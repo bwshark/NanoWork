@@ -16,7 +16,7 @@
  *   - 不修改原文，仅派生产物（原文仍照常显示）。
  */
 
-import type { ArtifactEvent } from './types';
+import type { ArtifactEvent } from '../types';
 import { genId } from '@/lib/id';
 
 /** 围栏块匹配：```lang\n ... \n``` 或 ```\n ... \n``` */

@@ -106,6 +106,7 @@ export function SidebarNav() {
     createSession(undefined, "新任务", {
       workdir: current?.workdir,
       fullAccess: current?.fullAccess,
+      toolApproval: current?.toolApproval,
     });
     navigate(ROUTES.chat);
   };
@@ -940,6 +941,7 @@ function SessionList() {
       workdir:
         group.kind === "workdir" && group.fullPath ? group.fullPath : undefined,
       fullAccess: current?.fullAccess,
+      toolApproval: current?.toolApproval,
     });
     navigate(ROUTES.chat);
   };

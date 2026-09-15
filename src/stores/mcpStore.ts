@@ -4,7 +4,7 @@ import { zustandStorage } from '@/platform';
 import { platform } from '@/platform';
 import { STORAGE_KEYS } from '@/lib/constants';
 import { genId } from '@/lib/id';
-import { syncToNanobotRuntime, toNanobotMCP, fromNanobotMCP } from '@/ai/nanobotConfig';
+import { getRuntime, type SyncResult } from '@/ai/runtime';
 import { MCP_SERVERS } from '@/ai/builtinMcps';
 import {
   BUILTIN_MCP_PREFIX,
@@ -31,22 +31,12 @@ interface McpState {
    *   返回 needsRestart=true，由用户手动合并并重启网关。
    * 返回主进程/平台层的同步结果描述。
    */
-  syncConfig: (id: string) => Promise<MCPSyncResult>;
+  syncConfig: (id: string) => Promise<SyncResult>;
   /** 同步全部已启用条目（同 syncConfig 的批量版） */
-  syncEnabled: () => Promise<MCPSyncResult>;
+  syncEnabled: () => Promise<SyncResult>;
   /** 启动回读：从 nanobot config.json 反向补齐本地缺失的 MCP 条目（仅追加，不覆盖） */
   hydrateFromNanobot: () => Promise<void>;
   setStatus: (id: string, status: MCPStatus) => void;
-}
-
-/** 同步结果描述（与 platform.syncNanobotMcp 形态对齐） */
-export interface MCPSyncResult {
-  ok: boolean;
-  message: string;
-  /** 配置是否实际发生变更 */
-  changed?: boolean;
-  /** 已写入但网关由外部进程托管，需用户自行重启 */
-  needsRestart?: boolean;
 }
 
 const delay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -168,10 +158,7 @@ export const useMcpStore = create<McpState>()(
         // 删除语义不变：删除条目后再同步即从 config.json 移除。
         const targets = selectEnabledConfigs(get().configs);
         try {
-          // 转为 nanobot 形态（以 server 名为键的字典），直接合并进
-          // config.json 的 tools.mcpServers；web 端降级为下载片段。
-          const fragmentJson = JSON.stringify(toNanobotMCP(targets));
-          const result = await syncMcpViaPlatform(fragmentJson);
+          const result = await getRuntime().sync('connectors', targets);
           get().setStatus(id, 'connected');
           return result;
         } catch (err) {
@@ -185,25 +172,12 @@ export const useMcpStore = create<McpState>()(
 
       syncEnabled: async () => {
         const targets = selectEnabledConfigs(get().configs);
-        // 仅 web 端对空集提前返回（无文件系统权限，避免下载空片段）；
-        // electron 端空集必须照常提交：主进程对 tools.mcpServers 是全量替换语义，
-        // 提交空字典（toNanobotMCP([]) → {}）可把已停用/已删除条目从 config.json
-        // 真正清空，否则网关重启仍会加载残留条目，且 hydrate 会按名称回读「复活」。
-        if (targets.length === 0 && platform.env !== 'electron') {
-          return { ok: true, changed: false, message: '未启用任何 MCP，无需同步' };
-        }
+        // 空集的特殊语义（web 短路 / electron 提交空字典以清空运行时）已收敛到
+        // 契约层实现（nanobotHttp/config.ts 的 syncMcpToRuntime），store 不再重复判断。
         targets.forEach((c) => get().setStatus(c.id, 'syncing'));
         try {
-          const fragmentJson = JSON.stringify(toNanobotMCP(targets));
-          const result = await syncMcpViaPlatform(fragmentJson);
+          const result = await getRuntime().sync('connectors', targets);
           targets.forEach((c) => get().setStatus(c.id, 'connected'));
-          // 空集提交成功：改写 message 以准确描述「清空运行时」语义
-          if (targets.length === 0 && result.ok) {
-            return {
-              ...result,
-              message: '未启用任何 MCP，已清空运行时的 MCP 同步',
-            };
-          }
           return result;
         } catch (err) {
           targets.forEach((c) => get().setStatus(c.id, 'error'));
@@ -218,10 +192,8 @@ export const useMcpStore = create<McpState>()(
         if (hydratePromise) return hydratePromise;
         hydratePromise = (async () => {
           try {
-            if (platform.env !== 'electron') return;
-            const snapshot = await platform.getNanobotMcp();
-            if (!snapshot) return;
-            const remote = fromNanobotMCP(snapshot);
+            // web 端无文件系统权限：回读返回空数组，天然短路
+            const remote = await getRuntime().read('connectors');
             if (remote.length === 0) return;
             // 按名称去重：仅追加本地缺失的条目，不覆盖本地已有配置
             const localNames = new Set(get().configs.map((c) => c.name));
@@ -253,27 +225,3 @@ export const useMcpStore = create<McpState>()(
     },
   ),
 );
-
-/**
- * 经 platform 层同步 MCP 到 nanobot。
- * 若 platform 提供 syncNanobotMcp，则优先走它（electron 合并写盘 / web 下载）；
- * 否则降级为写一个 nanobot.mcp.json 片段文件（保留旧行为兼容）。
- */
-async function syncMcpViaPlatform(fragmentJson: string): Promise<MCPSyncResult> {
-  const platformWithMcp = platform as Partial<{
-    syncNanobotMcp: (json: string) => Promise<MCPSyncResult>;
-  }>;
-  if (platformWithMcp.syncNanobotMcp) {
-    return platformWithMcp.syncNanobotMcp(fragmentJson);
-  }
-  // 兜底：仅 web 端未启用新接口时（开发期）才会走到这里
-  const target = await syncToNanobotRuntime(
-    JSON.parse(fragmentJson).mcpServers as MCPConfig[],
-  );
-  return {
-    ok: true,
-    changed: true,
-    needsRestart: true,
-    message: `片段已导出到 ${target}，请手动合并进 nanobot config.json 并重启网关`,
-  };
-}

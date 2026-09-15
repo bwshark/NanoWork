@@ -1,7 +1,7 @@
 import { useSettingsStore } from '@/stores/settingsStore';
 import type { ConnectionStatus as Status } from '@/types';
-import { NanobotClient } from './nanobotClient';
-import type { AIClient } from './types';
+import { getRuntime } from './runtime';
+import type { AgentRuntime } from './runtime/types';
 
 type Listener = () => void;
 
@@ -24,8 +24,8 @@ let sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, m
 
 /**
  * 连接管理器（FR-006）。
- * 始终直连 nanobot 网关：probe 可达为 connected，不可达为 offline
- * （发送时由 client 报错）。选择结果通过 onChange 广播，
+ * 始终直连引擎：probe 可达为 connected，不可达为 offline
+ * （发送时由 runtime 报错）。选择结果通过 onChange 广播，
  * 并同步写入 settingsStore.status（供 ConnectionBanner 读取）。
  *
  * 桌面端启动时序：主进程 spawn `nanobot serve` 与窗口创建是并行的，
@@ -36,7 +36,14 @@ let sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, m
  * 2. `startHeartbeat()`：稳态周期探测，网关中途起停都能自愈。
  */
 class ConnectionManager {
-  private nanobot = new NanobotClient();
+  /**
+   * 引擎实现。每次经工厂取（而非构造时缓存），
+   * 这样测试替换实现后本管理器立即生效，不会握着旧实例。
+   */
+  private get engine(): AgentRuntime {
+    return getRuntime();
+  }
+
   private listeners = new Set<Listener>();
   private _status: Status = 'offline';
 
@@ -68,7 +75,7 @@ class ConnectionManager {
     if (this.inflightProbe) return this.inflightProbe;
     this.inflightProbe = (async () => {
       try {
-        const ok = await this.nanobot.probe();
+        const ok = await this.engine.probe();
         return ok === 'connected' ? 'connected' : 'offline';
       } finally {
         this.inflightProbe = null;
@@ -90,12 +97,12 @@ class ConnectionManager {
     return next;
   }
 
-  /** 获取直连 AIClient（同时刷新 status 并广播） */
-  async getClient(): Promise<AIClient> {
+  /** 获取引擎实现（同时刷新 status 并广播） */
+  async getClient(): Promise<AgentRuntime> {
     const ok = await this.probeOnce();
     this._status = ok === 'connected' ? 'connected' : 'offline';
     this.emit();
-    return this.nanobot;
+    return this.engine;
   }
 
   /** 探测当前连接状态（触发一次 getClient） */

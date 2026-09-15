@@ -91,9 +91,10 @@ export interface Settings {
 ```
 [用户新建会话]
   → sessionsStore.createSession(agentId?)
-      → MemoryService.load(workspaceKey)        // 异步读取 MEMORY.md
-          ├─ electron: platform.writeTextFile 真实文件优先，缺省回退 storage
-          └─ web:      platform.storage.get(nanowork.memory.<key>)
+      → MemoryService.load(workspaceKey)        // 异步读取记忆
+          └─ 统一走 platform.storage.get('nanowork.memory.<key>')
+               Electron：主进程把该 key 路由为真实文件 ~/.nanowork/memory/<key>.md
+               Web：      localStorage（内存降级）
       → 若 memoryEnabled 且内容非空
           → 拼装 system 段：agent.systemPrompt + 标签包裹记忆块
           → 置 memoryLoaded = { injected:true, count, dismissed:false }
@@ -119,8 +120,9 @@ sessionsStore.send(text)
       → 生成带时间戳引用块：
         > [2025-xx-xx HH:mm] 来自「会话标题」
         > 原文片段...
-      → electron: platform.writeTextFile('MEMORY.md', 全量)
-      → web:      platform.storage.set(key, 全量)
+      → 统一走 platform.storage.set(key, 全量)
+           Electron：主进程路由为 ~/.nanowork/memory/<key>.md（原样 Markdown，可手工编辑）
+           Web：      localStorage
   → toast 成功
 ```
 
@@ -130,7 +132,9 @@ sessionsStore.send(text)
 MemoryPage 加载 → MemoryService.load() 填入文本框
   → 用户编辑 → [保存]
       → MemoryService.save(fullText)  // 覆盖写
-  → [导出] → platform.writeTextFile('MEMORY.md', text)（web 触发下载）
+  → [导出] → platform.writeTextFile('MEMORY.md', text)
+              Electron：相对路径解析到 ~/.nanowork/MEMORY.md
+              Web：     触发下载
   → [清空] → MemoryService.clear()
 ```
 
@@ -178,8 +182,10 @@ MemoryPage 加载 → MemoryService.load() 填入文本框
 ## 7. 共享知识 / 跨文件约定
 
 - **记忆 key 命名**：
-  - Web：`nanowork.memory.<workspaceKey>`（`<workspaceKey>` 取当前工作区路径哈希或 `agent.workdir`，默认 `default`）。
-  - Electron：真实文件路径 `<safeRoot>/MEMORY.md`，`safeRoot` 由主进程提供（经 `platform.writeTextFile` 解析）。
+  - 统一 key：`nanowork.memory.<workspaceKey>`（`<workspaceKey>` 取当前工作区路径哈希或 `agent.workdir`，默认 `default`）。
+  - Web：`localStorage` 内该 key。
+  - Electron：主进程把该 key 路由为**真实文件** `~/.nanowork/memory/<workspaceKey>.md`（原样 Markdown，用户可直接打开编辑）；`workspaceKey` 经 `sanitizeSegment` 收敛为安全文件名。**渲染层不再有单独的 electron 落盘分支**（见 `nanowork-prd-design-v2.md` 18.2.5 / ADR-019）。
+  - 命名说明：`MEMORY.md` 不再是存储文件名，仅作记忆页「导出」的目标名（Electron 下解析到 `~/.nanowork/MEMORY.md`）。
 - **注入标签格式**（system prompt 末尾包裹，便于解析与去重）：
   ```
   <!-- MEMORY -->
@@ -200,7 +206,7 @@ MemoryPage 加载 → MemoryService.load() 填入文本框
 
 1. **workspaceKey 来源**：当前 `agent.workdir` 默认 `/workspace`，Web 端无真实路径。需确认 Web 端 workspaceKey 取「当前激活 agent 的 workdir 哈希」还是「全局单一 default」。本设计默认：**Web 单一 `default`，Electron 用真实 workdir 路径**。
 2. **自动摘要的 Agent 调用方式**：PRD 要求「调用 Agent 生成摘要」，但未指定是否复用 `send` 通道或独立轻量接口。本设计预留 `MemoryService.summarize(history)`，内部走 `connectionManager.getClient()`，具体 prompt 模板在 T28 细化。
-3. **Electron 真实文件路径权限**：`safeRoot` 由主进程约束，渲染层仅传相对 `MEMORY.md` 文件名，具体落盘目录策略需主进程侧配合（不在本渲染层设计范围）。
+3. **Electron 真实文件路径权限** ✅ **已定**：不再由渲染层传 `MEMORY.md` 文件名。记忆正文经 `platform.storage` 的 `nanowork.memory.<key>` 直接由主进程路由到 `~/.nanowork/memory/<key>.md`；`MEMORY.md` 仅作导出名，`fs:writeTextFile` 把相对路径解析到 ① `~/.nanowork/`，绝对路径限制在 home / userData / ① 之内（`resolveWriteTarget`，见 `nanowork-prd-design-v2.md` 18.2.5）。
 4. **记忆页与设置页「打开记忆文件」**：Web 端「打开」等价于跳转记忆页；Electron 端可经 `platform.writeTextFile` 触发系统打开（或仅展示路径），交互细节 T27/T28 确认。
 
 ---

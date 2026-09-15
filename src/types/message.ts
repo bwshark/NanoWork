@@ -77,7 +77,7 @@ export interface Message {
 /** OpenAI 兼容请求消息角色（含 system） */
 export type ChatRole = 'system' | 'user' | 'assistant';
 
-/** 发送给 AIClient 的对话消息参数 */
+/** 发送给 AgentRuntime 的对话消息参数 */
 export interface ChatMessageParam {
   role: ChatRole;
   content: string;

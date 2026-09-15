@@ -77,7 +77,7 @@ function startStreaming(sessionId: string, message: Message) {
   useSessionsStore.setState({
     sessions: [session],
     activeId: sessionId,
-    streams: { [sessionId]: { status: 'streaming', handle: null } },
+    streams: { [sessionId]: { status: 'streaming', active: true } },
   });
 }
 

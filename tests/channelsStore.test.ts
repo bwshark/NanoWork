@@ -5,7 +5,7 @@ import {
   buildNanobotChannelsFragment,
   fromNanobotChannels,
   toNanobotChannels,
-} from '@/ai/nanobotChannels';
+} from '@/ai/runtime/nanobotHttp/channels';
 import type { ChannelConfig } from '@/types';
 
 /**

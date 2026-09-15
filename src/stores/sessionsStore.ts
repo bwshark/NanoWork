@@ -5,6 +5,7 @@ import { PLACEHOLDER_TITLES, STORAGE_KEYS } from '@/lib/constants';
 import { genId } from '@/lib/id';
 import { toast } from '@/components/Toast';
 import { connectionManager } from '@/ai/connectionManager';
+import { getRuntime } from '@/ai/runtime';
 import {
   attachmentsToUploadFiles,
   toPersistableAttachment,
@@ -27,18 +28,29 @@ import type {
   ToolCall,
 } from '@/types';
 import type {
+  ApprovalDecision,
+  ApprovalRequestEvent,
   ArtifactEvent,
-  ChatHandle,
   ChatRequest,
   ProcessToolEvent,
   ToolCallEvent,
   UploadFile,
-} from '@/ai/types';
+} from '@/ai/runtime/types';
 
-/** 待用户决策的敏感操作（触发 PermissionDialog） */
-export interface PendingPermission {
+/**
+ * 待用户裁决的逐条批准请求（触发 PermissionDialog）。
+ *
+ * 与旧版「本地假门控」的关键区别：**引擎此时真的停下了**——工具尚未执行，
+ * 会话的流式响应被阻塞在引擎的 `before_execute_tool` 里。所以这条记录
+ * 必须被终局处理（裁决或让流中断），悬空会拖到引擎超时（判为拒绝）。
+ */
+export interface PendingApproval {
+  /** 引擎侧审批请求 id；回传裁决时用它寻址 */
+  id: string;
   sessionId: string;
+  /** 承载该工具调用的助手消息 id（用于回写状态） */
   messageId: string;
+  /** 该工具调用在消息上的记录 id（与 id 不同：记录 id 是 UI 侧行标识） */
   toolCallId: string;
   tool: string;
   args: Record<string, unknown>;
@@ -50,8 +62,12 @@ export type StreamStatus = 'idle' | 'thinking' | 'streaming' | 'tooling' | 'done
 export interface SessionStream {
   /** 当前流式阶段：思考 / 流式 / 工具中 / 完成 */
   status: StreamStatus;
-  /** 该会话正在跑的 ChatHandle，供「停止」按钮随时调用 abort() */
-  handle: ChatHandle | null;
+  /**
+   * 是否有可中断的进行中请求（供「停止」按钮判定）。
+   * 不持有请求句柄：中断以 `runtime.abort(sessionId)` 表达，
+   * store 不需要理解句柄生命周期（见 ai/runtime/types.ts 边界约定）。
+   */
+  active: boolean;
 }
 
 interface SessionsState {
@@ -63,7 +79,14 @@ interface SessionsState {
    * 流结束后对应条目被移除。仅运行时状态，不持久化。
    */
   streams: Record<string, SessionStream>;
-  pendingPermission: PendingPermission | null;
+  /**
+   * 逐条批准的待裁决队列（FIFO）。仅运行时状态，不持久化——请求 id 由引擎
+   * 单次生成，重启后不存在可回传的对象，持久化只会留下「点了没反应」的死条目。
+   *
+   * 用队列而非单槽：多个会话可并发流式，各自都可能挂起等裁决；同一轮里的
+   * 并行工具调用也会产生多条。UI 只呈现队首，逐条处理。
+   */
+  pendingApprovals: PendingApproval[];
   error: string | null;
   /** 记忆注入运行时提示状态（不持久化） */
   memoryLoaded: MemoryState;
@@ -78,7 +101,7 @@ interface SessionsState {
   createSession: (
     agentId?: string,
     title?: string,
-    opts?: { workdir?: string; fullAccess?: boolean },
+    opts?: { workdir?: string; fullAccess?: boolean; toolApproval?: boolean },
   ) => Session;
   /**
    * 注入外部来源会话（IM 频道会话）并激活。
@@ -102,6 +125,8 @@ interface SessionsState {
   setSessionWorkdir: (id: string, workdir?: string) => void;
   /** 设置会话权限策略：true = 允许完全访问 */
   setSessionFullAccess: (id: string, fullAccess: boolean) => void;
+  /** 设置会话级逐条批准：true = 副作用工具执行前逐一授权（FR-1.5） */
+  setSessionToolApproval: (id: string, toolApproval: boolean) => void;
   /** 设置会话级模型覆盖 */
   setSessionModel: (id: string, model: string) => void;
 
@@ -154,8 +179,25 @@ interface SessionsState {
   closeReasoning: (sessionId: string, messageId: string) => void;
   /** 工具执行进度行（start=新增 running 行 / end=done / error=error） */
   handleProcessTool: (sessionId: string, messageId: string, ev: ProcessToolEvent) => void;
-  approvePermission: () => void;
-  rejectPermission: () => void;
+  /**
+   * 引擎发来逐条批准请求（引擎已挂起该工具调用）：入队 + 在消息上记一条
+   * pending 行，并把会话状态置为 tooling。
+   */
+  handleApprovalRequest: (
+    sessionId: string,
+    messageId: string,
+    req: ApprovalRequestEvent,
+  ) => void;
+  /**
+   * 裁决队首的逐条批准请求并回传引擎。
+   *
+   * @param decision 允许 / 拒绝
+   * @param reason 拒绝原因（可选）；引擎会回灌给模型让它改道
+   *
+   * 回传失败（请求已超时/已取消）时提示用户并仍出队——该请求已死，
+   * 留在队列里只会反复失败。
+   */
+  resolveApproval: (decision: ApprovalDecision, reason?: string) => Promise<void>;
   clearError: () => void;
 
   // —— 内部更新工具 ——
@@ -254,11 +296,14 @@ async function streamAssistantReply(
     // 权限仅「完全访问」时显式下发 full，默认权限跟随引擎配置默认
     workspace: session.workdir,
     accessMode: session.fullAccess ? 'full' : undefined,
+    // 逐条批准（tool_approval 轴）：两种权限开关是正交的，但「完全访问」更粗——
+    // 它已经表达了「别问我」，因此开启时不再叠加逐条审批，避免两个开关互相打架。
+    approvalMode: session.toolApproval && !session.fullAccess ? 'ask' : undefined,
   };
 
   // 2) 为该会话建立独立流式上下文（其他会话不受影响）
   useSessionsStore.setState((s) => ({
-    streams: { ...s.streams, [sessionId]: { status: 'thinking', handle: null } },
+    streams: { ...s.streams, [sessionId]: { status: 'thinking', active: true } },
     error: null,
   }));
 
@@ -289,9 +334,10 @@ async function streamAssistantReply(
       );
     }
     const client = await connectionManager.getClient();
-    // 记录该会话正在跑的 ChatHandle，供「停止」按钮调用 abort()。
-    // 保留 client 引用以便等流结束，避免 handle 提前被 GC。
-    const handle = client.sendMessage(req, {
+    // 经契约层发起流式对话：`chat()` 在流结束（正常 / 报错 / 被中断）后解析，
+    // 协议级错误经 onError 上报；中断由 useSessionsStore.abort() 走
+    // runtime.abort(sessionId)，此处不需要持有任何句柄。
+    await client.chat(req, {
       onStatus: (status) => {
         if (status !== 'done') patchStream({ status });
       },
@@ -307,6 +353,8 @@ async function streamAssistantReply(
         useSessionsStore.getState().closeReasoning(sessionId, assistantId),
       onProcessTool: (ev) =>
         useSessionsStore.getState().handleProcessTool(sessionId, assistantId, ev),
+      onApprovalRequest: (r) =>
+        useSessionsStore.getState().handleApprovalRequest(sessionId, assistantId, r),
       onDone: () => patchStream({ status: 'done' }),
       onError: (err) => {
         sendError = err.message;
@@ -314,8 +362,6 @@ async function streamAssistantReply(
         toast.error(`发送失败：${err.message}`);
       },
     });
-    patchStream({ handle });
-    await handle.done;
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     sendError = msg;
@@ -375,13 +421,23 @@ export function selectSessionStreamStatus(
   return s.streams[sessionId]?.status ?? 'idle';
 }
 
+/**
+ * 队首待裁决的逐条批准请求（PermissionDialog 用）。
+ * 返回 `undefined` 表示队列为空；逐条处理，不在 selector 内构造新对象。
+ */
+export function selectPendingApproval(
+  s: Pick<SessionsState, 'pendingApprovals'>,
+): PendingApproval | undefined {
+  return s.pendingApprovals[0];
+}
+
 export const useSessionsStore = create<SessionsState>()(
   persist(
     (set, get) => ({
       sessions: [],
       activeId: null,
       streams: {},
-      pendingPermission: null,
+      pendingApprovals: [],
       error: null,
       memoryLoaded: INITIAL_MEMORY_STATE,
 
@@ -423,6 +479,7 @@ export const useSessionsStore = create<SessionsState>()(
           skillIds: agent?.skillIds?.length ? [...agent.skillIds] : undefined,
           workdir: opts?.workdir,
           fullAccess: opts?.fullAccess,
+          toolApproval: opts?.toolApproval,
           title,
           messages: [],
           permissionLog: [],
@@ -477,6 +534,13 @@ export const useSessionsStore = create<SessionsState>()(
         get().updateSession(id, (s) => ({
           ...s,
           fullAccess,
+          updatedAt: nowIso(),
+        })),
+
+      setSessionToolApproval: (id, toolApproval) =>
+        get().updateSession(id, (s) => ({
+          ...s,
+          toolApproval,
           updatedAt: nowIso(),
         })),
 
@@ -685,17 +749,18 @@ renameSession: (id, title) =>
       /**
        * 中断指定会话正在流式传输的请求。无活跃请求时静默 no-op。
        *
-       * 1) 立刻调 handle.abort() → 终止 fetch；
+       * 1) 立刻调 runtime.abort(sessionId) → 终止底层 fetch；
        * 2) 把该会话最后一条 assistant 消息标记 aborted=true（仅当它存在，
        *    避免误标历史消息）；
-       * 3) 立即把该会话流式状态收敛为 idle，让 UI 不再显示「正在思考 /
-       *    流式中」，响应更跟手；流真正结束由 send 的 finally 块移除条目。
+       * 3) 立即把该会话流式状态收敛为 idle 且 active=false，让 UI 不再显示
+       *    「正在思考 / 流式中」，响应更跟手；流真正结束由 send 的 finally
+       *    块移除条目。active=false 同时保证重复点击「停止」是幂等的。
        */
       abort: (sessionId) => {
         const sid = sessionId ?? get().activeId;
         if (!sid) return;
         const stream = get().streams[sid];
-        if (!stream?.handle) return;
+        if (!stream?.active) return;
         const target = get().sessions.find((s) => s.id === sid);
         const last = target?.messages[target.messages.length - 1];
         if (last && last.role === 'assistant') {
@@ -704,9 +769,12 @@ renameSession: (id, title) =>
         set((s) => {
           const cur = s.streams[sid];
           if (!cur) return s;
-          return { ...s, streams: { ...s.streams, [sid]: { ...cur, status: 'idle' } } };
+          return {
+            ...s,
+            streams: { ...s.streams, [sid]: { ...cur, status: 'idle', active: false } },
+          };
         });
-        stream.handle.abort();
+        void getRuntime().abort(sid);
       },
 
       appendToken: (sessionId, messageId, chunk) =>
@@ -715,89 +783,105 @@ renameSession: (id, title) =>
           return { ...base, content: base.content + chunk };
         }),
 
+      /**
+       * 标准 OpenAI `tool_calls` 事件（展示用）。
+       *
+       * 注意：**授权不在本方法内处理**。真实引擎的逐条批准走
+       * `handleApprovalRequest`（引擎在工具执行前挂起，等待独立回传），
+       * 而 `capabilities.toolCalls === false` 时本方法根本不会被触发。
+       * 旧版在这里用 `status==='pending'` 造了一个纯本地的「假门控」——
+       * 它拦不住引擎（工具照常执行），已被 D3 的真实回环取代。
+       */
       handleToolCall: (sessionId, messageId, ev) => {
-        if (ev.status === 'pending' && ev.sensitive) {
-          // 会话开启「允许完全访问」：敏感工具自动批准，不再弹窗确认
-          const fullAccess =
-            get().sessions.find((s) => s.id === sessionId)?.fullAccess ?? false;
-          if (fullAccess) {
-            get().updateMessage(sessionId, messageId, (m) => {
-              const toolCalls = [...(m.toolCalls ?? [])];
-              if (!toolCalls.some((t) => t.id === ev.id)) {
-                toolCalls.push({
+        get().updateMessage(sessionId, messageId, (m) => {
+          const existing = m.toolCalls ?? [];
+          const toolCalls = existing.some((t) => t.id === ev.id)
+            ? existing.map((t) =>
+                t.id === ev.id
+                  ? {
+                      ...t,
+                      status: ev.status,
+                      ...(ev.result !== undefined ? { result: ev.result } : {}),
+                    }
+                  : t,
+              )
+            : [
+                ...existing,
+                {
                   id: ev.id,
                   tool: ev.tool,
                   args: ev.args,
                   sensitive: ev.sensitive,
-                  status: 'approved',
-                });
-              }
-              return { ...m, toolCalls };
-            });
-            get().updateSession(sessionId, (s) => ({
-              ...s,
-              permissionLog: [
-                ...s.permissionLog,
-                {
-                  id: genId(),
-                  tool: ev.tool,
-                  args: ev.args,
-                  decision: 'approved',
-                  at: nowIso(),
-                },
-              ] as PermissionLog[],
-            }));
-            return;
-          }
-          // 默认权限：等待用户决策的敏感工具，记录并弹出确认框
-          get().updateMessage(sessionId, messageId, (m) => {
-            const toolCalls = [...(m.toolCalls ?? [])];
-            if (!toolCalls.some((t) => t.id === ev.id)) {
-              toolCalls.push({
-                id: ev.id,
-                tool: ev.tool,
-                args: ev.args,
-                sensitive: ev.sensitive,
-                status: ev.status,
-              });
-            }
-            return { ...m, toolCalls };
-          });
-          set({
-            pendingPermission: {
-              sessionId,
-              messageId,
-              toolCallId: ev.id,
-              tool: ev.tool,
-              args: ev.args,
-            },
-          });
-          return;
-        }
-
-        // 其余状态：更新（或新增）工具调用记录
-        get().updateMessage(sessionId, messageId, (m) => {
-          const toolCalls = (m.toolCalls ?? []).map((t) =>
-            t.id === ev.id
-              ? {
-                  ...t,
                   status: ev.status,
                   ...(ev.result !== undefined ? { result: ev.result } : {}),
-                }
-              : t,
-          );
-          if (!toolCalls.some((t) => t.id === ev.id)) {
-            toolCalls.push({
-              id: ev.id,
-              tool: ev.tool,
-              args: ev.args,
-              sensitive: ev.sensitive,
-              status: ev.status,
-              ...(ev.result !== undefined ? { result: ev.result } : {}),
-            });
-          }
+                },
+              ];
           return { ...m, toolCalls };
         });
+      },
+
+      handleApprovalRequest: (sessionId, messageId, req) => {
+        // 在消息上落一条 pending 行，使授权请求与过程时间线同源可见
+        get().updateMessage(sessionId, messageId, (m) => ({
+          ...m,
+          toolCalls: [
+            ...(m.toolCalls ?? []),
+            {
+              id: req.id,
+              tool: req.tool,
+              args: req.args,
+              sensitive: true,
+              status: 'pending' as ToolCall['status'],
+            },
+          ],
+        }));
+        set((s) => ({
+          pendingApprovals: [
+            ...s.pendingApprovals,
+            {
+              id: req.id,
+              sessionId,
+              messageId,
+              toolCallId: req.id,
+              tool: req.tool,
+              args: req.args,
+            },
+          ],
+        }));
+      },
+
+      resolveApproval: async (decision, reason) => {
+        const head = get().pendingApprovals[0];
+        if (!head) return;
+        // 先出队再回传：裁决只能生效一次，重复点击不应再发一次请求
+        set((s) => ({ pendingApprovals: s.pendingApprovals.slice(1) }));
+        try {
+          await getRuntime().respondApproval?.(head.id, decision, reason);
+        } catch (e) {
+          // 请求已死（超时 / 被取消）：如实提示，不假装授权成功
+          toast.error(e instanceof Error ? e.message : String(e));
+        }
+        get().updateMessage(head.sessionId, head.messageId, (m) => ({
+          ...m,
+          toolCalls: (m.toolCalls ?? []).map((t) =>
+            t.id === head.toolCallId
+              ? { ...t, status: (decision === 'allow' ? 'approved' : 'rejected') as ToolCall['status'] }
+              : t,
+          ),
+        }));
+        get().updateSession(head.sessionId, (s) => ({
+          ...s,
+          permissionLog: [
+            ...s.permissionLog,
+            {
+              id: genId(),
+              tool: head.tool,
+              args: head.args,
+              decision: decision === 'allow' ? 'approved' : 'rejected',
+              at: nowIso(),
+            },
+          ] as PermissionLog[],
+        }));
       },
 
       handleArtifact: (sessionId, messageId, ev) => {
@@ -870,44 +954,6 @@ renameSession: (id, title) =>
           }
           return { ...base, process };
         }),
-
-      approvePermission: () => {
-        const p = get().pendingPermission;
-        if (!p) return;
-        get().updateMessage(p.sessionId, p.messageId, (m) => ({
-          ...m,
-          toolCalls: (m.toolCalls ?? []).map((t) =>
-            t.id === p.toolCallId ? { ...t, status: 'approved' as ToolCall['status'] } : t,
-          ),
-        }));
-        get().updateSession(p.sessionId, (s) => ({
-          ...s,
-          permissionLog: [
-            ...s.permissionLog,
-            { id: genId(), tool: p.tool, args: p.args, decision: 'approved', at: nowIso() },
-          ] as PermissionLog[],
-        }));
-        set({ pendingPermission: null });
-      },
-
-      rejectPermission: () => {
-        const p = get().pendingPermission;
-        if (!p) return;
-        get().updateMessage(p.sessionId, p.messageId, (m) => ({
-          ...m,
-          toolCalls: (m.toolCalls ?? []).map((t) =>
-            t.id === p.toolCallId ? { ...t, status: 'rejected' as ToolCall['status'] } : t,
-          ),
-        }));
-        get().updateSession(p.sessionId, (s) => ({
-          ...s,
-          permissionLog: [
-            ...s.permissionLog,
-            { id: genId(), tool: p.tool, args: p.args, decision: 'rejected', at: nowIso() },
-          ] as PermissionLog[],
-        }));
-        set({ pendingPermission: null });
-      },
 
       retry: async () => {
         const state = get();

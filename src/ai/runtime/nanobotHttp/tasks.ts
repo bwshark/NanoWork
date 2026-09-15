@@ -1,5 +1,5 @@
 /**
- * nanobot 定时任务映射层。
+ * nanobot **定时任务域**：领域对象 ⇄ 引擎 `cron/jobs.json` 与运行审计。
  *
  * 背景：nanobot 的定时任务由 gateway 进程内的 CronService 消费
  * （nanobot/cron/service.py），存储于 `{workspace}/cron/jobs.json`：
@@ -18,15 +18,16 @@
  *    创建的任务，前端生成的任务以 `originMetadata.managedBy='smartagent'`
  *    标记，主进程合并时仅管理带此标记的任务，绝不影响其他任务。
  *
- * 本模块把前端 TaskConfig[] 映射为可合并进 jobs.json 的片段，
- * 并经 platform.syncNanobotTasks 自动落盘（与 channels 的自动同步同构）。
+ * 本模块把前端 TaskConfig[] 映射为可合并进 jobs.json 的片段并经
+ * platform.syncNanobotTasks 落盘，同时承担运行审计
+ * （`cron/runs/*.json`）→ `TaskRunRecord` 的映射——后者此前抄在
+ * tasksStore 里，属于同一知识的两份实现，现统一收口到本文件。
  */
-
 import { platform } from '@/platform';
-import { isElectron } from '@/platform/env';
 import { nextCronRunMs } from '@/lib/cron';
-import type { TaskSyncResult } from '@/platform/types';
-import type { TaskConfig, TaskSchedule } from '@/types';
+import type { RunQuery } from '../types';
+import type { NanobotCronRunRecord, TaskSyncResult } from '@/platform/types';
+import type { TaskConfig, TaskRunRecord, TaskSchedule } from '@/types';
 
 /** 托管标记值：主进程据此识别「由智能体应用管理」的定时任务 */
 export const MANAGED_BY_SMARTAGENT = 'smartagent';
@@ -163,25 +164,67 @@ export function buildNanobotJobsFragment(tasks: TaskConfig[]): string {
 }
 
 /**
- * 同步到 nanobot 运行时（自动，无需用户手动操作）：
+ * 同步任务配置到引擎运行时（自动，无需用户手动操作）：
  * - electron：主进程将任务幂等合并进 `{workspace}/cron/jobs.json`，
  *   并通知 gateway 热加载立即生效（无需重启网关）；
  * - web：无文件系统权限，降级为下载片段文件并提示手动合并。
  *
- * @param tasks 当前全部任务配置
- * @returns 同步结果（ok/message/changed）
+ * 两条路径都在 platform 层实现（此前本函数自带一份 `isElectron()` 分支，
+ * 用 `nanobot.jobs.json` 作为下载名，与 channels / mcp 两个域的
+ * `nanowork.<域>.json` 命名不一致，属于重复实现，已删除）。
  */
-export async function syncTasksToNanobotRuntime(
-  tasks: TaskConfig[],
-): Promise<TaskSyncResult> {
-  const fragment = buildNanobotJobsFragment(tasks);
-  if (!isElectron()) {
-    await platform.writeTextFile('nanobot.jobs.json', fragment);
-    return {
-      ok: true,
-      changed: true,
-      message: '已下载任务配置片段，请手动合并进 nanobot jobs.json',
-    };
+export async function syncTasksToRuntime(tasks: TaskConfig[]): Promise<TaskSyncResult> {
+  return platform.syncNanobotTasks(buildNanobotJobsFragment(tasks));
+}
+
+/**
+ * 将 nanobot cron 执行审计记录映射为前端运行记录。
+ * @param rec 引擎侧审计记录（queued/ok/error）
+ * @returns 前端 TaskRunRecord（trigger='scheduled'，id 带 cron- 前缀防冲突）
+ */
+export function toTaskRunRecord(rec: NanobotCronRunRecord): TaskRunRecord {
+  const status =
+    rec.status === 'queued' ? 'running' : rec.status === 'ok' ? 'success' : 'error';
+  return {
+    id: `cron-${rec.runId}`,
+    taskId: rec.jobId,
+    taskName: rec.jobName || rec.jobId || '定时任务',
+    trigger: 'scheduled',
+    startedAt: new Date(rec.updatedAtMs || Date.now()).toISOString(),
+    status,
+    // 引擎执行会话键：展开记录时据此只读拉取完整执行过程
+    ...(rec.sessionKey ? { sessionKey: rec.sessionKey } : {}),
+    // 引擎原始运行 id（每次执行唯一，用于区分循环任务的多次运行）
+    runId: rec.runId,
+    ...(rec.error ? { error: rec.error } : {}),
+    ...(rec.response ? { response: rec.response } : {}),
+  };
+}
+
+/**
+ * 列出引擎侧定时任务运行记录（审计目录 `cron/runs/`）。
+ * 按 `RunQuery` 过滤：`taskId` 精确匹配任务、`sessionKey` 精确匹配会话键、
+ * `sinceMs` 按开始时间下界过滤、`limit` 取最新的 N 条。
+ *
+ * 与 tasksStore.fetchCronRuns 的分工：后者在本函数之上做「自动创建执行会话」
+ * 等产品行为；此处只负责「取数 + 映射 + 过滤」，保持无副作用。
+ *
+ * **不吞错**：审计目录不可读时应由调用方决定是「静默跳过」还是「提示用户」，
+ * Adapter 不预设错误策略。
+ */
+export async function listRunsFromRuntime(query: RunQuery = {}): Promise<TaskRunRecord[]> {
+  const records = await platform.listNanobotCronRuns();
+  let runs = records.map(toTaskRunRecord);
+  if (query.taskId !== undefined) runs = runs.filter((r) => r.taskId === query.taskId);
+  if (query.sessionKey !== undefined) {
+    runs = runs.filter((r) => r.sessionKey === query.sessionKey);
   }
-  return platform.syncNanobotTasks(fragment);
+  if (query.sinceMs !== undefined) {
+    const since = query.sinceMs;
+    runs = runs.filter((r) => Date.parse(r.startedAt) >= since);
+  }
+  if (query.limit !== undefined && runs.length > query.limit) {
+    runs = runs.slice(runs.length - query.limit);
+  }
+  return runs;
 }

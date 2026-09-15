@@ -12,7 +12,7 @@
  * 当某次 delta 不含 tool_calls 时，本解析器静默跳过，不影响文本流。
  */
 
-import type { ToolCallEvent } from './types';
+import type { ToolCallEvent } from '../types';
 import { isSensitiveTool } from '@/lib/constants';
 
 /** 流式累计的单个工具调用中间态（按 index 拼接） */

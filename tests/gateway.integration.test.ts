@@ -9,7 +9,7 @@
  * 真实网关联调步骤见 docs/gateway-e2e.md。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { NanobotClient } from '@/ai/nanobotClient';
+import { NanobotClient } from '@/ai/runtime/nanobotHttp/chat';
 import { useSettingsStore } from '@/stores/settingsStore';
 
 // 合法 SSE：每个事件以「双换行」结束（`data: {...}\n\n`）。
@@ -202,5 +202,169 @@ describe('NanobotClient 网关端到端（OpenAI 兼容 SSE）', () => {
     );
     await handle.done;
     expect(tokens.join('')).toBe('已处理文件。');
+  });
+});
+
+/**
+ * 逐条批准（FR-1.5）的传输层：请求透传开关、SSE 事件解析、裁决回传。
+ * 引擎侧挂起等裁决的行为由 nanobot 的 pytest 覆盖（tests/test_api_tool_approval.py
+ * 与 tests/agent/test_tool_approval.py）。
+ */
+describe('NanobotClient 逐条批准通道 (FR-1.5)', () => {
+  let client: NanobotClient;
+
+  beforeEach(() => {
+    useSettingsStore.getState().setSettings({
+      gatewayEndpoint: 'http://127.0.0.1:8765/v1',
+      apiToken: '',
+    });
+    client = new NanobotClient();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  /** 一个只包含审批请求事件的 SSE 流 */
+  const APPROVAL_SSE = sseStream([
+    JSON.stringify({
+      choices: [
+        {
+          delta: {
+            nanobot_event: {
+              kind: 'approval_request',
+              id: 'appr-1',
+              tool: 'write_file',
+              args: { path: 'demo.txt', content: 'hi' },
+              call_id: 'call-9',
+            },
+          },
+        },
+      ],
+    }),
+  ]);
+
+  it('解析 nanobot_event.kind=approval_request 并映射到 onApprovalRequest', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => makeResponse(APPROVAL_SSE)));
+
+    const seen: Array<{ id: string; tool: string; args: unknown; callId?: string }> = [];
+    const handle = client.sendMessage(
+      { agentId: 'a', messages: [{ role: 'user', content: 'hi' }], stream: true },
+      {
+        onToken: () => undefined,
+        onToolCall: () => undefined,
+        onArtifact: () => undefined,
+        onStatus: () => undefined,
+        onApprovalRequest: (r) =>
+          seen.push({ id: r.id, tool: r.tool, args: r.args, callId: r.callId }),
+        onDone: () => undefined,
+        onError: () => undefined,
+      },
+    );
+    await handle.done;
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toEqual({
+      id: 'appr-1',
+      tool: 'write_file',
+      args: { path: 'demo.txt', content: 'hi' },
+      callId: 'call-9',
+    });
+  });
+
+  it('JSON 请求体透传 approval_mode', async () => {
+    const bodies: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, init: RequestInit) => {
+        bodies.push(String(init.body));
+        return makeResponse(sseStream([JSON.stringify({ choices: [{ delta: { content: 'ok' } }] })]));
+      }),
+    );
+
+    const handle = client.sendMessage(
+      {
+        agentId: 'a',
+        messages: [{ role: 'user', content: 'hi' }],
+        stream: true,
+        sessionId: 's1',
+        approvalMode: 'ask',
+      },
+      {
+        onToken: () => undefined,
+        onToolCall: () => undefined,
+        onArtifact: () => undefined,
+        onStatus: () => undefined,
+        onDone: () => undefined,
+        onError: () => undefined,
+      },
+    );
+    await handle.done;
+
+    const body = JSON.parse(bodies[0]) as Record<string, unknown>;
+    expect(body.approval_mode).toBe('ask');
+    expect(body.session_id).toBe('s1');
+  });
+
+  it('multipart 请求体携带 approval_mode', async () => {
+    const forms: FormData[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, init: RequestInit) => {
+        forms.push(init.body as FormData);
+        return makeResponse(sseStream([JSON.stringify({ choices: [{ delta: { content: 'ok' } }] })]));
+      }),
+    );
+
+    const handle = client.sendMessage(
+      {
+        agentId: 'a',
+        messages: [{ role: 'user', content: '看图' }],
+        stream: true,
+        approvalMode: 'ask',
+        files: [{ name: 'x.png', content: '', mimeType: 'image/png' }],
+      },
+      {
+        onToken: () => undefined,
+        onToolCall: () => undefined,
+        onArtifact: () => undefined,
+        onStatus: () => undefined,
+        onDone: () => undefined,
+        onError: () => undefined,
+      },
+    );
+    await handle.done;
+
+    expect(forms[0].get('approval_mode')).toBe('ask');
+  });
+
+  it('respondApproval POST 到 /tool-approvals/{id} 并带裁决与原因', async () => {
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init: RequestInit) => {
+        calls.push({ url: String(url), init });
+        return makeResponse('', { json: { ok: true } });
+      }),
+    );
+
+    await client.respondApproval('appr-42', 'deny', '不要动这个文件');
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toBe('http://127.0.0.1:8765/v1/tool-approvals/appr-42');
+    expect(calls[0].init.method).toBe('POST');
+    expect(JSON.parse(String(calls[0].init.body))).toEqual({
+      decision: 'deny',
+      reason: '不要动这个文件',
+    });
+  });
+
+  it('respondApproval 遇到 404 抛出具名错误（请求已失效）', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => makeResponse('', { status: 404 })),
+    );
+
+    await expect(client.respondApproval('appr-gone', 'allow')).rejects.toThrow(/已失效/);
   });
 });

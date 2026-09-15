@@ -1,6 +1,6 @@
 import { genId } from '@/lib/id';
 import { platform } from '@/platform';
-import type { UploadFile } from '@/ai/types';
+import type { UploadFile } from '@/ai/runtime/types';
 import type { Attachment, AttachmentKind } from '@/types';
 
 /**

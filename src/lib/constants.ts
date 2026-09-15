@@ -52,13 +52,14 @@ export const STORAGE_KEYS = {
 
 /**
  * 工作区文件记忆（MEMORY.md）相关常量。
- * 读取统一走 platform.storage（Web/Electron 一致）；
- * Electron 真实文件落盘经 platform.writeTextFile(MEMORY_FILENAME, ...)。
+ * 读写统一走 platform.storage（Web/Electron 一致）；Electron 下主进程把
+ * `nanowork.memory.<workspaceKey>` 路由成 `~/.nanowork/memory/<workspaceKey>.md`
+ * 真实文件（见 electron/storageRoutes.ts）。
  */
 /** 记忆文本在 storage 中的 key 前缀，完整 key = MEMORY_KEY_PREFIX + workspaceKey */
 export const MEMORY_KEY_PREFIX = 'nanowork.memory.';
 
-/** 记忆文件名（Electron 落盘 / Web 导出下载均使用该名） */
+/** 记忆文件名（记忆页「导出」动作使用该名；Electron 下解析到 ~/.nanowork/） */
 export const MEMORY_FILENAME = 'MEMORY.md';
 
 /** 注入 system 段的记忆块起始标签（便于解析与去重） */

@@ -1,31 +1,29 @@
 /**
- * nanobot 配置片段生成器。
+ * nanobot **MCP 连接器域**：领域对象 ⇄ 引擎配置片段。
  *
- * 背景：nanobot 的 MCP Server 列表写在 `config.json` 的 `tools.mcpServers`
- * 路径下（启动时一次性加载；运行时无 chat 级热启用），本模块把前端
- * MCPConfig[] 映射为 nanobot 可消费的 JSON 片段，并提供落盘/导出/合并入口。
+ * 背景：nanobot 的 MCP Server 列表写在 config.json 的 `tools.mcpServers`
+ * 路径下（启动时一次性加载；运行时无 chat 级热启用）。本模块把前端
+ * `MCPConfig[]` 映射为 nanobot 可消费的结构，并提供同步/回读入口。
  *
- * 映射规则：
- *   - transport='url'    → { url, transport: 'streamable_http' | 'sse' }
- *   - transport='command'→ { command, args, transport: 'stdio' }
- *   - auth               → 注入到 env（HTTP 模式时也作为 headers 备份）
+ * 映射规则（对齐 nanobot 的 MCPServerConfig）：
+ *   - transport='url'    → { url, type: 'streamableHttp' | 'sse' }
+ *   - transport='command'→ { command, args, type: 'stdio' }
+ *   - auth               → 注入到 env（stdio）/ Authorization 头（http）
+ * 注意 nanobot 字段名为 `type`（取值 stdio|sse|streamableHttp），而非本应用
+ * 内部的 `transport`；nanobot 也会按 command/url 自动探测，显式给出 type
+ * 仅用于消除 HTTP/SSE 歧义。
  *
- * electron 主进程会把 `tools.mcpServers` 字段合并写入 config.json，并按需
- * 重启 serve 子进程让 MCP 工具在对话中真正生效；web 端降级为下载片段
- * (`{ mcpServers: ... }`) 供用户手动合并。
+ * 同步链路：electron 下 `platform.syncNanobotMcp` 会把 `tools.mcpServers`
+ * 合并写入 config.json 并按需重启 serve 子进程；web 下同一接口降级为
+ * 下载片段文件供用户手动合并。两条路径都在 platform 层，本模块不分支。
  */
-
 import { platform } from '@/platform';
-import { isElectron } from '@/platform/env';
 import { genId } from '@/lib/id';
+import { joinCommand, parseCommand, readStr } from '../codec';
+import type { SyncResult } from '../types';
 import type { MCPConfig } from '@/types';
 
-/**
- * nanobot mcpServers 条目结构（与 nanobot 的 MCPServerConfig 对齐）。
- * 注意 nanobot 字段名为 `type`（取值 stdio|sse|streamableHttp，大写 H），
- * 而非本应用内部的 `transport`；nanobot 也会按 command/url 自动探测，
- * 显式给出 type 仅用于消除 HTTP/SSE 歧义。
- */
+/** nanobot mcpServers 条目结构（键为 server 名） */
 export interface NanobotMCP {
   [name: string]: {
     type?: 'stdio' | 'sse' | 'streamableHttp';
@@ -35,21 +33,6 @@ export interface NanobotMCP {
     env?: Record<string, string>;
     headers?: Record<string, string>;
   };
-}
-
-/**
- * 解析 stdio 启动命令为 token 列表：空格分隔，双引号包裹的段
- * （含内部空格）视为单个 arg，引号本身去掉。
- * 例：`a "b c" d` → ['a', 'b c', 'd']。
- */
-function parseCommand(command: string): string[] {
-  const out: string[] = [];
-  const re = /"([^"]*)"|(\S+)/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(command)) !== null) {
-    out.push(m[1] !== undefined ? m[1] : m[2]);
-  }
-  return out;
 }
 
 /** 单条 MCPConfig → nanobot 条目 */
@@ -117,13 +100,11 @@ export function fromNanobotMCP(snapshot: Record<string, unknown> | null): MCPCon
       const args = Array.isArray(entry.args)
         ? entry.args.filter((a): a is string => typeof a === 'string')
         : [];
-      // 含空白字符的 arg 用双引号包裹，避免写回时被空格拆碎
-      const quotedArgs = args.map((a) => (/\s/.test(a) ? `"${a}"` : a));
       const cfg: MCPConfig = {
         id: genId(),
         name,
         transport: 'command',
-        command: [entry.command, ...quotedArgs].join(' '),
+        command: joinCommand([entry.command, ...args]),
         status: 'idle',
         source: 'user',
         enabled: true,
@@ -156,9 +137,11 @@ export function fromNanobotMCP(snapshot: Record<string, unknown> | null): MCPCon
       cfg.urlType = entry.type;
     }
     // HTTP/SSE 正向映射时 token 写入 Authorization 头，此处解析 Bearer 回灌
-    // （HTTP 头大小写不敏感；非字符串值容错跳过，避免整批回读失败）
-    const authHeader = entry.headers?.Authorization ?? entry.headers?.authorization;
-    if (typeof authHeader === 'string') {
+    // （HTTP 头大小写不敏感，经 codec 统一归一；非字符串值容错跳过）
+    const authHeader = entry.headers
+      ? readStr(entry.headers as Record<string, unknown>, 'Authorization', 'authorization')
+      : undefined;
+    if (authHeader) {
       const bearer = authHeader.match(/^Bearer\s+(\S+)/i);
       if (bearer?.[1]) {
         cfg.auth = { token: bearer[1] };
@@ -169,37 +152,39 @@ export function fromNanobotMCP(snapshot: Record<string, unknown> | null): MCPCon
   return out;
 }
 
-/** 历史形态：`{ mcpServers: { ... } }`，用于 web 下载片段兼容 */
-export function buildNanobotConfigFragment(configs: MCPConfig[]): string {
-  return JSON.stringify({ mcpServers: toNanobotMCP(configs) }, null, 2);
+/**
+ * 把连接器配置同步进引擎运行时。
+ *
+ * 入参是**待推送的启用条目**（调用方自行用 `selectEnabledConfigs` 过滤），
+ * 本函数只负责序列化与结果语义修正：
+ *
+ * - 空集在 electron 下**必须照常提交**：主进程对 `tools.mcpServers` 是
+ *   全量替换语义，提交空字典（`toNanobotMCP([])` → `{}`）才能把已停用 /
+ *   已删除的条目从 config.json 真正清空；否则网关重启仍会加载残留条目，
+ *   且 hydrate 会按名称回读「复活」。web 端则无需下载空片段，直接短路。
+ */
+export async function syncMcpToRuntime(targets: MCPConfig[]): Promise<SyncResult> {
+  const isEmpty = targets.length === 0;
+  // 用 platform.env 而非 isElectron()：环境判定统一走 platform 抽象层，
+  // 不在这里直接摸 window（也便于测试替换环境）。
+  if (isEmpty && platform.env !== 'electron') {
+    return { ok: true, changed: false, message: '未启用任何 MCP，无需同步' };
+  }
+  const result = await platform.syncNanobotMcp(JSON.stringify(toNanobotMCP(targets)));
+  // 空集提交成功：改写 message 以准确描述「清空运行时」语义
+  if (isEmpty && result.ok) {
+    return { ...result, message: '未启用任何 MCP，已清空运行时的 MCP 同步' };
+  }
+  return result;
 }
 
 /**
- * 完整 nanobot config 顶层片段：`{ tools: { mcpServers: { ... } } }`，
- * 供 electron 主进程做局部合并，避免覆盖 config.json 的其他字段。
+ * 从引擎回读连接器配置。
+ * 非 electron 端无文件系统权限：**直接短路**，不发起 IPC 往返
+ * （能力判定放在 adapter 一处，避免每个 store 各写一遍 env 分支）。
  */
-export function buildNanobotMcpConfigPatch(configs: MCPConfig[]): string {
-  return JSON.stringify(
-    {
-      tools: { mcpServers: toNanobotMCP(configs) },
-    },
-    null,
-    2,
-  );
-}
-
-/**
- * 同步到 nanobot 运行时（片段导出，web 降级路径）：
- * - electron：返回内置空操作（实际合并由 platform.syncNanobotMcp IPC 完成）；
- * - web：触发浏览器下载 `{ mcpServers: ... }` 片段文件，由用户手动合并。
- * 返回写入/下载的目标描述（用于 UI 提示）。
- */
-export async function syncToNanobotRuntime(configs: MCPConfig[]): Promise<string> {
-  const fragment = buildNanobotConfigFragment(configs);
-  const targetName = 'nanobot.mcp.json';
-  // electron 端不在这里写盘，避免覆盖主进程的合并结果；统一改走 platform 抽象
-  const targetPath = isElectron() ? `$HOME/${targetName}` : targetName;
-
-  await platform.writeTextFile(targetPath, fragment);
-  return targetPath;
+export async function readMcpFromRuntime(): Promise<MCPConfig[]> {
+  if (platform.env !== 'electron') return [];
+  const snapshot = await platform.getNanobotMcp();
+  return fromNanobotMCP(snapshot);
 }

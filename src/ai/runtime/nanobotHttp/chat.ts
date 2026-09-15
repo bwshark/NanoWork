@@ -5,13 +5,13 @@ import { fetchSSE, readSSEStream } from '@/lib/sse';
 import { inferMime } from '@/lib/attachments';
 import type { ModelInfo, ConnectionStatus } from '@/types';
 import type {
-  AIClient,
+  ApprovalDecision,
   ChatHandle,
   ChatRequest,
   StreamHandlers,
   TranscribeRequest,
   UploadFile,
-} from './types';
+} from '../types';
 import {
   ToolCallAccumulator,
   extractRawToolCalls,
@@ -21,7 +21,8 @@ import { extractArtifacts } from './artifactExtractor';
 /**
  * 网关 [LOCAL PATCH] 注入的进度事件结构（delta.nanobot_event）。
  * kind=reasoning：深度思考片段；kind=reasoning_end：思考段结束；
- * kind=tool：工具执行阶段事件（phase=start/end/error，含 call_id/name/arguments/result/error）。
+ * kind=tool：工具执行阶段事件（phase=start/end/error，含 call_id/name/arguments/result/error）；
+ * kind=approval_request：逐条批准请求（引擎已挂起，等待 POST /v1/tool-approvals/{id}）。
  */
 interface NanobotStreamEvent {
   kind?: string;
@@ -32,6 +33,10 @@ interface NanobotStreamEvent {
   arguments?: Record<string, unknown>;
   result?: unknown;
   error?: unknown;
+  /** kind=approval_request：审批请求 id / 工具名 / 入参 */
+  id?: string;
+  tool?: string;
+  args?: Record<string, unknown>;
 }
 
 /** 结果/错误展示文本截断上限（过程时间线仅做摘要展示） */
@@ -46,7 +51,12 @@ function toDisplayText(value: unknown): string | undefined {
 }
 
 /**
- * nanobot 网关客户端：直连 OpenAI 兼容 SSE 流式接口。
+ * nanobot 网关**传输层**：直连 OpenAI 兼容 SSE 流式接口。
+ *
+ * 定位（D1 分层）：本文件只负责「把一次请求发出去、把字节流解成事件」，
+ * 是 `NanobotHttpRuntime` 之下的 transport 原语。对外契约是
+ * `AgentRuntime.chat()` / `abort()`；`sendMessage()` 返回句柄的形态是
+ * transport 级细节，不向 UI/store 暴露（见 ../types.ts 顶部边界约定）。
  *
  * 经源码确认：nanobot 当前 /v1/chat/completions 仅流式返回 `delta.content`
  * 纯文本，不含 tool_calls / artifacts 事件，但支持 `session_id` 隔离与会话
@@ -58,7 +68,7 @@ function toDisplayText(value: unknown): string | undefined {
  *   4) 流结束后对完整文本做 artifact 启发式提取（code/mermaid/html 围栏块），
  *      对标 WorkBuddy 富产物内联渲染。
  */
-export class NanobotClient implements AIClient {
+export class NanobotClient {
   readonly kind = 'nanobot' as const;
 
   /**
@@ -156,6 +166,8 @@ export class NanobotClient implements AIClient {
       // 会话级工作空间 / 权限：引擎按 turn 解析 workspace_scope 生效
       ...(req.workspace ? { workspace: req.workspace } : {}),
       ...(req.accessMode ? { access_mode: req.accessMode } : {}),
+      // 逐条批准开关：与 access_mode 同处会话级 scope（tool_approval 轴）
+      ...(req.approvalMode ? { approval_mode: req.approvalMode } : {}),
     };
     const auth = this.authHeaders();
 
@@ -169,8 +181,9 @@ export class NanobotClient implements AIClient {
     // 多文件上传：message=拼接后的用户文本，files=多个 base64 解码后的文件
     //
     // 注意（已核对 nanobot/nanobot/api/server.py 的 _parse_multipart）：
-    // multipart 路径只识别 message / session_id / model / workspace / access_mode / files，
-    // **不解析 stream**，该分支下 stream 恒为 False，网关只会回完整 JSON（非 SSE）。
+    // multipart 路径只识别 message / session_id / model / workspace / access_mode /
+    // approval_mode / files，**不解析 stream**，该分支下 stream 恒为 False，
+    // 网关只会回完整 JSON（非 SSE）。
     // 因此前端必须兼容非流式响应（见 streamFormRequest.handleNonStreamResponse）。
     // 这里仍补上 stream：网关后续若支持 multipart 流式，前端无需改动即可自动生效。
     const form = new FormData();
@@ -181,6 +194,7 @@ export class NanobotClient implements AIClient {
     if (req.sessionId) form.append('session_id', req.sessionId);
     if (req.workspace) form.append('workspace', req.workspace);
     if (req.accessMode) form.append('access_mode', req.accessMode);
+    if (req.approvalMode) form.append('approval_mode', req.approvalMode);
     req.files.forEach((f: UploadFile) => {
       const mime = f.mimeType ?? inferMime(f.name);
       const bytes = Uint8Array.from(atob(f.content), (c) => c.charCodeAt(0));
@@ -231,6 +245,41 @@ export class NanobotClient implements AIClient {
     const text = (json.text ?? '').trim();
     if (text === '') throw new Error('转录结果为空，请重试');
     return text;
+  }
+
+  /**
+   * 回传一条逐条批准的裁决（FR-1.5）。
+   *
+   * 引擎此时正阻塞在 `before_execute_tool` 里等这个结果，因此这是**独立于
+   * SSE 流之外**的一次 POST——流本身是单向的，塞不进去。
+   *
+   * 404 表示请求已超时 / 已被取消 / 已裁决过：必须抛错让 UI 如实提示
+   * 「该授权已失效」，吞掉会误导用户以为工具已放行。
+   */
+  async respondApproval(
+    requestId: string,
+    decision: ApprovalDecision,
+    reason?: string,
+  ): Promise<void> {
+    const { endpoint } = this.getConfig();
+    const res = await fetch(
+      `${endpoint}/tool-approvals/${encodeURIComponent(requestId)}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...this.authHeaders() },
+        body: JSON.stringify({
+          decision,
+          ...(reason && reason.trim() !== '' ? { reason } : {}),
+        }),
+      },
+    );
+    if (!res.ok) {
+      throw new Error(
+        res.status === 404
+          ? '该工具调用已失效（可能已超时或被取消），请重新发起'
+          : `回传工具裁决失败：HTTP ${res.status} ${res.statusText}`,
+      );
+    }
   }
 
   /**
@@ -369,6 +418,16 @@ export class NanobotClient implements AIClient {
               error: phase === 'error' ? toDisplayText(nbEvent.error) : undefined,
             });
             handlers.onStatus(phase === 'start' ? 'tooling' : 'thinking');
+          } else if (nbEvent.kind === 'approval_request' && nbEvent.id) {
+            // 引擎已阻塞在工具执行前等裁决：把请求交给上层弹窗，
+            // 裁决经 respondApproval() 走 POST /v1/tool-approvals/{id} 送回。
+            handlers.onApprovalRequest?.({
+              id: String(nbEvent.id),
+              tool: String(nbEvent.tool ?? ''),
+              args: nbEvent.args ?? {},
+              ...(nbEvent.call_id ? { callId: String(nbEvent.call_id) } : {}),
+            });
+            handlers.onStatus('tooling');
           }
         }
 

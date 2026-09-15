@@ -1,9 +1,9 @@
 /**
- * nanobot channels 配置片段生成器与运行时同步器。
+ * nanobot **IM 渠道域**：领域对象 ⇄ `channels` 配置段。
  *
  * 背景：nanobot 的 IM 渠道配置位于 config.json 的 `channels` 段
  * （ChannelsConfig extra=allow，键为 camelCase，见 config_base.Base 的
- * alias_generator=to_camel）。本模块把前端 ChannelConfig[] 映射为该片段，
+ * alias_generator=to_camel）。本模块把前端 `ChannelConfig[]` 映射为该片段，
  * 并经 platform.syncNanobotChannels 自动合并进网关实际使用的 config.json
  * 并重启网关，无需用户手动操作。
  *
@@ -15,10 +15,13 @@
  *   实例含 { id, instanceId, enabled, domain: 'feishu'|'lark', appId, appSecret,
  *   groupPolicy, allowFrom, topicIsolation }；lark 卡片即 domain='lark' 的实例。
  *   instanceId 取稳定的渠道名（feishu/lark），避免随机 ID 造成实例身份漂移。
+ *
+ * 键名归一并入 `../codec`：本文件只管「哪个领域字段映射到哪个引擎键」，
+ * 不再自行实现 camelCase / snake_case 双写兜底。
  */
-
 import { platform } from '@/platform';
 import { genId } from '@/lib/id';
+import { putIf, readBool, readEnum, readStr, readStrArray } from '../codec';
 import type { ChannelSyncResult, NanobotChannelsSnapshot } from '@/platform/types';
 import type { ChannelConfig, ChannelKind, GroupPolicy } from '@/types';
 
@@ -36,12 +39,6 @@ interface NanobotFeishuSection {
 /** nanobot config.json 的 channels 段结构（节选） */
 export interface NanobotChannels {
   [channelName: string]: NanobotChannelEntry | NanobotFeishuSection | unknown;
-}
-
-/** 非空才写入（避免把空串覆盖进 nanobot 配置） */
-function putIf(target: Record<string, unknown>, key: string, value: unknown): void {
-  if (value === undefined || value === null || value === '') return;
-  target[key] = value;
 }
 
 /** 单条 ChannelConfig → 对应 channel 条目（feishu/lark 返回实例对象） */
@@ -101,20 +98,17 @@ export function toNanobotChannels(configs: ChannelConfig[]): NanobotChannels {
   return out;
 }
 
-/** 生成可被直接合并进 nanobot config.json 的完整片段 */
+/** 生成可被直接合并进 nanobot config.json 的完整片段（诊断 / 测试用） */
 export function buildNanobotChannelsFragment(configs: ChannelConfig[]): string {
   return JSON.stringify({ channels: toNanobotChannels(configs) }, null, 2);
 }
 
 /**
- * 同步到 nanobot 运行时（自动，无需用户手动操作）：
+ * 同步渠道配置到引擎运行时（自动，无需用户手动操作）：
  * - electron：主进程将片段合并进网关实际使用的 config.json 并重启网关；
  * - web：无文件系统权限，降级为下载片段文件并提示手动合并。
- *
- * @param configs 当前全部渠道配置
- * @returns 同步结果（ok/message/needsRestart）
  */
-export async function syncChannelsToNanobotRuntime(
+export async function syncChannelsToRuntime(
   configs: ChannelConfig[],
 ): Promise<ChannelSyncResult> {
   const fragment = buildNanobotChannelsFragment(configs);
@@ -122,22 +116,6 @@ export async function syncChannelsToNanobotRuntime(
 }
 
 // —— 反向映射：nanobot channels 段 → 本地 ChannelConfig（回显用） ——
-
-/** 读取条目中的非空字符串字段（兼容 camelCase / snake_case 两种键名） */
-function str(entry: Record<string, unknown>, ...keys: string[]): string | undefined {
-  for (const key of keys) {
-    const v = entry[key];
-    if (typeof v === 'string' && v !== '') return v;
-  }
-  return undefined;
-}
-
-/** 读取 allowFrom 白名单（兼容 allow_from；非数组回退空） */
-function allowFromOf(entry: Record<string, unknown>): string[] {
-  const v = entry.allowFrom ?? entry.allow_from;
-  if (!Array.isArray(v)) return [];
-  return v.filter((x): x is string => typeof x === 'string');
-}
 
 /** 具备扫码接入路径的渠道 kind（回显白名单归一仅作用于这些渠道） */
 const QR_ONBOARD_KINDS: ReadonlySet<ChannelKind> = new Set(['weixin', 'feishu', 'lark']);
@@ -155,21 +133,6 @@ const QR_ONBOARD_KINDS: ReadonlySet<ChannelKind> = new Set(['weixin', 'feishu', 
 function normalizeAllowFromForDisplay(kind: ChannelKind, list: string[]): string[] {
   if (!QR_ONBOARD_KINDS.has(kind)) return list;
   return list.length > 0 ? list : ['*'];
-}
-
-/** 读取群聊响应策略（仅 open / mention 合法，其余回退 undefined） */
-function groupPolicyOf(entry: Record<string, unknown>): GroupPolicy | undefined {
-  const v = str(entry, 'groupPolicy', 'group_policy');
-  return v === 'open' || v === 'mention' ? v : undefined;
-}
-
-/** 读取布尔策略字段（兼容 camelCase / snake_case） */
-function boolOf(entry: Record<string, unknown>, ...keys: string[]): boolean | undefined {
-  for (const key of keys) {
-    const v = entry[key];
-    if (typeof v === 'boolean') return v;
-  }
-  return undefined;
 }
 
 /**
@@ -195,18 +158,18 @@ export function fromNanobotChannels(
       id: genId(),
       kind,
       enabled: e.enabled !== false,
-      allowFrom: normalizeAllowFromForDisplay(kind, allowFromOf(e)),
+      allowFrom: normalizeAllowFromForDisplay(kind, readStrArray(e, 'allowFrom', 'allow_from')),
       syncStatus: 'synced',
       lastSyncAt: syncedAt,
     };
     if (kind === 'dingtalk') {
-      cfg.clientId = str(e, 'clientId', 'client_id');
-      cfg.clientSecret = str(e, 'clientSecret', 'client_secret');
+      cfg.clientId = readStr(e, 'clientId', 'client_id');
+      cfg.clientSecret = readStr(e, 'clientSecret', 'client_secret');
     } else if (kind === 'weixin') {
-      cfg.token = str(e, 'token');
+      cfg.token = readStr(e, 'token');
     } else {
-      cfg.botId = str(e, 'botId', 'bot_id');
-      cfg.botSecret = str(e, 'secret');
+      cfg.botId = readStr(e, 'botId', 'bot_id');
+      cfg.botSecret = readStr(e, 'secret');
     }
     out.push(cfg);
   };
@@ -225,20 +188,39 @@ export function fromNanobotChannels(
       : [section];
     for (const inst of instances) {
       // 飞书实例按 domain 映射为 feishu / lark kind（无 domain 视为 feishu）
-      const instKind: ChannelKind = str(inst, 'domain') === 'lark' ? 'lark' : 'feishu';
+      const instKind: ChannelKind = readStr(inst, 'domain') === 'lark' ? 'lark' : 'feishu';
       out.push({
         id: genId(),
         kind: instKind,
         enabled: inst.enabled !== false,
-        appId: str(inst, 'appId', 'app_id'),
-        appSecret: str(inst, 'appSecret', 'app_secret'),
-        groupPolicy: groupPolicyOf(inst),
-        topicIsolation: boolOf(inst, 'topicIsolation', 'topic_isolation'),
-        allowFrom: normalizeAllowFromForDisplay(instKind, allowFromOf(inst)),
+        appId: readStr(inst, 'appId', 'app_id'),
+        appSecret: readStr(inst, 'appSecret', 'app_secret'),
+        groupPolicy: readEnum<GroupPolicy>(
+          inst,
+          ['open', 'mention'],
+          'groupPolicy',
+          'group_policy',
+        ),
+        topicIsolation: readBool(inst, 'topicIsolation', 'topic_isolation'),
+        allowFrom: normalizeAllowFromForDisplay(
+          instKind,
+          readStrArray(inst, 'allowFrom', 'allow_from'),
+        ),
         syncStatus: 'synced',
         lastSyncAt: syncedAt,
       });
     }
   }
   return out;
+}
+
+/**
+ * 从引擎回读渠道配置。
+ * 非 electron 端无文件系统权限：**直接短路**，不发起 IPC 往返
+ * （能力判定放在 adapter 一处，避免每个 store 各写一遍 env 分支）。
+ */
+export async function readChannelsFromRuntime(): Promise<ChannelConfig[]> {
+  if (platform.env !== 'electron') return [];
+  const snapshot = await platform.getNanobotChannels();
+  return fromNanobotChannels(snapshot);
 }

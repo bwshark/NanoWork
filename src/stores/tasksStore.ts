@@ -4,10 +4,9 @@ import { platform, zustandStorage } from '@/platform';
 import { STORAGE_KEYS } from '@/lib/constants';
 import { genId } from '@/lib/id';
 import { toast } from '@/components/Toast';
-import { syncTasksToNanobotRuntime } from '@/ai/nanobotTasks';
+import { getRuntime } from '@/ai/runtime';
 import { cronRecordsToSession } from '@/lib/sessionImport';
 import { useSessionsStore } from '@/stores/sessionsStore';
-import type { NanobotCronRunRecord } from '@/platform/types';
 import type { TaskConfig, TaskRunRecord, TaskSchedule, TaskStatus } from '@/types';
 
 /**
@@ -73,30 +72,6 @@ const nowIso = () => new Date().toISOString();
 
 /** 已同步为侧边栏会话的 cron sessionKey 集合（模块级，跨调用去重） */
 const syncedCronSessions = new Set<string>();
-
-/**
- * 将 nanobot cron 执行审计记录映射为前端运行记录。
- * @param rec 引擎侧审计记录（queued/ok/error）
- * @returns 前端 TaskRunRecord（trigger='scheduled'，id 带 cron- 前缀防冲突）
- */
-function cronRunToRecord(rec: NanobotCronRunRecord): TaskRunRecord {
-  const status =
-    rec.status === 'queued' ? 'running' : rec.status === 'ok' ? 'success' : 'error';
-  return {
-    id: `cron-${rec.runId}`,
-    taskId: rec.jobId,
-    taskName: rec.jobName || rec.jobId || '定时任务',
-    trigger: 'scheduled',
-    startedAt: new Date(rec.updatedAtMs || Date.now()).toISOString(),
-    status,
-    // 引擎执行会话键：展开记录时据此只读拉取完整执行过程
-    ...(rec.sessionKey ? { sessionKey: rec.sessionKey } : {}),
-    // 引擎原始运行 id（每次执行唯一，用于区分循环任务的多次运行）
-    runId: rec.runId,
-    ...(rec.error ? { error: rec.error } : {}),
-    ...(rec.response ? { response: rec.response } : {}),
-  };
-}
 
 export const useTasksStore = create<TasksState>()(
   persist(
@@ -240,7 +215,7 @@ export const useTasksStore = create<TasksState>()(
         if (get().syncing) return;
         set({ syncing: true });
         try {
-          const result = await syncTasksToNanobotRuntime(get().tasks);
+          const result = await getRuntime().sync('tasks', get().tasks);
           set({
             lastSync: { at: nowIso(), ok: result.ok, message: result.message, changed: result.changed },
           });
@@ -259,13 +234,12 @@ export const useTasksStore = create<TasksState>()(
       },
 
       fetchCronRuns: async () => {
-        let records: NanobotCronRunRecord[];
+        let cronRuns: TaskRunRecord[];
         try {
-          records = await platform.listNanobotCronRuns();
+          cronRuns = await getRuntime().listRuns({});
         } catch {
           return; // 审计目录不可读时静默跳过，不影响本地记录
         }
-        const cronRuns = records.map(cronRunToRecord);
 
         // 为新完成的定时触发运行自动创建侧边栏会话（非 readonly）。
         // 去重键使用 run.id（每次执行唯一），而非 sessionKey（循环任务的所有运行共享同一 sessionKey）。

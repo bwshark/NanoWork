@@ -1,13 +1,9 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { platform, zustandStorage } from '@/platform';
-import type { ChannelSyncResult } from '@/platform/types';
+import { zustandStorage } from '@/platform';
 import { STORAGE_KEYS } from '@/lib/constants';
 import { genId } from '@/lib/id';
-import {
-  fromNanobotChannels,
-  syncChannelsToNanobotRuntime,
-} from '@/ai/nanobotChannels';
+import { getRuntime, type SyncResult } from '@/ai/runtime';
 import type { ChannelConfig, ChannelKind } from '@/types';
 
 /**
@@ -46,7 +42,7 @@ interface ChannelsState {
   /** 启用 / 停用某渠道并触发自动同步 */
   setEnabled: (kind: ChannelKind, enabled: boolean) => void;
   /** 同步到 nanobot 运行时（合并 channels 片段进 config.json 并重启网关） */
-  syncAll: () => Promise<ChannelSyncResult>;
+  syncAll: () => Promise<SyncResult>;
   /** 更新同步状态 */
   setSyncStatus: (id: string, status: ChannelConfig['syncStatus']) => void;
   /**
@@ -149,7 +145,7 @@ export const useChannelsStore = create<ChannelsState>()(
           const configs = get().configs;
           configs.forEach((c) => get().setSyncStatus(c.id, 'syncing'));
           try {
-            const result = await syncChannelsToNanobotRuntime(configs);
+            const result = await getRuntime().sync('channels', configs);
             const at = new Date().toISOString();
             if (!result.ok) {
               set((s) => ({
@@ -189,18 +185,16 @@ export const useChannelsStore = create<ChannelsState>()(
         hydrateFromNanobot: () => {
           if (hydratePromise) return hydratePromise;
           hydratePromise = (async () => {
-            try {
-              if (platform.env !== 'electron') return false;
-              const snapshot = await platform.getNanobotChannels();
-              if (!snapshot) return false;
-              const remote = fromNanobotChannels(snapshot);
-              if (remote.length === 0) return false;
-              const localKinds = new Set(get().configs.map((c) => c.kind));
-              const missing = remote.filter((c) => !localKinds.has(c.kind));
-              if (missing.length === 0) return false;
-              set((s) => ({ configs: [...s.configs, ...missing] }));
-              return true;
-            } catch {
+          try {
+            // web 端无文件系统权限：回读返回空数组，天然短路
+            const remote = await getRuntime().read('channels');
+            if (remote.length === 0) return false;
+            const localKinds = new Set(get().configs.map((c) => c.kind));
+            const missing = remote.filter((c) => !localKinds.has(c.kind));
+            if (missing.length === 0) return false;
+            set((s) => ({ configs: [...s.configs, ...missing] }));
+            return true;
+          } catch {
               // 回读失败不影响主流程：卡片保持本地状态
               return false;
             } finally {
@@ -212,10 +206,10 @@ export const useChannelsStore = create<ChannelsState>()(
 
         refreshFromNanobot: async (kind) => {
           try {
-            if (platform.env !== 'electron') return false;
-            const snapshot = await platform.getNanobotChannels();
-            if (!snapshot) return false;
-            const entry = fromNanobotChannels(snapshot).find((c) => c.kind === kind);
+            // web 端无文件系统权限：回读返回空数组，find 自然落空
+            const entry = (await getRuntime().read('channels')).find(
+              (c) => c.kind === kind,
+            );
             if (!entry) return false;
             // 覆盖式写入：本地同 kind 存在则替换（保留原 id 稳定），否则新增。
             // 注意：直接 set，不调 scheduleAutoSync——回读结果即引擎侧事实，

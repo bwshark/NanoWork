@@ -29,7 +29,7 @@
 
 | 文档 | 状态 | 阶段 | 内容概要 |
 |---|---|---|---|
-| **`nanowork-prd-design-v2.md`** ⭐ | 现行（主文档） | V1 → V3 全程 | 需求 + 设计合一的唯一总纲。第 0 章三点纠偏（D1 引擎契约层 / D2 事件化会话 / D3 三级权限）；第 1–6 章需求（R1–R12 域、`FR-<域>.<序>` 编号、用户故事、非功能、里程碑；**2.5 交付边界**：客户端之外需新增 7 个系统 + 三条硬判据）；第 7–22 章设计（五层架构、事件模型、权限、工具网关、四级扩展（**12.5–12.8 含 WorkBuddy 分发源实测**：市场四档来源 / 版本隔离缓存 / 云端边界 / 落地约束汇总）、提示词工程、记忆、自动化、IM、产物回滚、数据模型、同步、可观测、接口清单、目录规划）；第 23–24 章 ADR 与风险；附录 A 机制映射总表 / B 一致性修复清单 / C 术语表 |
+| **`nanowork-prd-design-v2.md`** ⭐ | 现行（主文档） | V1 → V3 全程 | 需求 + 设计合一的唯一总纲。第 0 章三点纠偏（D1 引擎契约层 / D2 事件化会话 / D3 三级权限）；第 1–6 章需求（R1–R12 域、`FR-<域>.<序>` 编号、用户故事、非功能、里程碑；**2.5 交付边界**：客户端之外需新增 7 个系统 + 三条硬判据）；第 7–22 章设计（五层架构、事件模型、权限（**10.3.1 收口落点纠偏**：L2 收口在**引擎**而非客户端，`access_mode` 与 `tool_approval` 为**正交两轴**）、工具网关（**11.1.1 逐条批准落地（D3）**：引擎否决通道 + 审批回传端点 + 客户端契约与 UI、三个 fail-closed 不变量、已知边界）、四级扩展（**12.5–12.8 含 WorkBuddy 分发源实测**：市场四档来源 / 版本隔离缓存 / 云端边界 / 落地约束汇总）、提示词工程、记忆、自动化、IM、产物回滚、数据模型（**18.2 四个根：目录约定与落地现状**：目标态与实现的逐项对照、三条收敛原则、两个实测缺陷，**18.2.5 目标态落地：key→文件路由**（一 key 一文件 + 归属路由 + 旧 blob 迁移））、同步、可观测、接口清单、目录规划）；第 23–24 章 ADR（**ADR-021：工具权限唯一收口在引擎**）与风险；附录 A 机制映射总表 / B 一致性修复清单 / C 术语表。**第 8 章含 8.2.1 契约落地修订与 8.4.1 D1 迁移记录**（引擎模块收敛到 `src/ai/runtime/`、codec 归一收口、清理 5 处死代码、`platform.env` vs `isElectron()` 陷阱） |
 | `cross-platform-sync-design.md` | 现行 | V1.5 / V2 / V3 | 跨端同步**整合版**：云端身份（邮箱 + JWT）+ 双向同步引擎。local-first、account-scoped、LWW + tombstone、append-only 同步日志、`SyncEngine` 包裹现有 store、认证/存储/运行时三层解耦 |
 | `gateway-e2e.md` | 现行 | V1 | 网关端到端验证手册：协议层用 monkeypatch `global.fetch` 跑通 `NanobotClient` 全链路（SSE 文本流 / `tool_calls` 增量 / artifact 提取）+ 真实 `nanobot serve` 启动步骤与验证清单 |
 | `prd.md` | 现行（**范围已收窄**） | V1 | 初版 PRD：定位、10 条用户故事、P0–P2 需求池（`FR-001`–`FR-012`）与 RFC 2119 验收标准。**新需求不再写入本文件**，仅保留其验收标准作为 MVP 验收对照 |
@@ -92,7 +92,7 @@
 | 新加入的开发者 | 根 `README.md` → `nanowork-prd-design-v2.md`（**务必先读第 0 章 + 第 1.2 节基线**）→ 第 7 章架构 / 第 22 章目录规划 → 按需读增量文档 |
 | 产品 / 需求评审 | v2 第 1–6 章 → `prd-memory.md` + `prd-tasks.md` → `prd.md` 的验收标准 |
 | 只做跨端同步 | `cross-platform-sync-design.md` → v2 第 19 章（本文提出的增量要求：V1 必须先落 `SyncMeta`） |
-| 只做安全 / 权限 | v2 第 10.3 节（三层权限）+ 第 11 章（工具网关、硬兜底、沙箱） |
+| 只做安全 / 权限 | v2 第 10.3 节（三层权限，含 **10.3.1 收口落点纠偏**）+ 第 11 章（工具网关、**11.1.1 逐条批准落地**、硬兜底、沙箱）+ ADR-021 |
 | V3 规划 | v2 第 2.3 节 → `nanowork-prd.md` |
 
 ---
@@ -122,7 +122,7 @@
 | 4 | `docs/prd.md` | WorkBuddy 归属误标为「网易有道」 | ✅ |
 | 5 | `docs/prd.md` | `FR-010` 标注「首版仅预留」，实际 5 渠道 + 扫码接入已实现 | ⬜ |
 | 6 | `docs/architecture.md` | 默认网关写成 `127.0.0.1:8765`，应为 `8900` | ⬜ |
-| 7 | `docs/architecture.md` | 文件清单过期（缺 `platform` / `nanobotBridge` / `im` / `composer` / `memory` 等），或在文首标注「历史版本，以 v2 为准」 | ⬜ |
+| 7 | `docs/architecture.md` | 文件清单过期（缺 `platform` / `nanobotBridge` / `im` / `composer` / `memory` 等），或在文首标注「历史版本，以 v2 为准」。另：3.2 节与 T04 引用的 `src/ai/types.ts` / `nanobotClient.ts` 已在 D1 迁至 `src/ai/runtime/types.ts` / `runtime/nanobotHttp/chat.ts`（见 v2 第 8.4.1 节） | ⬜ |
 | 8 | `docs/chat.md` | 无编号、无验收标准；需收编进 v2 后在文首标注已被取代 | ⬜ |
 | 9 | `docs/nanowork-prd.md` | 定位为企业平台，与代码基线不符；需在文首加注「V3 阶段需求，见 v2 第 2.3 节」 | ⬜ |
 | 10 | `docs/user-sync-login.md` | 已被 `cross-platform-sync-design.md` 整合；需加 superseded 横幅 | ⬜ |

@@ -13,10 +13,19 @@ export interface Session {
   /** 会话级工作空间（工作目录）；未设置时归入「默认工作空间」分组 */
   workdir?: string;
   /**
-   * 会话级权限策略：true = 允许完全访问（敏感工具自动批准，不再弹窗）。
-   * 默认 false（默认权限：敏感操作逐一确认）。
+   * 会话级权限策略：true = 允许完全访问（工具可在工作空间外执行）。
+   * 默认 false（默认权限：操作在安全沙箱约束内进行）。
    */
   fullAccess?: boolean;
+  /**
+   * 会话级逐条批准（FR-1.5）：true = 副作用工具（写文件 / 执行命令 /
+   * MCP 调用等）执行**前**必须由用户逐条授权，引擎会挂起等待裁决。
+   *
+   * 与 `fullAccess` 是正交两轴——前者管「能碰哪里」，本字段管「要不要先问」。
+   * 但 `fullAccess` 是更粗的开关：开启后不再逐条询问（见 sessionsStore
+   * 中 approvalMode 的推导）。
+   */
+  toolApproval?: boolean;
   /** 会话级模型覆盖；未设置时回退全局默认模型 */
   model?: string;
   /** 会话来源 IM 频道（如 dingtalk / feishu）；缺省为本地会话 */

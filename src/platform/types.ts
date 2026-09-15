@@ -160,7 +160,14 @@ export interface GatewayRestartResult {
  * 永不直接 import 'electron'。所有环境差异在 platform/ 内部消化。
  */
 
-/** 统一异步存储适配器（Zustand persist 与业务层共用） */
+/**
+ * 统一异步存储适配器（Zustand persist 与业务层共用）。
+ *
+ * 契约是「写进去什么、读出来什么」，**不约定后端的具体表示**：
+ * - electron：桥接层按文本传递，落盘为 ① `~/.nanowork/` 或 ② userData 下的文件；
+ * - web：localStorage，值会带一层 JSON 转义（实现细节，调用方不得依赖）。
+ * 实际调用方一律按字符串取用（`get<string>`）。
+ */
 export interface StorageAdapter {
   get<T>(key: string): Promise<T | null>;
   set<T>(key: string, value: T): Promise<void>;
@@ -174,9 +181,11 @@ export interface PlatformAdapter {
   storage: StorageAdapter;
   notify(title: string, body: string): void;
   /**
-   * 写入文本文件（用于导出 nanobot 配置片段等）。
-   * - electron：写入磁盘真实路径；
-   * - web：降级为浏览器下载（path 作为文件名）。
+   * 写入文本文件（用于导出记忆、nanobot 配置片段等）。
+   * - electron：**相对路径**解析到产品自有目录 `~/.nanowork/`（如 `MEMORY.md`
+   *   → `~/.nanowork/MEMORY.md`）；绝对路径须落在用户主目录 / userData /
+   *   `~/.nanowork/` 内，越界一律拒绝；
+   * - web：降级为浏览器下载（path 仅作为下载文件名）。
    */
   writeTextFile(path: string, content: string): Promise<void>;
   /**
@@ -367,6 +376,7 @@ export interface ElectronAPI {
   storageRemove(key: string): Promise<void>;
   storageClear(): Promise<void>;
   notify(title: string, body: string): void;
+  /** 写入文本文件；相对路径解析到 `~/.nanowork/`，绝对路径须在允许的根内 */
   writeTextFile(path: string, content: string): Promise<void>;
   /** 启动 nanobot 网关子进程（桌面端自动拉起） */
   nanobotStart(): Promise<boolean>;

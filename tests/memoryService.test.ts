@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { MemoryService } from '@/lib/memory';
 import { useSettingsStore, DEFAULT_TRANSCRIPTION, DEFAULT_DESKTOP } from '@/stores/settingsStore';
-import { NanobotClient } from '@/ai/nanobotClient';
+import { NanobotClient } from '@/ai/runtime/nanobotHttp/chat';
 import { MEMORY_KEY_PREFIX } from '@/lib/constants';
 
 /** 重置 settings 到初始态，避免跨用例串扰 */

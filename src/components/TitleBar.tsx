@@ -208,6 +208,7 @@ export function TitleBar() {
     createSession(undefined, "新任务", {
       workdir: current?.workdir,
       fullAccess: current?.fullAccess,
+      toolApproval: current?.toolApproval,
     });
     navigate(ROUTES.chat);
   };

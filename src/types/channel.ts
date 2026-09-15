@@ -10,7 +10,7 @@
  * - wecom：botId / secret（必填）+ allowFrom。
  *
  * 配置仅本地持久化（Zustand persist），同步时生成可合并进 nanobot
- * config.json 的 `channels` 片段（见 ai/nanobotChannels.ts）。
+ * config.json 的 `channels` 片段（见 ai/runtime/nanobotHttp/channels.ts）。
  */
 
 /** 支持的 IM 渠道（与 nanobot channel name 对齐；lark 为 feishu 的 domain 变体） */

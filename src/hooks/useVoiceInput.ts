@@ -147,6 +147,11 @@ export function useVoiceInput(options: UseVoiceInputOptions): UseVoiceInputResul
       setTranscribing(true);
       try {
         const client = await connectionManager.getClient();
+        // 转录是可选能力：方法存在性即能力声明（见 ai/runtime/types.ts），
+        // 不具备时显式报可读错误，而不是抛 TypeError
+        if (!client.transcribe) {
+          throw new Error('当前引擎不支持语音转录');
+        }
         const { language } = useSettingsStore.getState().settings.transcription ?? {
           language: '',
         };

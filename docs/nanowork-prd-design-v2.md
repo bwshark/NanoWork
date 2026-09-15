@@ -46,7 +46,7 @@
 
 | # | 决策 | 为什么必须现在做 | 对应章节 |
 |---|---|---|---|
-| D1 | **引擎契约层（AgentRuntime 防腐层）** | 当前 nanobot 的 HTTP/SSE 契约散落在 `nanobotClient`、`nanobotConfig`、`nanobotChannels`、`nanobotTasks` 四处。nanobot 迭代快、API 不稳（`docs/nanowork-prd.md` 风险表已识别）。一旦要换成「ACP 式协议」或升级引擎大版本，改动会横穿渲染层 | 第 8 章 |
+| D1 | **引擎契约层（AgentRuntime 防腐层）** ✅ 已落地（见 8.4.1） | 当前 nanobot 的 HTTP/SSE 契约散落在 `nanobotClient`、`nanobotConfig`、`nanobotChannels`、`nanobotTasks` 四处。nanobot 迭代快、API 不稳（`docs/nanowork-prd.md` 风险表已识别）。一旦要换成「ACP 式协议」或升级引擎大版本，改动会横穿渲染层 | 第 8 章 |
 | D2 | **事件化会话存储 + 同步元数据** | 当前会话是 Zustand `persist` 的整块 JSON blob。它天然不支持：回滚、分支、重放、增量同步、大历史性能。WorkBuddy 用 `parentId` 串成的 JSONL 事件 DAG 正是为此。跨端同步设计也依赖 `rev/updatedAt/deletedAt` | 第 9 章 |
 | D3 | **三级权限模型（提示词 / 客户端 / 运行时）** | 当前只有「提示词软约束 + 弹窗」，而 WorkBuddy 的结论是**必须代码强制兜底**（shim 劫持 → 回收站 → fail-closed）。企业准入门槛（`docs/nanowork-prd.md` F5.x）全靠这一层。V1 若不建立「工具调用网关」这一收口点，V3 的审批流无处分插 | 第 11 章 |
 
@@ -78,11 +78,17 @@
 
 **引擎接入**
 
-- `src/ai/nanobotClient.ts` —— OpenAI 兼容 `/v1/chat/completions` SSE 客户端；透传 `session_id` / `model` / `workspace` / `access_mode`；支持 multipart 文件上传（`files`）。
+- `src/ai/runtime/` —— **引擎契约层（D1）**，渲染层与引擎交互的唯一出口（见第 8 章）：
+  - `types.ts` —— `AgentRuntime` 接口、能力声明、配置域与 wire 类型（原 `src/ai/types.ts` 已并入）
+  - `index.ts` —— 工厂 `getRuntime()`
+  - `nanobotHttp/runtime.ts` —— 当前实现 `NanobotHttpRuntime`
+  - `nanobotHttp/chat.ts` —— OpenAI 兼容 `/v1/chat/completions` SSE 客户端；透传 `session_id` / `model` / `workspace` / `access_mode`；支持 multipart 文件上传（`files`）
+  - `nanobotHttp/config.ts` / `channels.ts` / `tasks.ts` —— 把前端配置**反向镜像**进 nanobot 的 `config.json` / `cron/jobs.json`；`tasks.ts` 另含 cron 运行审计 → `TaskRunRecord` 映射
+  - `nanobotHttp/sseToolCalls.ts` —— 标准 OpenAI `delta.tool_calls` 增量解析（预留，网关下发即生效）
+  - `nanobotHttp/artifactExtractor.ts` —— 从完成文本的围栏块启发式提取 code / mermaid / html 产物
+  - `codec.ts` —— 引擎配置键名归一（camelCase ⇄ snake_case）统一收口
 - `src/ai/connectionManager.ts` + `ConnectionBanner` —— 网关可达性探测（`connected` / `offline`）。
-- `src/ai/sseToolCalls.ts` —— 标准 OpenAI `delta.tool_calls` 增量解析（预留，网关下发即生效）。
-- `src/ai/artifactExtractor.ts` —— 从完成文本的围栏块启发式提取 code / mermaid / html 产物。
-- `src/ai/nanobotConfig.ts`、`nanobotChannels.ts`、`nanobotTasks.ts`、`cronTaskMirror.ts`、`cronMirrorWatcher.ts`、`cronRunsPoller.ts` —— 把前端配置**反向镜像**进 nanobot 的 `config.json` / `cron/jobs.json` 并热加载。
+- `src/ai/cronTaskMirror.ts`、`cronMirrorWatcher.ts`、`cronRunsPoller.ts` —— 聊天中 `cron` 工具创建的任务镜像进任务列表、执行留痕轮询（属产品行为，不属引擎契约层）。
 
 **会话与交互**
 
@@ -367,8 +373,8 @@ V1 的方案是把 cron 镜像进本地 `nanobot` 的 `jobs.json`（已实现）
 
 | 编号 | 名称 | 优先级 | 现状 | 环境 | 验收标准 |
 |---|---|---|---|---|---|
-| FR-8.1 | 敏感操作门控 | P0 | ✅ | both | 文件/终端/网络前弹确认并记录决策（已实现） |
-| FR-8.2 | **工具调用网关（唯一收口）** | **P0** | ⬜ | both | 所有工具调用必须经统一网关；网关负责：白名单校验 → 策略决策（allow / sandbox / deny）→ 审计记录。**任何绕过网关的路径视为缺陷** |
+| FR-8.1 | 敏感操作门控 | P0 | ✅ | both | 副作用工具（写文件/执行命令/MCP 调用）执行**前**弹确认并记录决策；**收口在引擎**（挂起 + 裁决回传，见 11.1.1）。只读工具自动放行；超时未响应按拒绝（fail-closed） |
+| FR-8.2 | **工具调用网关（唯一收口）** | **P0** | 🟡 | both | 收口**落点已定并落地在引擎**（`before_execute_tool` 否决通道 + `POST /v1/tool-approvals/{id}`，见 ADR-021）：所有副作用工具调用必须经此裁决，绕过即缺陷。**仍待做**：Agent 工具白名单校验（FR-2.2）、`sandbox` 决策档、审计记录 |
 | FR-8.3 | **运行时硬兜底** | **P0** | ⬜ | electron | 删除类操作改道系统回收站而非真删；回收站失败时 **fail-closed**（报错而非降级为真删）；临时目录例外。浏览器端无此能力，降级为「禁止删除类工具 + 明确提示」 |
 | FR-8.4 | **默认拒绝写入策略** | **P0** | ⬜ | electron | 白名单制：未在允许列表中的路径默认禁止写入；`.ssh` / `.gnupg` 等凭据目录为 `no_access`（连读也禁止） |
 | FR-8.5 | 沙箱执行 | P1 | 🟡 | electron | 执行类任务在受限上下文中运行：nanobot 已有 `tools/sandbox.py` 与 `security/`，需显式启用 + 目录白名单 + 子进程树强杀（对齐 WorkBuddy Job Object） |
@@ -464,7 +470,7 @@ V1 的方案是把 cron 镜像进本地 `nanobot` 的 `jobs.json`（已实现）
 
 | 阶段 | 范围 | 交付物 | 验收门禁 |
 |---|---|---|---|
-| **M1 引擎与事件地基** | D1 引擎契约层、D2 事件化会话与索引库、D3 工具网关骨架 | `AgentRuntime` 接口 + `NanobotHttpRuntime`；JSONL 事件流 + SQLite 索引；事件类型定义 | 全部旧功能经新契约跑通；`npm run build` 绿；单测不回退 |
+| **M1 引擎与事件地基** | D1 引擎契约层、D2 事件化会话与索引库、D3 工具网关骨架、**18.2 用户数据目录收敛** | `AgentRuntime` 接口 + `NanobotHttpRuntime`；JSONL 事件流 + SQLite 索引；事件类型定义；渲染层持久化迁出 `<userData>` 单文件；修复 `MEMORY.md` 落盘静默失败 | 全部旧功能经新契约跑通；`npm run build` 绿；单测不回退；`MEMORY.md` 在 Electron 下真实落盘且有测试覆盖 |
 | **M2 安全与执行模式** | FR-1.4/1.5、FR-8.2/8.3/8.4、FR-2.2 | Ask/Plan/Craft、计划审批、工具网关 + 回收站改道 + 默认拒绝写入 + Agent 工具白名单 | 绕过路径审计为 0；越权调用被拦截有测试；删除类操作 100% 进回收站 |
 | **M3 扩展与提示词** | FR-3.1/3.2/3.4、FR-4.2/4.3、P-提示词外置 | Skill 目录扫描 + 三态覆盖、Plugin 包格式、用户级记忆、身份文件、模式×领域×风格模板 | 装一个示例 Plugin 端到端可用；提示词可外置修改不重编译 |
 | **M4 自动化与产物** | FR-5.4/5.6、FR-6.3/6.4、FR-7.2/7.3 | RRULE + 有效期、结果回推 IM、IM 会话归档、产物索引、文件回滚 | 任务结果能推回企微；回滚能恢复指定步前的文件状态 |
@@ -474,6 +480,14 @@ V1 的方案是把 cron 镜像进本地 `nanobot` 的 `jobs.json`（已实现）
 | **M8 企业（V3）** | R12 全部 | 多租户、SSO、RBAC、审批、计费、沙箱强化 | 过等保二级对齐检查；私有化一键部署 |
 
 **跨阶段门禁**：每个 M 结束必须满足——(a) `npm run build` 绿；(b) 新增能力有单测；(c) 新增平台能力有 web 降级路径并写明；(d) 本文档与 `openspec` spec 同步更新。
+
+> **进度（2026-09）**：M1 中的「**18.2 用户数据目录收敛**」与「**D1 引擎契约层**」已完成；**工具调用逐条批准**（FR-8.1 + FR-8.2 的收口落点）已落地（D3）。
+>
+> - **18.2 用户数据目录收敛**：渲染层持久化从 `<userData>/nanowork-store.json` 单文件拆为**一 key 一文件**并按归属路由（① 用户资产 / ② 运行时），旧数据一次性可回滚迁移，`MEMORY.md` 落盘缺陷修复（见 18.2.5）。`storageRoutes` 单测覆盖路由归属与路径安全。
+> - **D1 引擎契约层**：四个散落的引擎模块搬进 `src/ai/runtime/nanobotHttp/`，渲染层改为只经 `AgentRuntime` 与引擎交互；`src/ai/types.ts` 并入 `runtime/types.ts`；键名归一并入 `codec.ts`；顺带清掉 5 处死代码/重复实现（见 8.4.1）。
+> - **D3 工具调用逐条批准**：给引擎的 `before_execute_tool` 加**否决通道**，引擎可在副作用工具执行前挂起、经 SSE 下发审批请求、由 `POST /v1/tool-approvals/{id}` 接收裁决；客户端新增 `capabilities.toolApproval` / `approvalMode` / `onApprovalRequest` / `respondApproval()`，并把原先**纯本地的假门控**（拦不住引擎、工具照常执行，见 FR-8.1）替换为真实回环。会话级开关与 `fullAccess` 为**正交两轴**，`full` 覆盖之（见 10.3.1 / 11.1.1 / ADR-021）。
+>
+> 三套 `tsc`、`vitest`（31 文件 / 507 用例）与 `npm run build` 全绿；引擎侧 `pytest` 相关用例全绿。**未做**：M1 的 D2 事件化会话；M2 的 Ask/Plan/Craft 三模式与 **FR-1.5 的 Plan 清单式审批 UI**（本次只落地了它依赖的「未批准不得执行写类工具」的强制机制）、FR-8.3/8.4 硬兜底、FR-2.2 Agent 工具白名单。
 
 **系统交付对照**（对应 2.5 的清单）：M1–M5 全部落在**客户端**（0 个新系统）；**M6 交付系统 ①**（云核）；**M7 交付 ②③**（若承诺关机执行则含 ④）；**M8 交付 ⑤⑥⑦⑧**。
 
@@ -563,30 +577,31 @@ flowchart TD
 
 ## 8.1 问题
 
-当前引擎契约散落四处，任何一处 nanobot 变更都会引发横向改动：
+当前引擎契约散落四处，任何一处 nanobot 变更都会引发横向改动（下表落点为 **D1 迁移前**的位置，迁移后对应 `src/ai/runtime/nanobotHttp/` 下的同名文件）：
 
-| 落点 | 现状 | 耦合内容 |
-|---|---|---|
-| `ai/nanobotClient.ts` | SSE / multipart 请求 | URL 形状、`access_mode`、`session_id`、字段命名 |
-| `ai/nanobotConfig.ts` | 生成 `mcpServers` 片段 | 配置文件结构、落盘位置、重启要求 |
-| `ai/nanobotChannels.ts` | 生成 `channels` 片段 | 5 渠道的字段命名（camelCase vs snake_case）、feishu `instances[]` 结构 |
-| `ai/nanobotTasks.ts` | 生成 `cron/jobs.json` 片段 | `CronSchedule` 三形态、`sessionKey` 绑定语义、`nextRunAtMs` 计算 |
+| 落点（迁移前） | 现状 | 耦合内容 | 迁移后 |
+|---|---|---|---|
+| `ai/nanobotClient.ts` | SSE / multipart 请求 | URL 形状、`access_mode`、`session_id`、字段命名 | `nanobotHttp/chat.ts` |
+| `ai/nanobotConfig.ts` | 生成 `mcpServers` 片段 | 配置文件结构、落盘位置、重启要求 | `nanobotHttp/config.ts` |
+| `ai/nanobotChannels.ts` | 生成 `channels` 片段 | 5 渠道的字段命名（camelCase vs snake_case）、feishu `instances[]` 结构 | `nanobotHttp/channels.ts` |
+| `ai/nanobotTasks.ts` | 生成 `cron/jobs.json` 片段 | `CronSchedule` 三形态、`sessionKey` 绑定语义、`nextRunAtMs` 计算 | `nanobotHttp/tasks.ts` |
 
-其中 `nanobotChannels.ts` 的注释已经暴露了这种耦合的代价——为了兼容 `allowFrom` / `allow_from` 两种键名、为飞书实例身份漂移做兜底归一，代码里堆了大量防御逻辑。
+其中 `nanobotChannels.ts` 的注释已经暴露了这种耦合的代价——为了兼容 `allowFrom` / `allow_from` 两种键名、为飞书实例身份漂移做兜底归一，代码里堆了大量防御逻辑。**这类归一现已全部收口到 `runtime/codec.ts`**（`readStr` / `readBool` / `readStrArray` / `readEnum`），域模块只负责「哪个领域字段映射到哪个引擎键」。
 
 ## 8.2 设计
 
 引入单一接口 `AgentRuntime`，**所有**引擎交互从它出发：
 
 ```ts
-// src/ai/runtime/types.ts
+// src/ai/runtime/types.ts —— 已实现形态（与初稿的差异见下方「落地修订」）
 export interface AgentRuntime {
   readonly kind: string;                  // 'nanobot-http'
   readonly capabilities: RuntimeCapabilities;
 
-  /** 流式对话（唯一对话入口） */
+  /** 流式对话（唯一对话入口）。Promise 在流结束（正常/出错/被中断）后解析，
+   *  不以 reject 表达协议错误——错误经 handlers.onError 上报 */
   chat(req: ChatRequest, handlers: StreamHandlers): Promise<void>;
-  /** 中断进行中的流式响应 */
+  /** 中断进行中的流式响应（按会话寻址，无活跃请求时静默 no-op） */
   abort(sessionId: string): Promise<void>;
 
   /** 模型目录 */
@@ -594,18 +609,45 @@ export interface AgentRuntime {
   /** 可达性探测 */
   probe(): Promise<ConnectionStatus>;
 
-  /** 配置类镜像（写侧）：把本地配置推给引擎 */
-  sync(section: RuntimeSection, payload: unknown): Promise<SyncResult>;
-  /** 配置类读取（回显侧）：从引擎回读真实状态 */
-  read(section: RuntimeSection): Promise<unknown>;
+  /** 配置类镜像（写侧）：入参是**领域对象**，不是引擎片段字符串 */
+  sync<S extends RuntimeSection>(
+    section: S,
+    payload: RuntimeSyncPayload[S],
+  ): Promise<SyncResult>;
+  /** 配置类读取（回显侧）：返回领域对象；不支持的域抛 RuntimeSectionUnsupportedError */
+  read<S extends RuntimeSection>(section: S): Promise<RuntimeReadResult[S]>;
 
   /** 会话运行态查询（定时任务留痕、IM 会话归档） */
   listRuns(query: RunQuery): Promise<TaskRunRecord[]>;
-  /** 字幕/语音转录 */
-  transcribe?(blob: Blob, cfg: TranscriptionConfig): Promise<string>;
+  /** 语音转录。方法存在性即能力声明；不具备的实现不定义此方法 */
+  transcribe?(req: TranscribeRequest): Promise<string>;
 }
 
 export type RuntimeSection = 'connectors' | 'channels' | 'tasks' | 'models' | 'memory';
+
+/** 各域的写入载荷（never = 该方向不支持，编译期拦截） */
+export interface RuntimeSyncPayload {
+  connectors: MCPConfig[];
+  channels: ChannelConfig[];
+  tasks: TaskConfig[];
+  models: never;
+  memory: never;
+}
+/** 各域的回读结果（tasks 用 listRuns()；memory 在产品自有目录，见 18.2） */
+export interface RuntimeReadResult {
+  connectors: MCPConfig[];
+  channels: ChannelConfig[];
+  models: ModelInfo[];
+  tasks: never;
+  memory: never;
+}
+
+export interface SyncResult {
+  ok: boolean;
+  message: string;         // 必填：每次同步都要能解释「写到哪 / 要不要重启 / 有没有降级」
+  changed?: boolean;
+  needsRestart?: boolean;
+}
 
 export interface RuntimeCapabilities {
   /** 事件能力协商：不具备则 UI 降级 */
@@ -613,30 +655,48 @@ export interface RuntimeCapabilities {
   toolCalls: boolean;      // 下发标准 tool_calls 增量
   artifacts: boolean;      // 下发 artifact 事件
   hotReload: boolean;      // 配置热加载（无需重启）
-  channels: string[];      // 支持的 IM 渠道
+  channels: ChannelKind[]; // 支持的 IM 渠道（取值域与产品侧一致，不是裸 string[]）
   sessions: boolean;       // 支持会话级隔离
 }
 ```
 
-**实现划分**：
+**实现划分**（与初稿的差异：多出 `codec.ts` 的读/写两侧读取器、`sseToolCalls` 与
+`artifactExtractor` 一并移入；`chat.ts` 承载 transport 原语）：
 
 ```
 src/ai/runtime/
-  types.ts               # 接口与能力声明
-  index.ts               # 工厂：按 settings 选择实现 + 能力缓存
-  nanobotHttp/runtime.ts # 当前实现（迁移 nanobotClient）
+  types.ts                    # 契约：AgentRuntime / 能力 / section / wire 类型（原 ai/types.ts 并入）
+  codec.ts                    # 键名归一（camelCase ⇄ snake_case）统一收口于此
+  index.ts                    # 工厂 getRuntime()（惰性单例）+ 测试替换点
   nanobotHttp/
-    chat.ts              # SSE 解析
-    config.ts            # 通用配置片段读写（迁移 nanobotConfig）
-    channels.ts          # channels 段映射（迁移 nanobotChannels）
-    tasks.ts             # jobs.json 映射（迁移 nanobotTasks）
-    codec.ts             # 键名归一（camelCase ⇄ snake_case）统一在这一处收口
+    runtime.ts                # NanobotHttpRuntime：编排（inflight 登记、section 分派、能力声明）
+    chat.ts                   # transport：SSE / multipart / 转录（迁移自 nanobotClient）
+    config.ts                 # connectors 域（迁移自 nanobotConfig）
+    channels.ts               # channels 域（迁移自 nanobotChannels）
+    tasks.ts                  # tasks 域 + cron 运行审计映射（迁移自 nanobotTasks）
+    sseToolCalls.ts           # OpenAI tool_calls 增量聚合（随域迁入）
+    artifactExtractor.ts      # 围栏块 → artifact 启发式提取（随域迁入）
 ```
+
+### 8.2.1 落地修订（2026-09）
+
+契约初稿有四处需要修订，均已按「修契约而非将就实现」处理：
+
+| 初稿 | 落地形态 | 原因 |
+|---|---|---|
+| `sync(section, payload: unknown)` / `read(section): Promise<unknown>` | 泛型 + `RuntimeSyncPayload` / `RuntimeReadResult` 映射表 | `unknown` 让调用点全靠断言；映射表把「每个域该传/该收什么」变成编译期事实，不支持的方向用 `never` 直接拦住 |
+| `transcribe?(blob, cfg: TranscriptionConfig)` | `transcribe?(req: TranscribeRequest)`，配置由实现自读 | 转录 endpoint / token / model 属实现细节。让 UI 组装 `cfg` 等于把服务地址泄漏到渲染层；`TranscriptionConfig` 也随之不必进契约 |
+| `channels: string[]` | `channels: ChannelKind[]` | 渠道取值域产品侧已有枚举，用 `string[]` 会放过拼错的渠道名 |
+| `SyncResult.message?` | `message: string`（必填） | 强制每次同步给出可展示说明，同时与 platform 侧 `MCPSyncResult` / `ChannelSyncResult` / `TaskSyncResult` 结构兼容，实现可零转换透传 |
+
+`ChatHandle`（`done` + `abort()`）**不进契约**：它是 transport 原语，只存在于
+`nanobotHttp/chat.ts` 与 `NanobotHttpRuntime` 内部。对外只暴露 `chat()` + `abort(sessionId)`，
+避免把「句柄生命周期」这种传输细节泄漏给 store。
 
 ## 8.3 三个收益
 
 1. **升级只改 Adapter**：nanobot 大版本变更时，改动被限制在 `nanobotHttp/` 内。
-2. **能力协商落地**（FR-9.3）：`capabilities` 让 UI 主动降级。今天的「`sseToolCalls` 已实现但网关不下发」是一个隐式假设，接入后变成显式声明——UI 无需猜测。
+2. **能力协商落地**（FR-9.3）：`capabilities` 让 UI 主动降级。「`sseToolCalls` 已实现但网关不下发标准 tool_calls」过去是散在注释里的隐式假设，现已固化为 `capabilities.toolCalls === false` 的显式声明——UI 无需猜测。
 3. **为 ACP 化预留**：若未来 nanobot 或其替代品提供 ACP 式双向协议，只需新增 `NanobotAcpRuntime`，UI 与 store 零改动。这正是 WorkBuddy 的核心解耦手法。
 
 ## 8.4 迁移策略
@@ -649,6 +709,48 @@ src/ai/runtime/
 4. 补能力协商分支与降级 UI。
 
 **验收**：`gateway.integration.test.ts` 等既有集成测试在迁移前后均通过，且不修改测试语义。
+
+### 8.4.1 落地记录（2026-09）
+
+**边界规则（本节的验收口径，ADR-020）**：`src/ai/runtime/nanobotHttp/**` 是**唯一**
+允许知道 nanobot wire 格式（`session_id` / `access_mode` / `mcpServers` / `jobs.json` /
+`delta.nanobot_event`）的地方。渲染层只允许 import `@/ai/runtime`（及其 `./types`）。
+
+迁移采用**直接搬迁**而非「先转调再删除」：因为四个旧模块的公开面就是新实现的下层，
+若先做转调层，第三步删除旧模块时等于重写一遍，白做一轮。搬迁过程中逻辑逐字保留。
+
+| 动作 | 结果 |
+|---|---|
+| 6 个文件 `git mv` 进 `nanobotHttp/`（保留历史） | `chat.ts` / `config.ts` / `channels.ts` / `tasks.ts` / `sseToolCalls.ts` / `artifactExtractor.ts` |
+| `src/ai/types.ts` 并入 `runtime/types.ts` 后删除 | 契约层从两个门收敛为一处；`@/ai/types` 全仓 0 引用 |
+| 调用点切换 | `connectionManager`（持 `AgentRuntime`，惰性取实现）、`sessionsStore`、`lib/memory`、`mcpStore`、`channelsStore`、`tasksStore`、`useVoiceInput`、`lib/attachments` |
+| 键名归一收口 | `codec.ts` 提供 `readStr` / `readBool` / `readStrArray` / `readEnum` / `putIf` / `parseCommand` / `joinCommand`；channels / config 两域不再各写一遍 `allowFrom ?? allow_from` |
+
+**迁移中顺带清掉的死代码与重复实现**（均为 0 引用或同知识抄两遍，删除不改行为）：
+
+1. `nanobotConfig.buildNanobotMcpConfigPatch` / `buildNanobotConfigFragment` —— 0 引用。
+2. `nanobotConfig.syncToNanobotRuntime` —— 只被 `mcpStore.syncMcpViaPlatform` 的兜底分支调用，而该分支条件是「platform 未提供 `syncNanobotMcp`」，但 platform 的 web 实现早已提供（降级为下载），**兜底永不触发**。两处一并删除。
+3. `nanobotTasks.syncTasksToNanobotRuntime` 自带的 `isElectron()` web 分支 —— 与 `platform.syncNanobotTasks` 的 web 降级重复，且下载文件名不一致（`nanobot.jobs.json` vs 其余两域的 `nanowork.<域>.json`）。删掉本地分支后三域命名统一。
+4. `tasksStore.cronRunToRecord` —— 与运行审计映射同源，已上移到 `nanobotHttp/tasks.ts` 的 `toTaskRunRecord`，`tasksStore.fetchCronRuns` 改经 `runtime.listRuns()` 取数。
+5. `mcpStore.MCPSyncResult` —— 与 platform 侧同名接口重复（且无人 import），统一用契约层的 `SyncResult`。
+
+**两个环境陷阱（沿用本节经验）**：
+
+- **`platform.env` ≠ `isElectron()`**：`isElectron()` 直接查 `window.electronAPI`，而
+  `platform.env` 是 platform 层在加载时定下的字段（测试会改写它来模拟环境）。
+  「是否有文件系统权限」必须用 `platform.env !== 'electron'` 判断——用 `isElectron()`
+  会让 `mcpStore` 的 electron 空集用例（改写 `platform.env` 但无 `electronAPI`）判错分支。
+  环境判定现已收敛到 adapter 一处（`syncMcpToRuntime` / `readMcpFromRuntime` /
+  `readChannelsFromRuntime`），三个 store 不再各写一遍。
+- **`kind` 语义变更**：`getClient()` 返回的由 `NanobotClient`（`kind='nanobot'`）变为
+  `AgentRuntime`（`kind='nanobot-http'`），`connectionManager.test.ts` 的两处断言随之更新；
+  渲染层无任何分支依赖该值，它只用于日志与诊断。
+
+**中断语义（FR-中断）的连带简化**：`sessionsStore.SessionStream` 的
+`handle: ChatHandle | null` 收敛为 `active: boolean`，中断改为 `runtime.abort(sessionId)`。
+顺带修掉一个竞态窗口：旧实现要在 `await getClient()` 之后才 `patchStream({ handle })`，
+这段 await 期间点「停止」是空的；新实现里 `active` 与请求登记同处一个同步节拍。
+
 
 ---
 
@@ -884,6 +986,7 @@ WorkBuddy 的 `sessions` 表有 `permission_mode` 与 `use_sandbox_cli` 两个�
 
 ```ts
 export type PermissionMode = 'restricted' | 'full';   // 会话级（已实现：fullAccess）
+export type ToolApprovalMode = 'auto' | 'ask';        // 会话级：要不要逐条问（D3 落地）
 export type ToolDecision  = 'allow' | 'sandbox' | 'deny';
 ```
 
@@ -895,6 +998,25 @@ export type ToolDecision  = 'allow' | 'sandbox' | 'deny';
 
 `full` 模式的语义：**只跳过 L2 的交互确认，不跳过 L3 的物理兜底**。即「完全访问」下 AI 仍不能真删文件——它只能把文件送进回收站。这是本产品与「无脑全权限」的关键区别，也是企业准入的底气。
 
+### 10.3.1 收口落点纠偏：L2 在**引擎**，不在客户端（2026-09，D3）
+
+上表把 L2 写成「本客户端」，这是**落地时被推翻的假设**。真实链路是：
+
+> 客户端只收到一条**单向 SSE 流出**。工具的真实执行在 nanobot 引擎进程内，
+> 客户端既看不见调用、也拦不住它——把门控写在客户端，等于给一扇没有门的墙装锁。
+
+因此 L2 的唯一收口必须落在**引擎的工具执行前**（`nanobot` 的
+`before_execute_tool`），客户端只承担「呈现请求 + 回传裁决」。这带来两条正交的
+会话级轴，取值都随请求透传、按 turn 生效：
+
+| 轴 | 字段 | 语义 | 客户端落点 |
+|---|---|---|---|
+| 作用域 | `access_mode` | `restricted`=沙箱内 / `full`=放开工作空间限制 | `session.fullAccess` |
+| 询问 | `tool_approval` | `auto`=直接执行 / `ask`=副作用工具执行前逐条授权 | `session.toolApproval` |
+
+两轴正交，但 `full` 是**更粗的开关**：它已经表达了「别问我」，因此开启后不再叠加逐条审批。
+实现细节见 11.1.1，决策记录见 ADR-021。
+
 ---
 
 # 第 11 章 工具、安全与沙箱 ★
@@ -902,6 +1024,14 @@ export type ToolDecision  = 'allow' | 'sandbox' | 'deny';
 ## 11.1 工具调用网关（FR-8.2）
 
 **设计原则：所有工具调用必须经过唯一收口。**
+
+> **收口落点在引擎，不在客户端**（2026-09 纠偏，见 10.3.1 与 11.1.1）。
+> 下面这段 `src/security/toolGateway.ts` 是最初的**客户端网关**设计草案：
+> 它假设客户端能看见并裁决每一次工具调用。实测后该假设不成立（工具在引擎
+> 进程内执行，客户端只见单向 SSE），因此这一层被**引擎侧审批门**
+> （`before_execute_tool` 否决通道）取代。本代码块保留为**V3 企业版**的
+> 参考形态——届时的多租户策略、审批留痕、租户级白名单仍需一个可穷举单测的
+> 纯函数 `decide`，只是它会被下推到服务端/引擎侧执行。
 
 ```ts
 // src/security/toolGateway.ts
@@ -948,6 +1078,57 @@ export interface ToolGateway {
 7. 网络出口不在白名单                       → deny
 8. 其余                                    → allow
 ```
+
+### 11.1.1 逐条批准落地（D3，2026-09）★
+
+**目标（FR-1.5）**：用户逐条批准工具调用——副作用工具（写文件 / 执行命令 /
+MCP 调用等）执行**前**必须由用户裁决；只读工具自动放行。
+
+**为什么不能用「配置护栏」凑合**：在引擎侧配置「哪些工具禁用」只能得到
+*静态白名单*，给不了「**逐次授权**」——同一个 `write_file`，用户可能这次允许、
+下次拒绝。要拿到逐条能力，只有一条路：给引擎的工具执行前加**否决通道**
+（方案 B），让它能挂起等人。
+
+#### 四层链路
+
+| 层 | 落点 | 职责 |
+|---|---|---|
+| ① 引擎·策略与注册表 | `nanobot/security/tool_approval.py` | `ToolApprovalPolicy.requires_approval()`（**只读白名单**，未知工具默认需审批）；`PendingApprovals` 注册表（`asyncio.Future`，按 callId 会合） |
+| ② 引擎·审批门 | `nanobot/agent/hooks/tool_approval.py` | `ToolApprovalHook.before_execute_tool()`：读会话级 `tool_approval` 轴 → 下发请求 → await Future → 超时/异常按**拒绝** |
+| ③ 引擎·协议面 | `nanobot/api/server.py` | 请求解析 `approval_mode` 并入 scope；`_on_progress` 把请求经 `delta.nanobot_event` 下发；`POST /v1/tool-approvals/{id}` 接收裁决 |
+| ④ 客户端 | `src/ai/runtime/**` + `sessionsStore` + `PermissionDialog` | 契约层 `capabilities.toolApproval` / `ChatRequest.approvalMode` / `onApprovalRequest` / `respondApproval()`；store 维护**运行时**待裁决队列；弹窗呈现并回传 |
+
+反向通道是必需的：SSE 只出不进，而引擎此刻阻塞在工具执行前，所以裁决必须走
+**独立的一次 POST**（`POST /v1/tool-approvals/{id}`，body `{decision, reason?}`）。
+
+#### 三个不变量（改这块前必读）
+
+1. **fail-closed**。裁决路径**不能复用** `CompositeHook._for_each_hook_safe`——
+   它是 fail-open（逐个吞异常只记日志），用在门控上等于「策略出错就静默放行」。
+   审批走 `CompositeHook._decide_for_each_hook`：钩子抛错 → 转为拒绝，但**仍继续
+   调用其余钩子**（观察型钩子共享此方法，契约是「每个钩子都收到事件」）。
+   写成「遇 deny 短路」会打挂 `test_composite_error_isolation_all_async`。
+2. **收口要装配在两处**，否则是策略旁路：`agent/turn_hooks.py` 的基线链路
+   （覆盖 normal + **ephemeral** turn）**以及** `agent/subagent.py`（子代理直接给
+   runner 传 `hook=`，不走 `build_agent_turn_hook`）。
+3. **拒绝必须走软错误载荷**（`agent/tools/execution.py`），不能抛异常——与
+   `_classify_violation` 的既有范式一致，让模型改道而不是把整轮会话打崩。
+
+#### 已知边界（V1 有意留的口子）
+
+- **非流式路径永不审批**：`multipart`（带附件）请求返回完整 JSON、没有 SSE 通道，
+  审批请求无处下发 → 钩子直接按拒绝处理（fail-closed）。即「带附件 + 逐条批准」
+  组合下写类工具会被拒，直到 multipart 也支持流式。
+- **定时任务不启用逐条批准**：cron 运行时没有人在场，`ask` 只会等到超时后全部拒绝。
+  任务侧继续只用 `fullAccess`（作用域轴）。
+- **`ask` 不可避免会拖长一轮会话**：超时默认 300s，超时即拒绝。
+
+#### 验证
+
+- 引擎：`tests/agent/test_tool_approval.py`（策略/注册表/钩子，20 例）、
+  `tests/test_api_tool_approval.py`（协议面，9 例）。
+- 客户端：`tests/gateway.integration.test.ts`（事件解析 / 开关透传 / 裁决回传）、
+  `tests/sessionsStore.test.ts`（队列、裁决、失效处理）。
 
 ## 11.2 运行时硬兜底（FR-8.3 / FR-8.4）
 
@@ -1558,8 +1739,97 @@ rollbackTo(commitSeq: number): Promise<{ ok: true; restored: string[] } | { ok: 
 ```
 
 > 这个布局与 WorkBuddy 的用户数据目录**同构**（`settings.json` / `models.json` / `mcp.json` / `projects/<slug>/*.jsonl` / `file-history/` / `artifact-index/` / `audit-log/` / `logs/` / `traces/`）。同构的价值是：迁移、诊断、经验复用都不需要重新建立心智模型。
+>
+> ⚠️ **上面是目标态，不是现状。** 当前代码实际落在四个互不相干的根目录里，且有若干项的落点与本节声明不同。实施前**必须**先读 18.2。
 
-## 18.2 云表（V1.5 / V3）
+## 18.2 四个根：目录约定与落地现状 ★
+
+18.1 是**目标态**布局。当前代码实际落在**四个互不相干的根目录**里，且没有任何一处文档写清它们的关系。不显式约定边界，往后每新增一项能力就会再散落一处硬编码——`USER_SKILLS_DIR`（`electron/main.ts`）就是刚落下的第一个。
+
+### 18.2.1 四个根（本机实测，2026-09）
+
+| # | 根 | 实际路径 | 职责 | 内容（M1 目录化后） |
+|---|---|---|---|---|
+| ① | 产品自有目录 | `~/.nanowork/` | 跨工作区、跨端的用户资产 | `settings.json`、`mcp.json`、`channels.json`、`experts/{agents,groups}.json`、`skills/`（含 `index.json`）、`memory/`、`MEMORY.md`（导出） |
+| ② | Electron 用户数据目录 | `<userData>`（Win 打包后 `%APPDATA%\nanowork`） | 运行时数据 | `sessions.json`、`tasks.json`、`artifacts.json`、`device-id.txt`、`misc/`（未登记 key 兜底）、`nanowork-store.json.migrated`（旧 blob 备份） |
+| ③ | 引擎配置目录 | `{nanobot config 所在目录}`（本机 = 仓库根） | 引擎配置及其派生数据 | `nanobot.config.json`、`sessions/<workspace_id>/`、`llm_usage.sqlite3` |
+| ④ | 引擎工作区 | `{config.agents.defaults.workspace}`（本机 = `<repo>/.nanowork-workspace/`） | 引擎运行时工作区 | `memory/MEMORY.md`、`cron/jobs.json`、`cron/runs/` |
+
+② 归 Electron 管理；③ 与 ④ 由**引擎**决定，在 `electron/main.ts` 的 `resolveNanobotWorkspacePath()` 中解析（读 config 的 `agents.defaults.workspace` 并展开 `~`，缺省回退 `~/.nanobot/workspace`，与引擎 `get_workspace_path` 一致）。**只有 ① 是产品自己定的。**
+
+> **② 中的 `sessions.json` / `tasks.json` / `artifacts.json` 是「过渡落点」，不是终态。** 它们按 18.2.3 原则 1 本应逐步迁向 ① 或 D2 的实体化结构（`projects/<slug>/*.jsonl` + `index/sessions.db`）；M1 只做到「单文件 blob → 一 key 一文件」，因为这三者是随会话产生的大对象，迁 ① 会与「用户手工可编辑」的定位冲突。见 18.2.5 的落点表与 ADR-019。
+
+### 18.2.2 与 18.1 的逐项对照
+
+| 18.1 声明 | 实现现状 | 判定 |
+|---|---|---|
+| `~/.nanowork/settings.json` | ✅ 已落地：`STORAGE_KEYS` 经 `storageRoutes` 路由到独立文件，缩进美化可手工编辑 | ✅ M1 已收口 |
+| `~/.nanowork/models.json` | `modelsStore` 无 `persist`（内存态/派生），未落盘 | ⬜ 待建 |
+| `~/.nanowork/MEMORY.md` | ✅ 记忆落 `~/.nanowork/memory/<workspace>.md`（原样 Markdown）；`MEMORY.md` 作为导出名落 `~/.nanowork/`（见 18.2.4-①） | ✅ M1 已收口 |
+| `~/.nanowork/SOUL.md` 等身份文件 | 未实现（FR-4.3 ⬜） | ⬜ 待建 |
+| `~/.nanowork/skills/` | `USER_SKILLS_DIR`，逐目录解析 `SKILL.md`；启用态与索引落 `skills/index.json` | ✅ 已落地 |
+| `~/.nanowork/experts/` | ✅ `agents.json` / `groups.json` 已路由落地；但**内置专家仍在源码** `src/ai/builtin*.ts`，未外置为 ① 下的包 | ⚠️ 半落地 |
+| `~/.nanowork/plugins/{marketplaces,cache}/` | 无 | ⬜ 待建（规范见 12.6） |
+| `~/.nanowork/connectors/` | 无 | ⬜ 待建 |
+| `~/.nanowork/mcp.json` | ✅ 渲染层 MCP 注册表落 ① `mcp.json`；引擎生效副本仍同步写 ③ `config.json.tools.mcpServers`（两者职责不同，非重复） | ✅ 已落地 |
+| `<workspace>/.nanowork/memory/` | ④ 的 `memory/`，但根目录名是 `.nanowork-workspace` | ⚠️ 命名不一致 |
+| `<workspace>/.nanowork/skills/` | 无（项目级技能未实现） | ⬜ 待建 |
+| `<userData>/projects/<slug>/` | ③ 的 `sessions/<workspace_id>/`；渲染层会话暂为 ② `sessions.json` | ⚠️ 落点与声明不同（D2 落地后迁实体流） |
+| `<userData>/index/sessions.db` | 无；用量数据在 ③ 的 `llm_usage.sqlite3` | ⚠️ 落点与声明不同 |
+| `<userData>/file-history/` | 无（`lib/undoStack.ts` 是**输入框草稿**撤销，非文件回滚） | ⬜ 待建（FR-7.3） |
+| `<userData>/artifact-index/` `logs/` `traces/` `audit-log/` `sync/` | 无 | ⬜ 待建 |
+
+这张表的价值不在「有几项没做」——那本就属排期。关键在**两类偏差性质完全不同**：`⬜` 是没做，按里程碑推进即可；`⚠️` 是**落点与声明不一致**，会在 V1.5 做同步时集中爆发——同步要按实体粒度读写，而现状是一块 blob 加几个引擎私有目录。
+
+### 18.2.3 三条收敛原则
+
+1. **用户资产进 ①，不进 ②。** ② 是 Electron 的实现细节（卸载即可能被清），且单文件 blob 无法按实体同步。V1 已把**数据实体**拆开（事件流 JSONL + `SyncMeta`），**渲染层持久化**也已在 M1 落成「一 key 一文件 + 按 key 路由归属」（见 18.2.5）——用户资产（`settings` / `mcp` / `channels` / `experts` / `skills` 索引 / 记忆）全部进 ①，仅 `sessions` / `tasks` / `artifacts` 作过渡落点留在 ②，待 D2 的实体化结构（`projects/<slug>/*.jsonl` + `index/sessions.db`）落地后消化。
+2. **引擎产物留在 ③ / ④，不要「统一」到 ①。** 引擎按 config 自己寻址，搬动会让它找不到文件，`FR-5.x` 的 cron 热加载随之失效。③ / ④ 的路径只允许一个来源：`resolveNanobotWorkspacePath()`。
+3. **渲染层只经 `platform` 访问 ①，禁止自拼路径。** 现状守得很干净（`window.electronAPI` 仅出现在 `src/platform/`），需固化为 CI 检查——ADR-004 的工具网关收口依赖这条边界。
+
+### 18.2.4 两个实测缺陷（M1 已关闭）
+
+**① `MEMORY.md` 在 Electron 下从未真正落盘 —— 已修复。**
+
+*根因（修复前）*：`memory.ts` 与 `MemoryPage.tsx` 调用 `platform.writeTextFile(MEMORY_FILENAME, text)`，传的是**纯文件名** `'MEMORY.md'`；而主进程 `fs:writeTextFile` 只做 `startsWith(home | userData)` 安全校验、**不做路径拼接**，纯文件名必然校验失败 → 抛错 → 被 `memory.ts` 的空 `catch` 吞掉。注释与 `docs/architecture-memory.md` 承诺的「Electron 额外写真实 MEMORY.md」始终未生效，且因静默降级从未暴露。
+
+*修法（M1）*：
+- **记忆正文不再走 `writeTextFile` 二段写入**，改为经 `platform.storage` 的 key `nanowork.memory.<workspace>` 直接路由到 `~/.nanowork/memory/<workspace>.md`（原样 Markdown），`memory.ts` 的整段「写文件 + 空 catch」一并删除；
+- **`writeTextFile` 补上相对路径语义**：相对路径解析到 ① `~/.nanowork/`（`resolveWriteTarget`），绝对路径仍限制在 home / userData / ① 之内，用 `resolve` 归一化后再按「根 + 分隔符」前缀比对，避免 `/home/u` 误命中 `/home/u-evil`。`MEMORY.md` 的**导出**动作因此可从「必然失败」变为真正落到 `~/.nanowork/MEMORY.md`；
+- 主进程不再吞异常：`fs:writeTextFile` 越界时抛错，由调用方 `MemoryPage` 呈现。
+
+**② 与用户资产相关的目录出现两套相近命名 —— 保持现状（已决议）。**
+工作区级是 `.nanowork-workspace`（④，引擎 workspace），用户级是 `.nanowork`（①，产品自有）。两者职责不同（引擎运行时 vs 产品用户资产），**不建议此刻改名**——`nanobot.config.json` 的 `agents.defaults.workspace` 已指向它，改名前须先迁移其中的 `memory/` 与 `cron/`；仅在新项目初始化时改用中性名（如 `<repo>/.workspace`）。
+
+### 18.2.5 目标态落地：key → 文件的路由（M1 实施）★
+
+M1 把「渲染层持久化」从 ② 的单文件 blob 改为**一 key 一文件 + 按 key 路由归属**。落点表集中在 **`electron/storageRoutes.ts`**：一个**不 import electron 的纯模块**（`resolveRoute(key, roots)` → 绝对路径 + 格式 + 是否缩进），因而可被 vitest 直接覆盖（`tests/electron/storageRoutes.test.ts`）。
+
+**落点表**
+
+| 归属 | key（`STORAGE_KEYS.*`） | 落点 |
+|---|---|---|
+| ① 用户资产 | `settings` / `mcp` / `channels` | `~/.nanowork/{settings,mcp,channels}.json`（缩进美化） |
+| ① 用户资产 | `agents` / `expertGroups` | `~/.nanowork/experts/{agents,groups}.json` |
+| ① 用户资产 | `skills`（索引 + 启用态） | `~/.nanowork/skills/index.json` |
+| ① 用户资产 | `nanowork.memory.index` | `~/.nanowork/memory/index.json` |
+| ① 用户资产 | `nanowork.memory.<workspace>` | `~/.nanowork/memory/<workspace>.md`（**原样 Markdown**） |
+| ② 运行时 | `sessions` / `tasks` / `artifacts` | `<userData>/{sessions,tasks,artifacts}.json`（紧凑写） |
+| ② 运行时 | `nanowork.deviceId` | `<userData>/device-id.txt`（裸文本） |
+| ② 运行时 | 其余未登记 key | `<userData>/misc/<key>.json`（兜底，不丢数据也不污染 ①） |
+
+**四条实现约定**
+
+1. **文本透传，不做二次编码。** 桥接层按文本传递，`ElectronStorageAdapter` 不再对已序列化的值再 `stringify`。json 路由落盘时 `JSON.parse` 成结构再写，于是 `settings.json` 是**可读可改的真实结构**，而不是 `"{\"state\":...}"` 这样的转义字符串；读回时文件原文即调用方写盘前的文本。
+2. **旧数据一次性迁移，保守且可回滚。** `migrateLegacyStore()` 在 `app.whenReady()` 中**先于建窗**执行（建窗要同步读主题偏好）：不覆盖新落点已有数据的 key；旧值多出的一层字符串编码由 `unwrapLegacyValue` 剥掉；完成后旧文件**改名**为 `nanowork-store.json.migrated` 而非删除。迁移未完成时同步读取仍回退旧 blob，保证升级后首帧主题与快捷键不丢。
+3. **并发安全。** 同文件走**逐文件串行写队列**（`enqueueWrite`），避免 read-modify-write 交叉丢失更新。
+4. **`storage:clear` 精确删除，不整目录。** 按 `knownRouteFiles()` 的清单逐文件删，记忆目录只清 `.md`/`.json`；`skills/`、`plugins/`、`connectors/` 等属用户资产，**不**进清空范围。
+
+> 实测（本机旧 blob 迁移推演）：`nanowork.tasks` → `<userData>/tasks.json`、`nanowork.sessions` → `<userData>/sessions.json`，读回均可 `JSON.parse` 还原为 `{ state, version }`；`storage:clear` 清单共 11 项，无一项落在 `plugins/` / `connectors/`。
+>
+> 18.2.1–18.2.3 的**根边界**固化为 **ADR-018**；18.2.5 的**落点路由**固化为 **ADR-019**。
+
+## 18.3 云表（V1.5 / V3）
 
 ```sql
 -- V1.5
@@ -1584,7 +1854,7 @@ documents(id, kb_id, title, uri, acl JSONB, indexed_at)
 
 `audit_logs` 的 `hash` + `prev_hash` 构成哈希链，实现「防篡改」——这是等保与审计的常见要求，成本很低但价值很高。
 
-## 18.3 关系图
+## 18.4 关系图
 
 ```mermaid
 erDiagram
@@ -1844,6 +2114,10 @@ nanowork-server/                 # 云侧单仓库（V1.5 起步，monorepo）
 | ADR-015 | 扩展分发做成「对象存储 + 索引 json」，不做应用服务 | **新建** | 零应用服务器成本；代价是包对象**必须不可变**（配合 12.6 版本隔离） |
 | ADR-016 | 云侧单仓库起步，V1.5 不提前拆仓 | **新建** | 只有 ① 一个进程时拆仓净增部署与联调成本（见 22.2） |
 | ADR-017 | 管理台是独立前端，不并入用户工作台 | **新建** | 受众 / 权限模型 / 路由鉴权均不同，仅共用组件库（见 2.5.3-1） |
+| ADR-018 | 用户数据目录分四个根：① `~/.nanowork`（产品自有）/ ② `<userData>`（Electron 实现）/ ③ 引擎配置目录 / ④ 引擎工作区 | **新建** | 用户资产只进 ①；③④ 路径只经 `resolveNanobotWorkspacePath()`；渲染层持久化须从 ② 的单文件迁向 ①（见 18.2） |
+| ADR-019 | 渲染层持久化改为「一 key 一文件 + 按 key 路由归属」，落点表收口在纯模块 `electron/storageRoutes.ts` | **新建** | 消除写放大与「卸载丢用户资产」；纯模块可单测（路由归属 / 路径越界 / 编解码往返）。过渡落点 `sessions`/`tasks`/`artifacts` 留 ②，待 D2 实体化消化（见 18.2.5） |
+| ADR-020 | `src/ai/runtime/nanobotHttp/**` 是**唯一**允许知道引擎 wire 格式的位置；渲染层只允许 import `@/ai/runtime`（及其 `./types`） | **新建** | 把「防腐层」从口号变成可检查的边界：`session_id`/`access_mode`/`mcpServers`/`jobs.json`/`delta.nanobot_event` 只出现在该目录内。契约层不出现任何引擎特有字段；`ChatHandle` 等 transport 原语不上浮（见 8.2.1 / 8.4.1） |
+| ADR-021 | 工具权限的**唯一收口落在引擎**（`before_execute_tool` 否决通道 + 审批回传端点），不是客户端网关；`access_mode`（作用域）与 `tool_approval`（询问）为**正交两轴**，`full` 作为更粗开关覆盖逐条批准 | **新建** | 客户端只收单向 SSE，看不见也拦不住引擎进程内的工具执行——把门控写在客户端是「给没有门的墙装锁」。代价：引擎侧需维护 vendored fork 的 LOCAL PATCH，且非流式（multipart）路径无审批通道须 fail-closed。取代 11.1 的客户端 `ToolGateway` 草案（保留为 V3 参考形态）。见 10.3.1 / 11.1.1 |
 
 ---
 
@@ -1945,7 +2219,7 @@ nanowork-server/                 # 云侧单仓库（V1.5 起步，monorepo）
 |---|---|
 | **ACL / AllowFrom** | 渠道白名单，限制哪些外部账号可以驱动 Agent |
 | **ACP** | Agent Client Protocol，WorkBuddy 用来解耦 GUI 与内核的 JSON-RPC 协议 |
-| **AgentRuntime** | 本文定义的引擎契约接口，所有引擎交互的唯一出口 |
+| **AgentRuntime** | 本文定义的引擎契约接口，所有引擎交互的唯一出口。契约在 `src/ai/runtime/types.ts`，当前实现 `NanobotHttpRuntime` 在 `src/ai/runtime/nanobotHttp/`（该目录是唯一允许知道引擎 wire 格式的地方，见 ADR-020） |
 | **Artifact（产物）** | Agent 产出的可交付物（文档/表格/PPT/图表/HTML/代码等） |
 | **automations** | WorkBuddy 的定时自动化表；本文对应 `TaskConfig` |
 | **commitSeq** | 文件回滚的提交序号，回滚边界 |

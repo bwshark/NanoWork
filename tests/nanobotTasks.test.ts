@@ -4,7 +4,7 @@ import {
   buildNanobotJobsFragment,
   toNanobotJob,
   toNanobotSchedule,
-} from '@/ai/nanobotTasks';
+} from '@/ai/runtime/nanobotHttp/tasks';
 import type { TaskConfig } from '@/types';
 
 /** 构造最小 TaskConfig */

@@ -1,13 +1,12 @@
 import { platform } from '@/platform';
 import { connectionManager } from '@/ai/connectionManager';
 import {
-  MEMORY_FILENAME,
   MEMORY_KEY_PREFIX,
   MEMORY_TAG_CLOSE,
   MEMORY_TAG_OPEN,
 } from '@/lib/constants';
 import type { ChatMessageParam, MemoryAppendOptions, MemoryMeta } from '@/types';
-import type { ChatRequest } from '@/ai/types';
+import type { ChatRequest } from '@/ai/runtime/types';
 
 /** 自动摘要的最大字数约束（对应 PRD：≤150 字） */
 const SUMMARY_MAX_CHARS = 150;
@@ -53,8 +52,9 @@ const WORKSPACE_INDEX_KEY = `${MEMORY_KEY_PREFIX}index`;
  *
  * 设计约束（docs/architecture-memory.md §7）：
  * - 渲染层永不 import 'electron'，所有 IO 经 platform；
- * - **读取统一走 platform.storage**（Web/Electron 一致）；
- * - **写入**：Web 落 storage；Electron 额外经 platform.writeTextFile 写真实 MEMORY.md；
+ * - **读写统一走 platform.storage**（Web/Electron 一致）。Electron 下存储层会把
+ *   `nanowork.memory.<workspace>` 路由成 `~/.nanowork/memory/<workspace>.md`
+ *   真实文件（见 ADR-019），故渲染层不再需要单独的落盘分支；
  * - 记忆永不写入 agentsStore.agent.systemPrompt，只在运行时以标签块注入 history。
  *
  * 增强（本次）：
@@ -153,19 +153,15 @@ class MemoryServiceImpl {
 
   /**
    * 覆盖写入记忆全文。
-   * - Web：仅写 storage；
-   * - Electron：写 storage（供 load 读回）+ 写真实 MEMORY.md 文件。
+   *
+   * 落盘由 `platform.storage` 统一承担：Electron 下 `nanowork.memory.<workspace>`
+   * 经主进程路由直接写成 `~/.nanowork/memory/<workspace>.md`（见 18.2 目录约定），
+   * 因此**不需要**额外的 `writeTextFile` 二段写入——旧实现在这里多写一次
+   * `MEMORY.md`，但传的是纯文件名，被主进程安全校验拒绝后又吞掉异常，
+   * 于是「写真实 MEMORY.md」从未生效且无人察觉。
    */
   async save(fullText: string): Promise<void> {
-    const text = fullText ?? '';
-    await platform.storage.set(this.storageKey(), text);
-    if (platform.env === 'electron') {
-      try {
-        await platform.writeTextFile(MEMORY_FILENAME, text);
-      } catch {
-        /* 落盘失败降级为仅 storage 持久化 */
-      }
-    }
+    await platform.storage.set(this.storageKey(), fullText ?? '');
   }
 
   /** 清空记忆（等价于 save('')） */
@@ -295,7 +291,7 @@ class MemoryServiceImpl {
     let text = '';
     try {
       const client = await connectionManager.getClient();
-      await client.sendMessage(req, {
+      await client.chat(req, {
         onToken: (chunk) => {
           text += chunk;
         },

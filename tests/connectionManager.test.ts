@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { connectionManager, __setSleepForTest } from '@/ai/connectionManager';
-import { NanobotClient } from '@/ai/nanobotClient';
+import { NanobotClient } from '@/ai/runtime/nanobotHttp/chat';
 import { useSettingsStore, DEFAULT_TRANSCRIPTION, DEFAULT_DESKTOP } from '@/stores/settingsStore';
 
 function resetSettings() {
@@ -30,20 +30,21 @@ describe('connectionManager: 直连选路与状态广播 (FR-006)', () => {
     vi.restoreAllMocks();
   });
 
-  it('网关可达时选 nanobotClient，状态为 connected', async () => {
+  it('网关可达时返回引擎实现（nanobot-http），状态为 connected', async () => {
     vi.spyOn(NanobotClient.prototype, 'probe').mockResolvedValue('connected');
     resetSettings();
     const client = await connectionManager.getClient();
-    expect(client.kind).toBe('nanobot');
+    // D1 起 getClient() 返回的是契约层实现，kind 标识实现而非引擎族
+    expect(client.kind).toBe('nanobot-http');
     expect(connectionManager.status).toBe('connected');
     expect(useSettingsStore.getState().status).toBe('connected');
   });
 
-  it('网关不可达时状态 offline，仍返回 nanobotClient', async () => {
+  it('网关不可达时状态 offline，仍返回引擎实现', async () => {
     vi.spyOn(NanobotClient.prototype, 'probe').mockResolvedValue('offline');
     resetSettings();
     const client = await connectionManager.getClient();
-    expect(client.kind).toBe('nanobot');
+    expect(client.kind).toBe('nanobot-http');
     expect(connectionManager.status).toBe('offline');
     expect(useSettingsStore.getState().status).toBe('offline');
   });

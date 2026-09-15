@@ -3,8 +3,8 @@ import { useSessionsStore } from '@/stores/sessionsStore';
 import { useSettingsStore, DEFAULT_TRANSCRIPTION, DEFAULT_DESKTOP } from '@/stores/settingsStore';
 import { useAgentsStore } from '@/stores/agentsStore';
 import { useArtifactsStore } from '@/stores/artifactsStore';
-import { NanobotClient } from '@/ai/nanobotClient';
-import type { ChatHandle, StreamHandlers } from '@/ai/types';
+import { NanobotClient } from '@/ai/runtime/nanobotHttp/chat';
+import type { ChatHandle, ChatRequest, StreamHandlers } from '@/ai/runtime/types';
 
 /** 重置所有相关 store 到初始态，避免 persist 跨用例串扰 */
 function resetStores() {
@@ -24,7 +24,7 @@ function resetStores() {
     sessions: [],
     activeId: null,
     streams: {},
-    pendingPermission: null,
+    pendingApprovals: [],
     error: null,
   });
   useArtifactsStore.setState({ bySession: {} });
@@ -32,7 +32,7 @@ function resetStores() {
 
 /**
  * 模拟网关流式行为：
- * - 文本含「读文件」→ 下发敏感工具 files 的 pending 事件（等待前端权限决策）；
+ * - 文本含「读文件」→ 下发逐条批准请求（引擎在工具执行前挂起，等裁决回传）；
  * - 其余 → 纯文本流式回复。
  */
 function mockGateway() {
@@ -46,15 +46,13 @@ function mockGateway() {
       if (/读文件/.test(text)) {
         handlers.onStatus('streaming');
         handlers.onToken('好的，我来读取文件。\n');
-        handlers.onToolCall({
-          id: 'call-files-1',
+        handlers.onApprovalRequest?.({
+          id: 'appr-files-1',
           tool: 'files',
           args: { operation: 'read', path: '/workspace/sample.txt' },
-          sensitive: true,
-          status: 'pending',
         });
-        // 真实网关会等待前端 approval 回执后继续；测试在此结束流，
-        // 后续状态由 store 的 approve/reject 驱动。
+        // 真实引擎此刻阻塞在工具执行前、流不会结束；测试在此收尾，
+        // 后续状态由 store 的 resolveApproval 驱动。
         handlers.onStatus('done');
         handlers.onDone();
         return { done: Promise.resolve(), abort: () => {} };
@@ -162,56 +160,102 @@ describe('sessionsStore: 会话发送与流式 (FR-001)', () => {
   });
 });
 
-describe('sessionsStore: 敏感工具权限门控 (FR-009)', () => {
-  it('敏感工具触发 pending 弹窗，批准后写入权限日志', async () => {
-    await useSessionsStore.getState().send('请帮我读文件 /workspace/sample.txt');
+describe('sessionsStore: 逐条批准 (FR-1.5)', () => {
+  it('引擎挂起时入队并落 pending 行；允许后回传裁决并写入权限日志', async () => {
+    const respond = vi
+      .spyOn(NanobotClient.prototype, 'respondApproval')
+      .mockResolvedValue(undefined);
 
-    const state = useSessionsStore.getState();
-    expect(state.pendingPermission).not.toBeNull();
-
-    useSessionsStore.getState().approvePermission();
-
-    const after = useSessionsStore.getState();
-    const session = after.sessions[0];
-    const assistant = session.messages.find((m) => m.role === 'assistant')!;
-
-    const fileCall = assistant.toolCalls?.find((t) => t.tool === 'files');
-    expect(fileCall).toBeDefined();
-    expect(fileCall!.status).toBe('approved');
-    expect(session.permissionLog.some((l) => l.decision === 'approved')).toBe(true);
-    expect(after.pendingPermission).toBeNull();
-  });
-
-  it('敏感工具被拒绝后写入 rejected 日志', async () => {
-    await useSessionsStore.getState().send('请帮我读文件 /workspace/sample.txt');
-
-    useSessionsStore.getState().rejectPermission();
-
-    const after = useSessionsStore.getState();
-    const session = after.sessions[0];
-    const assistant = session.messages.find((m) => m.role === 'assistant')!;
-
-    const fileCall = assistant.toolCalls?.find((t) => t.tool === 'files');
-    expect(fileCall?.status).toBe('rejected');
-    expect(session.permissionLog.some((l) => l.decision === 'rejected')).toBe(true);
-    expect(after.pendingPermission).toBeNull();
-  });
-
-  it('会话开启完全访问时敏感工具自动批准，不弹窗', async () => {
     const session = useSessionsStore
       .getState()
-      .createSession('agent-test', '完全访问会话', { fullAccess: true });
+      .createSession('agent-test', '逐条批准会话', { toolApproval: true });
 
-    await useSessionsStore.getState().send('请帮我读文件 /workspace/sample.txt');
+    await useSessionsStore.getState().send('请帮我读文件 /workspace/sample.txt', session.id);
 
+    const queued = useSessionsStore.getState();
+    expect(queued.pendingApprovals).toHaveLength(1);
+    expect(queued.pendingApprovals[0].tool).toBe('files');
+    expect(queued.pendingApprovals[0].sessionId).toBe(session.id);
+
+    const before = queued.sessions
+      .find((s) => s.id === session.id)!
+      .messages.find((m) => m.role === 'assistant')!;
+    expect(before.toolCalls?.find((t) => t.tool === 'files')?.status).toBe('pending');
+
+    await useSessionsStore.getState().resolveApproval('allow');
+
+    expect(respond).toHaveBeenCalledWith('appr-files-1', 'allow', undefined);
     const after = useSessionsStore.getState();
+    expect(after.pendingApprovals).toHaveLength(0);
     const cur = after.sessions.find((s) => s.id === session.id)!;
     const assistant = cur.messages.find((m) => m.role === 'assistant')!;
-
-    const fileCall = assistant.toolCalls?.find((t) => t.tool === 'files');
-    expect(fileCall?.status).toBe('approved');
-    expect(after.pendingPermission).toBeNull();
+    expect(assistant.toolCalls?.find((t) => t.tool === 'files')?.status).toBe('approved');
     expect(cur.permissionLog.some((l) => l.decision === 'approved')).toBe(true);
+  });
+
+  it('拒绝时把原因回传给引擎并记录 rejected', async () => {
+    const respond = vi
+      .spyOn(NanobotClient.prototype, 'respondApproval')
+      .mockResolvedValue(undefined);
+
+    await useSessionsStore.getState().send('请帮我读文件 /workspace/sample.txt');
+    await useSessionsStore.getState().resolveApproval('deny', '这个文件不该读');
+
+    expect(respond).toHaveBeenCalledWith('appr-files-1', 'deny', '这个文件不该读');
+    const after = useSessionsStore.getState();
+    const session = after.sessions[0];
+    const assistant = session.messages.find((m) => m.role === 'assistant')!;
+    expect(assistant.toolCalls?.find((t) => t.tool === 'files')?.status).toBe('rejected');
+    expect(session.permissionLog.some((l) => l.decision === 'rejected')).toBe(true);
+    expect(after.pendingApprovals).toHaveLength(0);
+  });
+
+  it('裁决回传失败（请求已超时/失效）时仍出队，不假装授权成功', async () => {
+    vi.spyOn(NanobotClient.prototype, 'respondApproval').mockRejectedValue(
+      new Error('该工具调用已失效（可能已超时或被取消），请重新发起'),
+    );
+
+    await useSessionsStore.getState().send('请帮我读文件 /workspace/sample.txt');
+    await useSessionsStore.getState().resolveApproval('allow');
+
+    const after = useSessionsStore.getState();
+    expect(after.pendingApprovals).toHaveLength(0);
+    // 队列清空，用户不会被一条死请求反复拦住
+    expect(after.pendingApprovals).toEqual([]);
+  });
+
+  it('空队列时 resolveApproval 静默 no-op', async () => {
+    const respond = vi.spyOn(NanobotClient.prototype, 'respondApproval');
+    await useSessionsStore.getState().resolveApproval('allow');
+    expect(respond).not.toHaveBeenCalled();
+  });
+
+  it('逐条批准开关透传为请求级 approval_mode=ask；完全访问覆盖之', async () => {
+    const reqs: ChatRequest[] = [];
+    vi.spyOn(NanobotClient.prototype, 'sendMessage').mockImplementation(
+      (req, handlers: StreamHandlers): ChatHandle => {
+        reqs.push(req);
+        handlers.onStatus('streaming');
+        handlers.onToken('ok');
+        handlers.onStatus('done');
+        handlers.onDone();
+        return { done: Promise.resolve(), abort: () => {} };
+      },
+    );
+
+    const approvalSession = useSessionsStore
+      .getState()
+      .createSession('agent-test', '逐条批准', { toolApproval: true });
+    await useSessionsStore.getState().send('hi', approvalSession.id);
+    expect(reqs[0].approvalMode).toBe('ask');
+
+    // 完全访问是更粗的开关：开启后不再逐条询问，两开关不叠加
+    const fullSession = useSessionsStore
+      .getState()
+      .createSession('agent-test', '完全访问', { toolApproval: true, fullAccess: true });
+    await useSessionsStore.getState().send('hi', fullSession.id);
+    expect(reqs[1].approvalMode).toBeUndefined();
+    expect(reqs[1].accessMode).toBe('full');
   });
 });
 

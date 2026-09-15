@@ -7,8 +7,9 @@
   "description": "类 WorkBuddy 智能体客户端助手（基于 nanobot 引擎）— 跨端（Web + Electron）React 渲染层",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
+    "build": "npm run typecheck && npm run typecheck:electron && vite build",
     "typecheck": "tsc --noEmit",
+    "typecheck:electron": "tsc --noEmit -p tsconfig.node.json",
     "typecheck:tests": "tsc --noEmit -p tsconfig.test.json",
     "preview": "vite preview",
     "test": "vitest run",

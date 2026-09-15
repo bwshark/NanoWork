@@ -1,5 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, Notification, shell } from 'electron';
-import { dirname, join } from 'node:path';
+import { dirname, extname, join } from 'node:path';
 import { promises as fs, existsSync, readFileSync, type Dirent } from 'node:fs';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createConnection } from 'node:net';
@@ -28,11 +28,36 @@ import type {
   NanobotCronRunRecord,
   NanobotCronSessionDetail,
 } from '../src/platform/types';
+import {
+  DEVICE_ID_STORAGE_KEY,
+  knownRouteFiles,
+  memoryDir,
+  miscDir,
+  productDir,
+  resolveRoute,
+  resolveWriteTarget,
+  serializeRouteValue,
+  unwrapLegacyValue,
+  type StorageRoots,
+} from './storageRoutes';
 
 const isDev = !app.isPackaged;
 
-/** 桌面端本地存储文件（JSON，落 userData 目录） */
-const STORAGE_FILE = join(app.getPath('userData'), 'nanowork-store.json');
+/** 两个持久化根的来源：① 用户资产取 home，② 运行时数据取 Electron userData */
+const STORAGE_ROOTS: StorageRoots = {
+  home: app.getPath('home'),
+  electronUserData: app.getPath('userData'),
+};
+
+/** 设置 store 的持久化 key（与渲染层 STORAGE_KEYS.settings 一致） */
+const SETTINGS_STORE_KEY = 'nanowork.settings';
+
+/**
+ * 旧版单文件持久化 blob：`{ '<storage key>': '<JSON 字符串>' }`。
+ * 仅用于**一次性迁移**（见 migrateLegacyStore）与迁移未完成时的读取回退；
+ * 迁移成功后会被改名为 `nanowork-store.json.migrated` 保留备查。
+ */
+const LEGACY_STORE_FILE = join(app.getPath('userData'), 'nanowork-store.json');
 
 /**
  * 用户本地技能目录：`~/.nanowork/skills`，每个子目录含一份 SKILL.md。
@@ -41,44 +66,196 @@ const STORAGE_FILE = join(app.getPath('userData'), 'nanowork-store.json');
  * 刻意不做旧路径回退，避免与外部产品产生隐性耦合（两者技能格式虽同源，
  * 但归属与生命周期各自独立）。用户如需复用既有技能，应显式迁移目录内容。
  */
-const USER_SKILLS_DIR = join(app.getPath('home'), '.nanowork', 'skills');
+const USER_SKILLS_DIR = join(productDir(STORAGE_ROOTS), 'skills');
 
-async function readStore(): Promise<Record<string, string>> {
+// ——————————————————————————————————————————————
+// 持久化存储：按 key 路由到 ① / ② 的独立文件
+//
+// 落点规则集中在 electron/storageRoutes.ts（纯模块，有单测覆盖），
+// 这里只负责 IO：读文件、写文件、迁移旧 blob。
+// ——————————————————————————————————————————————
+
+/** 逐文件串行写队列：避免同文件的 read-modify-write 交叉导致丢失更新 */
+const writeQueues = new Map<string, Promise<void>>();
+
+function enqueueWrite(filePath: string, task: () => Promise<void>): Promise<void> {
+  const previous = writeQueues.get(filePath) ?? Promise.resolve();
+  // 前一任务失败不应阻断后续写入，故成功/失败分支都续接
+  const next = previous.then(task, task);
+  writeQueues.set(
+    filePath,
+    next.catch(() => undefined),
+  );
+  return next;
+}
+
+/** 读取落点文件原文；不存在返回 null，其余错误照抛（不吞 EACCES 等问题） */
+async function readRouteFile(key: string): Promise<string | null> {
+  const { filePath } = resolveRoute(key, STORAGE_ROOTS);
   try {
-    const text = await fs.readFile(STORAGE_FILE, 'utf-8');
-    return JSON.parse(text) as Record<string, string>;
-  } catch {
-    return {};
+    return await fs.readFile(filePath, 'utf-8');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw err;
   }
 }
 
-async function writeStore(data: Record<string, string>): Promise<void> {
-  await fs.writeFile(STORAGE_FILE, JSON.stringify(data), 'utf-8');
+/** 按落点写入（自动建父目录 + 按 key 串行化） */
+async function writeRouteFile(key: string, value: string): Promise<void> {
+  const route = resolveRoute(key, STORAGE_ROOTS);
+  const text = serializeRouteValue(value, route);
+  await enqueueWrite(route.filePath, async () => {
+    await fs.mkdir(dirname(route.filePath), { recursive: true });
+    await fs.writeFile(route.filePath, text, 'utf-8');
+  });
+}
+
+/** 读取持久化值：文件原文即调用方写盘前的文本，原样返回（见 storageRoutes 编解码约定） */
+async function readPersistedValue(key: string): Promise<string | null> {
+  const text = await readRouteFile(key);
+  if (text !== null) return text;
+  // 新落点尚未生成：可能是尚未迁移的旧数据，命中则顺手补迁
+  const legacy = await readLegacyValue(key);
+  if (legacy === undefined) return null;
+  try {
+    const normalized = unwrapLegacyValue(legacy);
+    await writeRouteFile(key, normalized);
+    return serializeRouteValue(normalized, resolveRoute(key, STORAGE_ROOTS));
+  } catch (err) {
+    // 旧值本身损坏（非合法 JSON）时不能让整个读取失败，退回原始值交给上层解析
+    console.warn(`[storage] 补迁移 ${key} 失败，本次按旧形态返回：`, err);
+    return legacy;
+  }
+}
+
+/** 旧 blob 的内存缓存；undefined = 未加载，null = 不存在/读取失败 */
+let legacyCache: Record<string, string> | null | undefined;
+
+async function loadLegacyStore(): Promise<Record<string, string>> {
+  if (legacyCache !== undefined) return legacyCache ?? {};
+  try {
+    const parsed = JSON.parse(
+      await fs.readFile(LEGACY_STORE_FILE, 'utf-8'),
+    ) as Record<string, unknown>;
+    legacyCache = Object.fromEntries(
+      Object.entries(parsed).filter(
+        (entry): entry is [string, string] => typeof entry[1] === 'string',
+      ),
+    );
+  } catch {
+    legacyCache = null;
+  }
+  return legacyCache ?? {};
+}
+
+async function readLegacyValue(key: string): Promise<string | undefined> {
+  const store = await loadLegacyStore();
+  return key in store ? store[key] : undefined;
+}
+
+/**
+ * 一次性把旧单文件 blob 迁移到新落点。
+ *
+ * 迁移策略刻意保守：
+ * - **不覆盖**新落点已有数据的 key（新数据优先，避免迁移回滚用户后续操作）；
+ * - 完成后把旧文件**改名**而非删除（`.migrated` 后缀），保留可回滚的证据；
+ * - 单个 key 失败不影响其余 key，仅告警。
+ */
+async function migrateLegacyStore(): Promise<void> {
+  let legacy: Record<string, string>;
+  try {
+    legacy = JSON.parse(await fs.readFile(LEGACY_STORE_FILE, 'utf-8')) as Record<
+      string,
+      string
+    >;
+  } catch {
+    return; // 新装用户没有旧文件，属正常情况，不告警
+  }
+
+  let migrated = 0;
+  let skipped = 0;
+  for (const [key, value] of Object.entries(legacy)) {
+    if (typeof value !== 'string') continue;
+    try {
+      if ((await readRouteFile(key)) !== null) {
+        skipped += 1;
+        continue;
+      }
+      // 旧值比新契约多一层字符串编码，剥掉后再落盘
+      await writeRouteFile(key, unwrapLegacyValue(value));
+      migrated += 1;
+    } catch (err) {
+      console.warn(`[storage] 迁移 ${key} 失败：`, err);
+    }
+  }
+
+  try {
+    await fs.rename(LEGACY_STORE_FILE, `${LEGACY_STORE_FILE}.migrated`);
+  } catch (err) {
+    console.warn('[storage] 旧存储文件改名失败，下次启动会重试：', err);
+    return;
+  }
+  legacyCache = undefined; // 让回退读取重新落到已改名的文件（即读不到）
+  console.log(
+    `[storage] 旧存储已迁移：${migrated} 项写入 ①/②，${skipped} 项因新落点已有数据而跳过`,
+  );
+}
+
+/**
+ * 同步读取持久化值（`createWindow` 之前调用，此时异步 IO 尚未就绪）。
+ * 优先新落点；若尚未生成则回退旧 blob（并剥掉旧值多余的一层编码），
+ * 保证升级后首帧主题/快捷键不丢。
+ */
+function readPersistedValueSync(key: string): string | null {
+  const route = resolveRoute(key, STORAGE_ROOTS);
+  try {
+    return readFileSync(route.filePath, 'utf-8');
+  } catch {
+    try {
+      const store = JSON.parse(readFileSync(LEGACY_STORE_FILE, 'utf-8')) as Record<
+        string,
+        string
+      >;
+      return typeof store[key] === 'string' ? unwrapLegacyValue(store[key]) : null;
+    } catch {
+      return null;
+    }
+  }
+}
+
+/**
+ * 解析设置 store 的持久化文档（zustand persist 包装成 `{ state, version }`）。
+ *
+ * 新落点里 `settings.json` 就是这个文档本身，解析一次即可；旧 blob 的值多一层
+ * 字符串编码，`readPersistedValueSync` 已用 `unwrapLegacyValue` 剥掉，
+ * 故这里无需再做「试着多解一层」的猜测。解析失败返回 null 由调用方兜底。
+ */
+function parseSettingsDocument(raw: string | null): {
+  state?: { settings?: { theme?: unknown; desktop?: Partial<DesktopConfig> } };
+} | null {
+  if (typeof raw !== 'string' || !raw) return null;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return typeof parsed === 'object' && parsed !== null
+      ? (parsed as {
+          state?: { settings?: { theme?: unknown; desktop?: Partial<DesktopConfig> } };
+        })
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
  * 创建窗口前同步读取持久化主题偏好（用于初始背景色，避免冷启动闪烁）。
- * 存储结构：userData/nanowork-store.json → { [key]: JSON 字符串 }，
- * key 'nanowork.settings'（同 STORAGE_KEYS.settings）对应 zustand persist 包装
- * { state: { settings: { theme } }, version }。仅 light/dark 有效，
+ * 落点：① `~/.nanowork/settings.json`（见 storageRoutes），内容为 zustand persist
+ * 的包装 `{ state: { settings: { theme } }, version }`。仅 light/dark 有效，
  * system/缺失/任何解析异常均返回 null，由调用方回落 nativeTheme。
  */
 function readPersistedTheme(): 'light' | 'dark' | null {
-  try {
-    const text = readFileSync(STORAGE_FILE, 'utf-8');
-    const store = JSON.parse(text) as Record<string, string>;
-    const raw = store['nanowork.settings'];
-    if (typeof raw !== 'string') return null;
-    let parsed: unknown = JSON.parse(raw);
-    // 兼容双重 JSON 编码：zustand createJSONStorage 写入前已序列化一次，
-    // 存储适配器 set 又 stringify 一次，解析后仍是字符串则再解析一次（最多两次）
-    if (typeof parsed === 'string') parsed = JSON.parse(parsed);
-    const wrapped = parsed as { state?: { settings?: { theme?: unknown } } } | null;
-    const theme = wrapped?.state?.settings?.theme;
-    return theme === 'light' || theme === 'dark' ? theme : null;
-  } catch {
-    return null;
-  }
+  const theme = parseSettingsDocument(readPersistedValueSync(SETTINGS_STORE_KEY))?.state
+    ?.settings?.theme;
+  return theme === 'light' || theme === 'dark' ? theme : null;
 }
 
 /** 初始窗口背景色：持久化偏好优先，其余情况跟随系统外观 */
@@ -93,9 +270,6 @@ function pickInitialBackgroundColor(): string {
 // 桌面端集成：系统托盘 + 全局快捷键
 // ——————————————————————————————————————————————
 
-/** 设置 store 的持久化 key（与渲染层 STORAGE_KEYS.settings 一致） */
-const SETTINGS_STORE_KEY = 'nanowork.settings';
-
 /** 桌面端配置默认值（与渲染层 DEFAULT_DESKTOP 保持一致） */
 const DEFAULT_DESKTOP_CONFIG: DesktopConfig = {
   closeToTray: true,
@@ -105,40 +279,29 @@ const DEFAULT_DESKTOP_CONFIG: DesktopConfig = {
 };
 
 /**
- * 冷启动同步读取持久化的桌面端配置（store 文件 → state.settings.desktop）。
+ * 冷启动同步读取持久化的桌面端配置（① settings.json → state.settings.desktop）。
  * 必须在建窗前拿到：否则全局快捷键要等渲染层启动后才注册，
  * 中间存在"窗口已隐藏但快捷键唤不起"的空窗期。任何解析异常回落默认值。
  */
 function readPersistedDesktopConfig(): DesktopConfig {
-  try {
-    const text = readFileSync(STORAGE_FILE, 'utf-8');
-    const store = JSON.parse(text) as Record<string, string>;
-    const raw = store[SETTINGS_STORE_KEY];
-    if (typeof raw !== 'string') return { ...DEFAULT_DESKTOP_CONFIG };
-    let parsed: unknown = JSON.parse(raw);
-    // 兼容双重 JSON 编码（同 readPersistedTheme）
-    if (typeof parsed === 'string') parsed = JSON.parse(parsed);
-    const desktop = (parsed as { state?: { settings?: { desktop?: Partial<DesktopConfig> } } })?.state
-      ?.settings?.desktop;
-    if (!desktop || typeof desktop !== 'object') return { ...DEFAULT_DESKTOP_CONFIG };
-    return {
-      closeToTray:
-        typeof desktop.closeToTray === 'boolean'
-          ? desktop.closeToTray
-          : DEFAULT_DESKTOP_CONFIG.closeToTray,
-      hotkey: typeof desktop.hotkey === 'string' ? desktop.hotkey : DEFAULT_DESKTOP_CONFIG.hotkey,
-      openAtLogin:
-        typeof desktop.openAtLogin === 'boolean'
-          ? desktop.openAtLogin
-          : DEFAULT_DESKTOP_CONFIG.openAtLogin,
-      showInDock:
-        typeof desktop.showInDock === 'boolean'
-          ? desktop.showInDock
-          : DEFAULT_DESKTOP_CONFIG.showInDock,
-    };
-  } catch {
-    return { ...DEFAULT_DESKTOP_CONFIG };
-  }
+  const desktop = parseSettingsDocument(readPersistedValueSync(SETTINGS_STORE_KEY))?.state
+    ?.settings?.desktop;
+  if (!desktop || typeof desktop !== 'object') return { ...DEFAULT_DESKTOP_CONFIG };
+  return {
+    closeToTray:
+      typeof desktop.closeToTray === 'boolean'
+        ? desktop.closeToTray
+        : DEFAULT_DESKTOP_CONFIG.closeToTray,
+    hotkey: typeof desktop.hotkey === 'string' ? desktop.hotkey : DEFAULT_DESKTOP_CONFIG.hotkey,
+    openAtLogin:
+      typeof desktop.openAtLogin === 'boolean'
+        ? desktop.openAtLogin
+        : DEFAULT_DESKTOP_CONFIG.openAtLogin,
+    showInDock:
+      typeof desktop.showInDock === 'boolean'
+        ? desktop.showInDock
+        : DEFAULT_DESKTOP_CONFIG.showInDock,
+  };
 }
 
 /** 当前生效的桌面端配置（运行时可被渲染层热更新） */
@@ -862,7 +1025,8 @@ async function ensureChannelEnabledInConfig(configPath: string, engineChannel: s
       const instances = (feishu as Record<string, unknown>).instances;
       if (Array.isArray(instances)) {
         for (const inst of instances) {
-          const cfg = inst as Record<string, unknown> | null;
+          // 下面的 typeof/null 判定已经排除了非对象与 null，故此处直接按对象断言
+          const cfg = inst as Record<string, unknown>;
           if (typeof inst !== 'object' || inst === null || cfg.enabled !== false) continue;
           // 只翻持有凭证的实例：与断开功能协同——「凭证清空且 enabled=false」
           // 是断开后的合法状态，误翻会启用无 appId 实例、与前端状态背离
@@ -1615,22 +1779,50 @@ async function getNanobotChannelSession(
 }
 
 // —— 本地存储桥（渲染层经 window.electronAPI 调用）——
-ipcMain.handle('storage:get', async (_e, key: string) => {
-  const store = await readStore();
-  return key in store ? store[key] : null;
-});
+// 每个 key 独立落盘（落点见 electron/storageRoutes.ts），不再整体读写单文件：
+// 既避免「改一个 store 重写全部状态」的写放大，也让用户资产可直接打开编辑。
+ipcMain.handle('storage:get', async (_e, key: string) => readPersistedValue(key));
 ipcMain.handle('storage:set', async (_e, key: string, value: string) => {
-  const store = await readStore();
-  store[key] = value;
-  await writeStore(store);
+  await writeRouteFile(key, value);
 });
 ipcMain.handle('storage:remove', async (_e, key: string) => {
-  const store = await readStore();
-  delete store[key];
-  await writeStore(store);
+  const { filePath } = resolveRoute(key, STORAGE_ROOTS);
+  await fs.rm(filePath, { force: true });
 });
+
+/**
+ * 精确清空「存储」类落点。
+ *
+ * 刻意**不整目录删除**：① 下的 `skills/`、`plugins/`、`connectors/` 是用户资产
+ * （技能包、插件、凭据），不属于可一键清空的存储状态；memory 目录也只清
+ * `.md` / `.json`，不动用户手工放进去的其它文件。
+ */
+async function clearStorageFiles(): Promise<void> {
+  const files = knownRouteFiles(STORAGE_ROOTS);
+  await Promise.all(files.map((filePath) => fs.rm(filePath, { force: true })));
+  await clearDirFiles(memoryDir(STORAGE_ROOTS), ['.md', '.json']);
+  await fs.rm(miscDir(STORAGE_ROOTS), { recursive: true, force: true });
+  await fs.rm(LEGACY_STORE_FILE, { force: true });
+  legacyCache = null; // 旧数据已清，避免回退读取把它复活
+}
+
+/** 删除目录下指定扩展名的文件（目录不存在视为无事发生） */
+async function clearDirFiles(dir: string, extensions: string[]): Promise<void> {
+  let entries: Dirent[];
+  try {
+    entries = await fs.readdir(dir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  await Promise.all(
+    entries
+      .filter((entry) => entry.isFile() && extensions.includes(extname(entry.name)))
+      .map((entry) => fs.rm(join(dir, entry.name), { force: true })),
+  );
+}
+
 ipcMain.handle('storage:clear', async () => {
-  await writeStore({});
+  await clearStorageFiles();
 });
 
 // —— 通知桥 ——
@@ -1638,18 +1830,20 @@ ipcMain.on('app:notify', (_e, title: string, body: string) => {
   new Notification({ title, body }).show();
 });
 
-// —— 文本文件写入桥（导出 nanobot 配置片段等）——
-// 安全约束：仅允许写入用户主目录及其子目录，防止任意路径越权写入。
-const SAFE_ROOTS = [app.getPath('home'), app.getPath('userData')];
+// —— 文本文件写入桥（导出文件）——
+// 路径规整与安全校验见 storageRoutes.resolveWriteTarget：
+// - 绝对路径：仅允许落在用户主目录 / userData / ① 产品自有目录内；
+// - 相对路径：解析到 ① `~/.nanowork/`（如 'MEMORY.md' → `~/.nanowork/MEMORY.md`）。
+//   早期实现只做 `startsWith` 校验、不做相对路径解析，导致传纯文件名必然被拒——
+//   渲染层的「导出 MEMORY.md」在 Electron 下实际一直失败。
 ipcMain.handle('fs:writeTextFile', async (_e, filePath: string, content: string) => {
-  const normalized = join(filePath); // 解析为绝对路径
-  const isSafe = SAFE_ROOTS.some((root) => normalized.startsWith(root));
-  if (!isSafe) {
+  const target = resolveWriteTarget(filePath, STORAGE_ROOTS);
+  if (!target) {
     throw new Error(`禁止写入非用户目录：${filePath}`);
   }
   // 确保父目录存在
-  await fs.mkdir(dirname(normalized), { recursive: true });
-  await fs.writeFile(normalized, content, 'utf-8');
+  await fs.mkdir(dirname(target), { recursive: true });
+  await fs.writeFile(target, content, 'utf-8');
 });
 
 // —— 本地文件只读桥（复制消息后粘贴恢复附件内容用）——
@@ -1706,16 +1900,22 @@ ipcMain.on('window:toggle-fullscreen', () => {
 });
 
 // ——— 应用元信息（关于弹窗用）———
-const DEVICE_ID_KEY = 'nanowork.deviceId';
+/**
+ * 设备 ID：首次访问生成并落盘（② `<userData>/device-id.txt`），后续复用。
+ * 该值是主进程自持的裸文本（不经过渲染层适配器的 JSON 编码），故直接读写文件。
+ */
+async function readOrCreateDeviceId(): Promise<string> {
+  const existing = await readRouteFile(DEVICE_ID_STORAGE_KEY);
+  if (existing) return existing;
+  const route = resolveRoute(DEVICE_ID_STORAGE_KEY, STORAGE_ROOTS);
+  const deviceId = randomUUID();
+  await fs.mkdir(dirname(route.filePath), { recursive: true });
+  await fs.writeFile(route.filePath, deviceId, 'utf-8');
+  return deviceId;
+}
+
 ipcMain.handle('app:getInfo', async () => {
-  // 设备 ID：首次访问生成并持久化到 userData/nanowork-store.json，后续复用
-  const store = await readStore();
-  let deviceId = store[DEVICE_ID_KEY];
-  if (!deviceId) {
-    deviceId = randomUUID();
-    store[DEVICE_ID_KEY] = deviceId;
-    await writeStore(store);
-  }
+  const deviceId = await readOrCreateDeviceId();
   return {
     appName: app.getName(),
     version: app.getVersion(),
@@ -1920,7 +2120,7 @@ ipcMain.handle(
 // 路径由主进程自行解析，不接受渲染层指定，杜绝任意路径写入。
 // ——————————————————————————————————————————————
 
-/** 托管标记值（与渲染层 ai/nanobotTasks.ts 的 MANAGED_BY_SMARTAGENT 一致） */
+/** 托管标记值（与渲染层 ai/runtime/nanobotHttp/tasks.ts 的 MANAGED_BY_SMARTAGENT 一致） */
 const MANAGED_BY_SMARTAGENT = 'smartagent';
 
 /** 定时任务同步结果（渲染层据此决定提示文案） */
@@ -2380,6 +2580,11 @@ ipcMain.handle('skills:loadUser', async () => {
 app.whenReady().then(async () => {
   // 隐藏系统级原生菜单（自绘菜单栏接管）
   Menu.setApplicationMenu(null);
+
+  // 旧版单文件存储 → ①/② 目录化落点的一次性迁移。
+  // 必须早于 createWindow：建窗时会同步读主题偏好，迁移完成后即可直接命中新落点。
+  await migrateLegacyStore();
+
   void createWindow();
 
   // 托盘 + 全局快捷键：窗口建好后立即初始化，保证冷启动即可用快捷键唤起。

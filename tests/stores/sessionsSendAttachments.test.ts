@@ -3,9 +3,9 @@ import { useSessionsStore } from '@/stores/sessionsStore';
 import { useSettingsStore, DEFAULT_DESKTOP } from '@/stores/settingsStore';
 import { useAgentsStore } from '@/stores/agentsStore';
 import { useArtifactsStore } from '@/stores/artifactsStore';
-import { NanobotClient } from '@/ai/nanobotClient';
+import { NanobotClient } from '@/ai/runtime/nanobotHttp/chat';
 import type { Attachment, Message, Session } from '@/types';
-import type { ChatHandle, ChatRequest, StreamHandlers } from '@/ai/types';
+import type { ChatHandle, ChatRequest, StreamHandlers } from '@/ai/runtime/types';
 
 /**
  * sessionsStore.send() 附件链路测试。
@@ -83,7 +83,7 @@ function resetStores() {
     sessions: [],
     activeId: null,
     streams: {},
-    pendingPermission: null,
+    pendingApprovals: [],
     error: null,
   });
   useArtifactsStore.setState({ bySession: {} });
