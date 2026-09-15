@@ -31,6 +31,15 @@ run/
 nanobot.config.yaml
 nanobot.config.yml
 nanobot.config.json
+pairing.json
+weixin/
+cli-apps/*_registry_cache.json
+
+# Runtime data（每次运行都会变，禁止入库）
+llm_usage.sqlite3
+llm_usage.sqlite3-shm
+llm_usage.sqlite3-wal
+temp-review-diff.txt
 
 # Editor / OS
 .vscode/
