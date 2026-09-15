@@ -1,0 +1,104 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+  --app-bg: #f5f7fa;
+  --app-text: #1f2430;
+  --scrollbar-thumb: #cbd5e1;
+  --scrollbar-thumb-hover: #94a3b8;
+  --table-border: #e2e8f0;
+  /* 可交互卡片 hover：描边加重 + 纸面提亮 + 柔和投影（见 src/lib/cardSx.ts） */
+  --hover-surface: #ffffff;
+  --hover-border: rgba(15, 23, 42, 0.3);
+  --hover-shadow: 0 8px 20px rgba(15, 23, 42, 0.12);
+}
+
+/* 深色覆盖（沿用原有深色值，由 themeMode.ts 同步 html.dark） */
+html.dark {
+  color-scheme: dark;
+  --app-bg: #0b1120;
+  --app-text: #e2e8f0;
+  --scrollbar-thumb: #334155;
+  --scrollbar-thumb-hover: #475569;
+  --table-border: #334155;
+  --hover-surface: #1f232c;
+  --hover-border: rgba(255, 255, 255, 0.26);
+  --hover-shadow: 0 10px 24px rgba(0, 0, 0, 0.45);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: Inter, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial,
+    sans-serif;
+  background-color: var(--app-bg);
+  color: var(--app-text);
+}
+
+/* 美化滚动条 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+}
+
+/* 对话内搜索命中高亮（CSS Custom Highlight API，只登记 Range 不改 DOM）。
+   全部命中用半透明翠绿，当前选中项用实底翠绿 + 深色文字，一眼可辨「还有几处 / 现在在哪处」。
+   色相跟随参考图（青绿系），在深色主题下比琥珀色更不刺眼。 */
+::highlight(search-hit) {
+  background-color: rgba(45, 212, 191, 0.3);
+  color: inherit;
+}
+::highlight(search-hit-active) {
+  background-color: #2dd4bf;
+  color: #04211f;
+}
+
+/* Markdown 基础排版（与 MUI 主题协调） */
+.md-body {
+  line-height: 1.7;
+  font-size: 14px;
+}
+.md-body h1,
+.md-body h2,
+.md-body h3 {
+  margin: 12px 0 8px;
+  font-weight: 600;
+}
+.md-body p {
+  margin: 6px 0;
+}
+.md-body ul,
+.md-body ol {
+  padding-left: 20px;
+  margin: 6px 0;
+}
+.md-body table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 8px 0;
+  font-size: 13px;
+}
+.md-body th,
+.md-body td {
+  border: 1px solid var(--table-border);
+  padding: 6px 10px;
+  text-align: left;
+}
+.md-body pre {
+  border-radius: 8px;
+  margin: 8px 0;
+}

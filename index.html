@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh-CN" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark light" />
+    <title>nanowork · 智能办公助手</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script>
+      // 防冷启动闪烁（Web 路径）：在模块脚本之前同步读取持久化主题偏好。
+      // localStorage key 与 STORAGE_KEYS.settings 一致；值为 zustand persist 包装
+      // { state: { settings: { theme } }, version }。仅 light 时切为浅色初始态，
+      // 其余（dark/system/无数据/异常）保持深色初始态不变。
+      try {
+        var __raw = localStorage.getItem('nanowork.settings');
+        if (__raw) {
+          var __data = JSON.parse(__raw);
+          // 兼容双重 JSON 编码：zustand createJSONStorage 写入前已序列化一次，
+          // WebStorageAdapter.set 又 stringify 一次，解析后仍是字符串则再解析一次（最多两次）
+          if (typeof __data === 'string') __data = JSON.parse(__data);
+          var __theme = __data?.state?.settings?.theme;
+          if (__theme === 'light') {
+            document.documentElement.classList.remove('dark');
+            document.documentElement.style.colorScheme = 'light';
+          }
+        }
+      } catch (e) {
+        /* 异常时保持深色初始态 */
+      }
+    </script>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

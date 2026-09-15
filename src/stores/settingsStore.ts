@@ -1,0 +1,175 @@
+import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
+import { zustandStorage } from '@/platform';
+import { DEFAULT_GATEWAY, DEFAULT_STATUS, STORAGE_KEYS } from '@/lib/constants';
+import type {
+  ConnectionStatus,
+  DesktopConfig,
+  Settings,
+  TranscriptionConfig,
+} from '@/types';
+
+interface SettingsState {
+  settings: Settings;
+  /** 当前连接状态（由 ConnectionManager 同步写入） */
+  status: ConnectionStatus;
+  setSettings: (patch: Partial<Settings>) => void;
+  setStatus: (status: ConnectionStatus) => void;
+  reset: () => void;
+  /**
+   * 设置/覆盖工作空间显示别名（侧边栏分组标题）。
+   * alias 为空字符串视为清除（恢复为该分组的默认名）。
+   * 注意：只改 settings 内的 alias 表，绝不写回任何 session.workdir，
+   * 这正是「重命名工作空间」与旧版「编辑路径」的本质差异。
+   *
+   * `fallback` 传该分组「未设别名时的默认显示名」：与之相同则不占表项。
+   * 自动任务分组（key 形如 `__cron__:xxx`）的默认名不是路径末级目录名，
+   * 必须显式传入，否则判等会失配、表项永远清不掉。
+   * 不传时按 workdir 路径处理（取 dirBasename）。
+   */
+  setWorkspaceAlias: (workdir: string, alias: string, fallback?: string) => void;
+  /**
+   * 把指定会话从侧边栏列表隐藏（「从列表中移除」用）。
+   * 幂等：已在表内的 id 不会重复写入；不改动任何会话数据本身。
+   */
+  hideSessions: (ids: string[]) => void;
+}
+
+/** 语音转录默认配置：默认关闭（需用户显式配置模型后才会启用语音按钮） */
+export const DEFAULT_TRANSCRIPTION: TranscriptionConfig = {
+  enabled: false,
+  endpoint: '',
+  model: 'whisper-1',
+  apiToken: '',
+  language: 'zh',
+};
+
+/**
+ * 桌面端默认配置（需与 electron/main.ts 的 DEFAULT_DESKTOP_CONFIG 保持一致）。
+ * 主进程冷启动时会直接从同一份持久化文件回读，因此默认值两边必须对齐，
+ * 否则首次启动（渲染层尚未写入 store 前）快捷键会落到不一致的键位。
+ */
+export const DEFAULT_DESKTOP: DesktopConfig = {
+  // 默认关闭窗口 → 隐藏到托盘（微信/钉钉式后台常驻），符合"运行在后台"的预期
+  closeToTray: true,
+  // 默认唤起快捷键：Ctrl+Alt+S（S = nanowork）。
+  // 不用 Alt+Space：Windows 上该组合被系统窗口菜单占用，注册会失败。
+  hotkey: 'Ctrl+Alt+S',
+  openAtLogin: false,
+  showInDock: true,
+};
+
+const DEFAULT_SETTINGS: Settings = {
+  gatewayEndpoint: DEFAULT_GATEWAY,
+  apiToken: '',
+  theme: 'system',
+  memoryEnabled: true,
+  autoSummarize: false,
+  transcription: DEFAULT_TRANSCRIPTION,
+  desktop: DEFAULT_DESKTOP,
+  workspaceAliases: {},
+  sidebarCollapsed: false,
+  hiddenSessions: [],
+};
+
+/** 合法主题偏好值；未知值兜底为深色（读取侧归一化，防止存储被手工写入非法值） */
+export function normalizeTheme(value: unknown): Settings['theme'] {
+  return value === 'light' || value === 'dark' || value === 'system' ? value : 'dark';
+}
+
+export const useSettingsStore = create<SettingsState>()(
+  persist(
+    (set) => ({
+      settings: DEFAULT_SETTINGS,
+      status: DEFAULT_STATUS,
+      setSettings: (patch) => set((s) => ({ settings: { ...s.settings, ...patch } })),
+      setStatus: (status) => set({ status }),
+      reset: () => set({ settings: DEFAULT_SETTINGS, status: DEFAULT_STATUS }),
+      setWorkspaceAlias: (workdir, alias, fallback) =>
+        set((s) => {
+          const next = { ...(s.settings.workspaceAliases ?? {}) };
+          const trimmed = alias.trim();
+          // 判等基准：调用方给了 fallback 就用它；否则按路径末级目录名。
+          // 一致的默认名不必占用表项，避免 mapping 表无限膨胀。
+          const defaultLabel = fallback ?? dirBasename(workdir);
+          if (trimmed && trimmed !== defaultLabel) next[workdir] = trimmed;
+          else delete next[workdir];
+          return { settings: { ...s.settings, workspaceAliases: next } };
+        }),
+      hideSessions: (ids) =>
+        set((s) => {
+          if (ids.length === 0) return s;
+          const current = s.settings.hiddenSessions ?? [];
+          const merged = new Set([...current, ...ids]);
+          // 幂等：没有新增时返回原 state，避免触发无意义的重渲染
+          if (merged.size === current.length) return s;
+          return {
+            settings: { ...s.settings, hiddenSessions: Array.from(merged) },
+          };
+        }),
+    }),
+    {
+      name: STORAGE_KEYS.settings,
+      storage: zustandStorage,
+      version: 8,
+      migrate: (persistedState) => {
+        const state = persistedState as Partial<SettingsState> | undefined;
+        if (state?.settings?.gatewayEndpoint?.includes(':8765')) {
+          state.settings.gatewayEndpoint = DEFAULT_GATEWAY;
+        }
+        if (state?.settings) {
+          // 旧版本可能持久化了已移除的 mode 字段，直接丢弃
+          delete (state.settings as Partial<Settings> & { mode?: unknown }).mode;
+          // v3：局部字段合并式迁移——保留已有字段值，仅补齐缺失字段的默认值，
+          // 并对 theme 做合法性兜底（旧 'light'/'dark' 在新类型下依然合法）
+          state.settings = {
+            ...DEFAULT_SETTINGS,
+            ...state.settings,
+            theme: normalizeTheme(state.settings.theme),
+          };
+          // v4：转录配置是嵌套对象，浅合并拿不到内层默认值，需单独补齐，
+          // 否则老用户升级后 settings.transcription 为 undefined，语音面板直接崩
+          state.settings.transcription = {
+            ...DEFAULT_TRANSCRIPTION,
+            ...(state.settings.transcription ?? {}),
+          };
+          // v5：桌面端配置同为嵌套对象，浅合并同样拿不到内层默认值，需单独补齐，
+          // 否则老用户升级后 settings.desktop 为 undefined，设置页与托盘联动会崩
+          state.settings.desktop = {
+            ...DEFAULT_DESKTOP,
+            ...(state.settings.desktop ?? {}),
+          };
+          // v6：工作空间别名表——老用户从未持久化过这个字段，
+          // 不补齐的话 SidebarNav 读出来是 undefined，调用 ?. 也能跑，
+          // 但持久化文件里缺字段会让 "重命名后再清空" 这种边界看起来不一致
+          state.settings.workspaceAliases = {
+            ...(state.settings.workspaceAliases ?? {}),
+          };
+          // v7：侧边栏折叠状态。老用户没存过，归一化为布尔，
+          // 避免持久化里残留 null / 字符串导致 SidebarNav 判定为「已收起」。
+          state.settings.sidebarCollapsed = state.settings.sidebarCollapsed === true;
+          // v8：侧边栏隐藏会话表。老用户没存过，归一化为数组——
+          // SidebarNav 会直接对它做 includes/indexOf，残留 null 会直接抛错。
+          state.settings.hiddenSessions = Array.isArray(
+            state.settings.hiddenSessions,
+          )
+            ? state.settings.hiddenSessions
+            : [];
+        }
+        return state ?? { settings: DEFAULT_SETTINGS, status: DEFAULT_STATUS };
+      },
+      partialize: (s) => ({ settings: s.settings, status: s.status }),
+    },
+  ),
+);
+
+/**
+ * 工作空间路径 → 显示名（统一 fallback，避免 SidebarNav 与 settingsStore 各写一份）。
+ * 这样 settingsStore 能在「别名与默认名相同时自动剔除表项」，
+ * SidebarNav 也能在「aliases 为空 map」时直接拿到 dirBasename，不用重复 split。
+ */
+function dirBasename(p: string): string {
+  const cleaned = p.replace(/[\\/]+$/, '');
+  const parts = cleaned.split(/[\\/]/);
+  return parts[parts.length - 1] || p;
+}

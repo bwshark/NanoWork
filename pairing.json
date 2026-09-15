@@ -1,0 +1,23 @@
+{
+  "approved": {},
+  "pending": {
+    "6D6F-72DQ": {
+      "channel": "weixin",
+      "sender_id": "o9cq803ODhkIwpMcGyXB_634z1dw@im.wechat",
+      "created_at": 1787539066.6090584,
+      "expires_at": 1787539666.6090584
+    },
+    "HLI1-47H3": {
+      "channel": "weixin",
+      "sender_id": "o9cq803ODhkIwpMcGyXB_634z1dw@im.wechat",
+      "created_at": 1787539135.2856464,
+      "expires_at": 1787539735.2856467
+    },
+    "G2QO-9JTK": {
+      "channel": "weixin",
+      "sender_id": "o9cq803ODhkIwpMcGyXB_634z1dw@im.wechat",
+      "created_at": 1787539337.8530107,
+      "expires_at": 1787539937.8530107
+    }
+  }
+}

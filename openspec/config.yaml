@@ -1,0 +1,39 @@
+schema: spec-driven
+
+context: |
+  Tech stack: React 18 + TypeScript 5.5 + Vite 5; UI with MUI v5
+  (@mui/material + @mui/icons-material) and Emotion; state via Zustand 4.5
+  (persist middleware wrapping platform.storage); routing react-router-dom v7.
+  Path alias "@/" -> src/.
+  Cross-platform: one React render layer runs in Web (browser) and Electron (desktop).
+  Electron bridge: desktop-only caps via window.electronAPI (preload); the nanobot
+  engine (Python, sibling process) provides channels / MCP / tasks / cron.
+
+  Conventions:
+  - Platform boundary: ALL platform-specific code funnels through src/platform/index.ts
+    (the `platform` object + `platform.env: 'web' | 'electron'`). Render-layer code
+    imports from "@/platform" only; never import electron directly, never read
+    window.electronAPI outside src/platform.
+  - Web degradation: any filesystem/gateway capability must ship an electron impl AND a
+    web fallback. Web fallback returns {ok:false, error} (or downloads a snippet +
+    "请使用桌面端") - never throws, never silently no-ops.
+  - Styling: prefer MUI `sx`; numeric fontSize (e.g. 13); icons inherit 18px via
+    cloneElement(item.icon,{fontSize:'inherit'}); idle icon color text.secondary.
+  - State: domain state in src/stores/* (Zustand); select narrow slices to limit re-renders.
+  - Build gate: `npm run build` = `tsc --noEmit && vite build`; type errors block build.
+
+rules:
+  proposal:
+    - "State platform scope explicitly: web / electron / both."
+    - Include a "Non-goals" section.
+    - Keep under 400 words.
+  design:
+    - Name every platform method touched and its web fallback.
+    - For any new platform capability, specify the web degradation path up front.
+    - Note Electron bridge changes (preload.ts / main.ts) when the capability crosses the boundary.
+  tasks:
+    - Break work into chunks <= 2h.
+    - Tag platform-specific tasks (web / electron / both).
+  specs:
+    - "Each requirement declares env scope: web / electron / both."
+    - Desktop-only capability must say so and define its web degraded behavior.

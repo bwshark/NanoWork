@@ -1,0 +1,30 @@
+{
+  "appId": "com.nanowork",
+  "productName": "nanowork",
+  "icon": "electron/assets/icon",
+  "directories": {
+    "output": "release"
+  },
+  "files": [
+    "dist/**/*",
+    "electron/main.cjs",
+    "electron/preload.cjs",
+    "electron/assets/**/*"
+  ],
+  "mac": {
+    "target": "dmg",
+    "category": "public.app-category.productivity",
+    "icon": "electron/assets/icon.icns"
+  },
+  "win": {
+    "target": "nsis",
+    "icon": "electron/assets/icon.ico"
+  },
+  "linux": {
+    "target": "AppImage",
+    "icon": "electron/assets/icon.png"
+  },
+  "electronDownload": {
+    "mirror": "https://npmmirror.com/mirrors/electron/"
+  }
+}
