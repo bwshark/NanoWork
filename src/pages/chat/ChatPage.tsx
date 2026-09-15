@@ -90,7 +90,7 @@ export function ChatPage() {
             fontSize: { xs: 32, sm: 40 },
           }}
         >
-          嗣嗣牧知, 我帮你
+          NanoWork, 我帮你
         </Typography>
 
         {/* 模式按钮(segmented control:深色胶囊容器 + 选中态高对比胶囊底) */}

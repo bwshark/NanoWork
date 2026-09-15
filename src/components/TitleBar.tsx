@@ -319,7 +319,7 @@ export function TitleBar() {
       style={{ WebkitAppRegion: "drag" } as RegionStyle}
     >
       {/* 左侧：窗口级操作图标组 + 菜单栏。整体 no-drag，紧邻左侧。
-          品牌名「嗣嗣牧知」已移到侧边栏顶部，此处只留操作入口 */}
+          品牌名「nanowork」已移到侧边栏顶部，此处只留操作入口 */}
       <Box
         style={{ WebkitAppRegion: "no-drag" } as RegionStyle}
         sx={{ display: "flex", alignItems: "center", gap: 0.25 }}

@@ -1,4 +1,4 @@
-# nanowork（嗣嗣牧知 SmartAgent）需求与设计文档 v2.0
+# nanowork 需求与设计文档 v2.0
 
 > **文档性质**：合并版「详细需求 + 系统设计」文档。取代并升级以下三份文档的共同结论：
 > - `C:\Users\xinmi\.workbuddy\WorkBuddy-architecture-analysis.md`（WorkBuddy 实现原理分析）
@@ -173,7 +173,7 @@
 
 ## 2.1 一句话定位
 
-> **nanowork（嗣嗣牧知 SmartAgent）是一个「引擎可控、数据自持、可私有化」的智能体工作台：桌面与浏览器共用一套渲染层，直连自托管 nanobot 引擎，把长任务执行、专家协作、定时自动化与多渠道派活收进一个看得见的界面里。**
+> **nanowork是一个「引擎可控、数据自持、可私有化」的智能体工作台：桌面与浏览器共用一套渲染层，直连自托管 nanobot 引擎，把长任务执行、专家协作、定时自动化与多渠道派活收进一个看得见的界面里。**
 
 三条护城河（与 WorkBuddy 形成差异化，而非正面竞争）：
 
@@ -1246,7 +1246,7 @@ WorkBuddy 的提示词资产是一个 **10 组合（交互模式 × 领域）× 
 
 ```jinja
 {{ modelName }}                  → 模型名
-{{ productName }}                → 产品名（嗣嗣牧知 SmartAgent）
+{{ productName }}                → 产品名（nanowork）
 {{ ResponseLanguage }}           → 响应语言
 {{ dataFolderName }}             → 项目数据目录名（.nanowork）
 {{ sessionMode }}                → 当前执行模式（ask/plan/craft）

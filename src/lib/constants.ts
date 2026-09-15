@@ -5,8 +5,8 @@ import type { ConnectionStatus } from '@/types';
  * 与窗口标题栏解耦：桌面端标题栏只放操作图标，品牌名落在侧边栏顶部，
  * 折叠侧边栏后靠托盘图标 / 任务栏标题识别应用。
  */
-export const APP_DISPLAY_NAME = '嗣嗣牧知';
-export const APP_DISPLAY_SUB = 'SmartAgent';
+export const APP_DISPLAY_NAME = 'NanoWork';
+export const APP_DISPLAY_SUB = 'Workbench';
 
 /** 完整应用名（「关于」弹窗标题与复制信息用，与侧边栏品牌名保持一致） */
 export const APP_NAME = `${APP_DISPLAY_NAME} ${APP_DISPLAY_SUB}`;
