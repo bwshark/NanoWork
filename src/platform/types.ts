@@ -180,7 +180,7 @@ export interface PlatformAdapter {
    */
   writeTextFile(path: string, content: string): Promise<void>;
   /**
-   * 读取用户本地技能目录（~/.workbuddy/skills）。
+   * 读取用户本地技能目录（~/.nanowork/skills）。
    * - electron：扫描磁盘并解析 SKILL.md；
    * - web：降级为空数组（Web 端通过文件选择或内置技能使用）。
    */
@@ -415,7 +415,7 @@ export interface ElectronAPI {
   openPath(path: string): Promise<{ ok: boolean; error?: string }>;
   /** 读取本地文件为 base64；失败返回 ok=false 与错误描述 */
   readFileAsBase64(path: string): Promise<ReadFileBase64Result>;
-  /** 扫描用户本地 ~/.workbuddy/skills 目录并解析 SKILL.md */
+  /** 扫描用户本地 ~/.nanowork/skills 目录并解析 SKILL.md */
   loadUserSkills(): Promise<Skill[]>;
   /** 原生目录选择对话框，返回所选目录绝对路径；取消返回 null */
   pickDirectory(): Promise<string | null>;

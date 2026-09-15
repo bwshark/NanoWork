@@ -34,6 +34,15 @@ const isDev = !app.isPackaged;
 /** 桌面端本地存储文件（JSON，落 userData 目录） */
 const STORAGE_FILE = join(app.getPath('userData'), 'nanowork-store.json');
 
+/**
+ * 用户本地技能目录：`~/.nanowork/skills`，每个子目录含一份 SKILL.md。
+ *
+ * 这是 NanoWork 自有目录，与 WorkBuddy 的 `~/.workbuddy/skills` 无关——
+ * 刻意不做旧路径回退，避免与外部产品产生隐性耦合（两者技能格式虽同源，
+ * 但归属与生命周期各自独立）。用户如需复用既有技能，应显式迁移目录内容。
+ */
+const USER_SKILLS_DIR = join(app.getPath('home'), '.nanowork', 'skills');
+
 async function readStore(): Promise<Record<string, string>> {
   try {
     const text = await fs.readFile(STORAGE_FILE, 'utf-8');
@@ -2306,59 +2315,65 @@ function parseFrontMatter(text: string): Record<string, string> {
 }
 
 ipcMain.handle('skills:loadUser', async () => {
+  let entries: Dirent[];
   try {
-    const home = app.getPath('home');
-    const skillsDir = join(home, '.workbuddy', 'skills');
-    const entries = await fs.readdir(skillsDir, { withFileTypes: true });
-    const skills: Array<{
-      id: string;
-      name: string;
-      description: string;
-      category: string;
-      icon: string;
-      prompt: string;
-      source: 'local';
-      enabled: boolean;
-      version?: string;
-      path: string;
-      installedAt: string;
-    }> = [];
-    for (const entry of entries) {
-      if (!entry.isDirectory() || entry.name.startsWith('.') || entry.name.startsWith('_')) continue;
-      const skillPath = join(skillsDir, entry.name);
-      const skillFile = join(skillPath, 'SKILL.md');
-      if (!existsSync(skillFile)) continue;
-      try {
-        const text = await fs.readFile(skillFile, 'utf-8');
-        const fm = parseFrontMatter(text);
-        const id = (fm.name ?? entry.name) as string;
-        const name = (fm.name ?? entry.name) as string;
-        const description = ((fm.description_zh as string) || (fm.description as string) || '').trim();
-        const rawCategory = (fm['metadata.category'] as string) ?? 'other';
-        const category = rawCategory.charAt(0).toUpperCase() + rawCategory.slice(1);
-        const version = (fm.version as string) ?? '0.1.0';
-        const prompt = text.replace(/^---\s*\n[\s\S]*?\n---\s*\n/, '').trim();
-        skills.push({
-          id,
-          name,
-          description,
-          category,
-          icon: '📦',
-          prompt: prompt.slice(0, 4000),
-          source: 'local',
-          enabled: true,
-          version,
-          path: skillPath,
-          installedAt: new Date().toISOString(),
-        });
-      } catch {
-        // 忽略解析失败的单个技能目录
-      }
+    entries = await fs.readdir(USER_SKILLS_DIR, { withFileTypes: true });
+  } catch (err) {
+    // 目录不存在属正常情况（用户尚未安装任何本地技能）；其余错误仅告警不阻断。
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+      console.warn(`[skills] 扫描用户技能目录失败：${String(err)}`);
     }
-    return skills;
-  } catch {
     return [];
   }
+
+  const skills: Array<{
+    id: string;
+    name: string;
+    description: string;
+    category: string;
+    icon: string;
+    prompt: string;
+    source: 'local';
+    enabled: boolean;
+    version?: string;
+    path: string;
+    installedAt: string;
+  }> = [];
+
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.name.startsWith('.') || entry.name.startsWith('_')) continue;
+    const skillPath = join(USER_SKILLS_DIR, entry.name);
+    const skillFile = join(skillPath, 'SKILL.md');
+    if (!existsSync(skillFile)) continue;
+    try {
+      const text = await fs.readFile(skillFile, 'utf-8');
+      const fm = parseFrontMatter(text);
+      const id = (fm.name ?? entry.name) as string;
+      const name = (fm.name ?? entry.name) as string;
+      const description = ((fm.description_zh as string) || (fm.description as string) || '').trim();
+      const rawCategory = (fm['metadata.category'] as string) ?? 'other';
+      const category = rawCategory.charAt(0).toUpperCase() + rawCategory.slice(1);
+      const version = (fm.version as string) ?? '0.1.0';
+      const prompt = text.replace(/^---\s*\n[\s\S]*?\n---\s*\n/, '').trim();
+      skills.push({
+        id,
+        name,
+        description,
+        category,
+        icon: '📦',
+        prompt: prompt.slice(0, 4000),
+        source: 'local',
+        enabled: true,
+        version,
+        path: skillPath,
+        installedAt: new Date().toISOString(),
+      });
+    } catch {
+      // 忽略解析失败的单个技能目录
+    }
+  }
+
+  return skills;
 });
 
 // —— 生命周期 ——

@@ -41,7 +41,7 @@ export class ElectronStorageAdapter implements StorageAdapter {
     await this.api().writeTextFile(path, content);
   }
 
-  /** 经主进程扫描并解析 ~/.workbuddy/skills */
+  /** 经主进程扫描并解析 ~/.nanowork/skills */
   async loadUserSkills() {
     return this.api().loadUserSkills();
   }
