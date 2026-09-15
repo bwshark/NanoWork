@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { connectionManager, __setSleepForTest } from '@/ai/connectionManager';
 import { NanobotClient } from '@/ai/nanobotClient';
-import { useSettingsStore, DEFAULT_TRANSCRIPTION } from '@/stores/settingsStore';
+import { useSettingsStore, DEFAULT_TRANSCRIPTION, DEFAULT_DESKTOP } from '@/stores/settingsStore';
 
 function resetSettings() {
   useSettingsStore.setState({
@@ -12,6 +12,7 @@ function resetSettings() {
       memoryEnabled: true,
       autoSummarize: false,
       transcription: DEFAULT_TRANSCRIPTION,
+      desktop: DEFAULT_DESKTOP,
     },
     status: 'offline',
   });

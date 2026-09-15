@@ -11,6 +11,8 @@
     "typecheck": "tsc --noEmit",
     "typecheck:tests": "tsc --noEmit -p tsconfig.test.json",
     "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "build:electron": "vite build && node node_modules/esbuild/bin/esbuild electron/main.ts --bundle --platform=node --format=cjs --external:electron --outfile=electron/main.cjs && node node_modules/esbuild/bin/esbuild electron/preload.ts --bundle --platform=node --format=cjs --external:electron --outfile=electron/preload.cjs && electron-builder --config electron/builder.config.json",
     "electron:serve": "vite build && node node_modules/esbuild/bin/esbuild electron/main.ts --bundle --platform=node --format=cjs --external:electron --outfile=electron/main.cjs && node node_modules/esbuild/bin/esbuild electron/preload.ts --bundle --platform=node --format=cjs --external:electron --outfile=electron/preload.cjs && electron .",
     "verify:gateway": "vitest run tests/gateway.integration.test.ts"

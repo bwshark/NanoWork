@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useSessionsStore } from '@/stores/sessionsStore';
-import { useSettingsStore, DEFAULT_TRANSCRIPTION } from '@/stores/settingsStore';
+import { useSettingsStore, DEFAULT_TRANSCRIPTION, DEFAULT_DESKTOP } from '@/stores/settingsStore';
 import { useAgentsStore } from '@/stores/agentsStore';
 import { useArtifactsStore } from '@/stores/artifactsStore';
 import { NanobotClient } from '@/ai/nanobotClient';
@@ -16,6 +16,7 @@ function resetStores() {
       memoryEnabled: true,
       autoSummarize: false,
       transcription: DEFAULT_TRANSCRIPTION,
+      desktop: DEFAULT_DESKTOP,
     },
     status: 'offline',
   });

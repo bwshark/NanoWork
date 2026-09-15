@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { MemoryService } from '@/lib/memory';
-import { useSettingsStore, DEFAULT_TRANSCRIPTION } from '@/stores/settingsStore';
+import { useSettingsStore, DEFAULT_TRANSCRIPTION, DEFAULT_DESKTOP } from '@/stores/settingsStore';
 import { NanobotClient } from '@/ai/nanobotClient';
 import { MEMORY_KEY_PREFIX } from '@/lib/constants';
 
@@ -14,6 +14,7 @@ function resetSettings() {
       memoryEnabled: true,
       autoSummarize: false,
       transcription: DEFAULT_TRANSCRIPTION,
+      desktop: DEFAULT_DESKTOP,
     },
     status: 'offline',
   });

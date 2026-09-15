@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { DEFAULT_TRANSCRIPTION, useSettingsStore } from '@/stores/settingsStore';
+import { DEFAULT_TRANSCRIPTION, DEFAULT_DESKTOP, useSettingsStore } from '@/stores/settingsStore';
 import { DEFAULT_GATEWAY, STORAGE_KEYS } from '@/lib/constants';
 
 /**
@@ -36,6 +36,7 @@ beforeEach(() => {
       memoryEnabled: true,
       autoSummarize: false,
       transcription: DEFAULT_TRANSCRIPTION,
+      desktop: DEFAULT_DESKTOP,
     },
     status: 'offline',
   });

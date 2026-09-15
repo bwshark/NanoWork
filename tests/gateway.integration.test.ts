@@ -12,22 +12,37 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NanobotClient } from '@/ai/nanobotClient';
 import { useSettingsStore } from '@/stores/settingsStore';
 
+// 合法 SSE：每个事件以「双换行」结束（`data: {...}\n\n`）。
+// sse.parseSSEBuffer 按标准事件边界切分，缺空行会导致所有帧被合并成一个事件。
 function sseStream(chunks: string[]): string {
-  return chunks.map((c) => `data: ${c}\n`).join('') + 'data: [DONE]\n';
+  return chunks.map((c) => `data: ${c}\n\n`).join('') + 'data: [DONE]\n\n';
 }
 
-function makeResponse(bodyText: string, opts: { status?: number; json?: unknown } = {}) {
+function makeResponse(
+  bodyText: string,
+  opts: { status?: number; json?: unknown; contentType?: string } = {},
+) {
   const body = new ReadableStream<Uint8Array>({
     start(controller) {
       controller.enqueue(new TextEncoder().encode(bodyText));
       controller.close();
     },
   });
+  const contentType = opts.contentType ?? 'text/event-stream; charset=utf-8';
   return {
     ok: (opts.status ?? 200) < 400,
     status: opts.status ?? 200,
     statusText: 'OK',
     body,
+    // NanobotClient.fetchSSE 会读 content-type 判断走「SSE 流」还是
+    // 「非流式完整 JSON」分支；真实 Response 必然带 headers，这里补齐。
+    headers: {
+      get: (name: string) =>
+        name.toLowerCase() === 'content-type' ? contentType : null,
+    },
+    async text() {
+      return bodyText;
+    },
     async json() {
       return opts.json;
     },
@@ -130,7 +145,7 @@ describe('NanobotClient 网关端到端（OpenAI 兼容 SSE）', () => {
     let doneCount = 0;
     const statuses: string[] = [];
 
-    await client.sendMessage(
+    const handle = client.sendMessage(
       { agentId: 'a', messages: [{ role: 'user', content: 'hi' }], stream: true },
       {
         onToken: (t) => tokens.push(t),
@@ -143,6 +158,9 @@ describe('NanobotClient 网关端到端（OpenAI 兼容 SSE）', () => {
         onError: () => undefined,
       },
     );
+    // sendMessage 返回 ChatHandle 而非 Promise：必须等 handle.done，
+    // 否则断言会与流式解析竞态（生产代码 sessionsStore 同样 await handle.done）。
+    await handle.done;
 
     expect(doneCount).toBe(1);
     const full = tokens.join('');
@@ -166,7 +184,7 @@ describe('NanobotClient 网关端到端（OpenAI 兼容 SSE）', () => {
       vi.fn(async () => makeResponse(sseStream([JSON.stringify({ choices: [{ delta: { content: '已处理文件。' } }] })]))),
     );
     const tokens: string[] = [];
-    await client.sendMessage(
+    const handle = client.sendMessage(
       {
         agentId: 'a',
         messages: [{ role: 'user', content: '看图' }],
@@ -182,6 +200,7 @@ describe('NanobotClient 网关端到端（OpenAI 兼容 SSE）', () => {
         onError: () => undefined,
       },
     );
+    await handle.done;
     expect(tokens.join('')).toBe('已处理文件。');
   });
 });
