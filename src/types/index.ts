@@ -13,4 +13,5 @@ export * from './task';
 export * from './model';
 export * from './skill';
 export * from './memory';
+export * from './prompt';
 export * from './channel';

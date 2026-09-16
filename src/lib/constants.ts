@@ -34,6 +34,8 @@ export const ROUTES = {
   settings: '/settings',
   artifacts: '/artifacts',
   memory: '/memory',
+  /** 人格页：身份文件（SOUL/IDENTITY/USER）+ 提示词模板外置编辑 */
+  persona: '/persona',
   im: '/im',
 } as const;
 
@@ -82,6 +84,64 @@ export const MEMORY_TAG_OPEN = '<!-- MEMORY -->';
 
 /** 注入 system 段的记忆块结束标签 */
 export const MEMORY_TAG_CLOSE = '<!-- /MEMORY -->';
+
+/**
+ * 注入段的标签集（design §13.3「三层上下文注入」）。
+ *
+ * 与 `MEMORY_TAG_*` 用 HTML 注释不同，这里的标签是**真标签**——它们要能被人一眼
+ * 从装配结果里读出来「这段是什么」，而 `<!-- -->` 在 Markdown 渲染里是隐藏的。
+ * 记忆块保持 `<!-- MEMORY -->` 是刻意的（见 §14.2「现有机制设计良好，予以保留」），
+ * 且 `MemoryService.extractFromInjection` 依赖它做还原。
+ *
+ * ⚠️ `IDENTITY_TAG_*` 与引擎 `nanobot/agent/context.py` 的常量是**同名字符串的两份
+ * 镜像**（引擎注入系统提示词、客户端注入用户消息前缀）。改一边必须改另一边。
+ */
+export const IDENTITY_TAG_OPEN = '<identity_context>';
+export const IDENTITY_TAG_CLOSE = '</identity_context>';
+export const PRODUCT_IDENTITY_TAG_OPEN = '<product_identity>';
+export const PRODUCT_IDENTITY_TAG_CLOSE = '</product_identity>';
+export const TONE_STYLE_TAG_OPEN = '<tone_and_style>';
+export const TONE_STYLE_TAG_CLOSE = '</tone_and_style>';
+export const USER_INSTRUCTIONS_TAG_OPEN = '<user_custom_instructions>';
+export const USER_INSTRUCTIONS_TAG_CLOSE = '</user_custom_instructions>';
+
+/**
+ * 用户级长期记忆（L2）的存储 key：路由到 `~/.nanowork/MEMORY.md`（跨项目生效）。
+ *
+ * 刻意**不**复用 `MEMORY_KEY_PREFIX`：那个前缀是动态路由（`memory/<workspace>.md`），
+ * 用户级记忆落在 ① 根目录下的 `MEMORY.md`，是个静态落点。混用前缀会得到
+ * `memory/user.md`——一个看起来像工作区记忆、实际谁都不认的孤儿文件。
+ */
+export const USER_MEMORY_KEY = 'nanowork.userMemory';
+
+/**
+ * 身份文件（L4，FR-4.3）的存储 key。
+ * 一律落在 ① `~/.nanowork/` 根目录，文件名即用户可见的名字。
+ */
+export const IDENTITY_STORAGE_KEYS = {
+  soul: 'nanowork.identity.soul',
+  identity: 'nanowork.identity.identity',
+  user: 'nanowork.identity.user',
+  /** 一次性引导文件：存在即进入 onboarding 模式，引导完成后删除 */
+  bootstrap: 'nanowork.identity.bootstrap',
+} as const;
+
+/** 身份文件的磁盘文件名（与 key 的语义映射，主进程路由引用） */
+export const IDENTITY_FILENAMES = {
+  soul: 'SOUL.md',
+  identity: 'IDENTITY.md',
+  user: 'USER.md',
+  bootstrap: 'BOOTSTRAP.md',
+} as const;
+
+/**
+ * 提示词模板外置（design §13.4 / FR：提示词可外置修改不重编译）的存储 key 前缀。
+ *
+ * 完整 key = `PROMPT_KEY_PREFIX + <kind> + '.' + <key>`，路由到
+ * `~/.nanowork/prompts/<kind>/<key>.md`（如 `prompts/mode/ask.md`、
+ * `prompts/style/style-professional.md`）。
+ */
+export const PROMPT_KEY_PREFIX = 'nanowork.prompt.';
 
 /**
  * 敏感工具集合：文件读写 / 终端命令 / 网络访问。

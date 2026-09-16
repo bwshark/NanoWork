@@ -13,6 +13,11 @@ import {
 import { Link as RouterLink } from 'react-router-dom';
 import { ROUTES } from '@/lib/constants';
 import { HotkeyInput } from '@/components/HotkeyInput';
+import { PromptProfileFields } from '@/components/prompts/PromptProfileFields';
+import {
+  DEFAULT_PROMPT_DOMAIN,
+  DEFAULT_PROMPT_STYLE,
+} from '@/lib/promptCatalog';
 import type { DesktopConfig, Settings } from '@/types';
 import {
   DEFAULT_DESKTOP,
@@ -157,6 +162,19 @@ export function SettingsPage() {
     settings.transcription ?? DEFAULT_TRANSCRIPTION,
   );
 
+  /**
+   * 提示词档案的本地草稿（工作领域 / 语气风格 / 用户自定义指令）。
+   *
+   * 与转录配置同一套路：**改动先落本地草稿，点保存才写回 store**。
+   * 理由不只是「少写几次 localStorage」——`userCustomPrompt` 是每轮都要注入
+   * 上下文的正文，边打字边持久化会让半句话在下一轮就生效。
+   */
+  const [promptProfile, setPromptProfile] = useState({
+    domain: settings.promptDomain ?? DEFAULT_PROMPT_DOMAIN,
+    style: settings.promptStyle ?? DEFAULT_PROMPT_STYLE,
+    userCustomPrompt: settings.userCustomPrompt ?? '',
+  });
+
   useEffect(() => {
     setEndpoint(settings.gatewayEndpoint);
     setToken(settings.apiToken);
@@ -165,6 +183,14 @@ export function SettingsPage() {
   useEffect(() => {
     setTranscription(settings.transcription ?? DEFAULT_TRANSCRIPTION);
   }, [settings.transcription]);
+
+  useEffect(() => {
+    setPromptProfile({
+      domain: settings.promptDomain ?? DEFAULT_PROMPT_DOMAIN,
+      style: settings.promptStyle ?? DEFAULT_PROMPT_STYLE,
+      userCustomPrompt: settings.userCustomPrompt ?? '',
+    });
+  }, [settings.promptDomain, settings.promptStyle, settings.userCustomPrompt]);
 
   const save = async () => {
     setSettings({ gatewayEndpoint: endpoint, apiToken: token });
@@ -243,7 +269,9 @@ export function SettingsPage() {
           记忆
         </Typography>
         <Typography sx={{ fontSize: 13, color: 'text.secondary', mb: 1 }}>
-          工作区长期记忆（MEMORY.md）。开启注入后，会话创建时读取一次并在 system 提示末尾以标签块注入。
+          长期记忆分两层：工作区级（会话自动摘要与「记住这条」落在这里）与用户级
+          （只在记忆页手动编辑，跨项目生效）。开启注入后，会话创建时读取一次并在 system
+          提示末尾以标签块注入。
         </Typography>
         <FormControlLabel
           control={
@@ -266,6 +294,66 @@ export function SettingsPage() {
         <Box sx={{ mt: 1 }}>
           <Button component={RouterLink} to={ROUTES.memory} variant="outlined">
             打开记忆页
+          </Button>
+        </Box>
+      </Paper>
+
+      <Paper variant="outlined" sx={{ p: 2, mb: 2, bgcolor: 'background.paper' }}>
+        <Typography fontWeight={600} gutterBottom>
+          提示词档案
+        </Typography>
+        <Typography sx={{ fontSize: 13, color: 'text.secondary', mb: 1 }}>
+          这里选的是「全局默认」；单个专家可在其编辑弹窗里单独覆盖。执行模式
+          （问答 / 规划 / 执行）由会话当前模式决定，不在此设置。
+        </Typography>
+
+        <PromptProfileFields
+          domain={promptProfile.domain}
+          style={promptProfile.style}
+          allowInherit={false}
+          onDomainChange={(v) =>
+            setPromptProfile((p) => ({ ...p, domain: v ?? DEFAULT_PROMPT_DOMAIN }))
+          }
+          onStyleChange={(v) =>
+            setPromptProfile((p) => ({ ...p, style: v ?? DEFAULT_PROMPT_STYLE }))
+          }
+        />
+
+        <TextField
+          fullWidth
+          margin="dense"
+          multiline
+          minRows={3}
+          maxRows={10}
+          label="用户自定义指令（可选）"
+          placeholder="写给 Agent 的额外要求，例如「引用文件时给出路径与行号」。每轮注入，保持简短。"
+          value={promptProfile.userCustomPrompt}
+          onChange={(e) =>
+            setPromptProfile((p) => ({ ...p, userCustomPrompt: e.target.value }))
+          }
+          sx={{ mt: 1.5 }}
+        />
+        <Typography sx={{ fontSize: 12, color: 'text.secondary', mt: 0.5 }}>
+          这段正文会以标签块追加在身份文件之后、记忆之前，不覆盖 Agent 自身的系统提示词。
+          留空即关闭。
+        </Typography>
+
+        <Box sx={{ mt: 1.5, display: 'flex', gap: 1 }}>
+          <Button
+            variant="contained"
+            onClick={() => {
+              setSettings({
+                promptDomain: promptProfile.domain,
+                promptStyle: promptProfile.style,
+                userCustomPrompt: promptProfile.userCustomPrompt,
+              });
+              toast.success('提示词档案已保存');
+            }}
+          >
+            保存提示词档案
+          </Button>
+          <Button component={RouterLink} to={ROUTES.persona} variant="outlined">
+            打开人格页（编辑模板正文）
           </Button>
         </Box>
       </Paper>

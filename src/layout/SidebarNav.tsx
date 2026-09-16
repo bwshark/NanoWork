@@ -30,6 +30,8 @@ import PsychologyIcon from "@mui/icons-material/Psychology";
 import GridViewIcon from "@mui/icons-material/GridView";
 import AutoFixHighIcon from "@mui/icons-material/AutoFixHigh";
 import HubIcon from "@mui/icons-material/Hub";
+import BookmarksOutlinedIcon from "@mui/icons-material/BookmarksOutlined";
+import TuneIcon from "@mui/icons-material/Tune";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import SettingsIcon from "@mui/icons-material/Settings";
 import SmartphoneIcon from "@mui/icons-material/Smartphone";
@@ -79,6 +81,18 @@ const LIBRARY_ITEMS: NavLinkItem[] = [
   { label: "专家", icon: <PsychologyIcon />, to: ROUTES.agents },
   { label: "技能", icon: <AutoFixHighIcon />, to: ROUTES.skills },
   { label: "连接器", icon: <HubIcon />, to: ROUTES.mcp },
+];
+
+/**
+ * 个人化配置入口：记忆（L2 用户级 / L3 工作区级）与人格（身份文件 + 提示词外置）。
+ *
+ * 单列成组而不是塞进「扩展」：扩展装的是**能力**（专家 / 技能 / 连接器），
+ * 这两项改的是**助手本身是谁、记得什么**，性质不同，混在一起会让人以为
+ * 改人格是在装插件。
+ */
+const PERSONA_ITEMS: NavLinkItem[] = [
+  { label: "记忆", icon: <BookmarksOutlinedIcon />, to: ROUTES.memory },
+  { label: "人格", icon: <TuneIcon />, to: ROUTES.persona },
 ];
 
 /** 侧边栏主组件 */
@@ -268,6 +282,14 @@ export function SidebarNav() {
             ))}
           </List>
         </Collapse>
+        {PERSONA_ITEMS.map((item) => (
+          <NavRow
+            key={item.label}
+            item={item}
+            active={currentPath === item.to}
+            onClick={() => navigate(item.to)}
+          />
+        ))}
         <NavRow
           item={{
             label: "IM 频道",

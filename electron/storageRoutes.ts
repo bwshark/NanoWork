@@ -1,5 +1,12 @@
 import { isAbsolute, join, resolve, sep } from 'node:path';
-import { MEMORY_KEY_PREFIX, STORAGE_KEYS } from '../src/lib/constants';
+import {
+  IDENTITY_FILENAMES,
+  IDENTITY_STORAGE_KEYS,
+  MEMORY_KEY_PREFIX,
+  PROMPT_KEY_PREFIX,
+  STORAGE_KEYS,
+  USER_MEMORY_KEY,
+} from '../src/lib/constants';
 
 /**
  * 渲染层持久化 key → 磁盘落点 的路由表（Electron 主进程专用）。
@@ -95,6 +102,13 @@ const USER_FILES: Record<string, FileEntry> = {
   [STORAGE_KEYS.agents]: { rel: 'experts/agents.json', format: 'json' },
   [STORAGE_KEYS.expertGroups]: { rel: 'experts/groups.json', format: 'json' },
   [STORAGE_KEYS.skills]: { rel: 'skills/index.json', format: 'json' },
+  // 用户级长期记忆（L2）：与工作区记忆（`memory/<ws>.md`）分属两层，落在 ① 根目录
+  [USER_MEMORY_KEY]: { rel: 'MEMORY.md', format: 'text' },
+  // 身份文件（L4）：文件名即用户可见的名字，落 ① 根目录（§18.1 布局）
+  [IDENTITY_STORAGE_KEYS.soul]: { rel: IDENTITY_FILENAMES.soul, format: 'text' },
+  [IDENTITY_STORAGE_KEYS.identity]: { rel: IDENTITY_FILENAMES.identity, format: 'text' },
+  [IDENTITY_STORAGE_KEYS.user]: { rel: IDENTITY_FILENAMES.user, format: 'text' },
+  [IDENTITY_STORAGE_KEYS.bootstrap]: { rel: IDENTITY_FILENAMES.bootstrap, format: 'text' },
 };
 
 /**
@@ -122,6 +136,31 @@ export function productDir(roots: StorageRoots): string {
 export function memoryDir(roots: StorageRoots): string {
   return join(productDir(roots), 'memory');
 }
+
+/**
+ * 提示词模板目录 `~/.nanowork/prompts/`（§13.4 外置模板资产）。
+ * 与引擎侧 `<engine workspace>/prompts/` 是**两套**：这边是产品级
+ * （mode × domain × style 矩阵），那边是引擎自身的系统提示词。
+ */
+export function promptsDir(roots: StorageRoots): string {
+  return join(productDir(roots), 'prompts');
+}
+
+/**
+ * `storage:clear` 的**豁免**名单：这些 key 的落点属于「用户手写资产」，
+ * 与 ① 下的 `skills/`、`plugins/`、`connectors/` 同类，不参与一键清空——
+ * 清掉 `SOUL.md` 是「重置应用」不该有的副作用。用户要重置身份文件，
+ * 走身份页的「恢复默认」（删文件即回到内置默认）。
+ *
+ * 用户级 `MEMORY.md` **不在**豁免内：它和工作区 `memory/*.md` 同类，
+ * 「清空数据」把记忆清掉是既有语义。
+ */
+const CLEAR_EXEMPT_KEYS = new Set<string>([
+  IDENTITY_STORAGE_KEYS.soul,
+  IDENTITY_STORAGE_KEYS.identity,
+  IDENTITY_STORAGE_KEYS.user,
+  IDENTITY_STORAGE_KEYS.bootstrap,
+]);
 
 /** 未登记 key 的兜底目录 `<userData>/misc/`（见 resolveRoute 第 3 级） */
 export function miscDir(roots: StorageRoots): string {
@@ -199,6 +238,25 @@ export function resolveRoute(key: string, roots: StorageRoots): StorageRoute {
     };
   }
 
+  // 提示词模板：`nanowork.prompt.<kind>.<key>` → `prompts/<kind>/<key>.md`。
+  // 形状必须是**恰好两段**——多一段少一段都不猜，直接落到兜底目录，
+  // 否则 `nanowork.prompt.mode.a.b` 会产生意外深度（甚至越界）的路径。
+  if (key.startsWith(PROMPT_KEY_PREFIX)) {
+    const segments = key.slice(PROMPT_KEY_PREFIX.length).split('.');
+    if (segments.length === 2 && segments.every((segment) => segment.trim() !== '')) {
+      return {
+        filePath: join(
+          promptsDir(roots),
+          sanitizeSegment(segments[0]),
+          `${sanitizeSegment(segments[1])}.md`,
+        ),
+        format: 'text',
+        pretty: false,
+        scope: 'user',
+      };
+    }
+  }
+
   return {
     filePath: join(miscDir(roots), `${sanitizeSegment(key)}.json`),
     format: 'json',
@@ -242,11 +300,14 @@ export function unwrapLegacyValue(value: string): string {
  * 列出所有**静态登记**的落点文件（记忆与兜底目录另按目录清理）。
  *
  * `storage:clear` 用它做精确删除，避免误伤 ① 下的用户目录
- * （`skills/`、`plugins/`、`connectors/` 等属用户资产，不属于「可清空的存储」）。
+ * （`skills/`、`plugins/`、`connectors/` 等属用户资产，不属于「可清空的存储」）；
+ * `CLEAR_EXEMPT_KEYS` 里的身份文件同理被排除。
  */
 export function knownRouteFiles(roots: StorageRoots): string[] {
   return [
-    ...Object.values(USER_FILES).map((entry) => join(productDir(roots), entry.rel)),
+    ...Object.entries(USER_FILES)
+      .filter(([key]) => !CLEAR_EXEMPT_KEYS.has(key))
+      .map(([, entry]) => join(productDir(roots), entry.rel)),
     ...Object.values(RUNTIME_FILES).map((entry) =>
       join(roots.electronUserData, entry.rel),
     ),

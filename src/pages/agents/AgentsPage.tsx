@@ -30,10 +30,12 @@ import GroupsIcon from "@mui/icons-material/Groups";
 import PersonIcon from "@mui/icons-material/Person";
 import { useAgentsStore } from "@/stores/agentsStore";
 import { useExpertGroupsStore } from "@/stores/expertGroupsStore";
+import { useSettingsStore } from "@/stores/settingsStore";
 import { useSkillsStore } from "@/stores/skillsStore";
 import { useSessionsStore } from "@/stores/sessionsStore";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { SummonSlot } from "@/components/agents/SummonSlot";
+import { PromptProfileFields } from "@/components/prompts/PromptProfileFields";
 import { ROUTES } from "@/lib/constants";
 import {
   avatarGlyph,
@@ -108,6 +110,9 @@ export function AgentsPage() {
 
   const activeSessionId = useSessionsStore((s) => s.activeId);
   const updateSession = useSessionsStore((s) => s.updateSession);
+
+  /** 全局提示词档案：Agent 级覆盖未设置时展示「跟随全局」的继承结果 */
+  const settings = useSettingsStore((s) => s.settings);
 
   const [tab, setTab] = useState<PageTab>("agents");
   const [query, setQuery] = useState("");
@@ -393,6 +398,20 @@ export function AgentsPage() {
               </MenuItem>
             ))}
           </Select>
+
+          {/* 领域 / 风格覆盖（design §13.1）：留空 = 跟随全局设置。
+              刻意不预填全局值——把「跟随」落成具体值后，改全局就再也影响不到
+              这个 Agent，而用户根本没做过这个决定。 */}
+          <PromptProfileFields
+            domain={form.promptDomain}
+            style={form.promptStyle}
+            allowInherit
+            globalDomain={settings.promptDomain}
+            globalStyle={settings.promptStyle}
+            label="领域 / 风格覆盖（可选）"
+            onDomainChange={(v) => setForm({ ...form, promptDomain: v })}
+            onStyleChange={(v) => setForm({ ...form, promptStyle: v })}
+          />
 
           <Divider sx={{ my: 1.5 }} />
           <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>

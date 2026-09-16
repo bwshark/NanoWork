@@ -104,7 +104,7 @@
 
 **扩展与运维页**
 
-- `/skills` 技能页、`/mcp` MCP 管理（CRUD + 连接测试 + 同步状态）、`/tasks` 定时任务、`/memory` 记忆页、`/artifacts` 产物库、`/im` IM 频道页。
+- `/skills` 技能页、`/mcp` MCP 管理（CRUD + 连接测试 + 同步状态）、`/tasks` 定时任务、`/memory` 记忆页（用户级 / 工作区级双层切换）、`/persona` 人格页（身份文件 + 提示词模板外置编辑）、`/artifacts` 产物库、`/im` IM 频道页。
 - `src/lib/skillParser.ts` —— SKILL.md 解析。
 
 **IM 通道（超出既有文档记录的部分）**
@@ -164,8 +164,8 @@
 | 文件回滚 | `file-history-snapshot` + `*.file-rollback.ndjson` | F1.4 版本 / 回退 | 仅 `lib/undoStack.ts`（UI 级撤销） | **缺文件级回滚** |
 | 权限安全 | 三层（提示词 / UI / 运行时 shim 强制） | F5.1–F5.5 全部 | 两层（提示词 / UI），nanobot 侧有 `tools/sandbox.py`、`security/` 未启用 | **缺运行时硬兜底（D3）** |
 | 扩展生态 | Plugin / Skill / Connector / Expert 四级 + 市场 | F2.1–F2.4 | Agent / 专家团 / 内置技能 / MCP，无 Plugin 包、无市场 | **缺 Plugin 形态与分发** |
-| 提示词工程 | 10 组合（模式×领域）× 7 风格 × 4 层记忆注入，Nunjucks 外置模板 | — | 系统提示词内联在代码 | **缺模板外置** |
-| 记忆 | 4 层（云端画像 / 用户级 / 工作区 / 身份文件） | F3.2/F3.3 分级 + 可查看可删除 | 仅工作区 `MEMORY.md` | **缺 3 层** |
+| 提示词工程 | 10 组合（模式×领域）× 7 风格 × 4 层记忆注入，Nunjucks 外置模板 | — | 内置模板 + `~/.nanowork/prompts/<kind>/<key>.md` 外置覆盖（引擎白名单模板同样可覆盖） | ✅ 已补（M3 首轮，见第 13 章进度注） |
+| 记忆 | 4 层（云端画像 / 用户级 / 工作区 / 身份文件） | F3.2/F3.3 分级 + 可查看可删除 | 工作区 `memory/<key>.md` + 用户级 `MEMORY.md` + 身份文件四件套，均可在 UI 查看/编辑/删除 | 🟡 已补 3 层（缺 L1 云端画像，V1.5） |
 | 自动化 | `automations` 表：rrule / scheduled_at / valid_from-until / cwds / push_to_wechat / outbox / runs | F4.1/F4.2 | cron / interval / once，镜像进引擎；结果不推送 | **缺 rrule、有效期、结果回推、触发器扩展** |
 | IM | 6+ 渠道 + 结果回推 + 远程派活 | F1.6 | 5 渠道 + 扫码接入，**无结果回推** | **缺回推链路** |
 | 产物 | `artifact-index/` + 版本 + 内联渲染 | F1.4/F1.5 版本、人机双写 | 启发式提取 + 渲染 + 下载 | **缺版本与双写** |
@@ -328,10 +328,10 @@ V1 的方案是把 cron 镜像进本地 `nanobot` 的 `jobs.json`（已实现）
 | 编号 | 名称 | 优先级 | 现状 | 环境 | 验收标准 |
 |---|---|---|---|---|---|
 | FR-4.1 | 工作区记忆 | P0 | ✅ | both | `MEMORY.md` 读写 / 注入 / 幂等去重 / 多工作区（已实现，单测覆盖） |
-| FR-4.2 | 用户级长期记忆 | **P0** | ⬜ | both | `~/.nanowork/MEMORY.md`（用户显式要求才写）；跨项目生效 |
-| FR-4.3 | 身份文件 | **P1** | ⬜ | both | `SOUL.md` / `IDENTITY.md` / `USER.md` 每会话注入 `<identity_context>`；支持 `BOOTSTRAP.md` 一次性引导模式（引导完成后删除） |
+| FR-4.2 | 用户级长期记忆 | **P0** | ✅ | both | `~/.nanowork/MEMORY.md`（用户显式要求才写）；跨项目生效。**已落地**：`MemoryService` 增加 `scope` 分层——`user` → ① `MEMORY.md`，`workspace` → ① `memory/<key>.md`；`scope` 作为**末位可选参数**接入（40+ 既有调用点语义不变）。**「只在用户显式要求时写」由调用方保证**：自动摘要与「记住这条」一律走 `workspace`，只有记忆页在用户级作用域下的编辑才写 `user`。记忆页顶部按作用域切换，切层强制重新读盘 |
+| FR-4.3 | 身份文件 | **P1** | ✅ | both | `SOUL.md` / `IDENTITY.md` / `USER.md` 每会话注入 `<identity_context>`；支持 `BOOTSTRAP.md` 一次性引导模式（引导完成后删除）。**已落地**：四文件落 ① 根目录；引擎 `context.py` 把三个身份文件合成**单个** `<identity_context>` 块（`AGENTS.md` 留在块外，按 PRD 13.3）；`IDENTITY.md` 为新增的「我是谁」模板；`BOOTSTRAP.md` **非空**才进引导态（空文件 = 用户自己关掉了流程）；「完成引导」删除该文件；`/persona` 人格页可编辑四者，**空文件与未写过是两种状态**；身份文件**豁免** `storage:clear`（清本地数据不该抹掉人格） |
 | FR-4.4 | 记忆分级与命名空间 | P1 | ⬜ | both | 个人 / 项目 / 组织三级；命名空间按「租户 + 用户 + 工作区」隔离；组织记忆由管理员注入 |
-| FR-4.5 | 记忆可见可删 | **P0** | 🟡 | both | 记忆页可查看 / 编辑 / 删除 / 导出；删除为真实删除（合规要求，见 FR-8.6） |
+| FR-4.5 | 记忆可见可删 | **P0** | ✅ | both | 记忆页可查看 / 编辑 / 删除 / 导出；删除为真实删除（合规要求，见 FR-8.6）。**已落地**：两层（用户级 / 工作区级）各有独立的查看 / 编辑 / 清空 / 导出，导出文件名按作用域区分（两层默认同名 `MEMORY.md`，不带 key 会在下载目录互相覆盖） |
 | FR-4.6 | Dream 双阶段记忆 | P1 | ⬜ | electron | 接入 nanobot Dream（短期→长期合并）；合并产物需用户可审查后才生效 |
 | FR-4.7 | 组织知识库 | P2 | ⬜ | both | 文档上传（Office/PDF/图片）→ 解析 → 向量检索；按部门/角色设访问范围；**检索前过滤而非检索后过滤** |
 
@@ -503,6 +503,31 @@ V1 的方案是把 cron 镜像进本地 `nanobot` 的 `jobs.json`（已实现）
 > - **FR-8.2 三档决策**：`decide_tier` 把调用归入 `allow`（只读）/ `sandbox`（删除类 → 回收站）/ `deny`（其余，含 `mcp__*` 与未知工具——**默认不放行**，denylist 会静默放过上游新增的每个工具）。纯函数、无 IO，逐条穷举单测。
 > - **FR-8.9 审计留痕**：新增 `security/audit.py`，在工具执行的唯一收口点写 `audit/tool-gateway.ndjson`。四条不变量：append-only（从不改写既有行）、绝不影响执行（写失败静默吞）、含 `args_digest`（sha256，参数摘要被截断时仍能关联同一指令）、可重定向/可关闭（`NANOBOT_TOOL_AUDIT_LOG`）。记录含「对哪个 Agent」（`agent_id`）——没有它就只能说「有东西被拦了」，说不清是谁越的权。
 > - **FR-2.2 Agent 工具白名单**：`WorkspaceScope` 新增第五根轴 `tool_allow` / `tool_deny`（`None` = 未声明不限制，**空集 = 声明了一个都不许**，两者不可混）；纯函数 `agent_blocks_tool` 给出拒绝原因（黑名单**永远压过**白名单）；新钩子 `AgentToolPolicyHook` 挂在**基线**链上（ephemeral turn 同样绕不过）。审批门同步学会识别白名单——否则「白名单外 + ask 模式」会弹出一个「批了也执行不了」的框。客户端：`Agent.toolAllow/toolDeny` + 编辑 UI（可自由输入 MCP 工具名，写死列表会让 MCP 工具永远无法被授予）+ 卡片策略徽标 + 随每轮请求下发（JSON 与 multipart 两条路径都发，避免「带附件的那一轮」成为最小权限的旁路）。
+>
+> **M2 补丁（2026-09-16，在 M3 门禁中发现的真缺陷）**：`security/audit.py` 的 `append_audit_record` 只捕 `OSError`，
+> 而 `json.dumps` 对不可序列化字段抛的是 `TypeError`——它会**从工具网关一路逃出去，把工具调用打成失败**，
+> 直接违反该模块自己声明的「审计绝不影响执行」（不变量 2）。触发场景是真实的：执行链在 mock 会话作用域下
+> 运行时，`session_key` 等字段是 truthy 的 `MagicMock`，被原样写进记录。
+> 修法是两道防线——`build_audit_record` 的文本字段一律过 `_text()` 强制成 `str`（**记录构造本身必须是全函数**，
+> 不能只靠写盘那一步兜底），`append_audit_record` 的 `except` 写宽成 `Exception` 并给 `json.dumps` 加 `default=str`。
+> 补 3 条回归用例（`nanobot/tests/security/test_audit.py`）；`nanobot/tests/agent` 里原有的 `test_dream` 一条红
+> 随之转绿（`tests/agent` 单跑 1646 passed / 2 failed，剩两条均为 Windows symlink 环境性失败）。
+>
+> **M3 首轮：提示词与注入层（2026-09-16，FR-4.2 / FR-4.3 + P-提示词外置；引擎侧 + 客户端）**：
+>
+> - **提示词模板外置（可运营 / 可审计）**：引擎 `render_template()` 新增 `override_root`——白名单模板（`agent/identity.md`、`agent/tool_contract.md`、`agent/skills_section.md`、`agent/platform_policy.md`、`agent/subagent_system.md`）可被 `<workspace>/prompts/<name>` 覆盖，**坏覆盖 fail-open**（解析失败回退内置，不让用户改坏模板就等于会话发不出去）；`sync_workspace_templates` 种子默认副本且**不覆盖**用户已改的版本。客户端新增 `PromptLibrary`（`nanowork.prompt.<kind>.<key>` → ① `prompts/<kind>/<key>.md`），内置 3 模式 × 3 领域 × 7 风格槽位；回退链「有覆盖且非空 → 用覆盖，否则 → 内置」，因此「恢复默认」= **删文件**而不是写空文件。
+> - **统一注入装配器**：新增 `assemblePromptSections()`，固定顺序 agent-persona → identity → product-identity → tone-style → mode → domain → user-instructions → memory → skills → local-time。**身份必须排在记忆之前**——记忆块的边界指令写着「以上方系统提示定义的身份为准」，顺序反了那句护栏就指向了空处。
+> - **同步快照 + 异步加载**：装配发生在 `streamAssistantReply` 的同步段（那里 `await` 会破坏「`send()` 同步进入流式态」这条有测试钉住的性质），所以 `PromptLibrary` / `IdentityService` 都是「启动时 `loadAll()` 读盘 + 运行时 `resolveSync()` 读内存快照，未加载则回退内置」。这是与 `MemoryService` 同一套模式。
+> - **Agent 级覆盖**：`Agent.promptDomain/promptStyle`（**省略 = 跟随全局**，不可用默认值填充）+ 两个 Agent 编辑弹窗的共享选择器 + 设置页全局默认；顺带修掉 `createAgent` 白名单式构造漏写这两个字段导致的「新建时选的覆盖在保存瞬间消失」。
+> - **端到端可验证**：客户端 `vitest` **53 文件 / 797 用例**全绿（新增 4 个文件 / 25 例），三套 `tsc` 与
+>   `vite build`（15320 modules / 35s）全 0；引擎 `ruff check nanobot/ tests/` 全清、
+>   `tests/utils` + `tests/agent` 合跑 **1980 passed / 4 failed**（4 条红全是既有环境性/串扰：3 条 Windows
+>   symlink 权限 + 1 条 `test_consolidator` 的合跑串扰，单跑 `tests/agent` 即绿；基线已记入 skill 门禁清单），
+>   其中提示词 / 上下文相关用例 **112 passed**。
+> - **`electron/main.cjs` 已重建**：`electron/storageRoutes.ts`（身份文件 / 提示词 / 用户级记忆三条新路由）
+>   被 esbuild 打包进 `main.cjs`，只改 `storageRoutes.ts` 不同步重建，产物就会缺这三条路由——已用
+>   `grep -c` 校验产物确实含 `nanowork.identity.soul` / `nanowork.prompt.` / `nanowork.userMemory`。
+> - **本阶段未做**（仍属 M3 范围）：FR-3.1/3.2/3.4（Skill 目录扫描 + 三态覆盖、Plugin 包格式）未开工，因此 **M3 未闭合**。
 >
 > 三套 `tsc`、`vitest`（**43 文件 / 660 用例**）与引擎侧 `pytest` 全绿（`tests/security` 165、`tests/tools` 791、审批链与 utils 370、`tests/agent/test_agent_tool_policy.py` 36）。`ruff check nanobot/ tests/` 全清。**环境类红 8 条**（mcp 探测/连接的网络与 DNS、`fitz` 缺失、web_fetch 重定向），与本次改动无交集。
 >
@@ -1710,6 +1735,8 @@ WorkBuddy 的提示词资产是一个 **10 组合（交互模式 × 领域）× 
 {% if Capabilities.multimodal %}  → 多模态能力开关
 ```
 
+> **落地状态（M3 首轮）**：`WorkingMemoryContent` / `UserLocalMemoryContent` / `identityContext` / `ToneStyleContent` / `UserCustomPrompt` / `sessionMode` 六项已落地，但它们**不住在同一个模板里**——客户端按固定段落顺序装配（`lib/promptAssembly.ts`），引擎侧另有一套可外置的 `agent/*.md`。`ProjectMemoryContent` / `OrgMemoryContent` 依赖 FR-4.4（V2/V3），未实现。命名上我们用的是段落 id（`identity` / `memory` / `tone-style` …）而不是 WorkBuddy 的驼峰变量名，语义一一对应。
+
 ## 13.3 三层上下文注入
 
 对齐 WorkBuddy 的 `user-context-identity.tpl` 输出结构：
@@ -1724,11 +1751,31 @@ WorkBuddy 的提示词资产是一个 **10 组合（交互模式 × 领域）× 
 
 特殊模式：`WorkspaceIdentityMode === 'onboarding'` → 读取 `BOOTSTRAP.md` 引导 Agent 完成自我设定，完成后**删除**该文件（WorkBuddy 把它注释为 "your birth certificate"）。这是身份文件的首次生成机制，比要求用户手写 `SOUL.md` 友好得多。
 
+> **落地说明（M3 首轮）**：上面五个标签块已全部落地，但**不共用一个模板**——客户端 `lib/promptAssembly.ts` 按段落顺序拼装，引擎 `agent/context.py` 只负责把三个身份文件合成 `<identity_context>` 那一块（`AGENTS.md` 刻意留在块外）。标签字面量在 `src/lib/constants.ts` 与引擎的 `context.py` 各存一份并相互注明，改任一侧都要同步另一侧——这两份字符串是跨进程契约，不是各自的私有常量。
+
 ## 13.4 外置带来的三个能力
 
 1. **可运营**：改提示词不需要重新编译前端。
 2. **可 A/B**：同一模式可挂多套领域模板，按 Agent 选择。
 3. **可审计**：提示词是文件，可 diff、可版本控制、可评审——这对企业合规是硬要求。
+
+## 13.5 落地进度（2026-09-16，M3 首轮）
+
+| 本条要求 | 落点 | 状态 |
+|---|---|---|
+| 模式 × 领域 × 风格矩阵 | 客户端 `lib/promptCatalog.ts`（3 模式 × 3 领域 × 7 风格，内置正文） | ✅ |
+| 模板外置不重编译 | 客户端 `lib/promptLibrary.ts` → ① `prompts/<kind>/<key>.md`；引擎 `utils/prompt_templates.py` 白名单模板可被 `<workspace>/prompts/<name>` 覆盖 | ✅ |
+| 走坏模板的兜底 | 覆盖为空 / 解析失败 → **回退内置**（fail-open）；UI 上「恢复默认」= 删文件 | ✅ |
+| 三层上下文注入顺序 | 客户端 `lib/promptAssembly.ts`（`assemblePromptSections`） | ✅ |
+| `<identity_context>` 单块 | 引擎 `agent/context.py` 把 SOUL/IDENTITY/USER 合成**一个**标签块，`AGENTS.md` 留在块外 | ✅ |
+| `BOOTSTRAP.md` 一次性引导 | 非空即引导态；「完成引导」删除；`/persona` 人格页可查看并结束引导 | ✅ |
+| 用户自定义指令 | `settings.userCustomPrompt` → `<user_custom_instructions>` 段（设置页可编辑，留空即关闭） | ✅ |
+| 变量清单（13.2）中的 `{{ ProjectMemoryContent }}` / `{{ OrgMemoryContent }}` | 未实现（依赖 FR-4.4，V2/V3） | ⬜ |
+
+**两条必须记住的约束**（都是踩出来的）：
+
+1. **`override_root` 而不是 `workspace`**：引擎 `render_template(**kwargs)` 的参数名会成为模板变量名，而 `agent/subagent_system.md` 里本来就有 `{{ workspace }}`——参数取名 `workspace` 会把模板变量吞掉，症状是提示词里静默少了一段。
+2. **装配必须同步**：`streamAssistantReply` 同步进入流式态这条性质有测试钉住，所以提示词与身份文件都走「启动 `loadAll()` 读盘 + 运行时读内存快照」，**不在装配路径上 `await`**。
 
 ---
 
@@ -1739,9 +1786,9 @@ WorkBuddy 的提示词资产是一个 **10 组合（交互模式 × 领域）× 
 | 层 | 位置 | 写入方 | 现状 |
 |---|---|---|---|
 | L1 云端画像 | 服务端注入 `<memory>` 块 | 服务端自动学习 | ⬜（V1.5 后才有意义） |
-| L2 用户级长期记忆 | `~/.nanowork/MEMORY.md` | 用户显式要求才写 | ⬜ |
-| L3 工作区记忆 | `<workspace>/.nanowork/memory/YYYY-MM-DD.md` + `MEMORY.md` | 每次实质工作后追加 | 🟡 已有 `MEMORY.md`，缺按日日志 |
-| L4 身份文件 | `SOUL.md` / `IDENTITY.md` / `USER.md` | 引导生成 + 用户编辑 | ⬜ |
+| L2 用户级长期记忆 | `~/.nanowork/MEMORY.md` | 用户显式要求才写 | ✅ 记忆页用户级作用域 |
+| L3 工作区记忆 | `<workspace>/.nanowork/memory/YYYY-MM-DD.md` + `MEMORY.md` | 每次实质工作后追加 | 🟡 已落 `memory/<key>.md`（①），缺按日日志 |
+| L4 身份文件 | `SOUL.md` / `IDENTITY.md` / `USER.md` | 引导生成 + 用户编辑 | ✅ `/persona` 人格页（FR-4.3） |
 
 ## 14.2 注入机制（已实现部分保持）
 
@@ -1772,6 +1819,13 @@ export interface MemoryService {
 ```
 组织记忆 → 项目记忆 → 工作区记忆 → 用户记忆 → 身份文件 → 用户自定义指令 → 本轮对话
 ```
+
+> **落地差异（2026-09-16，M3 首轮）**：
+>
+> - **只落了四层里的两层**（L2 用户级 + L3 工作区级），`MemoryScope` 取值为 `'user' | 'workspace'`。`project` / `org` 依赖 FR-4.4，未实现。
+> - **`scope` 是末位可选参数**，不是上面示例的首位：`save(text, scope = 'workspace')`。本服务已有 40+ 处 `save(text)` 调用，把 scope 提到首位会让「改一行实现」变成「改四十个调用点」，收益为零而回归风险不小。语义与本文档一致，只是参数位置不同。
+> - **落点在 ① 而不是 `<workspace>/.nanowork/`**：用户级 → ① `MEMORY.md`；工作区级 → ① `memory/<key>.md`（见 18.2.4）。`<workspace>` 侧留给引擎自己的 `memory/MEMORY.md`（④），两者职责不同，刻意不复用同一路径。
+> - **注入顺序落到装配器**：实际顺序为 `agent-persona → identity → product-identity → tone-style → mode → domain → user-instructions → memory → skills → local-time`（`lib/promptAssembly.ts`）。其中**身份在记忆之前**是硬约束——记忆块的边界指令写着「以上方系统提示定义的身份为准」，顺序反了那句护栏就指向空处。
 
 ## 14.3 Dream 双阶段记忆
 
@@ -1985,6 +2039,8 @@ rollbackTo(commitSeq: number): Promise<{ ok: true; restored: string[] } | { ok: 
   connectors/                      # 连接器定义
     <uid>/.master.key              # 主密钥
     <uid>/.credentials.v3.json     # 加密凭据
+  prompts/                         # 提示词外置覆盖（mode × domain × style；空 = 用内置）
+    <kind>/<key>.md                # 例：style/style-professional.md、mode/ask.md
   mcp.json                         # MCP Server 注册
 
 <workspace>/.nanowork/             # 工作区级
@@ -2015,7 +2071,7 @@ rollbackTo(commitSeq: number): Promise<{ ok: true; restored: string[] } | { ok: 
 
 | # | 根 | 实际路径 | 职责 | 内容（M1 目录化后） |
 |---|---|---|---|---|
-| ① | 产品自有目录 | `~/.nanowork/` | 跨工作区、跨端的用户资产 | `settings.json`、`mcp.json`、`channels.json`、`experts/{agents,groups}.json`、`skills/`（含 `index.json`）、`memory/`、`MEMORY.md`（导出） |
+| ① | 产品自有目录 | `~/.nanowork/` | 跨工作区、跨端的用户资产 | `settings.json`、`mcp.json`、`channels.json`、`experts/{agents,groups}.json`、`skills/`（含 `index.json`）、`memory/`（工作区级记忆）、`MEMORY.md`（**用户级记忆**兼工作区级导出名）、身份文件 `SOUL.md` / `IDENTITY.md` / `USER.md` / `BOOTSTRAP.md`、`prompts/<kind>/<key>.md`（提示词外置覆盖） |
 | ② | Electron 用户数据目录 | `<userData>`（Win 打包后 `%APPDATA%\nanowork`） | 运行时数据 | `sessions.json`、`tasks.json`、`artifacts.json`、`device-id.txt`、`misc/`（未登记 key 兜底）、`nanowork-store.json.migrated`（旧 blob 备份） |
 | ③ | 引擎配置目录 | `{nanobot config 所在目录}`（本机 = 仓库根） | 引擎配置及其派生数据 | `nanobot.config.json`、`sessions/<workspace_id>/`、`llm_usage.sqlite3` |
 | ④ | 引擎工作区 | `{config.agents.defaults.workspace}`（本机 = `<repo>/.nanowork-workspace/`） | 引擎运行时工作区 | `memory/MEMORY.md`、`cron/jobs.json`、`cron/runs/` |
@@ -2030,8 +2086,9 @@ rollbackTo(commitSeq: number): Promise<{ ok: true; restored: string[] } | { ok: 
 |---|---|---|
 | `~/.nanowork/settings.json` | ✅ 已落地：`STORAGE_KEYS` 经 `storageRoutes` 路由到独立文件，缩进美化可手工编辑 | ✅ M1 已收口 |
 | `~/.nanowork/models.json` | `modelsStore` 无 `persist`（内存态/派生），未落盘 | ⬜ 待建 |
-| `~/.nanowork/MEMORY.md` | ✅ 记忆落 `~/.nanowork/memory/<workspace>.md`（原样 Markdown）；`MEMORY.md` 作为导出名落 `~/.nanowork/`（见 18.2.4-①） | ✅ M1 已收口 |
-| `~/.nanowork/SOUL.md` 等身份文件 | 未实现（FR-4.3 ⬜） | ⬜ 待建 |
+| `~/.nanowork/MEMORY.md` | ✅ 记忆落 `~/.nanowork/memory/<workspace>.md`（原样 Markdown）；`MEMORY.md` 兼作**用户级记忆**落点（FR-4.2）与工作区级的导出名（见 18.2.4-①） | ✅ M1 已收口，M3 补用户级 |
+| `~/.nanowork/SOUL.md` 等身份文件 | ✅ 已落地（FR-4.3）：`SOUL.md` / `IDENTITY.md` / `USER.md` / `BOOTSTRAP.md` 四者路由到 ① 根目录；`storage:clear` **豁免**身份文件 | ✅ M3 已收口 |
+| `~/.nanowork/prompts/` | ✅ 提示词外置覆盖：`prompts/<kind>/<key>.md`（客户端槽位）与引擎白名单模板（`prompts/agent/*.md`） | ✅ M3 已收口 |
 | `~/.nanowork/skills/` | `USER_SKILLS_DIR`，逐目录解析 `SKILL.md`；启用态与索引落 `skills/index.json` | ✅ 已落地 |
 | `~/.nanowork/experts/` | ✅ `agents.json` / `groups.json` 已路由落地；但**内置专家仍在源码** `src/ai/builtin*.ts`，未外置为 ① 下的包 | ⚠️ 半落地 |
 | `~/.nanowork/plugins/{marketplaces,cache}/` | 无 | ⬜ 待建（规范见 12.6） |

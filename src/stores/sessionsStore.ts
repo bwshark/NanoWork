@@ -29,6 +29,13 @@ import {
   toPersistableAttachment,
 } from '@/lib/attachments';
 import { MemoryService } from '@/lib/memory';
+import { IdentityService } from '@/lib/identity';
+import { PromptLibrary } from '@/lib/promptLibrary';
+import {
+  DEFAULT_PROMPT_DOMAIN,
+  DEFAULT_PROMPT_STYLE,
+} from '@/lib/promptCatalog';
+import { assemblePromptSections } from '@/lib/promptAssembly';
 import { useAgentsStore } from './agentsStore';
 import { useArtifactsStore } from './artifactsStore';
 import { useExpertGroupsStore } from './expertGroupsStore';
@@ -482,12 +489,16 @@ async function streamAssistantReply(
   if (!session) return { error: '会话不存在' };
   const agents = useAgentsStore.getState().agents;
 
-  // 1) 构造 history：system (agent / 记忆 / 技能 / 本地时间) + 历史消息
-  const history: ChatMessageParam[] = [];
+  // 1) 构造 history：system 段（统一经装配器）+ 历史消息
+  //
+  // 装配走 `assemblePromptSections`（§13.3）：段序与标签统一收口在那里，本函数
+  // 只负责把各来源解析成字符串。**全程同步**——见下面记忆快照的注释：
+  // 这里多一个 await 就会破坏「send 同步进入流式态」，所以三个服务都提供
+  // 同步取值（PromptLibrary.resolveSync / IdentityService.contentSync /
+  // 会话缓存的 memory 快照），异步读盘在启动时另行完成。
   const agent = agents.find((a) => a.id === session.agentId);
-  if (agent?.systemPrompt) {
-    history.push({ role: 'system', content: agent.systemPrompt });
-  }
+  const settings = useSettingsStore.getState().settings;
+
   // 记忆注入：读取本会话缓存的快照，以标签块追加在 system 段末尾。
   // 永不写入 agent.systemPrompt，仅存在于本次请求的临时 history。
   // 用户在提示条上「关闭」后（memoryLoaded.dismissed），临时停止注入，
@@ -499,30 +510,50 @@ async function streamAssistantReply(
   const memorySnapshot =
     useSessionsStore.getState().sessions.find((s) => s.id === sessionId)?.memory ?? '';
   const memoryDismissed = useSessionsStore.getState().memoryLoaded.dismissed;
-  if (
-    !memoryDismissed &&
-    useSettingsStore.getState().settings.memoryEnabled &&
-    memorySnapshot.trim() !== ''
-  ) {
-    const wrapped = MemoryService.wrapForInjection(memorySnapshot);
-    if (wrapped !== '') history.push({ role: 'system', content: wrapped });
-  }
+  const memoryBlock =
+    !memoryDismissed && settings.memoryEnabled && memorySnapshot.trim() !== ''
+      ? MemoryService.wrapForInjection(memorySnapshot)
+      : '';
+
   // 技能注入：把本会话挂载且已启用的技能 prompt 追加在 system 段末尾。
   const skills = useSkillsStore
     .getState()
     .skills.filter(
       (sk) => session.skillIds?.includes(sk.id) && sk.enabled && sk.prompt.trim() !== '',
     );
-  skills.forEach((sk) => history.push({ role: 'system', content: sk.prompt }));
-  // 本地时间提示：追加在 system 段末尾（仅存在于本次请求的临时 history，
-  // 不落库不污染人设）。智能体处理「30分钟后」「后天2点半」等相对时间时，
-  // 需据此换算为绝对时间后再调用 cron 工具，避免时区/基准歧义导致调度偏差。
+
+  // 本地时间提示（仅存在于本次请求的临时 history，不落库不污染人设）。
+  // 智能体处理「30分钟后」「后天2点半」等相对时间时，需据此换算为绝对时间后
+  // 再调用 cron 工具，避免时区/基准歧义导致调度偏差。
   const now = new Date();
-  const localTime = now.toLocaleString('zh-CN', { timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone, hour12: false });
-  history.push({
-    role: 'system',
-    content: `当前本地时间：${localTime}（时区 ${Intl.DateTimeFormat().resolvedOptions().timeZone}，ISO ${now.toISOString()}）。当用户提出相对时间（如"30分钟后""后天2点半""8月底"）的提醒/定时任务时，请据此换算为绝对时间后再调用 cron 工具。`,
-  });
+  const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const localTime = now.toLocaleString('zh-CN', { timeZone, hour12: false });
+  const localTimeNote = `当前本地时间：${localTime}（时区 ${timeZone}，ISO ${now.toISOString()}）。当用户提出相对时间（如"30分钟后""后天2点半""8月底"）的提醒/定时任务时，请据此换算为绝对时间后再调用 cron 工具。`;
+
+  // Agent 级覆盖优先于全局设置：字段省略 = 跟随全局（不要用 ?? 填成确定值，
+  // 那会抹掉「跟随全局」这个状态，见 types/agent.ts 的注释）。
+  const domain = agent?.promptDomain ?? settings.promptDomain ?? DEFAULT_PROMPT_DOMAIN;
+  const style = agent?.promptStyle ?? settings.promptStyle ?? DEFAULT_PROMPT_STYLE;
+
+  const history: ChatMessageParam[] = assemblePromptSections({
+    agentPersona: agent?.systemPrompt,
+    identity: {
+      soul: IdentityService.contentSync('soul'),
+      identity: IdentityService.contentSync('identity'),
+      user: IdentityService.contentSync('user'),
+      // 引导文件未被 IdentityService.loadAll() 读过时 isOnboarding() 为 false，
+      // 因此「没加载」不会把每个会话都推进引导态。
+      bootstrap: IdentityService.isOnboarding() ? IdentityService.contentSync('bootstrap') : '',
+    },
+    style: PromptLibrary.resolveSync('style', style),
+    mode: PromptLibrary.resolveSync('mode', session.mode ?? 'craft'),
+    domain: PromptLibrary.resolveSync('domain', domain),
+    userInstructions: settings.userCustomPrompt,
+    memory: memoryBlock,
+    skills: skills.map((sk) => sk.prompt),
+    localTime: localTimeNote,
+  }).map((section) => ({ role: 'system' as const, content: section.content }));
+
   useSessionsStore
     .getState()
     .sessions.find((s) => s.id === sessionId)

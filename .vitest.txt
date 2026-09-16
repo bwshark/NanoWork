@@ -1,0 +1,1445 @@
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90mD:/Workspace/study/nanowork[39m
+
+ [32m✓[39m tests/memoryService.test.ts [2m([22m[2m29 tests[22m[2m)[22m[32m 41[2mms[22m[39m
+ [32m✓[39m tests/electron/eventIndex.test.ts [2m([22m[2m20 tests[22m[2m)[22m[32m 30[2mms[22m[39m
+ [32m✓[39m tests/electron/eventRoutes.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 32[2mms[22m[39m
+ [32m✓[39m tests/electron/eventStore.test.ts [2m([22m[2m15 tests[22m[2m)[22m[33m 870[2mms[22m[39m
+ [32m✓[39m tests/channelAllowFrom.test.ts [2m([22m[2m17 tests[22m[2m)[22m[32m 28[2mms[22m[39m
+ [32m✓[39m tests/events/factory.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 26[2mms[22m[39m
+ [32m✓[39m tests/events/project.test.ts [2m([22m[2m19 tests[22m[2m)[22m[32m 33[2mms[22m[39m
+ [32m✓[39m tests/cronTaskMirror.test.ts [2m([22m[2m21 tests[22m[2m)[22m[32m 32[2mms[22m[39m
+ [32m✓[39m tests/channelScan.test.ts [2m([22m[2m19 tests[22m[2m)[22m[32m 60[2mms[22m[39m
+ [32m✓[39m tests/lib/richClipboard.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 25[2mms[22m[39m
+ [32m✓[39m tests/connectionManager.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 40[2mms[22m[39m
+ [32m✓[39m tests/events/electronStore.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 33[2mms[22m[39m
+ [32m✓[39m tests/events/recorder.test.ts [2m([22m[2m16 tests[22m[2m)[22m[32m 53[2mms[22m[39m
+ [32m✓[39m tests/lib/textHighlight.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 99[2mms[22m[39m
+ [32m✓[39m tests/gateway.integration.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 49[2mms[22m[39m
+ [32m✓[39m tests/cron.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 55[2mms[22m[39m
+ [32m✓[39m tests/lib/editableText.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 80[2mms[22m[39m
+ [32m✓[39m tests/stores/settingsTranscriptionMigration.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 26[2mms[22m[39m
+ [32m✓[39m tests/channelDisconnect.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 34[2mms[22m[39m
+ [32m✓[39m tests/events/contract.test.ts [2m([22m[2m24 tests[22m[2m)[22m[32m 39[2mms[22m[39m
+ [32m✓[39m tests/lib/attachments.test.ts [2m([22m[2m69 tests[22m[2m)[22m[32m 115[2mms[22m[39m
+ [32m✓[39m tests/channelsStore.test.ts [2m([22m[2m27 tests[22m[2m)[22m[32m 93[2mms[22m[39m
+ [32m✓[39m tests/mcpStore.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 43[2mms[22m[39m
+ [32m✓[39m tests/lib/taskQuery.test.ts [2m([22m[2m27 tests[22m[2m)[22m[32m 30[2mms[22m[39m
+ [32m✓[39m tests/lib/composerTrigger.test.ts [2m([22m[2m39 tests[22m[2m)[22m[32m 26[2mms[22m[39m
+ [32m✓[39m tests/nanobotTasks.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 25[2mms[22m[39m
+ [32m✓[39m tests/stores/settingsWorkspaceGroups.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 21[2mms[22m[39m
+ [32m✓[39m tests/hooks/useVoiceInput.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 20[2mms[22m[39m
+[90mstderr[2m | tests/planCard.test.tsx[2m > [22m[2mPlanCard[2m > [22m[2m渲染出可勾选的计划清单与待裁决状态
+[22m[39mWarning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+    at ButtonBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\ButtonBase.js:94:59)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at SwitchBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\internal\SwitchBase.js:72:7)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Checkbox (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Checkbox\Checkbox.js:78:59)
+    at label
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at FormControlLabel (D:\Workspace\study\nanowork\node_modules\@mui\material\node\FormControlLabel\FormControlLabel.js:106:59)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Paper (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Paper\Paper.js:70:59)
+    at PlanCard (D:/Workspace/study/nanowork/src/pages/chat/PlanCard.tsx:28:21)
+Warning: The current testing environment is not configured to support act(...)
+    at ButtonBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\ButtonBase.js:94:59)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at SwitchBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\internal\SwitchBase.js:72:7)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Checkbox (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Checkbox\Checkbox.js:78:59)
+    at label
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at FormControlLabel (D:\Workspace\study\nanowork\node_modules\@mui\material\node\FormControlLabel\FormControlLabel.js:106:59)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Paper (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Paper\Paper.js:70:59)
+    at PlanCard (D:/Workspace/study/nanowork/src/pages/chat/PlanCard.tsx:28:21)
+Warning: The current testing environment is not configured to support act(...)
+    at ButtonBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\ButtonBase.js:94:59)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Button (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Button\Button.js:231:30)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Paper (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Paper\Paper.js:70:59)
+    at PlanCard (D:/Workspace/study/nanowork/src/pages/chat/PlanCard.tsx:28:21)
+Warning: The current testing environment is not configured to support act(...)
+    at ButtonBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\ButtonBase.js:94:59)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Button (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Button\Button.js:231:30)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Paper (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Paper\Paper.js:70:59)
+    at PlanCard (D:/Workspace/study/nanowork/src/pages/chat/PlanCard.tsx:28:21)
+Warning: The current testing environment is not configured to support act(...)
+    at ButtonBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\ButtonBase.js:94:59)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Button (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Button\Button.js:231:30)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Paper (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Paper\Paper.js:70:59)
+    at PlanCard (D:/Workspace/study/nanowork/src/pages/chat/PlanCard.tsx:28:21)
+Warning: The current testing environment is not configured to support act(...)
+    at ButtonBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\ButtonBase.js:94:59)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Button (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Button\Button.js:231:30)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Transition (D:\Workspace\study\nanowork\node_modules\react-transition-group\cjs\Transition.js:135:30)
+    at Collapse (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Collapse\Collapse.js:104:59)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Paper (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Paper\Paper.js:70:59)
+    at PlanCard (D:/Workspace/study/nanowork/src/pages/chat/PlanCard.tsx:28:21)
+Warning: The current testing environment is not configured to support act(...)
+    at TransitionGroup (D:\Workspace\study\nanowork\node_modules\react-transition-group\cjs\TransitionGroup.js:57:30)
+    at span
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at TouchRipple (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\TouchRipple.js:139:59)
+    at span
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at ButtonBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\ButtonBase.js:94:59)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at SwitchBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\internal\SwitchBase.js:72:7)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Checkbox (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Checkbox\Checkbox.js:78:59)
+    at label
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at FormControlLabel (D:\Workspace\study\nanowork\node_modules\@mui\material\node\FormControlLabel\FormControlLabel.js:106:59)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Paper (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Paper\Paper.js:70:59)
+    at PlanCard (D:/Workspace/study/nanowork/src/pages/chat/PlanCard.tsx:28:21)
+Warning: The current testing environment is not configured to support act(...)
+    at TransitionGroup (D:\Workspace\study\nanowork\node_modules\react-transition-group\cjs\TransitionGroup.js:57:30)
+    at span
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at TouchRipple (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\TouchRipple.js:139:59)
+    at span
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at ButtonBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\ButtonBase.js:94:59)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at SwitchBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\internal\SwitchBase.js:72:7)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Checkbox (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Checkbox\Checkbox.js:78:59)
+    at label
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at FormControlLabel (D:\Workspace\study\nanowork\node_modules\@mui\material\node\FormControlLabel\FormControlLabel.js:106:59)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Paper (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Paper\Paper.js:70:59)
+    at PlanCard (D:/Workspace/study/nanowork/src/pages/chat/PlanCard.tsx:28:21)
+Warning: The current testing environment is not configured to support act(...)
+    at TransitionGroup (D:\Workspace\study\nanowork\node_modules\react-transition-group\cjs\TransitionGroup.js:57:30)
+    at span
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at TouchRipple (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\TouchRipple.js:139:59)
+    at button
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at ButtonBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\ButtonBase.js:94:59)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Button (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Button\Button.js:231:30)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Paper (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Paper\Paper.js:70:59)
+    at PlanCard (D:/Workspace/study/nanowork/src/pages/chat/PlanCard.tsx:28:21)
+Warning: The current testing environment is not configured to support act(...)
+    at TransitionGroup (D:\Workspace\study\nanowork\node_modules\react-transition-group\cjs\TransitionGroup.js:57:30)
+    at span
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at TouchRipple (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\TouchRipple.js:139:59)
+    at button
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at ButtonBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\ButtonBase.js:94:59)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Button (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Button\Button.js:231:30)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Paper (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Paper\Paper.js:70:59)
+    at PlanCard (D:/Workspace/study/nanowork/src/pages/chat/PlanCard.tsx:28:21)
+Warning: The current testing environment is not configured to support act(...)
+    at TransitionGroup (D:\Workspace\study\nanowork\node_modules\react-transition-group\cjs\TransitionGroup.js:57:30)
+    at span
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at TouchRipple (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\TouchRipple.js:139:59)
+    at button
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at ButtonBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\ButtonBase.js:94:59)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Button (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Button\Button.js:231:30)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Paper (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Paper\Paper.js:70:59)
+    at PlanCard (D:/Workspace/study/nanowork/src/pages/chat/PlanCard.tsx:28:21)
+Warning: The current testing environment is not configured to support act(...)
+    at TransitionGroup (D:\Workspace\study\nanowork\node_modules\react-transition-group\cjs\TransitionGroup.js:57:30)
+    at span
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at TouchRipple (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\TouchRipple.js:139:59)
+    at button
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at ButtonBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\ButtonBase.js:94:59)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Button (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Button\Button.js:231:30)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Transition (D:\Workspace\study\nanowork\node_modules\react-transition-group\cjs\Transition.js:135:30)
+    at Collapse (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Collapse\Collapse.js:104:59)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Paper (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Paper\Paper.js:70:59)
+    at PlanCard (D:/Workspace/study/nanowork/src/pages/chat/PlanCard.tsx:28:21)
+
+[90mstderr[2m | tests/planCard.test.tsx[2m > [22m[2mPlanCard[2m > [22m[2m渲染出可勾选的计划清单与待裁决状态
+[22m[39mWarning: The current testing environment is not configured to support act(...)
+
+ [32m✓[39m tests/webuiFrames.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 16[2mms[22m[39m
+[90mstderr[2m | tests/planCard.test.tsx[2m > [22m[2mPlanCard[2m > [22m[2m「按选中项执行」接通 store：切到 Craft 并发出带范围的下一轮
+[22m[39mWarning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+    at ButtonBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\ButtonBase.js:94:59)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at SwitchBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\internal\SwitchBase.js:72:7)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Checkbox (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Checkbox\Checkbox.js:78:59)
+    at label
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at FormControlLabel (D:\Workspace\study\nanowork\node_modules\@mui\material\node\FormControlLabel\FormControlLabel.js:106:59)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Paper (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Paper\Paper.js:70:59)
+    at PlanCard (D:/Workspace/study/nanowork/src/pages/chat/PlanCard.tsx:28:21)
+Warning: The current testing environment is not configured to support act(...)
+    at ButtonBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\ButtonBase.js:94:59)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at SwitchBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\internal\SwitchBase.js:72:7)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Checkbox (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Checkbox\Checkbox.js:78:59)
+    at label
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at FormControlLabel (D:\Workspace\study\nanowork\node_modules\@mui\material\node\FormControlLabel\FormControlLabel.js:106:59)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Paper (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Paper\Paper.js:70:59)
+    at PlanCard (D:/Workspace/study/nanowork/src/pages/chat/PlanCard.tsx:28:21)
+Warning: The current testing environment is not configured to support act(...)
+    at ButtonBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\ButtonBase.js:94:59)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Button (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Button\Button.js:231:30)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Paper (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Paper\Paper.js:70:59)
+    at PlanCard (D:/Workspace/study/nanowork/src/pages/chat/PlanCard.tsx:28:21)
+Warning: The current testing environment is not configured to support act(...)
+    at ButtonBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\ButtonBase.js:94:59)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Button (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Button\Button.js:231:30)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Paper (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Paper\Paper.js:70:59)
+    at PlanCard (D:/Workspace/study/nanowork/src/pages/chat/PlanCard.tsx:28:21)
+Warning: The current testing environment is not configured to support act(...)
+    at ButtonBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\ButtonBase.js:94:59)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Button (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Button\Button.js:231:30)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Paper (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Paper\Paper.js:70:59)
+    at PlanCard (D:/Workspace/study/nanowork/src/pages/chat/PlanCard.tsx:28:21)
+Warning: The current testing environment is not configured to support act(...)
+    at ButtonBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\ButtonBase.js:94:59)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Button (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Button\Button.js:231:30)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Transition (D:\Workspace\study\nanowork\node_modules\react-transition-group\cjs\Transition.js:135:30)
+    at Collapse (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Collapse\Collapse.js:104:59)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Paper (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Paper\Paper.js:70:59)
+    at PlanCard (D:/Workspace/study/nanowork/src/pages/chat/PlanCard.tsx:28:21)
+Warning: The current testing environment is not configured to support act(...)
+    at TransitionGroup (D:\Workspace\study\nanowork\node_modules\react-transition-group\cjs\TransitionGroup.js:57:30)
+    at span
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at TouchRipple (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\TouchRipple.js:139:59)
+    at span
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at ButtonBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\ButtonBase.js:94:59)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at SwitchBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\internal\SwitchBase.js:72:7)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Checkbox (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Checkbox\Checkbox.js:78:59)
+    at label
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at FormControlLabel (D:\Workspace\study\nanowork\node_modules\@mui\material\node\FormControlLabel\FormControlLabel.js:106:59)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Paper (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Paper\Paper.js:70:59)
+    at PlanCard (D:/Workspace/study/nanowork/src/pages/chat/PlanCard.tsx:28:21)
+Warning: The current testing environment is not configured to support act(...)
+    at TransitionGroup (D:\Workspace\study\nanowork\node_modules\react-transition-group\cjs\TransitionGroup.js:57:30)
+    at span
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at TouchRipple (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\TouchRipple.js:139:59)
+    at span
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at ButtonBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\ButtonBase.js:94:59)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at SwitchBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\internal\SwitchBase.js:72:7)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Checkbox (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Checkbox\Checkbox.js:78:59)
+    at label
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at FormControlLabel (D:\Workspace\study\nanowork\node_modules\@mui\material\node\FormControlLabel\FormControlLabel.js:106:59)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Paper (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Paper\Paper.js:70:59)
+    at PlanCard (D:/Workspace/study/nanowork/src/pages/chat/PlanCard.tsx:28:21)
+Warning: The current testing environment is not configured to support act(...)
+    at TransitionGroup (D:\Workspace\study\nanowork\node_modules\react-transition-group\cjs\TransitionGroup.js:57:30)
+    at span
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at TouchRipple (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\TouchRipple.js:139:59)
+    at button
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at ButtonBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\ButtonBase.js:94:59)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Button (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Button\Button.js:231:30)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Paper (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Paper\Paper.js:70:59)
+    at PlanCard (D:/Workspace/study/nanowork/src/pages/chat/PlanCard.tsx:28:21)
+Warning: The current testing environment is not configured to support act(...)
+    at TransitionGroup (D:\Workspace\study\nanowork\node_modules\react-transition-group\cjs\TransitionGroup.js:57:30)
+    at span
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at TouchRipple (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\TouchRipple.js:139:59)
+    at button
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at ButtonBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\ButtonBase.js:94:59)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Button (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Button\Button.js:231:30)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Paper (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Paper\Paper.js:70:59)
+    at PlanCard (D:/Workspace/study/nanowork/src/pages/chat/PlanCard.tsx:28:21)
+Warning: The current testing environment is not configured to support act(...)
+    at TransitionGroup (D:\Workspace\study\nanowork\node_modules\react-transition-group\cjs\TransitionGroup.js:57:30)
+    at span
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at TouchRipple (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\TouchRipple.js:139:59)
+    at button
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at ButtonBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\ButtonBase.js:94:59)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Button (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Button\Button.js:231:30)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Paper (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Paper\Paper.js:70:59)
+    at PlanCard (D:/Workspace/study/nanowork/src/pages/chat/PlanCard.tsx:28:21)
+Warning: The current testing environment is not configured to support act(...)
+    at TransitionGroup (D:\Workspace\study\nanowork\node_modules\react-transition-group\cjs\TransitionGroup.js:57:30)
+    at span
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at TouchRipple (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\TouchRipple.js:139:59)
+    at button
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at ButtonBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\ButtonBase.js:94:59)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Button (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Button\Button.js:231:30)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Transition (D:\Workspace\study\nanowork\node_modules\react-transition-group\cjs\Transition.js:135:30)
+    at Collapse (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Collapse\Collapse.js:104:59)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Paper (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Paper\Paper.js:70:59)
+    at PlanCard (D:/Workspace/study/nanowork/src/pages/chat/PlanCard.tsx:28:21)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+
+[90mstderr[2m | tests/planCard.test.tsx[2m > [22m[2mPlanCard[2m > [22m[2m「按选中项执行」接通 store：切到 Craft 并发出带范围的下一轮
+[22m[39mWarning: The current testing environment is not configured to support act(...)
+    at InputBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\InputBase\InputBase.js:225:59)
+    at OutlinedInput (D:\Workspace\study\nanowork\node_modules\@mui\material\node\OutlinedInput\OutlinedInput.js:130:59)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at FormControl (D:\Workspace\study\nanowork\node_modules\@mui\material\node\FormControl\FormControl.js:92:59)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at TextField (D:\Workspace\study\nanowork\node_modules\@mui\material\node\TextField\TextField.js:84:59)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Transition (D:\Workspace\study\nanowork\node_modules\react-transition-group\cjs\Transition.js:135:30)
+    at Collapse (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Collapse\Collapse.js:104:59)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Paper (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Paper\Paper.js:70:59)
+    at PlanCard (D:/Workspace/study/nanowork/src/pages/chat/PlanCard.tsx:28:21)
+Warning: The current testing environment is not configured to support act(...)
+    at InputBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\InputBase\InputBase.js:225:59)
+    at OutlinedInput (D:\Workspace\study\nanowork\node_modules\@mui\material\node\OutlinedInput\OutlinedInput.js:130:59)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at FormControl (D:\Workspace\study\nanowork\node_modules\@mui\material\node\FormControl\FormControl.js:92:59)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at TextField (D:\Workspace\study\nanowork\node_modules\@mui\material\node\TextField\TextField.js:84:59)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Transition (D:\Workspace\study\nanowork\node_modules\react-transition-group\cjs\Transition.js:135:30)
+    at Collapse (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Collapse\Collapse.js:104:59)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Paper (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Paper\Paper.js:70:59)
+    at PlanCard (D:/Workspace/study/nanowork/src/pages/chat/PlanCard.tsx:28:21)
+
+[90mstderr[2m | tests/planCard.test.tsx[2m > [22m[2mPlanCard[2m > [22m[2m「按选中项执行」接通 store：切到 Craft 并发出带范围的下一轮
+[22m[39mWarning: The current testing environment is not configured to support act(...)
+
+[90mstderr[2m | tests/planCard.test.tsx[2m > [22m[2mPlanCard[2m > [22m[2m「按选中项执行」接通 store：切到 Craft 并发出带范围的下一轮
+[22m[39mWarning: The current testing environment is not configured to support act(...)
+
+[90mstderr[2m | tests/planCard.test.tsx[2m > [22m[2mPlanCard[2m > [22m[2m「按选中项执行」接通 store：切到 Craft 并发出带范围的下一轮
+[22m[39mWarning: The current testing environment is not configured to support act(...)
+    at TransitionGroup (D:\Workspace\study\nanowork\node_modules\react-transition-group\cjs\TransitionGroup.js:57:30)
+    at span
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at TouchRipple (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\TouchRipple.js:139:59)
+    at button
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at ButtonBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\ButtonBase.js:94:59)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Button (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Button\Button.js:231:30)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Transition (D:\Workspace\study\nanowork\node_modules\react-transition-group\cjs\Transition.js:135:30)
+    at Collapse (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Collapse\Collapse.js:104:59)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Paper (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Paper\Paper.js:70:59)
+    at PlanCard (D:/Workspace/study/nanowork/src/pages/chat/PlanCard.tsx:28:21)
+
+ [32m✓[39m tests/stores/taskQueryStore.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 21[2mms[22m[39m
+ [32m✓[39m tests/sessionsPromptAssembly.test.ts [2m([22m[2m21 tests[22m[2m)[22m[33m 629[2mms[22m[39m
+[90mstderr[2m | tests/planCard.test.tsx[2m > [22m[2mPlanCard[2m > [22m[2m「按选中项执行」接通 store：切到 Craft 并发出带范围的下一轮
+[22m[39mWarning: The current testing environment is not configured to support act(...)
+
+[90mstderr[2m | tests/planCard.test.tsx[2m > [22m[2mPlanCard[2m > [22m[2m已裁决的计划不再显示执行按钮（避免重复批准）
+[22m[39mWarning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+    at ButtonBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\ButtonBase.js:94:59)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at SwitchBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\internal\SwitchBase.js:72:7)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Checkbox (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Checkbox\Checkbox.js:78:59)
+    at label
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at FormControlLabel (D:\Workspace\study\nanowork\node_modules\@mui\material\node\FormControlLabel\FormControlLabel.js:106:59)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Paper (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Paper\Paper.js:70:59)
+    at PlanCard (D:/Workspace/study/nanowork/src/pages/chat/PlanCard.tsx:28:21)
+Warning: The current testing environment is not configured to support act(...)
+    at ButtonBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\ButtonBase.js:94:59)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at SwitchBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\internal\SwitchBase.js:72:7)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Checkbox (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Checkbox\Checkbox.js:78:59)
+    at label
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at FormControlLabel (D:\Workspace\study\nanowork\node_modules\@mui\material\node\FormControlLabel\FormControlLabel.js:106:59)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Paper (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Paper\Paper.js:70:59)
+    at PlanCard (D:/Workspace/study/nanowork/src/pages/chat/PlanCard.tsx:28:21)
+Warning: The current testing environment is not configured to support act(...)
+    at ButtonBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\ButtonBase.js:94:59)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Button (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Button\Button.js:231:30)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Transition (D:\Workspace\study\nanowork\node_modules\react-transition-group\cjs\Transition.js:135:30)
+    at Collapse (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Collapse\Collapse.js:104:59)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Paper (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Paper\Paper.js:70:59)
+    at PlanCard (D:/Workspace/study/nanowork/src/pages/chat/PlanCard.tsx:28:21)
+Warning: The current testing environment is not configured to support act(...)
+    at TransitionGroup (D:\Workspace\study\nanowork\node_modules\react-transition-group\cjs\TransitionGroup.js:57:30)
+    at span
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at TouchRipple (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\TouchRipple.js:139:59)
+    at button
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at ButtonBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\ButtonBase.js:94:59)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Button (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Button\Button.js:231:30)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Transition (D:\Workspace\study\nanowork\node_modules\react-transition-group\cjs\Transition.js:135:30)
+    at Collapse (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Collapse\Collapse.js:104:59)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Paper (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Paper\Paper.js:70:59)
+    at PlanCard (D:/Workspace/study/nanowork/src/pages/chat/PlanCard.tsx:28:21)
+
+[90mstderr[2m | tests/planCard.test.tsx[2m > [22m[2mPlanCard[2m > [22m[2m已裁决的计划不再显示执行按钮（避免重复批准）
+[22m[39mWarning: The current testing environment is not configured to support act(...)
+
+ [32m✓[39m tests/stores/sessionUiStore.test.ts [2m([22m[2m16 tests[22m[2m)[22m[32m 21[2mms[22m[39m
+ [32m✓[39m tests/planCard.test.tsx [2m([22m[2m3 tests[22m[2m)[22m[33m 876[2mms[22m[39m
+     [33m[2m✓[22m[39m 渲染出可勾选的计划清单与待裁决状态 [33m 522[2mms[22m[39m
+ [32m✓[39m tests/electron/storageRoutes.test.ts [2m([22m[2m52 tests[22m[2m)[22m[32m 38[2mms[22m[39m
+ [32m✓[39m tests/taskDraft.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m tests/lib/processDigest.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 13[2mms[22m[39m
+ [32m✓[39m tests/identityService.test.ts [2m([22m[2m18 tests[22m[2m)[22m[32m 27[2mms[22m[39m
+ [32m✓[39m tests/promptCatalog.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 22[2mms[22m[39m
+ [32m✓[39m tests/promptAssembly.test.ts [2m([22m[2m20 tests[22m[2m)[22m[32m 24[2mms[22m[39m
+ [32m✓[39m tests/promptLibrary.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 28[2mms[22m[39m
+ [32m✓[39m tests/sessionsStore.test.ts [2m([22m[2m16 tests[22m[2m)[22m[32m 282[2mms[22m[39m
+ [32m✓[39m tests/constants.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m tests/memoryScope.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 21[2mms[22m[39m
+ [32m✓[39m tests/events/equivalence.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 118[2mms[22m[39m
+ [32m✓[39m tests/stores/sessionsSendAttachments.test.ts [2m([22m[2m18 tests[22m[2m)[22m[32m 83[2mms[22m[39m
+ [32m✓[39m tests/sessionsAgentToolPolicy.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 124[2mms[22m[39m
+ [32m✓[39m tests/sessionsPlanMode.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 201[2mms[22m[39m
+[90mstderr[2m | tests/chatProcessTimeline.test.tsx[2m > [22m[2mReasoningBlock[2m > [22m[2m写入中：正文可见、限高内部滚动、带进度转圈
+[22m[39mWarning: The current testing environment is not configured to support act(...)
+
+[90mstderr[2m | tests/chatProcessTimeline.test.tsx[2m > [22m[2mReasoningBlock[2m > [22m[2m写入中：正文可见、限高内部滚动、带进度转圈
+[22m[39mWarning: The current testing environment is not configured to support act(...)
+
+[90mstderr[2m | tests/chatProcessTimeline.test.tsx[2m > [22m[2mReasoningBlock[2m > [22m[2m写入结束：正文整段从 DOM 卸载，只留「深度思考」标记行
+[22m[39mWarning: The current testing environment is not configured to support act(...)
+
+[90mstderr[2m | tests/chatProcessTimeline.test.tsx[2m > [22m[2mReasoningBlock[2m > [22m[2m写入结束：正文整段从 DOM 卸载，只留「深度思考」标记行
+[22m[39mWarning: The current testing environment is not configured to support act(...)
+
+[90mstderr[2m | tests/chatProcessTimeline.test.tsx[2m > [22m[2mReasoningBlock[2m > [22m[2m卸载后的标记行仍可点开回看（历史思考按需渲染 Markdown）
+[22m[39mWarning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+    at Transition (D:\Workspace\study\nanowork\node_modules\react-transition-group\cjs\Transition.js:135:30)
+    at Collapse (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Collapse\Collapse.js:104:59)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at ReasoningBlock (D:/Workspace/study/nanowork/src/pages/chat/ReasoningBlock.tsx:67:27)
+
+[90mstderr[2m | tests/chatProcessTimeline.test.tsx[2m > [22m[2mReasoningBlock[2m > [22m[2m卸载后的标记行仍可点开回看（历史思考按需渲染 Markdown）
+[22m[39mWarning: The current testing environment is not configured to support act(...)
+
+[90mstderr[2m | tests/chatProcessTimeline.test.tsx[2m > [22m[2mProcessView[2m > [22m[2m按到达顺序交错渲染思考标记与工具行
+[22m[39mWarning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+    at span
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at Tooltip (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Tooltip\Tooltip.js:229:59)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at ToolRow (D:/Workspace/study/nanowork/src/pages/chat/ProcessView.tsx:192:20)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at ProcessView (D:/Workspace/study/nanowork/src/pages/chat/ProcessView.tsx:311:24)
+Warning: The current testing environment is not configured to support act(...)
+    at span
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at Tooltip (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Tooltip\Tooltip.js:229:59)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at ToolRow (D:/Workspace/study/nanowork/src/pages/chat/ProcessView.tsx:192:20)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at ProcessView (D:/Workspace/study/nanowork/src/pages/chat/ProcessView.tsx:311:24)
+
+[90mstderr[2m | tests/chatProcessTimeline.test.tsx[2m > [22m[2mProcessView[2m > [22m[2m按到达顺序交错渲染思考标记与工具行
+[22m[39mWarning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+
+[90mstderr[2m | tests/chatProcessTimeline.test.tsx[2m > [22m[2mProcessView[2m > [22m[2m只有末尾未闭合的思考展开正文；消息不再流式时它也一并卸载
+[22m[39mWarning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+    at span
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at Tooltip (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Tooltip\Tooltip.js:229:59)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at ToolRow (D:/Workspace/study/nanowork/src/pages/chat/ProcessView.tsx:192:20)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at ProcessView (D:/Workspace/study/nanowork/src/pages/chat/ProcessView.tsx:311:24)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+    at span
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at Tooltip (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Tooltip\Tooltip.js:229:59)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at ToolRow (D:/Workspace/study/nanowork/src/pages/chat/ProcessView.tsx:192:20)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at ProcessView (D:/Workspace/study/nanowork/src/pages/chat/ProcessView.tsx:311:24)
+
+[90mstderr[2m | tests/chatProcessTimeline.test.tsx[2m > [22m[2mProcessView[2m > [22m[2m只有末尾未闭合的思考展开正文；消息不再流式时它也一并卸载
+[22m[39mWarning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+
+[90mstderr[2m | tests/chatProcessTimeline.test.tsx[2m > [22m[2mProcessView[2m > [22m[2m无事件且无 children 时整体不渲染
+[22m[39mWarning: The current testing environment is not configured to support act(...)
+
+[90mstderr[2m | tests/chatProcessTimeline.test.tsx[2m > [22m[2mProcessView[2m > [22m[2m无事件且无 children 时整体不渲染
+[22m[39mWarning: The current testing environment is not configured to support act(...)
+
+[90mstderr[2m | tests/chatProcessTimeline.test.tsx[2m > [22m[2mProcessView[2m > [22m[2mchildren 为空数组时也不渲染（回归：空数组是真值，不能用 !children 判定）
+[22m[39mWarning: The current testing environment is not configured to support act(...)
+
+[90mstderr[2m | tests/chatProcessTimeline.test.tsx[2m > [22m[2mProcessView[2m > [22m[2mchildren 为空数组时也不渲染（回归：空数组是真值，不能用 !children 判定）
+[22m[39mWarning: The current testing environment is not configured to support act(...)
+
+[90mstderr[2m | tests/chatProcessTimeline.test.tsx[2m > [22m[2mAssistantMessage[2m > [22m[2m结束后：过程整块不在 DOM，只剩一行「已完成 1m41s ›」与回答
+[22m[39mWarning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+    at button
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at ButtonBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\ButtonBase.js:94:59)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at IconButton (D:\Workspace\study\nanowork\node_modules\@mui\material\node\IconButton\IconButton.js:113:59)
+    at Tooltip (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Tooltip\Tooltip.js:229:59)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at AssistantMessage (D:/Workspace/study/nanowork/src/pages/chat/AssistantMessage.tsx:66:29)
+Warning: The current testing environment is not configured to support act(...)
+    at button
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at ButtonBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\ButtonBase.js:94:59)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at IconButton (D:\Workspace\study\nanowork\node_modules\@mui\material\node\IconButton\IconButton.js:113:59)
+    at Tooltip (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Tooltip\Tooltip.js:229:59)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at AssistantMessage (D:/Workspace/study/nanowork/src/pages/chat/AssistantMessage.tsx:66:29)
+Warning: The current testing environment is not configured to support act(...)
+    at ButtonBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\ButtonBase.js:94:59)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at IconButton (D:\Workspace\study\nanowork\node_modules\@mui\material\node\IconButton\IconButton.js:113:59)
+    at Tooltip (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Tooltip\Tooltip.js:229:59)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at AssistantMessage (D:/Workspace/study/nanowork/src/pages/chat/AssistantMessage.tsx:66:29)
+Warning: The current testing environment is not configured to support act(...)
+    at ButtonBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\ButtonBase.js:94:59)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at IconButton (D:\Workspace\study\nanowork\node_modules\@mui\material\node\IconButton\IconButton.js:113:59)
+    at Tooltip (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Tooltip\Tooltip.js:229:59)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at AssistantMessage (D:/Workspace/study/nanowork/src/pages/chat/AssistantMessage.tsx:66:29)
+Warning: The current testing environment is not configured to support act(...)
+    at TransitionGroup (D:\Workspace\study\nanowork\node_modules\react-transition-group\cjs\TransitionGroup.js:57:30)
+    at span
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at TouchRipple (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\TouchRipple.js:139:59)
+    at button
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at ButtonBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\ButtonBase.js:94:59)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at IconButton (D:\Workspace\study\nanowork\node_modules\@mui\material\node\IconButton\IconButton.js:113:59)
+    at Tooltip (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Tooltip\Tooltip.js:229:59)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at AssistantMessage (D:/Workspace/study/nanowork/src/pages/chat/AssistantMessage.tsx:66:29)
+Warning: The current testing environment is not configured to support act(...)
+    at TransitionGroup (D:\Workspace\study\nanowork\node_modules\react-transition-group\cjs\TransitionGroup.js:57:30)
+    at span
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at TouchRipple (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\TouchRipple.js:139:59)
+    at button
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at ButtonBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\ButtonBase.js:94:59)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at IconButton (D:\Workspace\study\nanowork\node_modules\@mui\material\node\IconButton\IconButton.js:113:59)
+    at Tooltip (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Tooltip\Tooltip.js:229:59)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at AssistantMessage (D:/Workspace/study/nanowork/src/pages/chat/AssistantMessage.tsx:66:29)
+
+[90mstderr[2m | tests/chatProcessTimeline.test.tsx[2m > [22m[2mAssistantMessage[2m > [22m[2m结束后：过程整块不在 DOM，只剩一行「已完成 1m41s ›」与回答
+[22m[39mWarning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+
+[90mstderr[2m | tests/chatProcessTimeline.test.tsx[2m > [22m[2mAssistantMessage[2m > [22m[2m点「已完成」才展开过程（思考标记 + 工具行回来，思考正文仍不占 DOM）
+[22m[39mWarning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+    at button
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at ButtonBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\ButtonBase.js:94:59)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at IconButton (D:\Workspace\study\nanowork\node_modules\@mui\material\node\IconButton\IconButton.js:113:59)
+    at Tooltip (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Tooltip\Tooltip.js:229:59)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at AssistantMessage (D:/Workspace/study/nanowork/src/pages/chat/AssistantMessage.tsx:66:29)
+Warning: The current testing environment is not configured to support act(...)
+    at button
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at ButtonBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\ButtonBase.js:94:59)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at IconButton (D:\Workspace\study\nanowork\node_modules\@mui\material\node\IconButton\IconButton.js:113:59)
+    at Tooltip (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Tooltip\Tooltip.js:229:59)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at AssistantMessage (D:/Workspace/study/nanowork/src/pages/chat/AssistantMessage.tsx:66:29)
+Warning: The current testing environment is not configured to support act(...)
+    at ButtonBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\ButtonBase.js:94:59)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at IconButton (D:\Workspace\study\nanowork\node_modules\@mui\material\node\IconButton\IconButton.js:113:59)
+    at Tooltip (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Tooltip\Tooltip.js:229:59)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at AssistantMessage (D:/Workspace/study/nanowork/src/pages/chat/AssistantMessage.tsx:66:29)
+Warning: The current testing environment is not configured to support act(...)
+    at ButtonBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\ButtonBase.js:94:59)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at IconButton (D:\Workspace\study\nanowork\node_modules\@mui\material\node\IconButton\IconButton.js:113:59)
+    at Tooltip (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Tooltip\Tooltip.js:229:59)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at AssistantMessage (D:/Workspace/study/nanowork/src/pages/chat/AssistantMessage.tsx:66:29)
+Warning: The current testing environment is not configured to support act(...)
+    at TransitionGroup (D:\Workspace\study\nanowork\node_modules\react-transition-group\cjs\TransitionGroup.js:57:30)
+    at span
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at TouchRipple (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\TouchRipple.js:139:59)
+    at button
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at ButtonBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\ButtonBase.js:94:59)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at IconButton (D:\Workspace\study\nanowork\node_modules\@mui\material\node\IconButton\IconButton.js:113:59)
+    at Tooltip (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Tooltip\Tooltip.js:229:59)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at AssistantMessage (D:/Workspace/study/nanowork/src/pages/chat/AssistantMessage.tsx:66:29)
+Warning: The current testing environment is not configured to support act(...)
+    at TransitionGroup (D:\Workspace\study\nanowork\node_modules\react-transition-group\cjs\TransitionGroup.js:57:30)
+    at span
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at TouchRipple (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\TouchRipple.js:139:59)
+    at button
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at ButtonBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\ButtonBase.js:94:59)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at IconButton (D:\Workspace\study\nanowork\node_modules\@mui\material\node\IconButton\IconButton.js:113:59)
+    at Tooltip (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Tooltip\Tooltip.js:229:59)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at AssistantMessage (D:/Workspace/study/nanowork/src/pages/chat/AssistantMessage.tsx:66:29)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+    at span
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at Tooltip (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Tooltip\Tooltip.js:229:59)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at ToolRow (D:/Workspace/study/nanowork/src/pages/chat/ProcessView.tsx:192:20)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at ProcessView (D:/Workspace/study/nanowork/src/pages/chat/ProcessView.tsx:311:24)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Transition (D:\Workspace\study\nanowork\node_modules\react-transition-group\cjs\Transition.js:135:30)
+    at Collapse (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Collapse\Collapse.js:104:59)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at AssistantMessage (D:/Workspace/study/nanowork/src/pages/chat/AssistantMessage.tsx:66:29)
+Warning: The current testing environment is not configured to support act(...)
+    at span
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at Tooltip (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Tooltip\Tooltip.js:229:59)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at ToolRow (D:/Workspace/study/nanowork/src/pages/chat/ProcessView.tsx:192:20)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at ProcessView (D:/Workspace/study/nanowork/src/pages/chat/ProcessView.tsx:311:24)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Transition (D:\Workspace\study\nanowork\node_modules\react-transition-group\cjs\Transition.js:135:30)
+    at Collapse (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Collapse\Collapse.js:104:59)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at AssistantMessage (D:/Workspace/study/nanowork/src/pages/chat/AssistantMessage.tsx:66:29)
+Warning: The current testing environment is not configured to support act(...)
+    at Transition (D:\Workspace\study\nanowork\node_modules\react-transition-group\cjs\Transition.js:135:30)
+    at Collapse (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Collapse\Collapse.js:104:59)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at AssistantMessage (D:/Workspace/study/nanowork/src/pages/chat/AssistantMessage.tsx:66:29)
+
+[90mstderr[2m | tests/chatProcessTimeline.test.tsx[2m > [22m[2mAssistantMessage[2m > [22m[2m点「已完成」才展开过程（思考标记 + 工具行回来，思考正文仍不占 DOM）
+[22m[39mWarning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+
+[90mstderr[2m | tests/chatProcessTimeline.test.tsx[2m > [22m[2mAssistantMessage[2m > [22m[2m流式中自动铺开过程，文案为「已处理」
+[22m[39mWarning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+    at span
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at Tooltip (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Tooltip\Tooltip.js:229:59)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at ToolRow (D:/Workspace/study/nanowork/src/pages/chat/ProcessView.tsx:192:20)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at ProcessView (D:/Workspace/study/nanowork/src/pages/chat/ProcessView.tsx:311:24)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Transition (D:\Workspace\study\nanowork\node_modules\react-transition-group\cjs\Transition.js:135:30)
+    at Collapse (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Collapse\Collapse.js:104:59)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at AssistantMessage (D:/Workspace/study/nanowork/src/pages/chat/AssistantMessage.tsx:66:29)
+Warning: The current testing environment is not configured to support act(...)
+    at span
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at Tooltip (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Tooltip\Tooltip.js:229:59)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at ToolRow (D:/Workspace/study/nanowork/src/pages/chat/ProcessView.tsx:192:20)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at ProcessView (D:/Workspace/study/nanowork/src/pages/chat/ProcessView.tsx:311:24)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Transition (D:\Workspace\study\nanowork\node_modules\react-transition-group\cjs\Transition.js:135:30)
+    at Collapse (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Collapse\Collapse.js:104:59)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at AssistantMessage (D:/Workspace/study/nanowork/src/pages/chat/AssistantMessage.tsx:66:29)
+Warning: The current testing environment is not configured to support act(...)
+    at button
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at ButtonBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\ButtonBase.js:94:59)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at IconButton (D:\Workspace\study\nanowork\node_modules\@mui\material\node\IconButton\IconButton.js:113:59)
+    at Tooltip (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Tooltip\Tooltip.js:229:59)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at AssistantMessage (D:/Workspace/study/nanowork/src/pages/chat/AssistantMessage.tsx:66:29)
+Warning: The current testing environment is not configured to support act(...)
+    at button
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at ButtonBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\ButtonBase.js:94:59)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at IconButton (D:\Workspace\study\nanowork\node_modules\@mui\material\node\IconButton\IconButton.js:113:59)
+    at Tooltip (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Tooltip\Tooltip.js:229:59)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at AssistantMessage (D:/Workspace/study/nanowork/src/pages/chat/AssistantMessage.tsx:66:29)
+Warning: The current testing environment is not configured to support act(...)
+    at ButtonBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\ButtonBase.js:94:59)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at IconButton (D:\Workspace\study\nanowork\node_modules\@mui\material\node\IconButton\IconButton.js:113:59)
+    at Tooltip (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Tooltip\Tooltip.js:229:59)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at AssistantMessage (D:/Workspace/study/nanowork/src/pages/chat/AssistantMessage.tsx:66:29)
+Warning: The current testing environment is not configured to support act(...)
+    at ButtonBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\ButtonBase.js:94:59)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at IconButton (D:\Workspace\study\nanowork\node_modules\@mui\material\node\IconButton\IconButton.js:113:59)
+    at Tooltip (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Tooltip\Tooltip.js:229:59)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at AssistantMessage (D:/Workspace/study/nanowork/src/pages/chat/AssistantMessage.tsx:66:29)
+Warning: The current testing environment is not configured to support act(...)
+    at TransitionGroup (D:\Workspace\study\nanowork\node_modules\react-transition-group\cjs\TransitionGroup.js:57:30)
+    at span
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at TouchRipple (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\TouchRipple.js:139:59)
+    at button
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at ButtonBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\ButtonBase.js:94:59)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at IconButton (D:\Workspace\study\nanowork\node_modules\@mui\material\node\IconButton\IconButton.js:113:59)
+    at Tooltip (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Tooltip\Tooltip.js:229:59)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at AssistantMessage (D:/Workspace/study/nanowork/src/pages/chat/AssistantMessage.tsx:66:29)
+Warning: The current testing environment is not configured to support act(...)
+    at TransitionGroup (D:\Workspace\study\nanowork\node_modules\react-transition-group\cjs\TransitionGroup.js:57:30)
+    at span
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at TouchRipple (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\TouchRipple.js:139:59)
+    at button
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at ButtonBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\ButtonBase.js:94:59)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at IconButton (D:\Workspace\study\nanowork\node_modules\@mui\material\node\IconButton\IconButton.js:113:59)
+    at Tooltip (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Tooltip\Tooltip.js:229:59)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at AssistantMessage (D:/Workspace/study/nanowork/src/pages/chat/AssistantMessage.tsx:66:29)
+
+[90mstderr[2m | tests/chatProcessTimeline.test.tsx[2m > [22m[2mAssistantMessage[2m > [22m[2m流式中自动铺开过程，文案为「已处理」
+[22m[39mWarning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+
+[90mstderr[2m | tests/chatProcessTimeline.test.tsx[2m > [22m[2mAssistantMessage[2m > [22m[2m有失败步时在开关行常驻提示（过程收起后失败行看不见了）
+[22m[39mWarning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+    at button
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at ButtonBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\ButtonBase.js:94:59)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at IconButton (D:\Workspace\study\nanowork\node_modules\@mui\material\node\IconButton\IconButton.js:113:59)
+    at Tooltip (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Tooltip\Tooltip.js:229:59)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at AssistantMessage (D:/Workspace/study/nanowork/src/pages/chat/AssistantMessage.tsx:66:29)
+Warning: The current testing environment is not configured to support act(...)
+    at button
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at ButtonBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\ButtonBase.js:94:59)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at IconButton (D:\Workspace\study\nanowork\node_modules\@mui\material\node\IconButton\IconButton.js:113:59)
+    at Tooltip (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Tooltip\Tooltip.js:229:59)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at AssistantMessage (D:/Workspace/study/nanowork/src/pages/chat/AssistantMessage.tsx:66:29)
+Warning: The current testing environment is not configured to support act(...)
+    at ButtonBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\ButtonBase.js:94:59)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at IconButton (D:\Workspace\study\nanowork\node_modules\@mui\material\node\IconButton\IconButton.js:113:59)
+    at Tooltip (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Tooltip\Tooltip.js:229:59)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at AssistantMessage (D:/Workspace/study/nanowork/src/pages/chat/AssistantMessage.tsx:66:29)
+Warning: The current testing environment is not configured to support act(...)
+    at ButtonBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\ButtonBase.js:94:59)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at IconButton (D:\Workspace\study\nanowork\node_modules\@mui\material\node\IconButton\IconButton.js:113:59)
+    at Tooltip (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Tooltip\Tooltip.js:229:59)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at AssistantMessage (D:/Workspace/study/nanowork/src/pages/chat/AssistantMessage.tsx:66:29)
+Warning: The current testing environment is not configured to support act(...)
+    at TransitionGroup (D:\Workspace\study\nanowork\node_modules\react-transition-group\cjs\TransitionGroup.js:57:30)
+    at span
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at TouchRipple (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\TouchRipple.js:139:59)
+    at button
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at ButtonBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\ButtonBase.js:94:59)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at IconButton (D:\Workspace\study\nanowork\node_modules\@mui\material\node\IconButton\IconButton.js:113:59)
+    at Tooltip (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Tooltip\Tooltip.js:229:59)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at AssistantMessage (D:/Workspace/study/nanowork/src/pages/chat/AssistantMessage.tsx:66:29)
+Warning: The current testing environment is not configured to support act(...)
+    at TransitionGroup (D:\Workspace\study\nanowork\node_modules\react-transition-group\cjs\TransitionGroup.js:57:30)
+    at span
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at TouchRipple (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\TouchRipple.js:139:59)
+    at button
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at ButtonBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\ButtonBase.js:94:59)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at IconButton (D:\Workspace\study\nanowork\node_modules\@mui\material\node\IconButton\IconButton.js:113:59)
+    at Tooltip (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Tooltip\Tooltip.js:229:59)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at AssistantMessage (D:/Workspace/study/nanowork/src/pages/chat/AssistantMessage.tsx:66:29)
+
+[90mstderr[2m | tests/chatProcessTimeline.test.tsx[2m > [22m[2mAssistantMessage[2m > [22m[2m有失败步时在开关行常驻提示（过程收起后失败行看不见了）
+[22m[39mWarning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+
+[90mstderr[2m | tests/chatProcessTimeline.test.tsx[2m > [22m[2mAssistantMessage[2m > [22m[2m无过程时不渲染开关行
+[22m[39mWarning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+    at button
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at ButtonBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\ButtonBase.js:94:59)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at IconButton (D:\Workspace\study\nanowork\node_modules\@mui\material\node\IconButton\IconButton.js:113:59)
+    at Tooltip (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Tooltip\Tooltip.js:229:59)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at AssistantMessage (D:/Workspace/study/nanowork/src/pages/chat/AssistantMessage.tsx:66:29)
+Warning: The current testing environment is not configured to support act(...)
+    at button
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at ButtonBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\ButtonBase.js:94:59)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at IconButton (D:\Workspace\study\nanowork\node_modules\@mui\material\node\IconButton\IconButton.js:113:59)
+    at Tooltip (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Tooltip\Tooltip.js:229:59)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at AssistantMessage (D:/Workspace/study/nanowork/src/pages/chat/AssistantMessage.tsx:66:29)
+Warning: The current testing environment is not configured to support act(...)
+    at ButtonBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\ButtonBase.js:94:59)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at IconButton (D:\Workspace\study\nanowork\node_modules\@mui\material\node\IconButton\IconButton.js:113:59)
+    at Tooltip (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Tooltip\Tooltip.js:229:59)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at AssistantMessage (D:/Workspace/study/nanowork/src/pages/chat/AssistantMessage.tsx:66:29)
+Warning: The current testing environment is not configured to support act(...)
+    at ButtonBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\ButtonBase.js:94:59)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at IconButton (D:\Workspace\study\nanowork\node_modules\@mui\material\node\IconButton\IconButton.js:113:59)
+    at Tooltip (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Tooltip\Tooltip.js:229:59)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at AssistantMessage (D:/Workspace/study/nanowork/src/pages/chat/AssistantMessage.tsx:66:29)
+Warning: The current testing environment is not configured to support act(...)
+    at TransitionGroup (D:\Workspace\study\nanowork\node_modules\react-transition-group\cjs\TransitionGroup.js:57:30)
+    at span
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at TouchRipple (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\TouchRipple.js:139:59)
+    at button
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at ButtonBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\ButtonBase.js:94:59)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at IconButton (D:\Workspace\study\nanowork\node_modules\@mui\material\node\IconButton\IconButton.js:113:59)
+    at Tooltip (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Tooltip\Tooltip.js:229:59)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at AssistantMessage (D:/Workspace/study/nanowork/src/pages/chat/AssistantMessage.tsx:66:29)
+Warning: The current testing environment is not configured to support act(...)
+    at TransitionGroup (D:\Workspace\study\nanowork\node_modules\react-transition-group\cjs\TransitionGroup.js:57:30)
+    at span
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at TouchRipple (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\TouchRipple.js:139:59)
+    at button
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at ButtonBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\ButtonBase.js:94:59)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at IconButton (D:\Workspace\study\nanowork\node_modules\@mui\material\node\IconButton\IconButton.js:113:59)
+    at Tooltip (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Tooltip\Tooltip.js:229:59)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at AssistantMessage (D:/Workspace/study/nanowork/src/pages/chat/AssistantMessage.tsx:66:29)
+
+[90mstderr[2m | tests/chatProcessTimeline.test.tsx[2m > [22m[2mAssistantMessage[2m > [22m[2m无过程时不渲染开关行
+[22m[39mWarning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+
+[90mstderr[2m | tests/chatProcessTimeline.test.tsx[2m > [22m[2mAssistantMessage[2m > [22m[2m历史消息缺 durationMs 时开关行不显示耗时
+[22m[39mWarning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+    at button
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at ButtonBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\ButtonBase.js:94:59)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at IconButton (D:\Workspace\study\nanowork\node_modules\@mui\material\node\IconButton\IconButton.js:113:59)
+    at Tooltip (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Tooltip\Tooltip.js:229:59)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at AssistantMessage (D:/Workspace/study/nanowork/src/pages/chat/AssistantMessage.tsx:66:29)
+Warning: The current testing environment is not configured to support act(...)
+    at button
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at ButtonBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\ButtonBase.js:94:59)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at IconButton (D:\Workspace\study\nanowork\node_modules\@mui\material\node\IconButton\IconButton.js:113:59)
+    at Tooltip (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Tooltip\Tooltip.js:229:59)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at AssistantMessage (D:/Workspace/study/nanowork/src/pages/chat/AssistantMessage.tsx:66:29)
+Warning: The current testing environment is not configured to support act(...)
+    at ButtonBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\ButtonBase.js:94:59)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at IconButton (D:\Workspace\study\nanowork\node_modules\@mui\material\node\IconButton\IconButton.js:113:59)
+    at Tooltip (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Tooltip\Tooltip.js:229:59)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at AssistantMessage (D:/Workspace/study/nanowork/src/pages/chat/AssistantMessage.tsx:66:29)
+Warning: The current testing environment is not configured to support act(...)
+    at ButtonBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\ButtonBase.js:94:59)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at IconButton (D:\Workspace\study\nanowork\node_modules\@mui\material\node\IconButton\IconButton.js:113:59)
+    at Tooltip (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Tooltip\Tooltip.js:229:59)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at AssistantMessage (D:/Workspace/study/nanowork/src/pages/chat/AssistantMessage.tsx:66:29)
+Warning: The current testing environment is not configured to support act(...)
+    at TransitionGroup (D:\Workspace\study\nanowork\node_modules\react-transition-group\cjs\TransitionGroup.js:57:30)
+    at span
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at TouchRipple (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\TouchRipple.js:139:59)
+    at button
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at ButtonBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\ButtonBase.js:94:59)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at IconButton (D:\Workspace\study\nanowork\node_modules\@mui\material\node\IconButton\IconButton.js:113:59)
+    at Tooltip (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Tooltip\Tooltip.js:229:59)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at AssistantMessage (D:/Workspace/study/nanowork/src/pages/chat/AssistantMessage.tsx:66:29)
+Warning: The current testing environment is not configured to support act(...)
+    at TransitionGroup (D:\Workspace\study\nanowork\node_modules\react-transition-group\cjs\TransitionGroup.js:57:30)
+    at span
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at TouchRipple (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\TouchRipple.js:139:59)
+    at button
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at ButtonBase (D:\Workspace\study\nanowork\node_modules\@mui\material\node\ButtonBase\ButtonBase.js:94:59)
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at IconButton (D:\Workspace\study\nanowork\node_modules\@mui\material\node\IconButton\IconButton.js:113:59)
+    at Tooltip (D:\Workspace\study\nanowork\node_modules\@mui\material\node\Tooltip\Tooltip.js:229:59)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at div
+    at D:\Workspace\study\nanowork\node_modules\@emotion\react\dist\emotion-element-e8f4cc37.development.cjs.js:60:23
+    at Box (D:\Workspace\study\nanowork\node_modules\@mui\system\createBox.js:31:41)
+    at AssistantMessage (D:/Workspace/study/nanowork/src/pages/chat/AssistantMessage.tsx:66:29)
+
+[90mstderr[2m | tests/chatProcessTimeline.test.tsx[2m > [22m[2mAssistantMessage[2m > [22m[2m历史消息缺 durationMs 时开关行不显示耗时
+[22m[39mWarning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+
+ [32m✓[39m tests/chatProcessTimeline.test.tsx [2m([22m[2m13 tests[22m[2m)[22m[33m 465[2mms[22m[39m
+ [32m✓[39m tests/tasksStore.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m49 passed[39m[22m[90m (49)[39m
+[2m      Tests [22m [1m[32m772 passed[39m[22m[90m (772)[39m
+[2m   Start at [22m 21:13:46
+[2m   Duration [22m 18.24s[2m (transform 5.93s, setup 2.84s, import 63.39s, tests 5.09s, environment 185.63s)[22m
+
+exit=0

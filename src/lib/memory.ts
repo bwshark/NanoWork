@@ -4,8 +4,15 @@ import {
   MEMORY_KEY_PREFIX,
   MEMORY_TAG_CLOSE,
   MEMORY_TAG_OPEN,
+  USER_MEMORY_KEY,
 } from '@/lib/constants';
-import type { ChatMessageParam, MemoryAppendOptions, MemoryMeta } from '@/types';
+import type {
+  ChatMessageParam,
+  MemoryAppendOptions,
+  MemoryMeta,
+  MemoryScope,
+  MemoryScopeSummary,
+} from '@/types';
 import type { ChatRequest } from '@/ai/runtime/types';
 
 /** 自动摘要的最大字数约束（对应 PRD：≤150 字） */
@@ -47,6 +54,18 @@ function hashContent(s: string): string {
 /** 工作区索引在 storage 中的 key（记录已知工作区 key 列表，用于多工作区切换） */
 const WORKSPACE_INDEX_KEY = `${MEMORY_KEY_PREFIX}index`;
 
+/** 作用域的展示元信息（记忆页切换器用） */
+const SCOPE_DEFS: Record<MemoryScope, { label: string; description: string }> = {
+  user: {
+    label: '用户级',
+    description: '跨项目生效（L2）。按 FR-4.2 只在**用户显式要求**时写入，自动沉淀不进这一层。',
+  },
+  workspace: {
+    label: '工作区级',
+    description: '当前工作区的长期记忆（L3）。会话结束的自动摘要与「记住这条」都落在这里。',
+  },
+};
+
 /**
  * 工作区文件记忆服务（MemoryService）。
  *
@@ -60,6 +79,11 @@ const WORKSPACE_INDEX_KEY = `${MEMORY_KEY_PREFIX}index`;
  * 增强（本次）：
  * - 幂等去重：每条记忆块内嵌 `<!-- SUMMARY:<hash> -->` 隐藏标记，重复内容不再重复追加；
  * - 多工作区隔离：通过 `useWorkspace(key)` 切换当前工作区，记忆按 key 分别存储/列举。
+ *
+ * 增强（M3 / FR-4.2）：
+ * - **作用域分层**：新增 `user` 作用域落 `~/.nanowork/MEMORY.md`（跨项目，L2），
+ *   与既有的 `workspace` 作用域（`memory/<key>.md`，L3）并列。scope 作为**可选
+ *   尾参**接入既有方法，缺省 `'workspace'` —— 既有调用方语义不变。
  */
 class MemoryServiceImpl {
   /** 当前工作区 key（默认 'default'；多工作区通过 useWorkspace 切换） */
@@ -134,6 +158,19 @@ class MemoryServiceImpl {
     return this.storageKeyFor(this.currentKey);
   }
 
+  /**
+   * 作用域 → storage key（§14.1 的四层在 V1 落地两层）。
+   *
+   * - `workspace` → `nanowork.memory.<currentKey>` → `~/.nanowork/memory/<key>.md`
+   * - `user` → `nanowork.userMemory` → `~/.nanowork/MEMORY.md`
+   *
+   * 用户级刻意不复用 `MEMORY_KEY_PREFIX`：那个前缀是动态路由，套上去会得到
+   * `memory/user.md`——一个谁都不认的孤儿文件（见 constants.ts 的注释）。
+   */
+  private storageKeyForScope(scope: MemoryScope): string {
+    return scope === 'user' ? USER_MEMORY_KEY : this.storageKey();
+  }
+
   /** 按指定 key 读取记忆全文（不切换 currentKey） */
   private async loadByKey(key: string): Promise<string> {
     try {
@@ -144,10 +181,23 @@ class MemoryServiceImpl {
     }
   }
 
+  /** 按 storage key 读取（任意 key，含用户级） */
+  private async loadRawKey(storageKey: string): Promise<string> {
+    try {
+      const raw = await platform.storage.get<string>(storageKey);
+      return typeof raw === 'string' ? raw : '';
+    } catch {
+      return '';
+    }
+  }
+
   /**
    * 读取记忆全文。读取失败或从未写入时返回空串（不抛出，避免阻塞会话创建）。
+   *
+   * `scope` 缺省为 `'workspace'`——既有调用方拿到的语义与改动前**完全一致**。
    */
-  async load(): Promise<string> {
+  async load(scope: MemoryScope = 'workspace'): Promise<string> {
+    if (scope === 'user') return this.loadRawKey(USER_MEMORY_KEY);
     return this.loadByKey(this.currentKey);
   }
 
@@ -159,28 +209,39 @@ class MemoryServiceImpl {
    * 因此**不需要**额外的 `writeTextFile` 二段写入——旧实现在这里多写一次
    * `MEMORY.md`，但传的是纯文件名，被主进程安全校验拒绝后又吞掉异常，
    * 于是「写真实 MEMORY.md」从未生效且无人察觉。
+   *
+   * `scope` 刻意放在**末位可选参数**（而非 PRD 14.2 示例的首位）：本服务已有
+   * 40 余处 `save(text)` 调用，改成首位会让「改一行实现」变成「改四十个调用点」，
+   * 收益为零而回归风险不小。语义与 PRD 一致，只是参数位置不同。
    */
-  async save(fullText: string): Promise<void> {
-    await platform.storage.set(this.storageKey(), fullText ?? '');
+  async save(fullText: string, scope: MemoryScope = 'workspace'): Promise<void> {
+    await platform.storage.set(this.storageKeyForScope(scope), fullText ?? '');
   }
 
   /** 清空记忆（等价于 save('')） */
-  async clear(): Promise<void> {
-    await this.save('');
+  async clear(scope: MemoryScope = 'workspace'): Promise<void> {
+    await this.save('', scope);
   }
 
   /**
    * 追加一条记忆：读取现有全文 → 若内容已存在（按哈希去重）则跳过 → 否则拼接
    * 带时间戳与去重标记的 Markdown 引用块 → 覆盖写回。
+   *
+   * FR-4.2 的「用户显式要求才写」由**调用方**保证：自动沉淀与「记住这条」都用
+   * 缺省的 `workspace` 作用域，只有记忆页在用户级作用域下的编辑才会写 `user`。
    */
-  async append(content: string, opts: MemoryAppendOptions = {}): Promise<void> {
+  async append(
+    content: string,
+    opts: MemoryAppendOptions = {},
+    scope: MemoryScope = 'workspace',
+  ): Promise<void> {
     const trimmed = (content ?? '').trim();
     if (!trimmed) return;
 
     const hash = hashContent(trimmed);
     const marker = `${DEDUP_MARKER_OPEN}${hash}${DEDUP_MARKER_CLOSE}`;
 
-    const existing = await this.load();
+    const existing = await this.load(scope);
     // 幂等去重：同一内容（同 hash）不重复追加
     if (existing.includes(marker)) return;
 
@@ -190,7 +251,26 @@ class MemoryServiceImpl {
 
     const next =
       existing.trim() === '' ? block : `${existing.replace(/\s+$/, '')}\n\n${block}`;
-    await this.save(`${next}\n`);
+    await this.save(`${next}\n`, scope);
+  }
+
+  /** 各作用域的规模概览（记忆页的作用域切换器用） */
+  async scopeSummaries(): Promise<MemoryScopeSummary[]> {
+    const scopes: MemoryScope[] = ['user', 'workspace'];
+    const result: MemoryScopeSummary[] = [];
+    for (const scope of scopes) {
+      const text = await this.load(scope);
+      const meta = this.meta(text);
+      result.push({
+        scope,
+        label: SCOPE_DEFS[scope].label,
+        description: SCOPE_DEFS[scope].description,
+        chars: meta.chars,
+        entries: meta.entries,
+        lastWrittenAt: meta.lastWrittenAt,
+      });
+    }
+    return result;
   }
 
   /**

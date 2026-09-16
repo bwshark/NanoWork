@@ -44,6 +44,30 @@ export interface Settings {
    * Web 端无对应能力，该项仅作占位（保持结构一致，避免 undefined 分支）。
    */
   desktop: DesktopConfig;
+  // —— 提示词外置（design §13.1 / §13.4）——
+  /**
+   * 领域维度模板（`general` / `code` / `design`）的**全局默认**。
+   *
+   * 与 `promptStyle` 一样只是默认值：Agent 可以用自己的 `promptDomain` 覆盖。
+   * 之所以默认放在全局而不是每个 Agent 必填，是因为绝大多数用户只用一个 Agent，
+   * 强迫每个 Agent 都选一遍领域是纯粹的负担。
+   *
+   * 留空 / 非法值 → 组装时回退 `general`（见 promptCatalog 的 DEFAULT_PROMPT_DOMAIN）。
+   */
+  promptDomain?: string;
+  /**
+   * 语气风格模板 id（如 `style-professional`）的全局默认。
+   * 风格只改表达方式不改事实（§13.1 的内容质量护栏）。
+   */
+  promptStyle?: string;
+  /**
+   * 用户自定义指令，注入 `<user_custom_instructions>`。
+   *
+   * 与 Agent 的 `systemPrompt` 的区别：那是「这个 Agent 是什么」，这是「我这一轮
+   * 想额外强调什么」——跨 Agent 生效，适合放「总是用中文」「别给我写总结」这类
+   * 与身份无关的长期要求。
+   */
+  userCustomPrompt?: string;
   // —— 侧边栏工作空间显示名 ——
   /**
    * 工作空间别名表。key 为会话的 workdir（绝对路径），

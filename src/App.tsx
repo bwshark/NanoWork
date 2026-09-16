@@ -11,6 +11,8 @@ import { useChannelsStore } from '@/stores/channelsStore';
 import { useChannelSessionsStore } from '@/stores/channelSessionsStore';
 import { useMcpStore } from '@/stores/mcpStore';
 import { useSessionsStore } from '@/stores/sessionsStore';
+import { PromptLibrary } from '@/lib/promptLibrary';
+import { IdentityService } from '@/lib/identity';
 
 /**
  * 顶层壳：AppLayout（侧栏 + 横幅 + Outlet）+ 全局 Toast + 权限门控弹窗。
@@ -38,6 +40,11 @@ export function App() {
     void useSkillsStore.getState().refresh();
     // 重新合并内置 Agent 与持久化数据，保证内置专家（如牧场专家）重启后恒在
     void useAgentsStore.getState().refresh();
+    // 提示词模板与身份文件（L4）外置库：**只在启动时异步读盘一次**，装配时
+    // 用同步快照取用（见 PromptLibrary 的模块注释——注入点不能 await）。
+    // 读盘失败/未完成时退化为「内置提示词 + 无身份文件」，不影响发消息。
+    void PromptLibrary.loadAll();
+    void IdentityService.loadAll();
     // 启动回读：本地缺失的渠道配置从 nanobot config.json 反向补齐（回显）；
     // 随后校准：把本地已保存的频道配置同步进 nanobot，保证历史配置自动生效。
     // 主进程合并是幂等的（配置一致时返回 changed=false 且不重启网关）；

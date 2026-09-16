@@ -5,6 +5,7 @@ import {
   knownRouteFiles,
   memoryDir,
   miscDir,
+  promptsDir,
   productDir,
   resolveRoute,
   resolveWriteTarget,
@@ -13,7 +14,13 @@ import {
   unwrapLegacyValue,
   type StorageRoots,
 } from '../../electron/storageRoutes';
-import { MEMORY_KEY_PREFIX, STORAGE_KEYS } from '@/lib/constants';
+import {
+  IDENTITY_STORAGE_KEYS,
+  MEMORY_KEY_PREFIX,
+  PROMPT_KEY_PREFIX,
+  STORAGE_KEYS,
+  USER_MEMORY_KEY,
+} from '@/lib/constants';
 
 /**
  * 持久化落点路由单测。
@@ -261,5 +268,90 @@ describe('knownRouteFiles：storage:clear 的删除清单', () => {
     for (const file of knownRouteFiles(roots)) {
       expect(/\.(json|txt|md)$/.test(file)).toBe(true);
     }
+  });
+});
+
+describe('M3：用户级记忆 / 身份文件 / 提示词外置的落点', () => {
+  it.each([
+    [IDENTITY_STORAGE_KEYS.soul, 'SOUL.md'],
+    [IDENTITY_STORAGE_KEYS.identity, 'IDENTITY.md'],
+    [IDENTITY_STORAGE_KEYS.user, 'USER.md'],
+    [IDENTITY_STORAGE_KEYS.bootstrap, 'BOOTSTRAP.md'],
+  ])('身份文件 %s 落在 ① 根目录的 %s（原样 Markdown，用户可直接编辑）', (key, filename) => {
+    const route = resolveRoute(key, roots);
+    expect(route.scope).toBe('user');
+    expect(route.filePath).toBe(join(PRODUCT_DIR, filename));
+    expect(route.format).toBe('text');
+    expect(route.pretty).toBe(false);
+  });
+
+  it('用户级记忆落 ① 根目录的 MEMORY.md，而不是 memory/ 下的同名文件', () => {
+    const route = resolveRoute(USER_MEMORY_KEY, roots);
+    expect(route.scope).toBe('user');
+    expect(route.filePath).toBe(join(PRODUCT_DIR, 'MEMORY.md'));
+    expect(route.format).toBe('text');
+    // 关键区分：若误用 MEMORY_KEY_PREFIX，会得到 memory/user.md——一个
+    // 看起来像工作区记忆、实际谁都不认的孤儿文件。
+    expect(route.filePath).not.toBe(join(memoryDir(roots), 'user.md'));
+  });
+
+  it.each([
+    [`${PROMPT_KEY_PREFIX}mode.ask`, join('prompts', 'mode', 'ask.md')],
+    [`${PROMPT_KEY_PREFIX}domain.code`, join('prompts', 'domain', 'code.md')],
+    [
+      `${PROMPT_KEY_PREFIX}style.style-professional`,
+      join('prompts', 'style', 'style-professional.md'),
+    ],
+  ])('提示词模板 %s 落在 ① %s（两段式）', (key, rel) => {
+    const route = resolveRoute(key, roots);
+    expect(route.scope).toBe('user');
+    expect(route.filePath).toBe(join(PRODUCT_DIR, rel));
+    expect(route.format).toBe('text');
+  });
+
+  it('提示词 key 段数不对时落兜底目录，不猜路径深度', () => {
+    for (const bad of [`${PROMPT_KEY_PREFIX}mode`, `${PROMPT_KEY_PREFIX}mode.a.b`, `${PROMPT_KEY_PREFIX}mode.`]) {
+      const route = resolveRoute(bad, roots);
+      expect(route.filePath.startsWith(miscDir(roots))).toBe(true);
+    }
+  });
+
+  it('提示词 key 里的恶意片段不得让落点逃出 ① 目录', () => {
+    const hostile = [
+      `${PROMPT_KEY_PREFIX}..%2F..%2Fetc.passwd`,
+      `${PROMPT_KEY_PREFIX}mode.../../evil`,
+      `${PROMPT_KEY_PREFIX}....../....`,
+      `${PROMPT_KEY_PREFIX}\\..\\..\\windows.system32`,
+      `${PROMPT_KEY_PREFIX}mode.CON`,
+    ];
+    for (const key of hostile) {
+      const route = resolveRoute(key, roots);
+      // 真正的不变量是「落点仍在两个根之内」，而不是「字符串里没有点」：
+      // 文件名里的 `..`（如 `a..b`）是合法字符，不构成路径穿越。
+      expect(
+        route.filePath.startsWith(PRODUCT_DIR + sep) ||
+          route.filePath.startsWith(USER_DATA + sep),
+        key,
+      ).toBe(true);
+    }
+  });
+
+  it('两段式提示词 key 的段名被收敛为安全文件名', () => {
+    const route = resolveRoute(`${PROMPT_KEY_PREFIX}mode.con`, roots);
+    // Windows 保留设备名不得直接当文件名
+    expect(route.filePath).toBe(join(PRODUCT_DIR, 'prompts', 'mode', '_con.md'));
+  });
+
+  it('身份文件被排除在 storage:clear 之外（清空数据不该带走手写人设）', () => {
+    const files = knownRouteFiles(roots);
+    for (const filename of ['SOUL.md', 'IDENTITY.md', 'USER.md', 'BOOTSTRAP.md']) {
+      expect(files).not.toContain(join(PRODUCT_DIR, filename));
+    }
+    // 用户级记忆不在豁免内：它和工作区记忆同类，「清空数据」清掉是既有语义
+    expect(files).toContain(join(PRODUCT_DIR, 'MEMORY.md'));
+  });
+
+  it('提示词模板目录是 ① 下的 prompts/（与引擎 workspace 的 prompts/ 是两套）', () => {
+    expect(promptsDir(roots)).toBe(join(PRODUCT_DIR, 'prompts'));
   });
 });

@@ -43,6 +43,16 @@ export interface Agent {
   toolAllow?: string[];
   /** 工具黑名单（FR-2.2）：优先级高于 `toolAllow` */
   toolDeny?: string[];
+  /**
+   * 领域模板覆盖（§13.1 / §13.4「同一模式可挂多套领域模板，**按 Agent 选择**」）。
+   *
+   * 省略 = 用全局设置 `Settings.promptDomain`。与 `toolAllow` 同理：字段的
+   * **存在性**有意义，不要用 `?? 'general'` 把它填成确定值——那会抹掉
+   * 「跟随全局」这个状态，全局改了它也不动。
+   */
+  promptDomain?: string;
+  /** 风格模板覆盖（§13.1 语气风格）；省略 = 用全局设置 `Settings.promptStyle` */
+  promptStyle?: string;
   /** IM 远程控制绑定（FR-010）；null 表示未绑定 */
   imBinding: IMBinding | null;
   /** 是否启用 */

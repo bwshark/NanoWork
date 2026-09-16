@@ -47,6 +47,10 @@ function mergeAgents(stored: Agent[]): Agent[] {
       // 判据是「字段存在」而不是长度——空白名单是有效取值（一个工具都不许）。
       toolAllow: over.toolAllow ?? b.toolAllow,
       toolDeny: over.toolDeny ?? b.toolDeny,
+      // design §13.1：Agent 级提示词覆盖。同样按「字段存在」判据，未设则沿用内置值
+      // （内置 Agent 本身没声明时仍是 undefined = 跟随全局设置）。
+      promptDomain: over.promptDomain ?? b.promptDomain,
+      promptStyle: over.promptStyle ?? b.promptStyle,
       // 头像：内置 Agent 不接受用户上传，因此不取 over.avatar；
       // 派生占位（名称首字符 + hashColor）由 UI 层做
       source: 'builtin' as const,
@@ -83,6 +87,12 @@ export const useAgentsStore = create<AgentsState>()(
           // 空数组是「一个工具都不许」，不能拿来充当「用户还没设置」。
           toolAllow: partial?.toolAllow,
           toolDeny: partial?.toolDeny,
+          // design §13.1：Agent 级领域 / 风格覆盖。同上，省略 = 跟随全局设置。
+          // 必须在创建时一并落库：这是白名单式构造，漏掉就等于「新建时选的覆盖
+          // 在保存瞬间消失」，而编辑已有 Agent 走的是 updateAgent 的展开赋值，
+          // 两条路径行为不一致的话，只有新建会遇到这个坑。
+          promptDomain: partial?.promptDomain,
+          promptStyle: partial?.promptStyle,
           imBinding: partial?.imBinding ?? null,
           enabled: partial?.enabled ?? true,
           createdAt: nowIso(),

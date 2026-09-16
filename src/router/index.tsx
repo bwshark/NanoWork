@@ -10,9 +10,10 @@ import { TasksPage } from '@/pages/tasks/TasksPage';
 import { SettingsPage } from '@/pages/settings/SettingsPage';
 import { ArtifactsPage } from '@/pages/artifacts/ArtifactsPage';
 import { MemoryPage } from '@/pages/memory/MemoryPage';
+import { PersonaPage } from '@/pages/persona/PersonaPage';
 import { ImChannelsPage } from '@/pages/im/ImChannelsPage';
 
-/** React Router 7 路由表（/artifacts 为 P2 占位/基础；/memory 为工作区记忆页；/im 为 IM 频道页） */
+/** React Router 7 路由表（/artifacts 为 P2 占位/基础；/memory 为记忆页；/persona 为人格页；/im 为 IM 频道页） */
 export const router = createBrowserRouter([
   {
     path: '/',
@@ -28,6 +29,7 @@ export const router = createBrowserRouter([
       { path: ROUTES.settings, element: <SettingsPage /> },
       { path: ROUTES.artifacts, element: <ArtifactsPage /> },
       { path: ROUTES.memory, element: <MemoryPage /> },
+      { path: ROUTES.persona, element: <PersonaPage /> },
       { path: ROUTES.im, element: <ImChannelsPage /> },
       { path: '*', element: <Navigate to={ROUTES.chat} replace /> },
     ],
