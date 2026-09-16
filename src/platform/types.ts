@@ -1,4 +1,4 @@
-import type { ChannelConnectResponse, Skill } from '@/types';
+import type { ChannelConnectResponse, McpToolInfo, Skill } from '@/types';
 import type {
   SessionEvent,
   SessionIndexFile,
@@ -27,6 +27,80 @@ export interface MCPSyncResult {
 
 /** nanobot config.json 的 mcpServers 段原始快照（只读回读用） */
 export type NanobotMcpSnapshot = Record<string, unknown>;
+
+/** MCP 传输类型（与 `@/types` 的 MCPTransport 对齐的最小形态） */
+export type McpProbeTransport = 'url' | 'command';
+
+/**
+ * MCP 连接探针请求（渲染层 → 主进程）。
+ *
+ * **刻意不含凭据**：密钥只存在主进程的保险库里，探针按 `name` 去取。
+ * 渲染层多传一份明文，就等于把「凭据加密」这条设计从中间拆断。
+ */
+export interface McpProbeRequest {
+  /** server 名：既是回显标识，也是主进程查凭据的键 */
+  name: string;
+  transport: McpProbeTransport;
+  /** url 模式的地址 */
+  endpoint?: string;
+  /** command 模式的启动命令（含空格分隔的 args） */
+  command?: string;
+  /** url 模式的传输类型（`sse` 才允许降级走老式 GET 握手） */
+  urlType?: 'sse' | 'streamableHttp';
+  /** 超时（毫秒），缺省由主进程用 8000 */
+  timeoutMs?: number;
+}
+
+/**
+ * `tools/list` 返回的一条工具。
+ * 直接复用渲染层领域类型：探针结果是**同一个事实**，两处各声明一份必然漂移
+ * （症状是"界面能渲染、类型对不上"）。
+ */
+export type McpProbeTool = McpToolInfo;
+
+/** MCP 连接探针结果 */
+export interface McpProbeResult {
+  ok: boolean;
+  status: 'connected' | 'error';
+  /** 服务端暴露的工具清单（`ok=false` 时为空） */
+  tools: McpProbeTool[];
+  serverName?: string;
+  serverVersion?: string;
+  protocolVersion?: string;
+  /** `ok=false` 时的可读原因（超时 / HTTP 码 / 子进程 stderr 摘要） */
+  error?: string;
+  /** 从发起握手到得出结论的耗时 */
+  latencyMs: number;
+}
+
+/** 凭据保险库状态（可用性用来提示用户「本机没有系统凭据库」） */
+export interface CredentialVaultStatus {
+  available: boolean;
+  /** 保险库文件路径（仅供界面展示，便于用户定位/备份） */
+  path: string;
+}
+
+/** 凭据写入结果 */
+export interface SecretWriteResult {
+  ok: boolean;
+  error?: string;
+}
+
+/**
+ * 技能三态覆盖同步结果（FR-3.1）。
+ *
+ * 与 `MCPSyncResult` 同形但独立命名：语义不同（技能覆盖不需要重启也能被
+ * 下一轮请求读到，因为网关每轮都重读 config），未来若把「无需重启」这条
+ * 落到返回里，不至于因为共用类型而牵动 MCP 的行为。
+ */
+export interface SkillOverrideSyncResult {
+  ok: boolean;
+  message: string;
+  /** 覆盖表是否实际发生变更（幂等校准时为 false） */
+  changed?: boolean;
+  /** 已写入但网关由外部进程托管，需用户自行重启才生效 */
+  needsRestart?: boolean;
+}
 
 /** nanobot 定时任务同步结果（主进程返回） */
 export interface TaskSyncResult {
@@ -194,11 +268,19 @@ export interface PlatformAdapter {
    */
   writeTextFile(path: string, content: string): Promise<void>;
   /**
-   * 读取用户本地技能目录（~/.nanowork/skills）。
-   * - electron：扫描磁盘并解析 SKILL.md；
+   * 读取本地技能目录并解析 SKILL.md。
+   * - electron：扫描磁盘（用户级 `~/.nanowork/skills`，以及给了 workspace 时的
+   *   项目级 `<workspace>/skills`）并解析，返回结果带 `scope` 区分层级；
    * - web：降级为空数组（Web 端通过文件选择或内置技能使用）。
+   * @param workspace 当前工作区绝对路径；省略则只扫用户级目录
    */
-  loadUserSkills(): Promise<Skill[]>;
+  loadUserSkills(workspace?: string): Promise<Skill[]>;
+  /**
+   * 订阅技能目录变更（主进程 fs.watch 推送，已防抖），用于热加载。
+   * - electron：主进程推送 `skills:changed`；
+   * - web：无文件系统可监听，返回一个空的取消订阅函数。
+   */
+  onSkillsChanged(cb: () => void): () => void;
   /**
    * 弹出系统目录选择器，返回所选目录绝对路径。
    * - electron：原生 dialog.showOpenDialog；
@@ -214,11 +296,50 @@ export interface PlatformAdapter {
    */
   syncNanobotMcp(mcpJson: string): Promise<MCPSyncResult>;
   /**
+   * 将技能三态覆盖同步进 nanobot 运行时（合并写入 config.json 的
+   * `agents.defaults.skillOverrides`，并按需重启网关）。
+   *
+   * 这是三态真正生效的通道：不推的话，界面上「停用」只是本地不显示，
+   * 引擎照旧把该技能列进模型的可用技能清单。
+   * - electron：主进程完成合并与按需重启，返回结果；
+   * - web：无文件系统权限，降级为下载片段文件并返回 needsRestart。
+   */
+  syncNanobotSkills(overridesJson: string): Promise<SkillOverrideSyncResult>;
+  /**
    * 只读回读 nanobot config.json 的 `tools.mcpServers` 段（用于本地配置缺失时回显）。
    * - electron：主进程读取磁盘；
    * - web：无文件系统权限，返回 null。
    */
   getNanobotMcp(): Promise<NanobotMcpSnapshot | null>;
+  /**
+   * MCP 连接探针：真实握手（`initialize` + `tools/list`），返回连接结果与工具清单。
+   * - electron：主进程按传输类型跑探针（stdio spawn / http POST），凭据取自主进程保险库；
+   * - web：无本地进程与系统凭据库，返回 `ok=false` 并说明不支持。
+   */
+  probeMcpServer(request: McpProbeRequest): Promise<McpProbeResult>;
+  /**
+   * 凭据保险库可用性（加密是否可用，以及保险库落点）。
+   * - electron：`safeStorage.isEncryptionAvailable()`；
+   * - web：恒为 `available=false`（浏览器无 OS 凭据库）。
+   */
+  secretsStatus(): Promise<CredentialVaultStatus>;
+  /**
+   * 已配置凭据的 **key 名清单**（`{ serverName: ['token'] }`）。
+   * 只回传名字、**不回传值**——值一旦回传渲染层，加密就白做了。
+   * - web：恒为空对象。
+   */
+  secretsKeys(): Promise<Record<string, string[]>>;
+  /**
+   * 整条替换某个 server 的凭据；传空对象等于删除该条。
+   * 加密不可用时**拒绝写入**（fail-closed），返回 `ok=false` 与原因。
+   * - web：`ok=false`（不支持）。
+   */
+  secretsSet(name: string, secrets: Record<string, string>): Promise<SecretWriteResult>;
+  /**
+   * 删除某个 server 的凭据（幂等）。
+   * - web：视为已删（`ok=true`）。
+   */
+  secretsDelete(name: string): Promise<SecretWriteResult>;
   /**
    * 将 channels 配置片段同步进 nanobot 运行时（合并写入 config.json 并重启网关）。
    * - electron：主进程完成合并与重启，返回结果；
@@ -445,6 +566,18 @@ export interface ElectronAPI {
   nanobotSyncMcp(mcpJson: string): Promise<MCPSyncResult>;
   /** 只读回读 nanobot config.json 的 tools.mcpServers 段；不存在返回 null */
   nanobotGetMcp(): Promise<NanobotMcpSnapshot | null>;
+  /** MCP 连接探针（真实握手；凭据由主进程从保险库补齐） */
+  mcpProbe(request: McpProbeRequest): Promise<McpProbeResult>;
+  /** 凭据保险库可用性与落点 */
+  secretsStatus(): Promise<CredentialVaultStatus>;
+  /** 凭据 key 名清单（不含值） */
+  secretsKeys(): Promise<Record<string, string[]>>;
+  /** 写入某 server 的凭据（空对象即删除） */
+  secretsSet(name: string, secrets: Record<string, string>): Promise<SecretWriteResult>;
+  /** 删除某 server 的凭据 */
+  secretsDelete(name: string): Promise<SecretWriteResult>;
+  /** 同步技能三态覆盖到 nanobot（主进程合并写入 agents.defaults.skillOverrides 并按需重启） */
+  nanobotSyncSkills(overridesJson: string): Promise<SkillOverrideSyncResult>;
   /** 同步定时任务片段到 nanobot（主进程合并写入 jobs.json 并通知热加载） */
   nanobotSyncTasks(tasksJson: string): Promise<TaskSyncResult>;
   /** 列出 nanobot cron 执行审计记录（只读） */
@@ -478,8 +611,14 @@ export interface ElectronAPI {
   openPath(path: string): Promise<{ ok: boolean; error?: string }>;
   /** 读取本地文件为 base64；失败返回 ok=false 与错误描述 */
   readFileAsBase64(path: string): Promise<ReadFileBase64Result>;
-  /** 扫描用户本地 ~/.nanowork/skills 目录并解析 SKILL.md */
-  loadUserSkills(): Promise<Skill[]>;
+  /** 扫描本地技能目录并解析 SKILL.md（用户级 + 指定工作区的项目级） */
+  loadUserSkills(workspace?: string): Promise<Skill[]>;
+  /**
+   * 订阅技能目录变更（主进程 fs.watch 推送，已防抖）。
+   * 用于热加载：用户往目录里丢一个 SKILL.md 后不重进页面也能看到。
+   * 返回取消订阅函数。
+   */
+  onSkillsChanged(cb: () => void): () => void;
   /** 原生目录选择对话框，返回所选目录绝对路径；取消返回 null */
   pickDirectory(): Promise<string | null>;
   /** 窗口最小化 */

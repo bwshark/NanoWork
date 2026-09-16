@@ -313,8 +313,8 @@ V1 的方案是把 cron 镜像进本地 `nanobot` 的 `jobs.json`（已实现）
 
 | 编号 | 名称 | 优先级 | 现状 | 环境 | 验收标准 |
 |---|---|---|---|---|---|
-| FR-3.1 | Skill 管理 | P0 | 🟡 | both | 目录展示 + 启停 + 能力详情 + 搜索（已实现）；**补**：用户级/项目级 Skill 目录扫描与热加载；`skillOverrides` 支持 `off` / `user-invocable-only` / `on` 三态 |
-| FR-3.2 | Connector（MCP）管理 | P0 | 🟡 | both | CRUD + 连接测试 + 同步（已实现）；**补**：连接器凭据加密存储、连接状态实时化、工具级授权（单个 MCP 工具可单独禁用） |
+| FR-3.1 | Skill 管理 | P0 | ✅ | both | 目录展示 + 启停 + 能力详情 + 搜索；用户级（`~/.nanowork/skills`）与项目级（`<workspace>/skills`）目录扫描 + `fs.watch` 热加载；`skillOverrides` 三态 `off` / `user-invocable-only` / `on`；`allowed-tools` / `user-invocable` frontmatter 落地（见 §12.4 落地说明） |
+| FR-3.2 | Connector（MCP）管理 | P0 | ✅ | both | CRUD + 同步 + **真实连接测试**（主进程探针真实走 `initialize` / `tools/list`，替代原先 `delay(700)` 的假实现）+ **工具级授权**（`disabledTools` 黑名单 → 引擎 `MCPServerConfig.disabled_tools`）+ **凭据加密存储**（`~/.nanowork/connectors/.credentials.v3.json`，Electron `safeStorage` 托管密钥；渲染层只拿 key 名，见 §12.4.2） |
 | FR-3.3 | Expert 包 | P1 | 🟡 | both | 专家可打包分发（含头像、初始提示词、绑定技能）（V2） |
 | FR-3.4 | **Plugin 形态** | **P1** | ⬜ | both | 一个插件 = 清单 + SKILL.md + agents/ + experts/ + hooks/ + mcp/ + prompt/ + commands/ + skills/ + scripts/；支持安装 / 升级 / 卸载 / 版本锁定 |
 | FR-3.5 | 扩展市场 | P2 | ⬜ | both | 远程市场索引 + 一键安装 + 来源可信校验（签名/哈希）（V2） |
@@ -527,9 +527,58 @@ V1 的方案是把 cron 镜像进本地 `nanobot` 的 `jobs.json`（已实现）
 > - **`electron/main.cjs` 已重建**：`electron/storageRoutes.ts`（身份文件 / 提示词 / 用户级记忆三条新路由）
 >   被 esbuild 打包进 `main.cjs`，只改 `storageRoutes.ts` 不同步重建，产物就会缺这三条路由——已用
 >   `grep -c` 校验产物确实含 `nanowork.identity.soul` / `nanowork.prompt.` / `nanowork.userMemory`。
-> - **本阶段未做**（仍属 M3 范围）：FR-3.1/3.2/3.4（Skill 目录扫描 + 三态覆盖、Plugin 包格式）未开工，因此 **M3 未闭合**。
+> - **M3 第二批：技能目录扫描与三态覆盖（2026-09-16，FR-3.1；引擎侧 + 客户端）**：
+>   - **三态覆盖（`skillOverrides`）**：`on` / `user-invocable-only` / `off` 三档在**两个生效点**上落地——
+>     引擎 `SkillsLoader.list_skills` 摘掉 `off`，`build_skills_summary` 再摘掉 `user-invocable-only`，
+>     但 `load_skill` / `$skill` 显式调用仍解析得到后者。这就是「用户能唤起、模型不能自己伸手」的全部含义。
+>     **未知取值一律收敛为 `off`（fail-closed）**：覆盖表是限制性配置，读成 `on` 等于悄悄撤销用户的限制。
+>   - **用户级技能目录进引擎**：`SkillsLoader` 新增 `user_skills_dir`（默认产品路径 `~/.nanowork/skills`，
+>     `NANOWORK_HOME` 可改基址），扫描顺序为 `workspace → plugins → user → builtin`——
+>     与 PRD §12.4 的优先级链**反向**，因为引擎靠 `skip_names` 实现「先到先得」。
+>     参数默认 `None`（不扫描），只在 `from_config` 这条生产装配路径上注入：兜默认值会让每个单测都去读
+>     开发者宿主机上真实的技能目录，断言随本机装了什么而变。
+>   - **子代理同源**：`SubagentManager` 同步接收 `skill_overrides` / `user_skills_dir`。只给主代理套限制、
+>     子代理仍全量列出，等于给模型开了一条「把被禁的技能交给子代理去用」的旁路。
+>   - **客户端三态数据层**：新增 `src/lib/skillOverrides.ts`（与引擎同构的归一与判定函数）、
+>     `Skill.override / scope / allowedTools / userInvocable`、`skillParser` 解析 `allowed-tools` 与
+>     `user-invocable`（key 正则要支持连字符，否则整行被静默丢掉）；`skillsStore` 持久化版本 v1 → v2，
+>     老数据的布尔 `enabled` 迁移为 `off` / `on`，**不猜中间档**；`enabled` 收紧为 `override` 的派生值
+>     （`enabled === (override !== 'off')`），只在一处派生，避免两处状态漂移。
+>   - **扫描与热加载**：主进程 `scanSkillsDir` 同时扫用户级与项目级（`<workspace>/skills`——引擎真正读的目录），
+>     结果带 `scope`；`fs.watch` 监听技能根目录并防抖推送 `skills:changed`，渲染层订阅后自动重扫。
+>   - **推送链路**：`platform.syncNanobotSkills` → `mergeSkillOverridesIntoConfig` 合并进
+>     `config.json` 的 `agents.defaults.skillOverrides`（**camelCase**：引擎 pydantic 挂了 `alias_generator=to_camel`，
+>     写 snake_case 会被当成未知字段静默忽略），按需重启网关。**只推非默认档**，「调回启用」表现为从表里消失。
+>     推送失败在技能页显示告警——界面显示「已停用」而模型照旧在用，是用户永远不会自己发现的不一致。
+>   - **UI**：技能卡片的三态选择器（Switch 表达不出中间档）+ 来源层级徽标 + `allowed-tools` / `user-invocable`
+>     真实字段展示；内置与项目级技能不给删除入口（删了会「复活」，真实删除动作不在界面上）。
+>   - **未做**（仍属 M3 范围）：FR-3.4（Plugin 包格式）、FR-3.7/3.8（市场注册表与版本化缓存）
+>     未开工，因此 **M3 仍未闭合**。
 >
-> 三套 `tsc`、`vitest`（**43 文件 / 660 用例**）与引擎侧 `pytest` 全绿（`tests/security` 165、`tests/tools` 791、审批链与 utils 370、`tests/agent/test_agent_tool_policy.py` 36）。`ruff check nanobot/ tests/` 全清。**环境类红 8 条**（mcp 探测/连接的网络与 DNS、`fitz` 缺失、web_fetch 重定向），与本次改动无交集。
+> - **M3 第三批：连接器连接测试、工具级授权与凭据加密（2026-09-16，FR-3.2；引擎侧 + 主进程 + 客户端）**：
+>   - **修掉一句谎话**：原 `mcpStore.testConfig` 是 `delay(700)` → `connected`，**不发任何请求**。
+>     现在是主进程真实探针（`electron/mcpProbe.ts`）：stdio 走 spawn + 行分隔 JSON-RPC
+>     （`initialize` → `notifications/initialized` → `tools/list`），http 走 POST 并**同时解析
+>     JSON 与 SSE 两种响应**（streamableHttp 两种都可能回），老式 `GET /sse` 仅在 POST 明确
+>     失败时降级一次。探针**绝不抛异常**，且**回传子进程 stderr 摘要**——MCP server 连不上的
+>     原因几乎都写在 stderr。
+>   - **工具级授权用黑名单**（新增引擎加法字段 `MCPServerConfig.disabled_tools`，`[LOCAL PATCH]`）：
+>     上游 `enabled_tools` 是白名单且**一旦收窄就连带停掉 resources/prompts**；复用它做
+>     "禁用单个工具"会让用户禁一个工具却失去整台 server 的 resources。黑名单只作用于 tools、
+>     对未来新增工具默认放行，与白名单并存（白名单先裁、再裁黑名单）。写错名字只警告不报错。
+>   - **凭据加密（`safeStorage` 保险库）**：`~/.nanowork/connectors/.credentials.v3.json`（0600），
+>     密钥由 OS 凭据库托管。渲染层的持久化副本被**消灭**（`partialize` 剔除 `auth`，`auth` 退化为
+>     编辑草稿）；IPC **只回 key 名**、密钥值永不出主进程；`safeStorage` 不可用时**拒绝写入**
+>     （fail-closed，绝不悄悄降级成明文）；保险库写失败时**不更新 `authKeyNames`**。
+>     引擎配置那份仍是明文且必须明文（见 §12.4.2 ③ 的三份副本边界）。
+>   - **同步链路改为主进程注入凭据**：渲染层提交的条目不再携带密钥值，主进程按 server 名从保险库
+>     补齐（stdio → `env`；http → `token` → `Authorization: Bearer`），删除条目时一并清理凭据。
+>   - **测试**：新增 `tests/electron/mcpProbe.test.ts`（真的 spawn 子进程 / 真的起 HTTP 服务器，
+>     **不 mock 传输层**）、`tests/credentialVault.test.ts`、`tests/mcpToolAuth.test.ts`、
+>     `tests/mcpPageToolAuth.test.tsx`；引擎侧新增 7 条 `disabled_tools` 用例钉住
+>     「黑名单不连带停 resources/prompts」这条与白名单分叉的语义。
+>
+> 三套 `tsc`、`vitest`（**61 文件 / 947 用例**）与引擎侧 `pytest` 全绿（`tests/security` 165、审批链与 utils 370、`tests/agent/test_agent_tool_policy.py` 36）。`ruff check nanobot/ tests/` 全清。**环境类红 8 条**（`tests/tools` 的 mcp 探测/连接走网络、`fitz` 缺失、web_fetch 重定向 3 条；本次改动前后 failed 数均为 8，无回归）。
 >
 > **D2 遗留**：附件内容仍不入事件流（附件库属 R7/M4，见 9.6 的「已知范围差异」）。
 >
@@ -1472,7 +1521,7 @@ V1 采用**轻量沙箱**，V3 升级为容器级：
 
 | 形态 | 本质 | 目录 | 现状 |
 |---|---|---|---|
-| **Skill** | 单个 `SKILL.md` 描述的可复用工作流，模型按需加载 | `skills/`、`plugins/*/skills/` | 🟡 有内置目录与解析器，缺目录扫描与三态覆盖 |
+| **Skill** | 单个 `SKILL.md` 描述的可复用工作流，模型按需加载 | `skills/`、`plugins/*/skills/` | ✅ 目录扫描 + 三态覆盖 + 热加载已落地（`plugins/*/skills/` 仍由引擎侧 Agent Plugins 提供） |
 | **Connector** | 外部系统接入 = MCP Server + 加密凭据 + 状态 | `connectors/` | 🟡 有 MCP CRUD 与镜像，缺凭据加密与工具级授权 |
 | **Expert** | 行业专家角色包：提示词 + 知识库 + 工具白名单 + 模型 + 头像 + 初始提示词 | `experts/`、`plugins/*/experts/` | 🟡 有 Agent 与专家团，缺打包分发 |
 | **Plugin** | 从市场分发的功能包，含上述全部资源 + 钩子 + 命令 | `plugins/` | ⬜ 缺 |
@@ -1559,6 +1608,80 @@ user-invocable: true              # 是否可由用户直接 / 调用
 ```
 
 **保留名保护**：内置模式名（`ask` / `plan` / `craft`）与内置 Skill 名不可被覆盖——WorkBuddy 的经验是「禁止覆盖内置模式名」，否则用户装个插件就能劫持行为。
+
+### 12.4.1 落地说明（2026-09-16，FR-3.1）
+
+三处与上文规范不同，都是实现时的实测结论，不是实现漏做：
+
+**① 项目级技能的目录是 `<workspace>/skills`，不是 `<workspace>/.nanowork/skills`。**
+判据是「引擎真正读哪个目录」：`SkillsLoader.workspace_skills = workspace / "skills"`。
+客户端按 `.nanowork/skills` 去扫，会列出一批「界面看得见、引擎不认」的技能——比不扫更糟。
+
+**② 扫描顺序必须与优先级链反向。** 引擎靠 `skip_names` 做「先到先得」，所以实际扫描顺序是
+`workspace → plugins → user → builtin`，才能让项目级压过用户级、用户级压过内置。
+用户级目录在 summary 里**展示绝对路径**（它在工作区之外，相对路径会让模型 `read_file` 读错地方）。
+
+**③ 三态覆盖的存储有两跳，不是一跳。**
+客户端把启用态存在 `skills/index.json`（技能的索引与状态本来就同源，拆到 `settings.json`
+会变成一次操作两处写、必然漂移），随后**推送**到 `nanobot.config.json` 的
+`agents.defaults.skillOverrides`。引擎只认后者——不推的话，界面上的「停用」只是本地不显示，
+模型照旧能自主加载该技能。推送**只含非默认档**（`on` 省略），因此「调回启用」表现为从表里消失，
+和引擎侧「读不到即 `on`」天然一致；推送失败会在技能页显示告警，不静默。
+
+**三态的生效点各在一处**（这是三态唯一容易搞错的地方）：
+
+| 档位 | 引擎 `list_skills` | 引擎 skills summary | `$skill` 显式调用 | 客户端可挂载 |
+|---|---|---|---|---|
+| `on` | ✅ | ✅ | ✅ | ✅ |
+| `user-invocable-only` | ✅ | ❌ | ✅ | ✅ |
+| `off` | ❌ | ❌ | ❌ | ❌ |
+
+> 未知 / 拼错的取值一律收敛为 `off`（fail-closed）。覆盖表是*限制性*配置，
+> 读成 `on` 等于悄悄撤销用户的限制；读成 `off` 只是技能从列表消失，可见且可恢复。
+> 两侧各有一份同构实现与镜像用例：`src/lib/skillOverrides.ts` ↔ `nanobot/nanobot/agent/skills.py`。
+
+### 12.4.2 落地说明（2026-09-16，FR-3.2）
+
+三条子项（凭据加密 / 连接状态 / 工具级授权）全部闭合，其中有三处与直觉不同，都是实测结论。
+
+**① 原先的「连接测试」是一句谎话，必须先修这个。**
+
+`mcpStore.testConfig` 的实现是 `await delay(700); setStatus('connected')`——**不发任何请求**。它比"没有测试按钮"更糟：用户会拿一个永远为真的信号去排查真实问题。现在的实现是主进程探针（`electron/mcpProbe.ts`），真的做一次握手：
+
+| 传输 | 握手方式 |
+|---|---|
+| `command`（stdio） | spawn 子进程，行分隔 JSON-RPC：`initialize` → `notifications/initialized` → `tools/list` |
+| `url`（streamableHttp） | POST JSON-RPC；响应既可能是 `application/json` 也可能是 `text/event-stream`，两种都解；带 `mcp-session-id` 时后续请求复用 |
+| `url` + `urlType: 'sse'`（老式 HTTP+SSE） | 仅当 POST 明确失败时降级：`GET` 长连接拿 `event: endpoint`，再 POST 过去、响应仍走那条长连接 |
+
+两条硬约定：**探针绝不抛异常**（失败必须变成 `{ ok:false, error }`，否则界面只能显示"未知错误"）；**子进程 stderr 必须回传**（MCP server 连不上的原因几乎都写在 stderr，不回传等于没报错）。
+
+**② 工具级授权刻意做成「黑名单」，而不是复用上游的 `enabled_tools` 白名单。**
+
+上游 `MCPServerConfig.enabled_tools` 是一条白名单，且**一旦收窄就不再注册 resources / prompts**（"限制能力类别"语义）。直接复用它做"禁用单个工具"有两个问题：
+
+1. **语义错位**：用户的心智是"这个工具我不想让它用"，不是"这台 server 的其他能力我都不要了"；禁一个工具却连带关掉 resources/prompts 是用户没有表达的意图。
+2. **必须知道完整清单才能求补集**：白名单要在客户端先拿到服务端全部工具名，服务端后加的工具会**静默变成"自动被禁"**。
+
+因此新增一个加法字段 `MCPServerConfig.disabled_tools`（`[LOCAL PATCH]`）：黑名单**只作用于 tools**，且对未来新增的工具默认放行。两把剪刀并存——白名单先裁、再裁黑名单。黑名单里写了不存在的名字只**警告**、不报错：授权表是限制性配置，一个笔误不该把"多禁了一个不存在的名字"升级成整台 server 连接失败。
+
+**③ 凭据有三份副本，只有两份能被我们加密——这个边界必须写清楚。**
+
+| 副本 | 形态 | 说明 |
+|---|---|---|
+| 渲染层持久化（`~/.nanowork/mcp.json`、localStorage） | **已消灭** | `partialize` 剔除 `auth`；`auth` 退化为编辑草稿，不是持久化字段 |
+| 保险库 `~/.nanowork/connectors/.credentials.v3.json` | **加密**（0600） | `safeStorage` 托管密钥（即 §12.7 里 `.master.key` 的角色：OS 凭据库本来就是主密钥） |
+| 引擎 `nanobot.config.json` 的 `env` / `Authorization` | **明文**（必需） | 引擎要拿它去连 server，无法回避 |
+
+第三份消不掉，除非改用 `${VAR}` 环境变量间接引用；但环境变量只能由**本进程托管的** serve 子进程继承，外部托管的网关拿不到，引擎的 `resolve_config_env_vars` 遇到缺失变量会**直接拒绝加载配置**——那会把"没配凭据"升级成"网关起不来"。因此当前选择是：明文留在引擎配置里，把**我们自己的副本**加密并收紧到 0600。
+
+配套三条：
+
+- **不回传**：IPC 只回 key 名清单（`secrets:keys`），密钥值永不出主进程。界面显示"已设置 token"，不显示值；凭据输入框是只写框，留空 = 保持原值。
+- **fail-closed**：`safeStorage` 不可用时**拒绝写入**并显式报错，绝不降级为明文。悄悄降级是最糟的结果——用户以为加密了。
+- **写入成功才算数**：保险库写失败时不更新 `authKeyNames`。否则界面显示"已配置"、实际保险库里什么都没有，而这是静默的。
+
+> **架构差异备忘**：引擎侧其实有 MCP 运行时状态（`MCPProvider.runtime_status`），但它挂在 **websocket 通道**的 HTTP 路由上；nanowork 渲染层走的是 `/v1` OpenAI 兼容接口，**拿不到**那份状态。所以"实时状态"在本项目里落在**探针**上（按需 + 同步时刷新），而不是订阅引擎推送。这是刻意的：探针同时是工具清单的唯一来源，两件事共用一个机制，少一条需要长期维护的状态通道。
 
 ## 12.5 分发来源与联网要求（WorkBuddy 本机实测）
 

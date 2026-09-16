@@ -48,8 +48,13 @@ export class ElectronStorageAdapter implements StorageAdapter {
     await this.api().writeTextFile(path, content);
   }
 
-  /** 经主进程扫描并解析 ~/.nanowork/skills */
-  async loadUserSkills() {
-    return this.api().loadUserSkills();
+  /** 经主进程扫描并解析用户级 / 项目级技能目录 */
+  async loadUserSkills(workspace?: string) {
+    return this.api().loadUserSkills(workspace);
+  }
+
+  /** 经主进程把三态覆盖合并进 nanobot config.json */
+  async syncNanobotSkills(overridesJson: string) {
+    return this.api().nanobotSyncSkills(overridesJson);
   }
 }

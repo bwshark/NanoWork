@@ -42,6 +42,16 @@ const api: ElectronAPI = {
   nanobotSyncMcp: (mcpJson: string) =>
     ipcRenderer.invoke('nanobot:syncMcp', mcpJson),
   nanobotGetMcp: () => ipcRenderer.invoke('nanobot:getMcp'),
+  /** MCP 连接探针：真实握手拿连接结果与工具清单（凭据由主进程从保险库补齐） */
+  mcpProbe: (request) => ipcRenderer.invoke('mcp:probe', request),
+  /** 凭据保险库：可用性 / key 名清单 / 写入 / 删除（**密钥值不回传**） */
+  secretsStatus: () => ipcRenderer.invoke('secrets:status'),
+  secretsKeys: () => ipcRenderer.invoke('secrets:keys'),
+  secretsSet: (name: string, secrets: Record<string, string>) =>
+    ipcRenderer.invoke('secrets:set', name, secrets),
+  secretsDelete: (name: string) => ipcRenderer.invoke('secrets:delete', name),
+  nanobotSyncSkills: (overridesJson: string) =>
+    ipcRenderer.invoke('nanobot:syncSkills', overridesJson),
   nanobotSyncTasks: (tasksJson: string) =>
     ipcRenderer.invoke('nanobot:syncTasks', tasksJson),
   nanobotListCronRuns: () => ipcRenderer.invoke('nanobot:listCronRuns'),
@@ -98,6 +108,11 @@ const api: ElectronAPI = {
     const listener = (_e: unknown, config: DesktopConfig) => cb(config);
     ipcRenderer.on('app:desktop-config-changed', listener);
     return () => ipcRenderer.removeListener('app:desktop-config-changed', listener);
+  },
+  onSkillsChanged: (cb: () => void) => {
+    const listener = () => cb();
+    ipcRenderer.on('skills:changed', listener);
+    return () => ipcRenderer.removeListener('skills:changed', listener);
   },
 };
 

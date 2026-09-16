@@ -55,6 +55,9 @@ export function App() {
         if (useChannelsStore.getState().configs.length > 0) {
           await useChannelsStore.getState().syncAll();
         }
+        // 凭据保险库：**必须先读 key 名清单**，MCP 回读要用它来标注「已设置凭据」。
+        // 顺序反了不会报错，只是回显的凭据状态是空的——静默且难查。
+        await useMcpStore.getState().refreshSecrets();
         // MCP 回读：本地缺失的 MCP 配置从 nanobot config.json 反向补齐（仅追加，不覆盖）
         await useMcpStore.getState().hydrateFromNanobot();
       })().catch(() => undefined);

@@ -1,17 +1,20 @@
 import { useRef, useState, useMemo, useEffect } from "react";
 import {
+  Alert,
   Box,
   Button,
   Card,
   CardContent,
+  Chip,
   IconButton,
   InputAdornment,
   Menu,
   MenuItem,
-  Switch,
+  Select,
   Tab,
   Tabs,
   TextField,
+  Tooltip,
   Typography,
 } from "@mui/material";
 import SearchIcon from "@mui/icons-material/Search";
@@ -23,12 +26,20 @@ import CircularProgress from "@mui/material/CircularProgress";
 import Inventory2OutlinedIcon from "@mui/icons-material/Inventory2Outlined";
 import ArrowBackIcon from "@mui/icons-material/ArrowBack";
 import ChecklistIcon from "@mui/icons-material/Checklist";
+import LockOutlinedIcon from "@mui/icons-material/LockOutlined";
 import { useSkillsStore } from "@/stores/skillsStore";
+import { useSessionsStore } from "@/stores/sessionsStore";
 import { toast } from "@/components/Toast";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { parseSkillFromMarkdown } from "@/lib/skillParser";
+import {
+  SKILL_OVERRIDE_META,
+  SKILL_OVERRIDES,
+  resolveSkillOverride,
+} from "@/lib/skillOverrides";
+import { platform } from "@/platform";
 import { clampLines, hoverCardSx, iconTileSx } from "@/lib/cardSx";
-import type { Skill } from "@/types";
+import type { Skill, SkillOverride, SkillScope } from "@/types";
 
 /** 右上角「⋯」菜单按钮：低对比常驻，hover 提亮。 */
 const menuIconButtonSx = {
@@ -55,17 +66,80 @@ const squareIconButtonSx = {
   },
 };
 
+/** 来源层级徽标文案（PRD §12.4 的发现顺序） */
+const SCOPE_LABEL: Record<SkillScope, string> = {
+  builtin: '内置',
+  user: '用户级',
+  project: '项目级',
+};
+
+/**
+ * 能否从列表里删掉这个技能。
+ *
+ * 内置技能随应用发布，删了下次启动就回来；项目级技能来自
+ * `<workspace>/skills` 目录、每进一次页面就重扫一遍，从列表里抹掉同样会「复活」。
+ * 两者的真实删除动作都不在界面上（前者改代码，后者删文件），
+ * 所以不给删除入口 —— 与 `skillsStore.isUserOwnedSkill` 的判据保持一致。
+ */
+function canDelete(skill: Skill): boolean {
+  return skill.source !== 'builtin' && skill.scope !== 'project';
+}
+
+/**
+ * 三态覆盖控件（FR-3.1）。
+ *
+ * 用 Select 而不是 Switch：这三档不是「开 / 关」的二元关系，
+ * `user-invocable-only`（用户能唤起、模型看不见）用开关表达不出来，
+ * 硬塞成开关会让用户以为只有两种状态。
+ */
+function SkillStateControl({
+  skill,
+  disabled,
+  onSetOverride,
+}: {
+  skill: Skill;
+  disabled?: boolean;
+  onSetOverride: (id: string, override: SkillOverride) => void;
+}) {
+  const override = resolveSkillOverride(skill);
+  const meta = SKILL_OVERRIDE_META[override];
+  return (
+    <Tooltip title={meta.description}>
+      <Select
+        size="small"
+        variant="outlined"
+        value={override}
+        disabled={disabled}
+        onChange={(e) => onSetOverride(skill.id, e.target.value as SkillOverride)}
+        aria-label={`${skill.name} 生效方式`}
+        sx={{
+          minWidth: 104,
+          fontSize: 12.5,
+          '& .MuiSelect-select': { py: 0.5 },
+        }}
+      >
+        {SKILL_OVERRIDES.map((value) => (
+          <MenuItem key={value} value={value} sx={{ fontSize: 13 }}>
+            {SKILL_OVERRIDE_META[value].label}
+          </MenuItem>
+        ))}
+      </Select>
+    </Tooltip>
+  );
+}
+
 /**
  * 技能卡片：「全部技能」与「我安装的」两个视图共用，右上角操作按视图区分：
  * - market（全部技能）三态：未安装「+」→ 安装中 loading → 已安装「✓ + ⋯ 菜单」；
  *   停用后恢复「+」外观，点击可重新启用。
- * - installed（我安装的）：始终为 Switch 开关，直接启用/停用（停用后移出该视图）。
+ * - installed（我安装的）：始终为三态选择器，直接改生效档（停用后移出该视图）。
  */
 function SkillCard({
   skill,
   view,
   onToggle,
   onDelete,
+  onSetOverride,
   onInstalled,
 }: {
   skill: Skill;
@@ -73,6 +147,8 @@ function SkillCard({
   view: "market" | "installed";
   onToggle: (id: string) => void;
   onDelete: (skill: Skill) => void;
+  /** 三态覆盖入口（FR-3.1） */
+  onSetOverride: (id: string, override: SkillOverride) => void;
   /** 安装流程完成时回调（仅 market 视图的「+」流程会触发） */
   onInstalled?: (id: string) => void;
 }) {
@@ -96,22 +172,17 @@ function SkillCard({
     }, 800);
   };
 
-  /** 右上角操作区：installed 视图为 Switch；market 视图为三态按钮 */
+  /** 右上角操作区：installed 视图为三态选择器；market 视图为三态按钮 */
   const renderAction = () => {
     if (view === "installed") {
       return (
         <>
-          <Switch
-            size="small"
-            checked={skill.enabled}
-            onChange={() => onToggle(skill.id)}
-            aria-label={`${skill.enabled ? "停用" : "启用"} ${skill.name}`}
-          />
+          <SkillStateControl skill={skill} onSetOverride={onSetOverride} />
           {/*
-           * 本地技能在「我安装的」里保留 ⋯ 菜单：
-           * 市场视图不再展示已安装技能，删除入口必须留在这一侧。
+           * 可删除的技能才给 ⋯ 菜单。内置技能删了下次启动就回来，
+           * 项目级技能来自仓库目录、重进页面就重扫回来 —— 给入口只会误导。
            */}
-          {skill.source === "local" && (
+          {canDelete(skill) && (
             <>
               <IconButton
                 size="small"
@@ -252,18 +323,66 @@ function SkillCard({
         >
           {skill.description}
         </Typography>
+        {/*
+         * 能力元信息行：来源层级 + SKILL.md 里声明的真实约束。
+         * 全部取自已解析字段，不展示"推测出来的"能力 ——
+         * 技能卡片上写一个它其实没有的权限，比不写更糟。
+         */}
+        <Box sx={{ display: "flex", alignItems: "center", gap: 0.75, mt: 1.5, flexWrap: "wrap" }}>
+          {skill.scope && (
+            <Chip
+              size="small"
+              variant="outlined"
+              label={SCOPE_LABEL[skill.scope]}
+              sx={{ height: 20, fontSize: 11 }}
+            />
+          )}
+          {skill.allowedTools && skill.allowedTools.length > 0 && (
+            <Tooltip title={`工具白名单：${skill.allowedTools.join('、')}`}>
+              <Chip
+                size="small"
+                variant="outlined"
+                icon={<LockOutlinedIcon sx={{ fontSize: 13 }} />}
+                label={`${skill.allowedTools.length} 个工具`}
+                aria-label={`工具白名单：${skill.allowedTools.join('、')}`}
+                sx={{ height: 20, fontSize: 11 }}
+              />
+            </Tooltip>
+          )}
+          {skill.userInvocable === false && (
+            <Tooltip title="SKILL.md 声明 user-invocable: false，不会出现在用户的直接调用入口">
+              <Chip
+                size="small"
+                variant="outlined"
+                label="不可手动调用"
+                sx={{ height: 20, fontSize: 11 }}
+              />
+            </Tooltip>
+          )}
+        </Box>
       </CardContent>
     </Card>
   );
 }
 
-/** 技能市场页（FR-003）：搜索、分类筛选、启用/停用、本地安装 */
+/** 技能市场页（FR-003 / FR-3.1）：搜索、分类筛选、三态启停、本地安装 */
 export function SkillsPage() {
   const skills = useSkillsStore((s) => s.skills);
   const toggleSkill = useSkillsStore((s) => s.toggleSkill);
+  const setSkillOverride = useSkillsStore((s) => s.setSkillOverride);
   const installSkill = useSkillsStore((s) => s.installSkill);
   const removeSkill = useSkillsStore((s) => s.removeSkill);
   const refresh = useSkillsStore((s) => s.refresh);
+  const syncError = useSkillsStore((s) => s.syncError);
+
+  /**
+   * 当前工作区：项目级技能要从 `<workspace>/skills` 扫。
+   * 取当前活跃会话的 workdir —— 技能页没有自己的"当前目录"概念，
+   * 用户是从某个会话点进来的，那个会话的目录就是他要管理的项目。
+   */
+  const workspace = useSessionsStore(
+    (s) => s.sessions.find((x) => x.id === s.activeId)?.workdir,
+  );
 
   /**
    * 每次进入技能市场页面都重新扫描本地目录并合并。
@@ -272,8 +391,18 @@ export function SkillsPage() {
    * 重入页面时需要把最新目录反映上来。
    */
   useEffect(() => {
-    void refresh();
-  }, [refresh]);
+    void refresh(workspace);
+  }, [refresh, workspace]);
+
+  /**
+   * 热加载（FR-3.1）：主进程对技能目录挂了 fs.watch，目录有变动就推事件过来。
+   * 没有这条通道，「用外部编辑器改完 SKILL.md」必须手动切走再切回页面才能看到。
+   */
+  useEffect(() => {
+    return platform.onSkillsChanged(() => {
+      void refresh(workspace);
+    });
+  }, [refresh, workspace]);
 
   const [q, setQ] = useState("");
   const [category, setCategory] = useState("全部");
@@ -371,6 +500,18 @@ export function SkillsPage() {
 
   return (
     <Box sx={{ p: 3, maxWidth: 1100, margin: "0 auto" }}>
+      {/*
+       * 覆盖同步失败必须显式可见：界面显示「已停用」而引擎照旧把它列给模型，
+       * 是那种用户永远不会自己发现的不一致（PRD §12.4 的运行时启用状态只有在
+       * 写进引擎配置后才是真的）。
+       */}
+      {syncError && (
+        <Alert severity="warning" sx={{ mb: 2 }}>
+          技能生效方式未能同步到引擎：{syncError}
+          <br />
+          当前界面上的选择已保存在本地；引擎侧仍按上一次成功同步的配置运行。
+        </Alert>
+      )}
       {view === "installed" ? (
         <>
       {/*
@@ -452,6 +593,7 @@ export function SkillsPage() {
             view="installed"
             onToggle={toggleSkill}
             onDelete={setToDelete}
+            onSetOverride={setSkillOverride}
           />
         ))}
       </Box>
@@ -560,6 +702,7 @@ export function SkillsPage() {
             view="market"
             onToggle={toggleSkill}
             onDelete={setToDelete}
+            onSetOverride={setSkillOverride}
             onInstalled={handleInstalled}
           />
         ))}

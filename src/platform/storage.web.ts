@@ -28,7 +28,7 @@ export class WebStorageAdapter implements StorageAdapter {
   }
 
   /** Web 端无法直接扫描本地文件系统，返回空数组 */
-  async loadUserSkills() {
+  async loadUserSkills(_workspace?: string) {
     return [];
   }
 }

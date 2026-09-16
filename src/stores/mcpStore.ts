@@ -12,21 +12,50 @@ import {
   type MCPConfig,
   type MCPStatus,
 } from '@/types';
+import type {
+  CredentialVaultStatus,
+  McpProbeResult,
+  SecretWriteResult,
+} from '@/platform/types';
 
 interface McpState {
   configs: MCPConfig[];
+  /**
+   * 凭据保险库可用性（`null` = 尚未查询）。
+   * 用来决定「凭据是否加密保存」这句提示怎么写——不可用时必须显式告知，
+   * 而不是让用户以为已经加密。
+   */
+  vaultAvailable: boolean | null;
+  /** 各 server 已配置的凭据 **key 名清单**（值为空：密钥不出主进程） */
+  secretKeys: Record<string, string[]>;
   addConfig: (partial?: Partial<MCPConfig>) => MCPConfig;
   updateConfig: (id: string, patch: Partial<MCPConfig>) => void;
   removeConfig: (id: string) => void;
   /** 切换启用状态（builtin/user 通用） */
   toggleMcp: (id: string) => void;
   setMcpEnabled: (id: string, enabled: boolean) => void;
-  /** 连接测试（短暂 syncing 后 connected） */
-  testConfig: (id: string) => Promise<void>;
+  /**
+   * 真实连接测试（FR-3.2）。
+   *
+   * 走主进程探针：真实 `initialize` + `tools/list` 握手，并把发现的工具清单
+   * 缓存到配置上（工具级授权的候选来源）。**探测失败不清空已有清单**——
+   * 一次网络抖动不该把用户的授权视图擦掉。
+   */
+  testConfig: (id: string) => Promise<McpProbeResult>;
+  /** 切换单个工具的授权（黑名单：列入即不注册进引擎） */
+  setToolDisabled: (id: string, toolName: string, disabled: boolean) => void;
+  /** 读取保险库可用性与 key 名清单（启动时与写入后各调一次） */
+  refreshSecrets: () => Promise<CredentialVaultStatus>;
+  /**
+   * 保存某条 MCP 的凭据。
+   * - electron：写加密保险库，成功后才把 key 名清单落到配置上；
+   * - web：无系统凭据库，保持既有的明文持久化（界面会明确标注）。
+   */
+  saveSecrets: (id: string, secrets: Record<string, string>) => Promise<SecretWriteResult>;
   /**
    * 同步到 nanobot 运行时：
    * - electron：主进程把已启用条目合并写入 config.json tools.mcpServers，
-   *   并按需重启 serve 子进程；
+   *   并从保险库补齐凭据，按需重启 serve 子进程；
    * - web：无文件系统权限，降级为下载合并后的片段文件，
    *   返回 needsRestart=true，由用户手动合并并重启网关。
    * 返回主进程/平台层的同步结果描述。
@@ -39,7 +68,13 @@ interface McpState {
   setStatus: (id: string, status: MCPStatus) => void;
 }
 
-const delay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+/** 从草稿里取凭据的 key 名清单（排序后稳定，便于比较与展示） */
+function secretKeyNames(secrets: Record<string, string> | undefined): string[] {
+  if (!secrets) return [];
+  return Object.keys(secrets)
+    .filter((key) => key !== '' && typeof secrets[key] === 'string' && secrets[key] !== '')
+    .sort();
+}
 
 /** 回读并发保护：启动期多次调用只执行一次 */
 let hydratePromise: Promise<void> | null = null;
@@ -85,6 +120,8 @@ export const useMcpStore = create<McpState>()(
   persist(
     (set, get) => ({
       configs: mergeConfigs([]),
+      vaultAvailable: null,
+      secretKeys: {},
 
       addConfig: (partial) => {
         const config: MCPConfig = {
@@ -114,6 +151,14 @@ export const useMcpStore = create<McpState>()(
         if (!cfg || isBuiltinMcpId(cfg.id)) return;
         // 先从 store 移除，再触发同步，确保提交的是删除后的 configs
         set((s) => ({ configs: s.configs.filter((c) => c.id !== id) }));
+        // 凭据一并清理：条目没了而密钥还留在保险库里，是一份没有归属的明文
+        // （且下次同名 server 会被"自动带上旧凭据"，是最难排查的一类串味）
+        if (platform.env === 'electron') {
+          void platform
+            .secretsDelete(cfg.name)
+            .then(() => get().refreshSecrets())
+            .catch((err) => console.warn('[mcp] 删除凭据失败：', err));
+        }
         // 删除后立即全量同步（后台非阻塞）：把被删条目从 config.json 的
         // tools.mcpServers 中真正移除，避免下次启动 hydrate 重新回显；
         // 同步失败不影响本地删除结果。Web 端无文件系统权限，跳过。
@@ -141,11 +186,77 @@ export const useMcpStore = create<McpState>()(
           configs: s.configs.map((c) => (c.id === id ? { ...c, status } : c)),
         })),
 
-      testConfig: async (id) => {
-        get().setStatus(id, 'syncing');
-        await delay(700);
-        get().setStatus(id, 'connected');
+      refreshSecrets: async () => {
+        const status = await platform.secretsStatus();
+        const keys = await platform.secretsKeys();
+        set({ vaultAvailable: status.available, secretKeys: keys });
+        return status;
       },
+
+      saveSecrets: async (id, secrets) => {
+        const cfg = get().configs.find((c) => c.id === id);
+        if (!cfg) return { ok: false, error: '未找到对应 MCP 配置' };
+        const names = secretKeyNames(secrets);
+
+        if (platform.env !== 'electron') {
+          // Web 端没有系统凭据库：保持既有的明文持久化，界面会标注"未加密"。
+          // 这里刻意不返回 ok:false——Web 端的凭据本来就不落保险库，
+          // 报错只会让用户以为保存失败了。
+          get().updateConfig(id, { auth: { ...secrets }, authKeyNames: names });
+          return { ok: true };
+        }
+
+        const result = await platform.secretsSet(cfg.name, secrets);
+        if (!result.ok) return result;
+        // 写入成功才更新"已配置"视图：否则界面显示已设置、实际保险库里没有，
+        // 而失败是静默的——用户永远不会自己发现。
+        get().updateConfig(id, { auth: undefined, authKeyNames: names });
+        await get().refreshSecrets();
+        return { ok: true };
+      },
+
+      testConfig: async (id) => {
+        const cfg = get().configs.find((c) => c.id === id);
+        if (!cfg) {
+          return {
+            ok: false,
+            status: 'error',
+            tools: [],
+            error: '未找到对应 MCP 配置',
+            latencyMs: 0,
+          };
+        }
+        get().setStatus(id, 'syncing');
+        // 探针按 name 自己查凭据：渲染层手上没有明文密钥，也不需要知道
+        const result = await platform.probeMcpServer({
+          name: cfg.name,
+          transport: cfg.transport,
+          endpoint: cfg.endpoint,
+          command: cfg.command,
+          urlType: cfg.urlType,
+        });
+        get().updateConfig(id, {
+          status: result.ok ? 'connected' : 'error',
+          // 失败时保留上次清单：一次抖动不该让授权视图变成空白
+          tools: result.ok ? result.tools : cfg.tools,
+          lastProbedAt: result.ok ? Date.now() : cfg.lastProbedAt,
+        });
+        return result;
+      },
+
+      setToolDisabled: (id, toolName, disabled) =>
+        set((s) => ({
+          configs: s.configs.map((c) => {
+            if (c.id !== id) return c;
+            const next = new Set(c.disabledTools ?? []);
+            if (disabled) next.add(toolName);
+            else next.delete(toolName);
+            const list = [...next].sort();
+            // 空黑名单收敛为 undefined：让"无限制"只有一种表示，
+            // 避免 [] 与 undefined 两态在比较/序列化时来回抖动
+            return { ...c, disabledTools: list.length > 0 ? list : undefined };
+          }),
+        })),
 
       syncConfig: async (id) => {
         const cfg = get().configs.find((c) => c.id === id);
@@ -195,9 +306,21 @@ export const useMcpStore = create<McpState>()(
             // web 端无文件系统权限：回读返回空数组，天然短路
             const remote = await getRuntime().read('connectors');
             if (remote.length === 0) return;
+            // 引擎配置里的凭据是**明文**（引擎消费必需）。electron 上不回灌它：
+            // 回灌等于把明文又搬进渲染层，白加密一遍。改为从保险库取 key 名清单。
+            const secretKeys = get().secretKeys;
+            const sanitized = remote.map((c) => {
+              if (platform.env !== 'electron') return c;
+              const names = secretKeys[c.name];
+              return {
+                ...c,
+                auth: undefined,
+                authKeyNames: names && names.length > 0 ? names : undefined,
+              };
+            });
             // 按名称去重：仅追加本地缺失的条目，不覆盖本地已有配置
             const localNames = new Set(get().configs.map((c) => c.name));
-            const missing = remote.filter((c) => !localNames.has(c.name));
+            const missing = sanitized.filter((c) => !localNames.has(c.name));
             if (missing.length === 0) return;
             set((s) => ({ configs: [...s.configs, ...missing] }));
           } catch {
@@ -212,7 +335,22 @@ export const useMcpStore = create<McpState>()(
     {
       name: STORAGE_KEYS.mcp,
       storage: zustandStorage,
-      partialize: (s) => ({ configs: s.configs }),
+      /**
+       * 持久化时**剔除凭据明文**（electron）。
+       *
+       * `auth` 是编辑草稿，不是持久化字段：密钥的落地形态只有加密保险库与
+       * 引擎配置两份。若不剔除，`~/.nanowork/mcp.json` 里就是一串明文
+       * `Bearer xxx`——那正是本次要消掉的那份副本。
+       *
+       * Web 端没有保险库，凭据只能落在 localStorage（浏览器环境的既有限制，
+       * 界面会明确标注"未加密"），因此 Web 保持原样。
+       */
+      partialize: (s) => ({
+        configs:
+          platform.env === 'electron'
+            ? s.configs.map((c) => ({ ...c, auth: undefined }))
+            : s.configs,
+      }),
       merge: (persisted, current) => {
         // 反序列化时再合并一次，以确保 builtin 与新版本代码同步
         const persistedConfigs =

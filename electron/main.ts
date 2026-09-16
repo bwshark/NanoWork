@@ -1,6 +1,6 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, Notification, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, Notification, safeStorage, shell } from 'electron';
 import { dirname, extname, join } from 'node:path';
-import { promises as fs, existsSync, readFileSync, type Dirent } from 'node:fs';
+import { promises as fs, existsSync, readFileSync, watch as fsWatch, type Dirent } from 'node:fs';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createConnection } from 'node:net';
 import { request as httpRequest } from 'node:http';
@@ -43,6 +43,8 @@ import {
   type StorageRoots,
 } from './storageRoutes';
 import { createEventStore } from './eventStore';
+import { CredentialVault, safeStorageCipher } from './credentialVault';
+import { probeMcpServer, type McpProbeRequest } from './mcpProbe';
 import type { SessionMeta } from '../src/types/event';
 
 const isDev = !app.isPackaged;
@@ -71,6 +73,31 @@ const LEGACY_STORE_FILE = join(app.getPath('userData'), 'nanowork-store.json');
  * 但归属与生命周期各自独立）。用户如需复用既有技能，应显式迁移目录内容。
  */
 const USER_SKILLS_DIR = join(productDir(STORAGE_ROOTS), 'skills');
+
+/**
+ * 连接器凭据保险库：`~/.nanowork/connectors/.credentials.v3.json`。
+ *
+ * 密钥值只在这里与 `nanobot.config.json`（引擎消费必需）出现，且保险库那份
+ * 由 `safeStorage` 加密（OS 凭据库托管密钥，即 PRD §12.7 里 `.master.key` 的角色）。
+ * 渲染层的持久化镜像与 IPC 回读**都拿不到值**，只有密钥名清单。
+ *
+ * 注意落点：`connectors/` 属用户资产，已在 `storageRoutes.ts` 的
+ * `CLEAR_EXEMPT_KEYS` 精神之内——「清空存储」不得连带删除凭据。
+ */
+const CONNECTOR_SECRETS_FILE = join(
+  productDir(STORAGE_ROOTS),
+  'connectors',
+  '.credentials.v3.json',
+);
+
+const credentialVault = new CredentialVault({
+  filePath: CONNECTOR_SECRETS_FILE,
+  cipher: safeStorageCipher({
+    isEncryptionAvailable: () => safeStorage.isEncryptionAvailable(),
+    encryptString: (plain) => safeStorage.encryptString(plain),
+    decryptString: (blob) => safeStorage.decryptString(blob),
+  }),
+});
 
 // ——————————————————————————————————————————————
 // 持久化存储：按 key 路由到 ① / ② 的独立文件
@@ -1335,6 +1362,60 @@ async function syncNanobotChannels(channelsJson: string): Promise<ChannelSyncRes
 }
 
 /**
+ * 把保险库里的凭据注入待写入的 `tools.mcpServers` 条目。
+ *
+ * ## 为什么注入发生在主进程
+ *
+ * 渲染层提交上来的条目**不含密钥值**（密钥只在保险库与引擎配置里存在），
+ * 所以"用哪条 server 的哪份凭据"必须由持有保险库的主进程补齐。渲染层只负责
+ * 声明"这个 server 叫什么"，值由这里按名字取——这也是密钥不回传渲染层的代价：
+ * 少一处明文，就少一处泄露面。
+ *
+ * ## 注入位置沿用既有约定
+ *
+ * - stdio：整体进 `env`（MCP server 从环境变量读 API Key）；
+ * - url：`token` → `Authorization: Bearer`，其余键作为同名请求头。
+ *
+ * 保险库的值**覆盖**条目里已有的同名字段：它是唯一的权威来源，
+ * 允许条目自带同名字段会让"保险库改了但配置没变"变成一条静默失效的路径。
+ */
+async function injectConnectorSecrets(
+  servers: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const asObject = (value: unknown): Record<string, unknown> =>
+    typeof value === 'object' && value !== null && !Array.isArray(value)
+      ? { ...(value as Record<string, unknown>) }
+      : {};
+
+  const out: Record<string, unknown> = {};
+  for (const [name, raw] of Object.entries(servers)) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      out[name] = raw;
+      continue;
+    }
+    const entry = asObject(raw);
+    const secrets = await credentialVault.read(name);
+    if (Object.keys(secrets).length === 0) {
+      out[name] = entry;
+      continue;
+    }
+    const isStdio = entry.type === 'stdio' || typeof entry.command === 'string';
+    if (isStdio) {
+      entry.env = { ...asObject(entry.env), ...secrets };
+    } else {
+      const headers = asObject(entry.headers);
+      for (const [key, value] of Object.entries(secrets)) {
+        headers[key === 'token' ? 'Authorization' : key] =
+          key === 'token' ? `Bearer ${value}` : value;
+      }
+      entry.headers = headers;
+    }
+    out[name] = entry;
+  }
+  return out;
+}
+
+/**
  * 把渲染层提交的 MCP Server 片段合并进 nanobot config.json 的 tools.mcpServers。
  * 幂等：内容一致时不写盘，返回 false。
  *
@@ -1390,6 +1471,41 @@ async function getNanobotMcp(): Promise<Record<string, unknown> | null> {
  *   2. 若本进程托管着 serve 子进程，按需重启以加载新工具；
  *   3. serve 不在本进程托管（外部托管 / 仅 gateway）→ 返回 needsRestart。
  */
+/**
+ * 把技能三态覆盖合并进 `config.json` 的 `agents.defaults.skillOverrides`。
+ *
+ * 三条容易写错的约定：
+ * 1. **键名是 camelCase**。引擎的 pydantic 模型挂了 `alias_generator=to_camel`，
+ *    写成 `skill_overrides` 会被当成未知字段直接忽略——覆盖静默失效。
+ * 2. **整体替换而不是逐键合并**。渲染层每次送来的都是完整覆盖表
+ *    （只含非默认档），逐键合并会让「用户把技能调回启用」永远删不掉旧条目。
+ * 3. `agents` / `defaults` 可能是任意非对象值（手改坏了配置），一律重建。
+ *
+ * @returns 是否实际发生变更
+ */
+async function mergeSkillOverridesIntoConfig(
+  configPath: string,
+  overrides: Record<string, unknown>,
+): Promise<boolean> {
+  const raw = existsSync(configPath) ? await fs.readFile(configPath, 'utf-8') : '{}';
+  const data = JSON.parse(raw) as Record<string, unknown>;
+  const asObject = (value: unknown): Record<string, unknown> =>
+    typeof value === 'object' && value !== null && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : {};
+  const agents = asObject(data.agents);
+  const defaults = asObject(agents.defaults);
+  const existing = asObject(defaults.skillOverrides);
+  if (JSON.stringify(existing) === JSON.stringify(overrides)) return false;
+  defaults.skillOverrides = overrides;
+  agents.defaults = defaults;
+  data.agents = agents;
+  const tmp = `${configPath}.tmp`;
+  await fs.writeFile(tmp, JSON.stringify(data, null, 2), 'utf-8');
+  await fs.rename(tmp, configPath);
+  return true;
+}
+
 async function syncNanobotMcp(mcpJson: string): Promise<{
   ok: boolean;
   message: string;
@@ -1411,11 +1527,14 @@ async function syncNanobotMcp(mcpJson: string): Promise<{
           ? (child as Record<string, unknown>)
           : (parsed as Record<string, unknown>);
     }
+    // 渲染层提交的条目不含密钥值：写入引擎配置前由主进程按 server 名补齐
+    // （密钥只存在保险库与这份引擎配置里，见 injectConnectorSecrets 的说明）
+    const withSecrets = await injectConnectorSecrets(mcpServers);
     const configPath = await resolveNanobotConfigPath();
     if (!configPath) {
       return { ok: false, message: '未找到 nanowork config.json，无法同步 MCP 配置' };
     }
-    const changed = await mergeMcpIntoConfig(configPath, mcpServers);
+    const changed = await mergeMcpIntoConfig(configPath, withSecrets);
     if (!changed) {
       return { ok: true, changed: false, message: 'MCP 配置与 nanowork 一致，无需变更' };
     }
@@ -2085,6 +2204,53 @@ ipcMain.handle('nanobot:getMcp', async () => {
     return null;
   }
 });
+// MCP 连接探针：真实握手（initialize + tools/list），凭据由主进程从保险库补齐
+// （渲染层只传 server 名与地址，**不传密钥**）。探针自身绝不抛异常。
+ipcMain.handle('mcp:probe', async (_e, request: McpProbeRequest) => {
+  try {
+    const name = typeof request?.name === 'string' ? request.name : '';
+    const secrets = name ? await credentialVault.read(name) : {};
+    return await probeMcpServer({ ...request, secrets });
+  } catch (err) {
+    return {
+      ok: false,
+      status: 'error',
+      tools: [],
+      error: `探针异常：${err instanceof Error ? err.message : String(err)}`,
+      latencyMs: 0,
+    };
+  }
+});
+// 连接器凭据保险库：只回传可用性与 key 名清单，**密钥值永不出主进程**
+ipcMain.handle('secrets:status', () => credentialVault.status());
+ipcMain.handle('secrets:keys', async () => {
+  try {
+    return await credentialVault.keyNames();
+  } catch (err) {
+    console.warn(`[secrets] 密钥名清单读取失败：${String(err)}`);
+    return {};
+  }
+});
+ipcMain.handle(
+  'secrets:set',
+  async (_e, name: string, secrets: Record<string, string> | null | undefined) => {
+    try {
+      await credentialVault.write(name, secrets ?? {});
+      return { ok: true };
+    } catch (err) {
+      // 写入失败必须回到界面上：fail-closed 的价值就在于用户看得见
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  },
+);
+ipcMain.handle('secrets:delete', async (_e, name: string) => {
+  try {
+    await credentialVault.remove(name);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+});
 // 频道会话只读扫描：渲染层「频道」列表与历史对话的数据源（失败返回空，不影响主程序）
 ipcMain.handle('nanobot:listChannelSessions', async () => {
   try {
@@ -2543,65 +2709,122 @@ ipcMain.handle('nanobot:deleteCronHistory', async (_e, taskId: string) => {
   }
 });
 
-// —— 技能目录扫描桥 ——
-/** 简易 YAML frontmatter 解析：仅取顶层 key 与 metadata.xxx */
+// —— 技能目录扫描桥（FR-3.1） ——
+/**
+ * 简易 YAML frontmatter 解析：仅取顶层 key 与 metadata.xxx。
+ *
+ * 必须与渲染层 `src/lib/skillParser.ts` 的解析规则保持一致（含
+ * 「key 允许连字符」「块状列表拼回同一 key」两条）——同一份 SKILL.md
+ * 在主进程与渲染层被解析成不同的 `allowed-tools`，是最难定位的一类不一致。
+ */
 function parseFrontMatter(text: string): Record<string, string> {
   const match = text.match(/^---\s*\n([\s\S]*?)\n---\s*\n/);
   if (!match) return {};
   const result: Record<string, string> = {};
   let inMetadata = false;
+  /** 上一个「值为空」的顶层 key —— 随后的 `- item` 行都归它 */
+  let openListKey: string | null = null;
   for (const line of match[1].split('\n')) {
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith('#')) continue;
-    const m = line.match(/^(\s*)(\w+):\s*(.*)$/);
+
+    const item = line.match(/^\s+-\s+(.*)$/);
+    if (item && openListKey) {
+      const value = item[1].replace(/^["']|["']$/g, '').trim();
+      if (value) {
+        result[openListKey] = result[openListKey]
+          ? `${result[openListKey]},${value}`
+          : value;
+      }
+      continue;
+    }
+
+    // key 允许连字符：`allowed-tools` / `user-invocable` 都是合法字段名，
+    // 只认 \w 会把它们整行丢掉（静默失效比报错更难查）
+    const m = line.match(/^(\s*)([\w.-]+):\s*(.*)$/);
     if (!m) continue;
     const [, indent, key, raw] = m;
     const value = raw.replace(/^["']|["']$/g, '').trim();
     if (indent.length === 0) {
       inMetadata = key === 'metadata';
       result[key] = value;
+      openListKey = value === '' ? key : null;
     } else if (inMetadata || key.startsWith('metadata.')) {
-      result[`metadata.${key}`] = value;
+      result[`metadata.${key.replace(/^metadata\./, '')}`] = value;
     }
   }
   return result;
 }
 
-ipcMain.handle('skills:loadUser', async () => {
+/** frontmatter 列表字段 → 数组；空值返回 undefined 而不是空数组 */
+function parseList(raw: string | undefined): string[] | undefined {
+  if (raw === undefined) return undefined;
+  const items = raw
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+  return items.length > 0 ? items : undefined;
+}
+
+/** frontmatter 布尔字段：只有明确的 falsy 写法才算 false，缺省按 fallback */
+function parseBoolean(raw: string | undefined, fallback: boolean): boolean {
+  if (raw === undefined) return fallback;
+  const normalized = raw.trim().toLowerCase();
+  if (['false', 'no', 'off', '0'].includes(normalized)) return false;
+  if (['true', 'yes', 'on', '1'].includes(normalized)) return true;
+  return fallback;
+}
+
+/** 扫描结果里的技能形状（与渲染层 `Skill` 对齐；`override`/`enabled` 由 store 派生） */
+interface ScannedSkill {
+  id: string;
+  name: string;
+  description: string;
+  category: string;
+  icon: string;
+  prompt: string;
+  source: 'local';
+  scope: 'user' | 'project';
+  override: 'on';
+  enabled: boolean;
+  allowedTools?: string[];
+  userInvocable?: boolean;
+  version?: string;
+  path: string;
+  installedAt: string;
+}
+
+/**
+ * 扫描一个技能根目录（`<root>/<name>/SKILL.md`）。
+ *
+ * `id` 取**目录名**而不是 frontmatter 的 `name`：目录名才是引擎侧的技能身份
+ * （`SkillsLoader._skill_entries_from_dir` 用 `skill_dir.name`），三态覆盖表
+ * 也是按这个名字下发给引擎的。取 frontmatter 名会让「写在 frontmatter 里
+ * 但目录名不同」的技能永远覆盖不上——而 Agent Skills 规范本就要求两者相同。
+ */
+async function scanSkillsDir(root: string, scope: 'user' | 'project'): Promise<ScannedSkill[]> {
   let entries: Dirent[];
   try {
-    entries = await fs.readdir(USER_SKILLS_DIR, { withFileTypes: true });
+    entries = await fs.readdir(root, { withFileTypes: true });
   } catch (err) {
-    // 目录不存在属正常情况（用户尚未安装任何本地技能）；其余错误仅告警不阻断。
+    // 目录不存在属正常情况（尚未安装任何技能 / 项目里没放技能）；其余错误仅告警。
     if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-      console.warn(`[skills] 扫描用户技能目录失败：${String(err)}`);
+      console.warn(`[skills] 扫描技能目录失败（${root}）：${String(err)}`);
     }
     return [];
   }
 
-  const skills: Array<{
-    id: string;
-    name: string;
-    description: string;
-    category: string;
-    icon: string;
-    prompt: string;
-    source: 'local';
-    enabled: boolean;
-    version?: string;
-    path: string;
-    installedAt: string;
-  }> = [];
-
+  const skills: ScannedSkill[] = [];
   for (const entry of entries) {
     if (!entry.isDirectory() || entry.name.startsWith('.') || entry.name.startsWith('_')) continue;
-    const skillPath = join(USER_SKILLS_DIR, entry.name);
+    const skillPath = join(root, entry.name);
     const skillFile = join(skillPath, 'SKILL.md');
     if (!existsSync(skillFile)) continue;
     try {
       const text = await fs.readFile(skillFile, 'utf-8');
       const fm = parseFrontMatter(text);
-      const id = (fm.name ?? entry.name) as string;
+      // id 取目录名：目录名才是引擎侧的技能身份，三态覆盖表按它下发。
+      const id = entry.name;
       const name = (fm.name ?? entry.name) as string;
       const description = ((fm.description_zh as string) || (fm.description as string) || '').trim();
       const rawCategory = (fm['metadata.category'] as string) ?? 'other';
@@ -2616,7 +2839,11 @@ ipcMain.handle('skills:loadUser', async () => {
         icon: '📦',
         prompt: prompt.slice(0, 4000),
         source: 'local',
+        scope,
+        override: 'on',
         enabled: true,
+        allowedTools: parseList(fm['allowed-tools']),
+        userInvocable: parseBoolean(fm['user-invocable'], true),
         version,
         path: skillPath,
         installedAt: new Date().toISOString(),
@@ -2625,8 +2852,132 @@ ipcMain.handle('skills:loadUser', async () => {
       // 忽略解析失败的单个技能目录
     }
   }
-
   return skills;
+}
+
+// —— 技能目录热加载（FR-3.1）——
+/**
+ * 已监听的技能目录 → watcher。重复调用 `skills:loadUser` 时不重复加监听。
+ * 目录被删掉后 watcher 会自行失活，这里保留条目即可（重建监听的价值很低）。
+ */
+const skillWatchers = new Map<string, { close: () => void }>();
+
+/** 防抖句柄：编辑器保存 SKILL.md 会连发多次 change，合并成一次通知 */
+let skillsChangedTimer: ReturnType<typeof setTimeout> | null = null;
+
+function notifySkillsChanged(): void {
+  if (skillsChangedTimer) clearTimeout(skillsChangedTimer);
+  skillsChangedTimer = setTimeout(() => {
+    skillsChangedTimer = null;
+    for (const win of BrowserWindow.getAllWindows()) {
+      win.webContents.send('skills:changed');
+    }
+  }, 300);
+}
+
+/**
+ * 给一个技能根目录加变更监听（幂等）。
+ *
+ * 只监听目录本身（不递归）：技能是「一个子目录一个技能」，
+ * 目录的增删会冒泡到父目录，而 SKILL.md 的内容修改会冒泡到技能子目录。
+ * 因此这里对每个已知技能子目录也各加一层，才能覆盖「原地改 SKILL.md」。
+ */
+function watchSkillsRoot(root: string): void {
+  if (skillWatchers.has(root)) return;
+  if (!existsSync(root)) return;
+  try {
+    const watcher = fsWatch(root, { persistent: false }, () => notifySkillsChanged());
+    skillWatchers.set(root, watcher);
+  } catch (err) {
+    // 监听失败不影响扫描本身：用户仍可手动重进技能页触发重扫。
+    console.warn(`[skills] 监听技能目录失败（${root}）：${String(err)}`);
+  }
+}
+
+ipcMain.handle('skills:loadUser', async (_e, workspace?: string) => {
+  const roots: Array<{ root: string; scope: 'user' | 'project' }> = [
+    { root: USER_SKILLS_DIR, scope: 'user' },
+  ];
+  if (typeof workspace === 'string' && workspace.trim() !== '') {
+    // 项目级技能的目录是 `<workspace>/skills` —— 这是引擎真正读取的位置
+    // （`SkillsLoader.workspace_skills = workspace / "skills"`）。
+    // 扫别的目录只会列出「界面看得见、引擎不认」的技能。
+    roots.push({ root: join(workspace, 'skills'), scope: 'project' });
+  }
+
+  const skills: ScannedSkill[] = [];
+  const seen = new Set<string>();
+  for (const { root, scope } of roots) {
+    watchSkillsRoot(root);
+    for (const skill of await scanSkillsDir(root, scope)) {
+      // 先到先得：用户级在前、项目级在后，与 PRD §12.4 的优先级链一致
+      // （这里反过来排就变成「项目级被用户级盖掉」）。
+      if (seen.has(skill.id)) continue;
+      seen.add(skill.id);
+      skills.push(skill);
+    }
+  }
+  return skills;
+});
+
+/**
+ * 同步技能三态覆盖：幂等合并进 `config.json` 的 `agents.defaults.skillOverrides`。
+ *
+ * 键名是 camelCase（`skillOverrides`）——引擎的 pydantic 模型挂了
+ * `alias_generator=to_camel`，写 snake_case 不会被识别，覆盖会静默失效。
+ * 覆盖表变化需要重启网关才对已建立的会话生效；由调用方按 needsRestart 提示。
+ */
+async function syncNanobotSkills(overridesJson: string): Promise<{
+  ok: boolean;
+  message: string;
+  changed?: boolean;
+  needsRestart?: boolean;
+}> {
+  try {
+    if (nanobotStartupPromise) await nanobotStartupPromise;
+    const parsed = JSON.parse(overridesJson) as unknown;
+    const overrides: Record<string, unknown> =
+      typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+        ? (parsed as Record<string, unknown>)
+        : {};
+    const configPath = await resolveNanobotConfigPath();
+    if (!configPath) {
+      return { ok: false, message: '未找到 nanobot config.json，技能覆盖未写入' };
+    }
+    const changed = await mergeSkillOverridesIntoConfig(configPath, overrides);
+    if (!changed) {
+      return { ok: true, changed: false, message: '技能覆盖与 nanowork 一致，无需变更' };
+    }
+    // 覆盖表在 serve 启动时读入 AgentDefaults；改完必须重启才作用于新会话。
+    if (nanobotProcess) {
+      stopNanobot();
+      await waitForPortFree('127.0.0.1', 8900, 5000);
+      await startNanobot();
+      if (nanobotProcess) {
+        return { ok: true, changed: true, message: '技能覆盖已写入并生效' };
+      }
+      return { ok: false, changed: true, message: '技能覆盖已写入，但 serve 重启失败，请检查 nanowork 日志' };
+    }
+    const portBusy = await isPortInUse('127.0.0.1', 8900);
+    return {
+      ok: true,
+      changed: true,
+      message: portBusy
+        ? '技能覆盖已写入 agents.defaults.skillOverrides，serve 由外部进程托管，请重启该网关后生效'
+        : '技能覆盖已写入 agents.defaults.skillOverrides，请启动网关后生效',
+      needsRestart: true,
+    };
+  } catch (err) {
+    return { ok: false, message: `技能覆盖同步失败：${String(err)}` };
+  }
+}
+
+ipcMain.handle('nanobot:syncSkills', async (_e, overridesJson: string) => {
+  try {
+    return await syncNanobotSkills(overridesJson);
+  } catch (err) {
+    return { ok: false, message: `技能覆盖同步失败：${String(err)}` };
+  }
 });
 
 // —— 生命周期 ——

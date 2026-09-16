@@ -32,36 +32,54 @@ export interface NanobotMCP {
     url?: string;
     env?: Record<string, string>;
     headers?: Record<string, string>;
+    /**
+     * 工具级授权黑名单（nanowork 本地扩展字段）。
+     * 引擎侧 `MCPServerConfig.disabled_tools` 挂了 `alias_generator=to_camel`，
+     * 所以这里必须是 camelCase；写成 snake_case 会被当成未知字段静默忽略。
+     */
+    disabledTools?: string[];
   };
+}
+
+/** 归一黑名单：只留非空字符串；空集返回 undefined（不下发） */
+function normalizeDisabledTools(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const list = value.filter(
+    (item): item is string => typeof item === 'string' && item.trim() !== '',
+  );
+  return list.length > 0 ? list : undefined;
 }
 
 /** 单条 MCPConfig → nanobot 条目 */
 export function toNanobotEntry(cfg: MCPConfig): NanobotMCP[string] {
+  const entry: Record<string, unknown> = {};
+
   if (cfg.transport === 'command') {
     const parts = parseCommand(cfg.command ?? '');
-    const entry: Record<string, unknown> = {
-      type: 'stdio',
-      command: parts[0],
-      args: parts.slice(1),
-    };
+    entry.type = 'stdio';
+    entry.command = parts[0];
+    entry.args = parts.slice(1);
     // stdio 模式下把 auth 作为环境变量注入（如 API Key）
     if (cfg.auth && Object.keys(cfg.auth).length > 0) {
       entry.env = { ...cfg.auth };
     }
-    return entry as NanobotMCP[string];
+  } else {
+    // url：优先用回读时保留的 urlType，避免写回时被 URL 路径推断翻转；
+    // 兜底：默认按 streamableHttp；若显式含 /sse 路径则按 sse
+    const isSse = /\/sse(\/|$)/i.test(cfg.endpoint ?? '');
+    entry.type = cfg.urlType ?? (isSse ? 'sse' : 'streamableHttp');
+    entry.url = cfg.endpoint;
+    // HTTP/SSE 模式：token 注入到 Authorization 头（兼容需要 Bearer 的 MCP server）
+    if (cfg.auth?.token) {
+      entry.headers = { Authorization: `Bearer ${cfg.auth.token}` };
+    }
   }
 
-  // url：优先用回读时保留的 urlType，避免写回时被 URL 路径推断翻转；
-  // 兜底：默认按 streamableHttp；若显式含 /sse 路径则按 sse
-  const isSse = /\/sse(\/|$)/i.test(cfg.endpoint ?? '');
-  const entry: Record<string, unknown> = {
-    type: cfg.urlType ?? (isSse ? 'sse' : 'streamableHttp'),
-    url: cfg.endpoint,
-  };
-  // HTTP/SSE 模式：token 注入到 Authorization 头（兼容需要 Bearer 的 MCP server）
-  if (cfg.auth?.token) {
-    entry.headers = { Authorization: `Bearer ${cfg.auth.token}` };
-  }
+  // 工具级授权黑名单：空集**不下发**——引擎的缺省就是「不限制」，
+  // 下发空数组只会让 config.json 多一行永远为空的噪音。
+  const disabledTools = normalizeDisabledTools(cfg.disabledTools);
+  if (disabledTools) entry.disabledTools = disabledTools;
+
   return entry as NanobotMCP[string];
 }
 
@@ -91,6 +109,8 @@ export function fromNanobotMCP(snapshot: Record<string, unknown> | null): MCPCon
   for (const [name, raw] of Object.entries(snapshot)) {
     if (!name || !raw || typeof raw !== 'object') continue;
     const entry = raw as NanobotMCP[string];
+    // 工具级授权黑名单在两个分支里都要回灌，故在分叉前取一次
+    const disabledTools = normalizeDisabledTools(entry.disabledTools);
 
     const isStdio =
       entry.type === 'stdio' || (!entry.url && typeof entry.command === 'string');
@@ -109,6 +129,7 @@ export function fromNanobotMCP(snapshot: Record<string, unknown> | null): MCPCon
         source: 'user',
         enabled: true,
       };
+      if (disabledTools) cfg.disabledTools = disabledTools;
       // stdio 正向映射时 auth 注入 env，此处反向回灌（仅保留字符串值）
       if (entry.env) {
         const envAuth = Object.fromEntries(
@@ -132,6 +153,7 @@ export function fromNanobotMCP(snapshot: Record<string, unknown> | null): MCPCon
       source: 'user',
       enabled: true,
     };
+    if (disabledTools) cfg.disabledTools = disabledTools;
     // 保留原传输类型，避免写回时 sse 被翻转为 streamableHttp
     if (entry.type === 'sse' || entry.type === 'streamableHttp') {
       cfg.urlType = entry.type;

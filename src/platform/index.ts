@@ -6,12 +6,17 @@ import { notify } from './notification';
 import type {
   ChannelConnectAction,
   ChannelSyncResult,
+  CredentialVaultStatus,
   GatewayRestartResult,
   MCPSyncResult,
+  McpProbeRequest,
+  McpProbeResult,
   NanobotCronHistoryDeleteResult,
   NanobotCronRunRecord,
   NanobotMcpSnapshot,
   PlatformAdapter,
+  SecretWriteResult,
+  SkillOverrideSyncResult,
   TaskSyncResult,
 } from './types';
 import type { ChannelConnectResponse } from '@/types';
@@ -32,11 +37,18 @@ export const platform: PlatformAdapter = {
     }
     return webWriteTextFile(path, content);
   },
-  loadUserSkills: () => {
+  loadUserSkills: (workspace?: string) => {
     if (isElectron() && storage instanceof ElectronStorageAdapter) {
-      return storage.loadUserSkills();
+      return storage.loadUserSkills(workspace);
     }
     return Promise.resolve([]);
+  },
+  onSkillsChanged: (cb: () => void): (() => void) => {
+    if (isElectron() && window.electronAPI) {
+      return window.electronAPI.onSkillsChanged(cb);
+    }
+    // Web 端没有可监听的本地目录：返回空取消函数，调用方无需分支
+    return () => {};
   },
   pickDirectory: () => {
     if (isElectron() && storage instanceof ElectronStorageAdapter) {
@@ -85,6 +97,72 @@ export const platform: PlatformAdapter = {
     }
     // Web 端无文件系统权限：无法回读
     return null;
+  },
+  /**
+   * MCP 连接探针。
+   *
+   * Web 端**明确返回不可用**而不是假装成功：探针需要 spawn 本地进程 / 携带
+   * OS 凭据库里的密钥发起请求，浏览器两样都没有。降级成"看起来连上了"会让
+   * 用户在一个永远不会真的连上的端点后面排查半天。
+   */
+  probeMcpServer: async (request: McpProbeRequest): Promise<McpProbeResult> => {
+    if (isElectron() && window.electronAPI) {
+      return window.electronAPI.mcpProbe(request);
+    }
+    return {
+      ok: false,
+      status: 'error',
+      tools: [],
+      error: 'Web 端不支持连接测试（需要本地进程与系统凭据库），请使用桌面端',
+      latencyMs: 0,
+    };
+  },
+  secretsStatus: async (): Promise<CredentialVaultStatus> => {
+    if (isElectron() && window.electronAPI) {
+      return window.electronAPI.secretsStatus();
+    }
+    // 浏览器没有 OS 凭据库：如实报告不可用，界面据此提示"不加密存储"
+    return { available: false, path: '' };
+  },
+  secretsKeys: async (): Promise<Record<string, string[]>> => {
+    if (isElectron() && window.electronAPI) {
+      return window.electronAPI.secretsKeys();
+    }
+    return {};
+  },
+  secretsSet: async (
+    name: string,
+    secrets: Record<string, string>,
+  ): Promise<SecretWriteResult> => {
+    if (isElectron() && window.electronAPI) {
+      return window.electronAPI.secretsSet(name, secrets);
+    }
+    // Web 端无保险库：拒绝写入（fail-closed）。Web 端的凭据编辑仍走本地
+    // 明文持久化——这是浏览器环境的既有限制，界面会明确标注。
+    return { ok: false, error: 'Web 端没有系统凭据库，凭据未加密保存' };
+  },
+  secretsDelete: async (name: string): Promise<SecretWriteResult> => {
+    if (isElectron() && window.electronAPI) {
+      return window.electronAPI.secretsDelete(name);
+    }
+    return { ok: true };
+  },
+  /** 技能三态覆盖同步：合并进 config.json 的 agents.defaults.skillOverrides */
+  syncNanobotSkills: async (
+    overridesJson: string,
+  ): Promise<SkillOverrideSyncResult> => {
+    if (isElectron() && window.electronAPI) {
+      return window.electronAPI.nanobotSyncSkills(overridesJson);
+    }
+    // Web 端无文件系统权限：降级为下载片段文件，由用户手动合并进 config.json
+    await webWriteTextFile('nanowork.skills.json', overridesJson);
+    return {
+      ok: true,
+      changed: true,
+      message:
+        '已下载技能覆盖片段，请将其合并到 nanobot config.json 的 agents.defaults.skillOverrides 中',
+      needsRestart: true,
+    };
   },
   syncNanobotTasks: async (tasksJson: string): Promise<TaskSyncResult> => {
     if (isElectron() && window.electronAPI) {
