@@ -1,4 +1,9 @@
 import type { ChannelConnectResponse, Skill } from '@/types';
+import type {
+  SessionEvent,
+  SessionIndexFile,
+  SessionMeta,
+} from '@/types/event';
 
 /** nanobot channels 同步结果（主进程返回） */
 export interface ChannelSyncResult {
@@ -370,11 +375,59 @@ export interface DesktopConfigResult {
   config: DesktopConfig;
 }
 
+// ——— D2 事件流桥的入参/出参（渲染层 ↔ 主进程）———
+
+/**
+ * 事件流追加参数。
+ *
+ * 传**领域对象**而非序列化文本：主进程拥有磁盘/线格式（JSONL 逐行编码），
+ * 渲染层只表达「发生了什么事件」。这样格式演进只改 eventStore 一处。
+ */
+export interface EventAppendParams {
+  /** 会话 id（单层安全片段，越界由主进程拒绝） */
+  sessionId: string;
+  /** 所属工作空间：决定 `projects/<slug>/`；缺省归入默认槽 */
+  workdir?: string | null;
+  /** 本次要追加的事件（按 `seq` 升序） */
+  events: SessionEvent[];
+}
+
+/** 事件流追加结果：返回该会话最新计数，供渲染层推进续写游标 */
+export interface EventAppendResult {
+  /** 该会话当前最大 `seq` */
+  lastSeq: number;
+  /** 该会话累计事件数（来自索引投影） */
+  eventCount: number;
+}
+
 export interface ElectronAPI {
   storageGet(key: string): Promise<string | null>;
   storageSet(key: string, value: string): Promise<void>;
   storageRemove(key: string): Promise<void>;
   storageClear(): Promise<void>;
+  // —— 事件流存储（D2：以 append-only 事件流为事实源）——
+  // 主进程拥有磁盘格式：IPC 两侧只传领域对象（事件 / 元数据 / 索引），
+  // JSONL 编码、索引投影、容错解析全部封在 electron/eventStore.ts 内。
+  /** 追加事件并维护索引；返回最新计数 */
+  eventsAppend(params: EventAppendParams): Promise<EventAppendResult>;
+  /** 读取会话事件流（主进程解析 JSONL；不存在返回空数组） */
+  eventsRead(sessionId: string, workdir?: string | null): Promise<SessionEvent[]>;
+  /** 删除会话的事件流与元数据，并移除索引条目（幂等） */
+  eventsRemove(sessionId: string, workdir?: string | null): Promise<void>;
+  /** 读取会话元数据；不存在返回 null */
+  readSessionMeta(sessionId: string, workdir?: string | null): Promise<SessionMeta | null>;
+  /** 覆盖写入会话元数据 */
+  writeSessionMeta(meta: SessionMeta): Promise<void>;
+  /** 扫描全部工作空间目录下的会话元数据（索引重建 / 磁盘发现） */
+  listSessionMetas(): Promise<SessionMeta[]>;
+  /** 读取会话索引；不存在返回空索引 */
+  readSessionIndex(): Promise<SessionIndexFile>;
+  /** 全量重建会话索引并落盘；返回重建后的索引 */
+  rebuildSessionIndex(): Promise<SessionIndexFile>;
+  /** 内容寻址备份：写入 `<hash>.bak`（已存在则跳过） */
+  putFileBackup(hash: string, content: string): Promise<void>;
+  /** 内容寻址备份：读取 `<hash>.bak`；不存在返回 null */
+  getFileBackup(hash: string): Promise<string | null>;
   notify(title: string, body: string): void;
   /** 写入文本文件；相对路径解析到 `~/.nanowork/`，绝对路径须在允许的根内 */
   writeTextFile(path: string, content: string): Promise<void>;

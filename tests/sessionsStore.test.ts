@@ -4,9 +4,10 @@ import { useSettingsStore, DEFAULT_TRANSCRIPTION, DEFAULT_DESKTOP } from '@/stor
 import { useAgentsStore } from '@/stores/agentsStore';
 import { useArtifactsStore } from '@/stores/artifactsStore';
 import { NanobotClient } from '@/ai/runtime/nanobotHttp/chat';
+import { resetEventStream } from './helpers/eventStream';
 import type { ChatHandle, ChatRequest, StreamHandlers } from '@/ai/runtime/types';
 
-/** 重置所有相关 store 到初始态，避免 persist 跨用例串扰 */
+/** 重置所有相关 store 到初始态，避免用例之间跨用例串扰 */
 function resetStores() {
   useSettingsStore.setState({
     settings: {
@@ -28,6 +29,8 @@ function resetStores() {
     error: null,
   });
   useArtifactsStore.setState({ bySession: {} });
+  // 会话数据只走事件流：每个用例都换一份干净的内存事件存储 + 清空记录器
+  resetEventStream();
 }
 
 /**

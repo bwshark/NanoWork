@@ -59,6 +59,9 @@ const SUPPORTED_CHANNELS: ChannelKind[] = [
  * - `toolApproval: true`：`[LOCAL PATCH]` 给 `before_execute_tool` 加了否决通道，
  *   引擎能在工具执行前挂起并经 `nanobot_event.kind='approval_request'` 下发请求、
  *   由 `POST /v1/tool-approvals/{id}` 接收裁决（见 docs 第 11 章）。
+ * - `executionModes: true`：`[LOCAL PATCH]` 的 `session_mode` 随请求落到会话
+ *   scope，由 `SessionModeHook` 在工具执行前强制 ask / plan 只读、并把
+ *   `submit_plan` 的结果以 `nanobot_event.kind='plan'` 下发（FR-1.4 / FR-1.5）。
  */
 const CAPABILITIES: RuntimeCapabilities = {
   reasoning: true,
@@ -66,6 +69,7 @@ const CAPABILITIES: RuntimeCapabilities = {
   artifacts: true,
   hotReload: false,
   toolApproval: true,
+  executionModes: true,
   channels: SUPPORTED_CHANNELS,
   sessions: true,
 };

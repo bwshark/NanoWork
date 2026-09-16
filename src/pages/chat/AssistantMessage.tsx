@@ -27,6 +27,7 @@ import { MarkdownView } from '@/components/MarkdownView';
 import { ArtifactRenderer } from '@/components/ArtifactRenderer';
 import { ProcessView } from './ProcessView';
 import { ToolCallCard } from './ToolCallCard';
+import { PlanCard } from './PlanCard';
 import type { Message, ProcessToolRow } from '@/types';
 
 interface AssistantMessageProps {
@@ -304,6 +305,16 @@ export function AssistantMessage({ message, agentId, sessionId }: AssistantMessa
       {message.artifacts?.map((a) => (
         <ArtifactRenderer key={a.id} artifact={a} />
       ))}
+
+      {/* 计划清单（FR-1.5）：与正文同级而非藏在「过程」折叠里——
+          它是本轮唯一需要用户做决定的东西，收起来等于没给入口 */}
+      {message.plan && (
+        <PlanCard
+          sessionId={sessionId}
+          messageId={message.id}
+          planId={message.plan.planId}
+        />
+      )}
 
       <Box
         sx={{

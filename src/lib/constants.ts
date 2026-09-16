@@ -40,7 +40,22 @@ export const ROUTES = {
 /** 持久化存储 key 前缀集中管理 */
 export const STORAGE_KEYS = {
   settings: 'nanowork.settings',
-  sessions: 'nanowork.sessions',
+  /**
+   * 上次打开的会话 id（纯 UI 状态）。
+   *
+   * 会话数据本身已事件化落盘（`<userData>/projects/<slug>/<sessionId>.jsonl`），
+   * 这里只记「光标在哪」，与业务数据无关——故它独立于事件流单独持久化。
+   */
+  activeSession: 'nanowork.ui.activeSession',
+  /**
+   * **旧版**会话整块快照的 storage key，已废弃。
+   *
+   * 会话数据自 D2 Phase E 起只走事件流（`<userData>/projects/<slug>/<id>.jsonl`），
+   * 这个键既不再读也不再写。之所以保留常量而非删掉：主进程/Web 各有一条 storage
+   * 路由（`<userData>/sessions.json`）需要按它做**一次性清理**——不清理就留下
+   * 一个永远读不到的孤儿文件。历史会话已由用户清空，故无需迁移。
+   */
+  legacySessions: 'nanowork.sessions',
   agents: 'nanowork.agents',
   expertGroups: 'nanowork.expertGroups',
   skills: 'nanowork.skills',
@@ -78,3 +93,46 @@ export const SENSITIVE_TOOLS = ['files', 'shell', 'network'] as const;
 export function isSensitiveTool(tool: string): boolean {
   return (SENSITIVE_TOOLS as readonly string[]).includes(tool);
 }
+
+/**
+ * Agent 工具白名单（FR-2.2）的候选项。
+ *
+ * 这是**输入建议**，不是穷尽清单——引擎里还有 `mcp__<服务>__<工具>` 这类
+ * 运行时才知道名字的工具，所以 UI 必须允许自由输入。写死成「只能从列表里选」
+ * 会让 MCP 工具永远无法被授予，等于把白名单变成一堵墙。
+ *
+ * 名单与 `nanobot/agent/tools/` 的注册表对齐，改动时两边一起看。
+ */
+export const AGENT_TOOL_CATALOG = [
+  // 只读
+  'read_file',
+  'list_dir',
+  'find_files',
+  'grep',
+  'web_search',
+  'web_fetch',
+  // 写类
+  'write_file',
+  'apply_patch',
+  // 执行
+  'exec',
+  // 删除（FR-8.3：唯一会走系统回收站的删除入口）
+  'delete_file',
+  // Plan 模式交付物（FR-1.5）
+  'submit_plan',
+] as const;
+
+/** 工具名的人话说明，用于白名单编辑时的提示（FR-2.2） */
+export const AGENT_TOOL_LABELS: Record<string, string> = {
+  read_file: '读取文件',
+  list_dir: '列目录',
+  find_files: '查找文件',
+  grep: '内容搜索',
+  web_search: '联网搜索',
+  web_fetch: '抓取网页',
+  write_file: '写入文件',
+  apply_patch: '打补丁改文件',
+  exec: '执行终端命令',
+  delete_file: '删除（进回收站）',
+  submit_plan: '提交计划（Plan 模式）',
+};

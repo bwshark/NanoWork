@@ -4,6 +4,7 @@ import { useSettingsStore, DEFAULT_DESKTOP } from '@/stores/settingsStore';
 import { useAgentsStore } from '@/stores/agentsStore';
 import { useArtifactsStore } from '@/stores/artifactsStore';
 import { NanobotClient } from '@/ai/runtime/nanobotHttp/chat';
+import { resetEventStream } from '../helpers/eventStream';
 import type { Attachment, Message, Session } from '@/types';
 import type { ChatHandle, ChatRequest, StreamHandlers } from '@/ai/runtime/types';
 
@@ -87,6 +88,8 @@ function resetStores() {
     error: null,
   });
   useArtifactsStore.setState({ bySession: {} });
+  // 会话数据只走事件流：每个用例都换一份干净的内存事件存储 + 清空记录器
+  resetEventStream();
 }
 
 /** 默认网关 mock：记录请求、立刻回一段文本并结束流 */
@@ -278,17 +281,48 @@ describe('sessionsStore: 重发链路携带附件', () => {
 
 describe('sessionsStore: history 构造', () => {
   it('「只有附件、文本为空」的历史 user 消息不会被过滤掉', async () => {
-    const pureAttachment: Message = {
-      id: 'm-pure',
-      role: 'user',
-      content: '',
-      attachments: [docAttachment()],
-      createdAt: new Date().toISOString(),
-    };
-    useSessionsStore.setState({
-      sessions: [session('s1', [pureAttachment])],
-      activeId: 's1',
+    /**
+     * 事件流是事实源，故这里**直接把该轮次写进事件流**再从读路径水合。
+     *
+     * 这是唯一能造出 `content` 为空字符串的用户消息的途径——`send()` 对纯附件
+     * 会合成「附件：xxx」占位文本，故该形态只可能来自事件流里的历史数据。
+     */
+    const stream = resetEventStream();
+    const now = new Date().toISOString();
+    await stream.append({
+      sessionId: 's1',
+      events: [
+        {
+          id: 'ev-1',
+          sessionId: 's1',
+          parentId: null,
+          seq: 1,
+          type: 'message',
+          timestamp: Date.now(),
+          messageId: 'm-pure',
+          role: 'user',
+          content: '',
+          attachments: [
+            { id: 'att-doc', name: '报告.pdf', kind: 'document', mime: 'application/pdf' },
+          ],
+        },
+      ],
     });
+    await stream.writeMeta({
+      id: 's1',
+      title: 'T',
+      agentId: 'agent-test',
+      mode: 'craft',
+      permissionMode: 'restricted',
+      createdAt: now,
+      updatedAt: now,
+    });
+    await useSessionsStore.getState().loadSessions();
+    await useSessionsStore.getState().loadSession('s1');
+
+    const hydrated = useSessionsStore.getState().sessions[0];
+    expect(hydrated.messages).toHaveLength(1);
+    expect(hydrated.messages[0].content).toBe('');
 
     await useSessionsStore.getState().send('继续', 's1');
 

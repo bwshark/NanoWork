@@ -100,11 +100,14 @@ const USER_FILES: Record<string, FileEntry> = {
 /**
  * ② Electron 运行时数据：落在 `<userData>/`，紧凑写。
  *
- * sessions / tasks / artifacts 都是「随会话产生」的数据，不是用户手写的资产，
- * 因此不占 ① 的位置。
+ * tasks / artifacts 都是「随会话产生」的数据，不是用户手写的资产，因此不占 ① 的位置。
+ *
+ * `legacySessions`（`sessions.json`）是 D2 Phase E 之前的旧版会话整块快照，
+ * 已无任何读写方；保留这条路由只为让渲染层能把它**一次性清掉**（见
+ * `sessionsStore.loadSessions`），否则会留下一个永远读不到的孤儿文件。
  */
 const RUNTIME_FILES: Record<string, FileEntry> = {
-  [STORAGE_KEYS.sessions]: { rel: 'sessions.json', format: 'json' },
+  [STORAGE_KEYS.legacySessions]: { rel: 'sessions.json', format: 'json' },
   [STORAGE_KEYS.tasks]: { rel: 'tasks.json', format: 'json' },
   [STORAGE_KEYS.artifacts]: { rel: 'artifacts.json', format: 'json' },
   [DEVICE_ID_STORAGE_KEY]: { rel: 'device-id.txt', format: 'text' },

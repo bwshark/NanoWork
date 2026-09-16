@@ -34,6 +34,15 @@ export interface Agent {
   systemPrompt: string;
   /** 绑定的技能 id 列表 */
   skillIds: string[];
+  /**
+   * 工具白名单（FR-2.2）：省略 = 不限制；**空数组** = 一个工具都不许。
+   *
+   * 两者语义不同，UI 必须能表达「未设置」而不是把它落成空数组——否则用户
+   * 只是没碰过这个开关，Agent 就被锁成了什么都做不了。
+   */
+  toolAllow?: string[];
+  /** 工具黑名单（FR-2.2）：优先级高于 `toolAllow` */
+  toolDeny?: string[];
   /** IM 远程控制绑定（FR-010）；null 表示未绑定 */
   imBinding: IMBinding | null;
   /** 是否启用 */

@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
+  Autocomplete,
   Avatar,
   Box,
   Button,
@@ -35,7 +36,7 @@ import { useSkillsStore } from "@/stores/skillsStore";
 import { useSessionsStore } from "@/stores/sessionsStore";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { SummonSlot } from "@/components/agents/SummonSlot";
-import { ROUTES } from "@/lib/constants";
+import { AGENT_TOOL_CATALOG, AGENT_TOOL_LABELS, ROUTES } from "@/lib/constants";
 import {
   avatarGlyph,
   cardChipOutlinedSx,
@@ -374,6 +375,40 @@ export function MyAgentsPage() {
                 sx={cardChipSx}
               />
             )}
+            {/* 工具权限（FR-2.2）：只在真的声明了策略时才出现。
+                「未声明」与「声明为空白名单」在卡片上必须一眼可分——
+                后者会让这个 Agent 什么都做不了，属于需要立刻看见的状态。 */}
+            {a.toolAllow !== undefined && (
+              <Tooltip
+                title={
+                  a.toolAllow.length === 0
+                    ? "已声明白名单但一个工具都没勾——该 Agent 无法调用任何工具"
+                    : `仅允许：${a.toolAllow.join("、")}`
+                }
+              >
+                <Chip
+                  size="small"
+                  color={a.toolAllow.length === 0 ? "warning" : "default"}
+                  variant="outlined"
+                  label={
+                    a.toolAllow.length === 0
+                      ? "无工具可用"
+                      : `仅 ${a.toolAllow.length} 个工具`
+                  }
+                  sx={cardChipOutlinedSx}
+                />
+              </Tooltip>
+            )}
+            {a.toolDeny && a.toolDeny.length > 0 && (
+              <Tooltip title={`禁止：${a.toolDeny.join("、")}`}>
+                <Chip
+                  size="small"
+                  variant="outlined"
+                  label={`禁 ${a.toolDeny.length} 个`}
+                  sx={cardChipOutlinedSx}
+                />
+              </Tooltip>
+            )}
           </Box>
           {renderFooter(
             a.enabled,
@@ -654,6 +689,96 @@ export function MyAgentsPage() {
               </MenuItem>
             ))}
           </Select>
+
+          {/* 工具权限（FR-2.2）：在引擎的工具网关强制，不依赖系统提示词。
+              关掉开关 = 不声明限制（undefined）；打开 = 声明白名单。
+              两者必须保持可区分——把「没设置」落成空数组会把这个 Agent 直接锁死。 */}
+          <Divider sx={{ my: 1.5 }} />
+          <Typography sx={{ fontSize: 13, fontWeight: 600 }}>
+            工具权限（FR-2.2）
+          </Typography>
+          <Typography sx={{ fontSize: 12, color: "text.secondary", mt: 0.5 }}>
+            白名单在引擎侧强制：不在名单里的工具连调用都会被拒，改提示词也绕不过。
+          </Typography>
+          <FormControlLabel
+            sx={{ mt: 0.5 }}
+            control={
+              <Switch
+                size="small"
+                checked={form.toolAllow !== undefined}
+                onChange={(e) =>
+                  setForm({
+                    ...form,
+                    // 打开时默认全选（等于「先不收紧，再逐个取消」），关掉时回到
+                    // undefined（不限制）而不是空数组（一个都不许）。
+                    toolAllow: e.target.checked
+                      ? [...AGENT_TOOL_CATALOG]
+                      : undefined,
+                  })
+                }
+              />
+            }
+            label={
+              <Typography sx={{ fontSize: 13 }}>
+                仅允许指定工具（最小权限）
+              </Typography>
+            }
+          />
+          {form.toolAllow !== undefined && (
+            <Autocomplete
+              multiple
+              freeSolo
+              size="small"
+              sx={{ mt: 1 }}
+              options={[...AGENT_TOOL_CATALOG]}
+              getOptionLabel={(o) => String(o)}
+              value={form.toolAllow}
+              onChange={(_e, value) =>
+                setForm({ ...form, toolAllow: value.map((v) => String(v)) })
+              }
+              renderOption={(props, option) => (
+                <li {...props} key={option}>
+                  <Box>
+                    <Typography sx={{ fontSize: 13 }}>{option}</Typography>
+                    {AGENT_TOOL_LABELS[option] && (
+                      <Typography sx={{ fontSize: 11, color: "text.secondary" }}>
+                        {AGENT_TOOL_LABELS[option]}
+                      </Typography>
+                    )}
+                  </Box>
+                </li>
+              )}
+              renderInput={(params) => (
+                <TextField
+                  {...params}
+                  label="允许的工具"
+                  placeholder="留空 = 一个工具都不许"
+                  helperText="可输入 MCP 工具名（如 mcp__github__create_issue）"
+                />
+              )}
+            />
+          )}
+          <Autocomplete
+            multiple
+            freeSolo
+            size="small"
+            sx={{ mt: 1 }}
+            options={[...AGENT_TOOL_CATALOG]}
+            getOptionLabel={(o) => String(o)}
+            value={form.toolDeny ?? []}
+            onChange={(_e, value) => {
+              const next = value.map((v) => String(v));
+              setForm({ ...form, toolDeny: next.length ? next : undefined });
+            }}
+            renderInput={(params) => (
+              <TextField
+                {...params}
+                label="禁止的工具（可选）"
+                placeholder="优先级高于上面的白名单"
+                helperText="用于在宽白名单上精确挖掉个别危险工具"
+              />
+            )}
+          />
 
           <Divider sx={{ my: 1.5 }} />
           <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>

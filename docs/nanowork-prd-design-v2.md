@@ -292,8 +292,8 @@ V1 的方案是把 cron 镜像进本地 `nanobot` 的 `jobs.json`（已实现）
 | FR-1.1 | 流式会话 | P0 | ✅ | both | 创建/切换会话；流式 markdown 渲染；断流可重试。**加固**：流式期间 token 落盘不得因 UI 阻塞丢失 |
 | FR-1.2 | 思考过程可视化 | P0 | ✅ | both | `reasoning` 事件可折叠展示；`ProcessView` 时间线可回看 |
 | FR-1.3 | 工具调用卡片 | P0 | ✅ | both | 参数 / 结果可展开；状态机 pending→running→done/error 完整 |
-| FR-1.4 | **三种执行模式 Ask / Plan / Craft** | **P0** | ⬜ | both | Ask：只读，禁止任何写工具；Plan：先产出结构化计划，**经用户批准后**才进入执行；Craft：直接执行。模式在会话内可切换且落到会话元数据 |
-| FR-1.5 | **计划审批流** | **P0** | ⬜ | both | Plan 模式产出的计划以可勾选清单呈现；支持逐项批准 / 全批准 / 打回并附意见；未批准前引擎不得调用写类工具（由工具网关强制，见第 11 章） |
+| FR-1.4 | **三种执行模式 Ask / Plan / Craft** | **P0** | ✅ | both | Ask：只读，禁止任何写工具；Plan：先产出结构化计划，**经用户批准后**才进入执行；Craft：直接执行。模式在会话内可切换且落到会话元数据。**已落地**：`session.mode`（事件 `session-start` / `mode-change` + meta），引擎侧由工具网关强制，不靠提示词（见 10.1） |
+| FR-1.5 | **计划审批流** | **P0** | ✅ | both | Plan 模式产出的计划以可勾选清单呈现；支持逐项批准 / 全批准 / 打回并附意见；未批准前引擎不得调用写类工具（由工具网关强制，见第 11 章）。**已落地**：引擎新增 `submit_plan` 工具 → `kind=plan` 事件 → 客户端 `PlanCard` 勾选清单 → `plan-decision` 事件（见 10.2） |
 | FR-1.6 | 事件化会话记录 | **P0** | ⬜ | both | 会话以 JSONL 追加事件流持久化；事件带 `id`/`parentId`；支持按 `parentId` 重建分支与重放 |
 | FR-1.7 | 会话检索 | P1 | 🟡 | both | 支持标题 / 全文 / 时间 / 工作区 / Agent 多条件检索（`lib/taskQuery.ts` 已有雏形，需扩展到事件流） |
 | FR-1.8 | 会话导入导出 | P2 | 🟡 | both | `lib/sessionImport.ts` 已有导入；补导出与跨端迁移格式（含事件流） |
@@ -303,7 +303,7 @@ V1 的方案是把 cron 镜像进本地 `nanobot` 的 `jobs.json`（已实现）
 | 编号 | 名称 | 优先级 | 现状 | 环境 | 验收标准 |
 |---|---|---|---|---|---|
 | FR-2.1 | Agent CRUD 与启停 | P0 | ✅ | both | 完整 CRUD + 持久化；可作为会话目标 |
-| FR-2.2 | Agent 工具白名单 | **P0** | ⬜ | both | 每个 Agent 可声明允许/禁止的工具集；默认最小权限；越权调用被工具网关拦截（不依赖提示词） |
+| FR-2.2 | Agent 工具白名单 | **P0** | ✅ | both | 每个 Agent 可声明允许/禁止的工具集；默认最小权限；越权调用被工具网关拦截（不依赖提示词）。引擎侧：`WorkspaceScope.tool_allow/tool_deny` + 纯函数 `agent_blocks_tool` + `AgentToolPolicyHook`（挂在**基线**钩子链上，ephemeral turn 同样绕不过）；客户端：`Agent.toolAllow/toolDeny` + 编辑 UI + 随每轮请求下发 |
 | FR-2.3 | 专家（Expert） | P0 | 🟡 | both | 专家 = 系统提示词 + 知识库绑定 + 工具白名单 + 模型绑定；内置招聘 / 法务 / 投研 / 财务 / 写作等模板（`builtinAgents.ts` 已有，需补绑定关系） |
 | FR-2.4 | 专家团编排 | P0 | 🟡 | both | `sequential` / `parallel` / `coordinator` 三模式**真实执行**（当前仅持久化与展示）；编排过程在 ProcessView 中可见 |
 | FR-2.5 | 子 Agent 委派 | P1 | ⬜ | both | 主 Agent 可委派子任务（nanobot `spawn` 工具）；子 Agent 的工具权限不得超过父级（权限单调递减） |
@@ -374,14 +374,14 @@ V1 的方案是把 cron 镜像进本地 `nanobot` 的 `jobs.json`（已实现）
 | 编号 | 名称 | 优先级 | 现状 | 环境 | 验收标准 |
 |---|---|---|---|---|---|
 | FR-8.1 | 敏感操作门控 | P0 | ✅ | both | 副作用工具（写文件/执行命令/MCP 调用）执行**前**弹确认并记录决策；**收口在引擎**（挂起 + 裁决回传，见 11.1.1）。只读工具自动放行；超时未响应按拒绝（fail-closed） |
-| FR-8.2 | **工具调用网关（唯一收口）** | **P0** | 🟡 | both | 收口**落点已定并落地在引擎**（`before_execute_tool` 否决通道 + `POST /v1/tool-approvals/{id}`，见 ADR-021）：所有副作用工具调用必须经此裁决，绕过即缺陷。**仍待做**：Agent 工具白名单校验（FR-2.2）、`sandbox` 决策档、审计记录 |
-| FR-8.3 | **运行时硬兜底** | **P0** | ⬜ | electron | 删除类操作改道系统回收站而非真删；回收站失败时 **fail-closed**（报错而非降级为真删）；临时目录例外。浏览器端无此能力，降级为「禁止删除类工具 + 明确提示」 |
-| FR-8.4 | **默认拒绝写入策略** | **P0** | ⬜ | electron | 白名单制：未在允许列表中的路径默认禁止写入；`.ssh` / `.gnupg` 等凭据目录为 `no_access`（连读也禁止） |
+| FR-8.2 | **工具调用网关（唯一收口）** | **P0** | ✅ | both | 收口**落点在引擎**（`before_execute_tool` 否决通道 + `POST /v1/tool-approvals/{id}`，见 ADR-021）：所有副作用工具调用必经此裁决，绕过即缺陷。三档决策（`allow` / `sandbox` / `deny`）由纯函数 `decide_tier` 给出并逐条穷举单测；Agent 白名单校验（FR-2.2）、`sandbox` 档（FR-8.3）、决策审计（FR-8.9）均已接线 |
+| FR-8.3 | **运行时硬兜底** | **P0** | ✅ | both | 删除类操作改道系统回收站而非真删；回收站失败时 **fail-closed**（报错而非降级为真删）；临时目录例外。**归属由 electron 修正为引擎**：删除发生在引擎进程内（`shell.py` 的 `rm` / `apply_patch` 的写入），Electron 主进程拦不住。落地：`security/trash.py`（回收站纯逻辑 + 批量阈值 + 留痕）+ `delete_file` 工具（唯一删除入口）+ `shell.py::_guard_command` 收口（裸 `rm`/`del`/`Remove-Item`/`unlink` 一律拦下并指回 `delete_file`，临时目录例外）。浏览器端因此**无需**降级——强制点在引擎，Web 与 Electron 同强度 |
+| FR-8.4 | **默认拒绝写入策略** | **P0** | 🟡 | both | 白名单制：未在允许列表中的路径默认禁止写入；`.ssh` / `.gnupg` 等凭据目录为 `no_access`（连读也禁止）。**已落地（引擎侧）**：凭据 `no_access` 为**无条件**守卫（读+写、`full` 模式亦不可越过、allow-list 无法覆盖）；写默认拒绝以 `file.default_deny_write` 开关承载。**归属由 electron 修正为引擎**：客户端拦不住工具在引擎进程内的实际读写 |
 | FR-8.5 | 沙箱执行 | P1 | 🟡 | electron | 执行类任务在受限上下文中运行：nanobot 已有 `tools/sandbox.py` 与 `security/`，需显式启用 + 目录白名单 + 子进程树强杀（对齐 WorkBuddy Job Object） |
 | FR-8.6 | 数据防泄漏 | P1 | ⬜ | both | 检索前按权限过滤；提示词注入检测；记忆可彻底删除（不出租户边界） |
 | FR-8.7 | 敏感操作审批 | P2 | ⬜ | both | 外发邮件/消息、删除文件、访问敏感目录、超额 API 调用 → 人审批后执行（V3） |
 | FR-8.8 | 内容审计 | P2 | ⬜ | both | 输入输出敏感词/合规扫描，支持自定义规则（V3） |
-| FR-8.9 | 审计日志 | P1 | ⬜ | both | 全量操作留痕（谁/何时/对哪个 Agent/什么指令/什么工具/触达什么数据）；append-only；含命令哈希（对齐 WorkBuddy `audit-log/*.jsonl`） |
+| FR-8.9 | 审计日志 | P1 | 🟡 | both | 全量操作留痕（谁/何时/对哪个 Agent/什么指令/什么工具/触达什么数据）；append-only；含命令哈希（对齐 WorkBuddy `audit-log/*.jsonl`）。**已落地（引擎侧）**：`security/audit.py` 在工具执行的唯一收口点写 `audit/tool-gateway.ndjson`，逐行 append-only，含 `timestamp / tool / tier / outcome / approved_by / args / args_digest(sha256) / session_key / channel / approval_mode / agent_id / reason`；写失败静默吞掉（审计不得反向影响执行）。**未做**：客户端检索/导出 UI、非工具类操作（技能启停、配置变更）的留痕 |
 
 ## R9 模型与能力协商
 
@@ -470,7 +470,7 @@ V1 的方案是把 cron 镜像进本地 `nanobot` 的 `jobs.json`（已实现）
 
 | 阶段 | 范围 | 交付物 | 验收门禁 |
 |---|---|---|---|
-| **M1 引擎与事件地基** | D1 引擎契约层、D2 事件化会话与索引库、D3 工具网关骨架、**18.2 用户数据目录收敛** | `AgentRuntime` 接口 + `NanobotHttpRuntime`；JSONL 事件流 + SQLite 索引；事件类型定义；渲染层持久化迁出 `<userData>` 单文件；修复 `MEMORY.md` 落盘静默失败 | 全部旧功能经新契约跑通；`npm run build` 绿；单测不回退；`MEMORY.md` 在 Electron 下真实落盘且有测试覆盖 |
+| **M1 引擎与事件地基** | D1 引擎契约层、D2 事件化会话与索引库、D3 工具网关骨架、**18.2 用户数据目录收敛** | `AgentRuntime` 接口 + `NanobotHttpRuntime`；JSONL 事件流 + JSON 索引（由 SQLite 改，见 9.4）；事件类型定义；`sessionsStore` 读写切至事件流（D2 A–E）；渲染层持久化迁出 `<userData>` 单文件；修复 `MEMORY.md` 落盘静默失败 | 全部旧功能经新契约跑通；`npm run build` 绿；单测不回退；`MEMORY.md` 在 Electron 下真实落盘且有测试覆盖；实时视图与事件投影等价（`tests/events/equivalence.test.ts`） |
 | **M2 安全与执行模式** | FR-1.4/1.5、FR-8.2/8.3/8.4、FR-2.2 | Ask/Plan/Craft、计划审批、工具网关 + 回收站改道 + 默认拒绝写入 + Agent 工具白名单 | 绕过路径审计为 0；越权调用被拦截有测试；删除类操作 100% 进回收站 |
 | **M3 扩展与提示词** | FR-3.1/3.2/3.4、FR-4.2/4.3、P-提示词外置 | Skill 目录扫描 + 三态覆盖、Plugin 包格式、用户级记忆、身份文件、模式×领域×风格模板 | 装一个示例 Plugin 端到端可用；提示词可外置修改不重编译 |
 | **M4 自动化与产物** | FR-5.4/5.6、FR-6.3/6.4、FR-7.2/7.3 | RRULE + 有效期、结果回推 IM、IM 会话归档、产物索引、文件回滚 | 任务结果能推回企微；回滚能恢复指定步前的文件状态 |
@@ -481,13 +481,34 @@ V1 的方案是把 cron 镜像进本地 `nanobot` 的 `jobs.json`（已实现）
 
 **跨阶段门禁**：每个 M 结束必须满足——(a) `npm run build` 绿；(b) 新增能力有单测；(c) 新增平台能力有 web 降级路径并写明；(d) 本文档与 `openspec` spec 同步更新。
 
-> **进度（2026-09）**：M1 中的「**18.2 用户数据目录收敛**」与「**D1 引擎契约层**」已完成；**工具调用逐条批准**（FR-8.1 + FR-8.2 的收口落点）已落地（D3）。
+> **进度（2026-09）**：M1 中的「**18.2 用户数据目录收敛**」「**D1 引擎契约层**」「**D2 事件化会话（A–E 全部）**」已完成；**工具调用逐条批准**（FR-8.1 + FR-8.2 的收口落点）已落地（D3）。
 >
 > - **18.2 用户数据目录收敛**：渲染层持久化从 `<userData>/nanowork-store.json` 单文件拆为**一 key 一文件**并按归属路由（① 用户资产 / ② 运行时），旧数据一次性可回滚迁移，`MEMORY.md` 落盘缺陷修复（见 18.2.5）。`storageRoutes` 单测覆盖路由归属与路径安全。
 > - **D1 引擎契约层**：四个散落的引擎模块搬进 `src/ai/runtime/nanobotHttp/`，渲染层改为只经 `AgentRuntime` 与引擎交互；`src/ai/types.ts` 并入 `runtime/types.ts`；键名归一并入 `codec.ts`；顺带清掉 5 处死代码/重复实现（见 8.4.1）。
 > - **D3 工具调用逐条批准**：给引擎的 `before_execute_tool` 加**否决通道**，引擎可在副作用工具执行前挂起、经 SSE 下发审批请求、由 `POST /v1/tool-approvals/{id}` 接收裁决；客户端新增 `capabilities.toolApproval` / `approvalMode` / `onApprovalRequest` / `respondApproval()`，并把原先**纯本地的假门控**（拦不住引擎、工具照常执行，见 FR-8.1）替换为真实回环。会话级开关与 `fullAccess` 为**正交两轴**，`full` 覆盖之（见 10.3.1 / 11.1.1 / ADR-021）。
+> - **D2 事件化会话（A–E 全部完成）**：`sessionsStore` 的读写路径已整体切到事件流——`send()` 派发事件落盘、列表读索引、消息按需从 JSONL 重建、旧 `persist` 与 `nanowork.sessions` 键已移除。事件模型（16 种 + `EventFactory`）+ 存储抽象（路由 / 索引纯逻辑 / IO / IPC / 契约 / 双实现）+ 投影（`project` / `activePath`）+ 记录器（`recordFor`）见 9.6。索引层由 SQLite 改为 **JSON 索引**（零原生依赖，见 9.4）。**两条推导路径的等价性由 `tests/events/equivalence.test.ts` 守卫**（ADR-023）。
 >
-> 三套 `tsc`、`vitest`（31 文件 / 507 用例）与 `npm run build` 全绿；引擎侧 `pytest` 相关用例全绿。**未做**：M1 的 D2 事件化会话；M2 的 Ask/Plan/Craft 三模式与 **FR-1.5 的 Plan 清单式审批 UI**（本次只落地了它依赖的「未批准不得执行写类工具」的强制机制）、FR-8.3/8.4 硬兜底、FR-2.2 Agent 工具白名单。
+> - **M2 首轮：Ask / Plan / Craft + 计划审批（FR-1.4 / FR-1.5）**：
+>   - **引擎侧**：执行模式与工作空间 / 权限 / 逐条批准同处会话级 `WorkspaceScope`（第四根轴 `session_mode`，未知取值报错而非静默降级）；`SessionModeHook` 在工具执行前 deny 被模式禁止的调用，并在 Plan 模式下把 `submit_plan` 的结果经 SSE（`kind=plan`）下发（新增 `progress_events.invoke_plan_event` 通道）。子代理补上模式/审批组合，避免成为旁路。
+>   - **客户端**：契约层新增 `ChatRequest.sessionMode` / `StreamHandlers.onPlan` / `capabilities.executionModes`；`sessionsStore` 新增 `setSessionMode`（落 `mode-change` 事件）、`handlePlan`、`resolvePlan`；`ComposerControls` 的模式选择器受能力门控（不支持就隐藏，不留点了不生效的开关）；计划随 `plan` / `plan-decision` 事件落盘，`PlanCard` 提供勾选 / 批准并执行 / 仅批准 / 打回带意见四种出口。
+>   - **标注范围内的取舍**：批准 → 会**顺带切到 Craft**（否则批准的语义是空的：Plan 下引擎依旧拒绝写工具）；「按选中项执行」把批准范围**显式写成一条用户消息**发出，而不是隐式指令，便于事后审计「当时批准了什么」。
+>
+> 三套 `tsc`、`vitest`（**42 文件 / 649 用例**）与 `npm run build` 全绿；引擎侧 `pytest` 相关用例全绿（另有 11 条**环境类**红：Windows symlink 权限 / 沙箱 DNS 解析 / httpx 重定向，与本次改动无交集）。
+>
+> **M2 续做（FR-8.4，引擎侧）**：凭据 `no_access`（读+写、`full` 模式不可越过）+ 写默认拒绝开关已落地，详见 11.2.1。
+>
+> **M2 收尾（2026-09-16，全在引擎侧 + 客户端透传）——M2 里程碑闭合**：
+>
+> - **FR-8.3 回收站改道**：新增 `security/trash.py`。`delete_path` 在临时目录外一律走系统回收站（Windows `SHFileOperationW` + `FOF_ALLOWUNDO`；macOS `osascript`；Linux `gio trash` / `trash-put`），**回收站不可用时抛错而不是降级成真删**（fail-closed）；`count_entries` + `check_bulk_threshold`（阈值 10）挡批量误删；每次操作写 `safe-delete-report.ndjson` 留痕。新增 `delete_file` 工具作为**模型唯一的删除入口**（复用写解析路径，因此 FR-8.4 的默认拒绝写入与凭据 `no_access` 同样覆盖删除——否则删除就是写策略的旁路）。`shell.py::_guard_command` 收口所有删除动词，临时目录例外；被拦下时提示词明确指向 `delete_file` 而不是报成「路径越界」（否则模型会换路径重试，而不是改道）。
+> - **FR-8.2 三档决策**：`decide_tier` 把调用归入 `allow`（只读）/ `sandbox`（删除类 → 回收站）/ `deny`（其余，含 `mcp__*` 与未知工具——**默认不放行**，denylist 会静默放过上游新增的每个工具）。纯函数、无 IO，逐条穷举单测。
+> - **FR-8.9 审计留痕**：新增 `security/audit.py`，在工具执行的唯一收口点写 `audit/tool-gateway.ndjson`。四条不变量：append-only（从不改写既有行）、绝不影响执行（写失败静默吞）、含 `args_digest`（sha256，参数摘要被截断时仍能关联同一指令）、可重定向/可关闭（`NANOBOT_TOOL_AUDIT_LOG`）。记录含「对哪个 Agent」（`agent_id`）——没有它就只能说「有东西被拦了」，说不清是谁越的权。
+> - **FR-2.2 Agent 工具白名单**：`WorkspaceScope` 新增第五根轴 `tool_allow` / `tool_deny`（`None` = 未声明不限制，**空集 = 声明了一个都不许**，两者不可混）；纯函数 `agent_blocks_tool` 给出拒绝原因（黑名单**永远压过**白名单）；新钩子 `AgentToolPolicyHook` 挂在**基线**链上（ephemeral turn 同样绕不过）。审批门同步学会识别白名单——否则「白名单外 + ask 模式」会弹出一个「批了也执行不了」的框。客户端：`Agent.toolAllow/toolDeny` + 编辑 UI（可自由输入 MCP 工具名，写死列表会让 MCP 工具永远无法被授予）+ 卡片策略徽标 + 随每轮请求下发（JSON 与 multipart 两条路径都发，避免「带附件的那一轮」成为最小权限的旁路）。
+>
+> 三套 `tsc`、`vitest`（**43 文件 / 660 用例**）与引擎侧 `pytest` 全绿（`tests/security` 165、`tests/tools` 791、审批链与 utils 370、`tests/agent/test_agent_tool_policy.py` 36）。`ruff check nanobot/ tests/` 全清。**环境类红 8 条**（mcp 探测/连接的网络与 DNS、`fitz` 缺失、web_fetch 重定向），与本次改动无交集。
+>
+> **D2 遗留**：附件内容仍不入事件流（附件库属 R7/M4，见 9.6 的「已知范围差异」）。
+>
+> **⚠️ 与上游的刻意分歧**：`tests/tools/test_exec_security.py` 与 `test_tool_validation.py` 中「`rm <ws路径> 2>/dev/null` 应当放行」的三条断言（含上游 #3599 回归）已被**改写为断言拦截**，并以 `[LOCAL PATCH]` 标注。上游关心的是「重定向不该触发路径越界告警」，nanowork 关心的是「删除必须能进回收站」——两条需求叠加后结论相反。合并上游时这三处会冲突，属预期。
 
 **系统交付对照**（对应 2.5 的清单）：M1–M5 全部落在**客户端**（0 个新系统）；**M6 交付系统 ①**（云核）；**M7 交付 ②③**（若承诺关机执行则含 ④）；**M8 交付 ⑤⑥⑦⑧**。
 
@@ -655,6 +676,8 @@ export interface RuntimeCapabilities {
   toolCalls: boolean;      // 下发标准 tool_calls 增量
   artifacts: boolean;      // 下发 artifact 事件
   hotReload: boolean;      // 配置热加载（无需重启）
+  toolApproval: boolean;   // 逐条批准：引擎可挂起等待裁决（false 时 UI 隐藏该开关）
+  executionModes: boolean; // 执行模式与计划投递（ask / plan / craft；false 时隐藏模式选择器）
   channels: ChannelKind[]; // 支持的 IM 渠道（取值域与产品侧一致，不是裸 string[]）
   sessions: boolean;       // 支持会话级隔离
 }
@@ -848,7 +871,19 @@ export interface FileSnapshotEvent extends BaseEvent {
 
 **内容寻址的 `file-history`**：以文件内容 hash 命名备份文件。同一文件多次快照若内容相同则复用同一备份——WorkBuddy 也是这么做的（`file-history/` 里 1735 个 shell 快照与备份复用）。这比「每次复制一份」节省一个数量级的磁盘。
 
-## 9.4 SQLite 索引库
+> **V1 落地修订（2026-09，D2）**：索引层由 `index/sessions.db` 改为 `index/sessions.json`
+> （理由见 9.4 开头）。`<sessionId>.file-rollback.ndjson` 与 `artifact-index/` 属 R7 / M4 范围，
+> 尚未落地。其余路径与本节一致——落点规则集中在 `electron/eventRoutes.ts`，
+> 由 `tests/electron/eventRoutes.test.ts` 守住「布局」与「越界」两类问题。
+
+## 9.4 索引层：JSON 索引（V1）／SQLite（目标态）
+
+> **V1 落地修订（2026-09）**：本项目 V1 **不用 SQLite**。索引是**可再生派生物**
+> （权威在 JSONL 与 meta），而 Electron 31 = Node 20 **没有内置 `node:sqlite`**，
+> 当前仓库又是**零原生依赖**——引入 `better-sqlite3` 需要 electron-rebuild 与按平台
+> 分发二进制，打包链路复杂度陡增。用 JSON 索引换来的跨端一致与打包稳定收益更高。
+> 代价是列表线性扫描、无 FTS5；接口留位（`readIndex` / `rebuildIndex` 返回
+> `SessionIndexFile`），日后可无痛替换回 SQLite。**下面的 DDL 保留为目标态参考。**
 
 ```sql
 -- 会话列表（避免扫描所有 JSONL）
@@ -910,16 +945,148 @@ CREATE TABLE sync_metadata (
 
 | 之前 | 之后 |
 |---|---|
-| `sessionsStore` 是事实源（persist 到 localStorage/JSON） | 事件流是**事实源**（落盘）；`sessionsStore` 是**内存视图**（读索引 + 已加载事件） |
-| `send()` 直接改 `messages` | `send()` 派发事件 → 落盘 → 更新视图 |
-| 列表来自全量反序列化 | 列表来自 `sessions` 表查询 |
+| `sessionsStore` 是事实源（persist 到 localStorage/JSON） | 事件流是**事实源**（落盘 `<sessionId>.jsonl` + meta）；`sessionsStore` 是**内存视图** |
+| `send()` 直接改 `messages` | `send()` 派发事件 → 落盘 → 更新视图（同一批事件对象，**构造一次、两处消费**） |
+| 列表来自全量反序列化（含全部消息与 base64 附件） | 列表来自**索引**（每会话一条投影），消息按需从 JSONL 重建 |
 
-迁移分三步（M1 内完成）：
-1. 双写：事件落盘的同时仍 persist 旧结构，UI 读旧结构 —— 保证不破功能。
-2. 切读：UI 改读事件视图，旧结构只作为迁移输入。
-3. 清理：一次性迁移历史会话为事件流，移除旧 persist key（保留备份）。
+迁移三步（M1）：**① 双写 → ② 切读 → ③ 清理**，三步**均已落地**（见 9.6 Phase C/D/E）。
+关键取舍：不做「双写一段时间再切」的双轨过渡，而是让事件流**从第一天起就是唯一落盘形态**
+（①与②在同一次改造内完成）——因为历史会话已由用户清空，不存在需要兼容的旧数据，
+双轨反而会留下两套读取路径互相打架。清理阶段只做一件事：删掉遗留的
+`nanowork.sessions` 快照键（不可读的孤儿数据）。
 
-**降级路径（web）**：Web 端无文件系统，事件流写入 `platform.storage`（localStorage 事件分片 / IndexedDB）。若 IndexedDB 不可用，降级为「内存事件流 + 会话级快照持久化」，并显式提示「当前环境不支持文件级回滚」。
+**降级路径（web）**：Web 端无文件系统，事件流写入 `platform.storage`（按会话分片）。
+`EventStore.capabilities.fileBacked === false` 时**没有**内容寻址文件备份能力，
+因此 Web 上不提供文件级回滚（UI 不展示该入口）。若存储不可用，仅表现为写入失败提示，
+内存视图仍是本次会话内的权威。
+
+## 9.6 落地记录（2026-09，D2 事件化会话）★
+
+D2 分五阶段推进，**A 事件模型 / B 存储抽象 / C 双写 / D 切读 / E 清理全部完成**：
+`send()` 派发事件、视图读事件、旧 `persist` 已移除。下表是**已落地**的分界与落点，
+改这块前请先读它。
+
+### Phase A：事件模型（`src/types/event.ts` + `src/events/factory.ts`）
+- 16 种事件 + `BaseEvent`（`id` / `sessionId` / `parentId` / `seq` / `timestamp` / `provider`），
+  联合以 `type` 判别；另有 `SessionMeta` / `SessionIndexEntry` / `SessionIndexFile`。
+- `EventFactory`：`seq` 单调分配、`parentId` 成链、`now` / `genId` 可注入（便于单测），
+  并支持从历史事件 `resumeFrom` 续写——打开旧会话继续追加时序号不重置。
+- **归属字段 `MessageScoped.messageId`**：助手正文是流式累积的，`message` 事件只能在
+  **回合结束时**以终值落盘，于是同回合的思考 / 工具 / 产物事件 `seq` 都**小于**它。
+  靠「就近归属」会算到上一条消息头上，故一律走显式 `messageId` 关联。
+- **命名坑**：本文件的 `ReasoningEvent` 与 `src/types/process.ts` 的同名类型**不同层**
+  （前者是持久化事件节点，后者是渲染聚合视图）。故事件模型**不进 `types/index.ts`
+  barrel**，一律以 `@/types/event` 直达，避免 barrel 歧义。
+
+### Phase B：存储抽象（三层 + 双实现）
+
+| 层 | 位置 | 职责 |
+|---|---|---|
+| 路由（纯） | `electron/eventRoutes.ts` | 参数 → 绝对路径 + 单层片段安全校验（越界**拒绝**，不静默清洗） |
+| 索引（纯） | `src/events/indexFile.ts` | 解析/规范化/投影/重建/排序；**主进程与 Web 共用同一份** |
+| IO | `electron/eventStore.ts` | JSONL 追加、meta 读写、索引落盘、内容寻址备份 |
+| 桥 | `electron/main.ts` + `electron/preload.ts` | `events:*` / `meta:*` / `index:*` / `file-backup:*` IPC |
+| 契约 | `src/events/store.ts` | `EventStore` 接口 + **内存参照实现** |
+| 桌面实现 | `src/events/electronStore.ts` | 薄转发（IPC）；`fileBacked` / `fileHistory` 均为 true |
+| Web 实现 | `src/events/webStore.ts` | 分片落 `platform.storage`；两项能力均为 false |
+| 入口 | `src/events/index.ts` | `getEventStore()` 惰性单例（结构与 `getRuntime()` 同构） |
+
+**为什么 IO 独立成 `electron/eventStore.ts`**：它只依赖 `node:fs`、**不 import electron**，
+因此可以用临时目录把「追加 → 索引 → 重建」整条链路在普通单测里跑通（15 例）。
+`main.ts` 只做一件事——把它的方法挂到 IPC 上。
+
+**为什么纯索引逻辑住在 `src/events/indexFile.ts`**：Electron 落盘与 Web 分片**共用**
+同一套索引语义，放 `src/` 才能被两侧同时 import 而不重复实现。
+`electron/eventIndex.ts` 退化为对它的再导出。
+
+### Phase C：双写（`sessionsStore` 写路径接入）
+
+事件流的写入收敛到一个出口 `recordFor(sessionId, build)`：**构造同步、写盘异步**。
+
+| store 动作 | 产生的事件 |
+|---|---|
+| `createSession` | `session-start` + 落 meta |
+| `send` / `resendFromMessage` | `message`(user)（+ 占位标题变更时 `ai-title`） |
+| `appendReasoning` → `closeReasoning`/正文开始/工具开始 | `reasoning`（**闭合时落一条终值**，不逐 chunk 写盘） |
+| `handleProcessTool` | `function-call` / `function-call-result` |
+| `handleApprovalRequest` → `resolveApproval` | `permission-decision`（未裁决**不落**，见下） |
+| `handleArtifact` | `artifact`（V1 内联内容，见 `ArtifactEvent`） |
+| 回合结束（done / error / abort） | `message`(assistant 终值，带 `createdAt`/`durationMs`/`aborted`) + `session-end` |
+| `rename` / `pin` / `setModel` / `setFullAccess` / `setToolApproval` | 只落 meta（非事件型变更） |
+| `deleteSession(s)` | `removeSession`（排进该会话写队列，避免删后又被追加复活） |
+| `setSessionWorkdir` | 事件文件**随作用域搬迁**（读旧 → 删旧 → 写新 → 写 meta，同一队列保序） |
+
+**哪些会话不写**：IM 频道会话（`channel`）、只读留痕（`readonly`）、定时任务执行
+（`cron:` 前缀）——它们的真值在引擎侧，本地落盘只会制造两份互相打架的数据。
+
+**为什么构造必须同步**：`recordFor` 在调用方栈上同步完成 `id` / `seq` / `timestamp` 的
+分配，只有写盘异步入队。这样既能保持 store 动作同步返回（约 20 个调用点不必改造），
+又能让内存视图与磁盘事件**来自同一批事件对象**——后者才是漂移的根源。
+
+### Phase D：切读（水合）
+
+- `loadSessions()`：只读**索引**（每会话一条投影）→ `readMeta` → 建出消息留白的会话列表；
+  `activeId` 从 `nanowork.ui.activeSession` 恢复。索引缺失/损坏时重建一次。
+- `loadSession(id)`：按需读 JSONL → `primeRecorder` → `project` → 就地填消息；
+  并发去重（`hydrating`），已水合直接返回；本进程内新建的会话**不读盘**（否则会把
+  记录器的 `seq` 重置回 0）。
+- 外部来源会话（频道 / cron）不落本地事件流，`loadSession` 直接标记就绪。
+
+### Phase E：清理
+
+- 移除 `zustand/middleware` 的 `persist` 与 `zustandStorage` 依赖，`STORAGE_KEYS.sessions`
+  改名为 `legacySessions`（**仅用于清理遗留快照**，无任何读取方）；
+- `electron/storageRoutes.ts` 同步去掉该键的落点（`RUNTIME_FILES`）；
+- 启动时删除遗留 `nanowork.sessions` 键（历史会话已被用户清空，无需迁移）。
+
+### 四个不变量（改这块前必读）
+1. **append-only**：事件流只追加（`fs.appendFile`），不读全文重写、不改既有行——
+   `seq` 才能当稳定游标，并发追加才安全（同文件由写队列串行化）。
+2. **索引可再生**：权威在 JSONL + meta；索引损坏 / schema 不符一律**丢弃重建**，
+   不做「尽力抢救」。故索引写入失败**不应**影响事件正文。
+3. **格式归主进程**：IPC 两侧只传领域对象；JSONL 编码与容错解析封在
+   `electron/eventStore.ts`。渲染层因此**无法**绕过契约去拼磁盘格式。
+4. **平台分派唯一入口**：渲染层只经 `getEventStore()`；直连 `electronStore` /
+   `webStore` 会绕过降级分支（Web 上会拿到依赖 `window.electronAPI` 的实现）。
+
+### 两条推导路径必须同源（`src/events/project.ts`）
+
+视图有**两个产地**：实时增量（流式中就地更新 store）与批量重放（打开会话时从事件流重建）。
+两者必须对同一批输入给出同一结果，否则「刷新前 / 刷新后」会看到不同的东西。为此：
+
+- **投影是纯函数**（不碰 IO / store / 平台），穷举边界可测；它是读路径的**唯一形状定义**。
+- **`activePath`（DAG 回溯）**：「编辑后重发」作废被替换消息之后的全部内容，但事件流只增
+  不改。新事件从被替换处**分叉**（`parentId` 指向它），于是「从最大 `seq` 的尖端沿
+  `parentId` 回溯到根」这条活跃时间线天然跳过废弃分支。
+- **`project()` 的两处取值范围不同，这是刻意的**：
+  - `messages` 只取**活跃时间线**——作废的分支不得出现；
+  - `permissionLog` 取**全量事件**——它是敏感操作的审计记录，一次裁决发生过就该留痕，
+    不因后续重发/回滚而消失（与 append-only 同义）。
+- **`messageId` 归属而非顺序**：见 Phase A 的说明。
+- 视图侧的派生值（消息 `createdAt`、权限日志 `id`/`at`、产物 `createdAt`）一律**取自事件**
+  而非各自 `nowIso()`/`genId()`，否则两条路径会给出不同的时间与 id。
+
+**已知范围差异（非缺陷，勿当 bug 修）**：
+1. `Session.updatedAt` 每次 `updateMessage` 都刷新，而 meta 只在非事件型变更时落盘，两者
+   本就不同步——`projectSession` 的 `updatedAt` 来自 meta。
+2. 附件 `dataUrl` / `previewUrl` 是**视图态**，刻意不入事件流（逐行 JSON 塞 base64 会让
+   单个 JSONL 膨胀到不可读，且 object URL 不可跨端复原）。**V1 缺口**：小图在当前会话能看
+   缩略图，刷新后只剩图标；附件库（内容寻址 + 事件只存引用）属 R7 / M4。
+3. 未裁决的审批请求在视图里有 `pending` 卡片，但**不落事件**——引擎侧悬空请求会被判超时
+   拒绝，持久化一个 `pending` 无意义（重载后该卡片消失与引擎状态一致）。
+
+### 验证
+- `tests/electron/eventRoutes.test.ts`（13）：布局与越界。
+- `tests/electron/eventIndex.test.ts`（20）：索引投影 / 重建 / 排序 / meta 解析。
+- `tests/electron/eventStore.test.ts`（15）：IO 全链路（临时目录，含容错与幂等）。
+- `tests/events/contract.test.ts`（24）：**同一组契约断言跑在内存 + Web 两个实现上**。
+- `tests/events/electronStore.test.ts`（7）：IPC 转发与桥缺失 fail-fast。
+- `tests/events/factory.test.ts`（9）：`seq` / `parentId` / `resumeFrom`。
+- `tests/events/project.test.ts`（19）：`activePath` 分支废弃、归属、审计日志。
+- `tests/events/recorder.test.ts`（16）：写队列保序、失败不阻断、分支点索引。
+- `tests/events/equivalence.test.ts`（5）：**实时增量视图 ≡ 批量重放投影**——用 store 的
+  真实动作跑完一轮会话（思考 / 工具 / 产物 / 审批 / 中断 / 编辑后重发）再投影比对，
+  是这条不变量唯一的自动化守卫（三处刻意差异各有一条用例显式钉住）。
 
 ---
 
@@ -936,6 +1103,35 @@ CREATE TABLE sync_metadata (
 | **Craft** | 全量（受 Agent 白名单与权限约束） | 直接执行 | `cli`（Standard） |
 
 **模式落点**：`session.mode`（事件 `session-start` 与 `mode-change` 中记录）。模式是一等公民，写入会话元数据并随同步元数据跨端一致。
+
+**UI 上有两处差异现在的形状已定**：① Composer 的模式选择器由 `capabilities.executionModes` 门控——引擎不支持时**隐藏**，不留一个点了不生效的开关；② 计划卡片（`PlanCard`）挂在助手消息下，四种出口分别是「按选中项执行」「批准」「批准并开始」「打回并附意见」。
+
+### 10.1.1 模式强制落地（M2，2026-09）★
+
+落地时最关键的一条：**模式不是提示词里的形容词，而是引擎会话作用域的一根轴**。原有三根轴是 `project_path` / `access_mode` / `tool_approval`，第四根是 `session_mode`：
+
+```python
+# nanobot/nanobot/security/workspace_access.py（LOCAL PATCH）
+class WorkspaceScope(BaseModel):
+    project_path: ...
+    access_mode: ...        # 作用域：能碰哪里
+    tool_approval: ...      # 询问：要不要先问
+    session_mode: SessionMode = "craft"   # 模式：能做什么
+```
+
+取值 `ask` / `plan` / `craft`，**未知取值抛 `WorkspaceScopeError` 而不是静默降级**——「用户以为在 Ask、实际能写文件」是不可接受的失效模式，宁可请求失败。
+
+强制发生在工具执行前（`before_execute_tool`），与审批门是**两条独立的门**，都要过：
+
+| 模式 | 放行集合 | `submit_plan` |
+|---|---|---|
+| `ask` | `READ_ONLY_TOOLS`（复用既有只读集） | deny |
+| `plan` | `READ_ONLY_TOOLS` + `submit_plan` | 截获 → SSE `kind=plan` → 回 ack |
+| `craft` | 全量（受白名单与权限约束） | deny（不在该模式下使用） |
+
+deny 的实现是**回注一条工具结果**（写明被拒的工具名与当前模式），而不是中断回合：模型看到「这条写操作在 Ask 模式下被拒」后会自行改道（改成只读探索或直接询问用户），不会卡死。子代理走的是另一条装配路径（`subagent.py` 直接给 runner 传 hook），所以也显式组合了 `SessionModeHook`，否则子代理会成为模式约束的旁路。
+
+最后是责任边界的确认：**执行模式唯一的强制点是引擎。** 客户端能把模式写进请求、能把计划渲染成可勾选清单，但「拦住那一次写文件」只能发生在工具真正要执行的那一刻——也就是引擎侧；其余地方的模式都是描述性的。
 
 **与现有「空状态三级模式」的关系**：`heroPresets.tsx` 的「日常办公 / 代码开发 / 设计创意」是**入口预设**（决定展示哪些 Skill 与提示词标签），**不是执行模式**。两者正交：
 
@@ -963,7 +1159,9 @@ sequenceDiagram
   Note over R: 只允许只读工具
   R->>G: function-call(Read)
   G-->>R: allow
-  R-->>S: plan 事件（结构化计划）
+  R->>G: function-call(submit_plan)
+  Note over G: 不下发工具系统，截获转 SSE
+  R-->>S: nanobot_event kind=plan（结构化计划）
   S->>E: plan 事件落盘
   S-->>U: 计划清单（可勾选）
   U->>S: 逐项批准 / 全批准 / 打回+意见
@@ -979,6 +1177,34 @@ sequenceDiagram
 ```
 
 **关键约束**：Plan 模式下即便模型「想」调用写类工具，工具网关也会 `deny` 并回注一条工具结果说明拒绝原因——引擎会因此重新规划。这是「软约束 + 硬兜底」的配合：提示词让它不该做，网关让它做不了。
+
+### 10.2.1 计划如何产出：走工具，不走「解析回答」（M2，2026-09）
+
+计划的结构化产出有两种候选载体：
+
+| 方案 | 做法 | 问题 |
+|---|---|---|
+| 解析最终回答 | 约定一段 ```plan 代码块 / JSON，客户端正则提取 | LLM 输出结构不可靠：包裹形式随模型漂移，格式坏了计划就没了，且**无法在引擎侧校验** |
+| **工具提交（采纳）** | 模型调用 `submit_plan`，引擎截获 → SSE `kind=plan` | 需在工具表里多一个工具；换来 **schema 校验 + 可拒重来 + 与模式联动**（仅 Plan 模式放行） |
+
+采纳后者。落地链路（对应上图「R-->>S: plan 事件」这一步的真实实现）：
+
+```
+模型 tool_call(submit_plan, {steps:[...]})
+   ↓ SessionModeHook.before_execute_tool
+   ├─ 模式校验：非 plan → deny（附带模式说明，让模型知道改怎么走）
+   ├─ 步骤归一化：str / {text} / {title} 等写法统一为 {id, text, status}
+   ├─ 无可用 SSE 通道 → 如实报错（不让计划停在用户看不见的地方）
+   └─ invoke_plan_event → SSE delta.nanobot_event{kind:"plan", plan_id, steps}
+客户端 onPlan → 写 plan 事件 → PlanCard 渲染 → 用户裁决 → plan-decision 事件
+```
+
+两个刻意的取舍，都写在这里以免日后被「顺手优化」掉：
+
+1. **批准后顺带切到 Craft**（`mode-change` 事件），并写入计划执行范围。否则批准的语义是空的——留在 Plan 模式下，引擎依旧会deny 写类工具。
+2. **执行范围以一条用户消息发出**（而非隐式内部指令）。代价是多一轮用户消息的观感，收益是「当时批准了什么」留在会话历史里可追溯，重放时也能复现。
+
+计划随 `plan` / `plan-decision` 事件落盘，因此刷新后卡片仍在、未裁决的计划仍可继续裁决——这条同样被 `tests/sessionsPlanMode.test.ts` 的等价性用例钉死（实时视图 ≡ 重放投影）。
 
 ## 10.3 权限模型（三层权限，与 WorkBuddy 对齐）
 
@@ -1113,6 +1339,11 @@ MCP 调用等）执行**前**必须由用户裁决；只读工具自动放行。
    runner 传 `hook=`，不走 `build_agent_turn_hook`）。
 3. **拒绝必须走软错误载荷**（`agent/tools/execution.py`），不能抛异常——与
    `_classify_violation` 的既有范式一致，让模型改道而不是把整轮会话打崩。
+4. **审批门不等于模式的执行场所**。`CompositeHook._decide_for_each_hook`
+   的语义是「deny 优先且不可被后续 allow 覆盖」，且**所有钩子都会执行**——
+   所以 Ask / Plan 的模式门（`SessionModeHook`，见 10.1.1）虽然挂在同一条链上，
+   审批钩内部也**必须**自己识别模式：模式禁止的工具不再下发审批请求，否则用户会
+   收到一条「批准也照样被拒」的请求。（反过来，模式放行也不等于跳过审批。）
 
 #### 已知边界（V1 有意留的口子）
 
@@ -1144,6 +1375,40 @@ WorkBuddy 的结论值得完整借鉴：**在 Bash / Python / Node 三个运行�
 | 默认拒绝写入 | 白名单制：未列出的路径默认禁止写入 | `tsbx_rules.json` 的 `default_action: deny_write` |
 | 凭据保护 | `.ssh` / `.gnupg` 等目录 `no_access`（含读取） | 同 |
 | 子进程控制 | Windows 用 Job Object 确保进程树被强杀 | `job-object.node` |
+
+### 11.2.1 已落地（FR-8.4，2026-09）★
+
+**归属修正**：本节原写「执行归属：必须在 Electron 主进程实现」。这对
+*删除改道* 成立（渲染层与主进程才有系统调用），但对 **路径策略不成立**——
+读写发生在**引擎进程内**，客户端拦不住。因此 FR-8.4 的强制点落在引擎
+`nanobot/security/workspace_policy.py`，与审批门、模式门同一收口原则
+（见 11.1.1 的四层链路）。
+
+| 机制 | 落点 | 语义 |
+|---|---|---|
+| 凭据 `no_access` | `workspace_policy.is_no_access_path()` / `require_no_access_free()` | 三条规则任一命中即拒绝，**读+写皆禁**：① 落在 `~/.ssh`、`~/.gnupg`、`~/.aws`、`~/.kube`、`~/.docker`、`~/.config/gcloud` 等凭据目录内；② 是 `~` 下的凭据文件（`.netrc` / `.npmrc` / `.pypirc` / `.git-credentials` / `.htpasswd` / `.authinfo`）；③ 文件名为私钥（`id_rsa` / `id_dsa` / `id_ecdsa` / `id_ed25519`，不限目录） |
+| 默认拒绝写入 | `resolve_allowed_path(write=True, deny_write_by_default=…)`，由 `file.default_deny_write` 配置 | 写操作且**没有任何可写白名单**时直接拒绝，而不是退化成「哪里都能写」 |
+
+两个实现要点（改这块前必读）：
+
+1. **守卫必须排在早返回之前**。`resolve_allowed_path` 在
+   `allowed_root is None and not files` 时原本直接返回——这正是 `full` 访问
+   模式的路径。凭据检查若写在早返回之后就会被完整绕过，`~/.ssh/id_rsa`
+   变成可读写。这是本特性的核心回归点，单测里有专门的参数化用例钉住。
+2. **误伤面要守住**。凭据目录**锚定在用户主目录**（而非「路径里出现
+   `.docker` 就拦」），凭据文件区分「`~` 下的 `.npmrc`」与「项目里的
+   `.npmrc`」；`credentials.json` 这类常见测试夹具不进名单。安全特性若把
+   正常项目文件一起拦掉，用户第一反应是关掉整个能力。
+
+**待定（需产品决策）**：`file.default_deny_write` 当前默认 `False`（保持引擎
+上游语义，避免静默改变 `full` 模式行为）。PRD 11.1 决策表第 5 条写的是
+「路径不在 extraAllowWrite 且为写操作 → **需确认（或 full 模式下 allow）**」，
+与 11.2「未列出的路径默认禁止写入」在 `full` 模式下互相矛盾。若采纳 11.2 的
+更严口径，把该开关默认值改为 `True` 即可。
+
+**验证**：`tests/security/test_workspace_policy.py` 新增 14 例（凭据目录 /
+凭据文件 / 私钥文件名 / 符号链接逃逸 / allow-list 不可覆盖 / 误伤面回归 /
+写默认拒绝 / 上游兼容）。
 
 **执行归属**：这些兜底必须在 **Electron 主进程**实现（渲染层无系统调用能力）。渲染层通过 `platform` 暴露的能力请求；Web 端降级为「禁用删除类工具 + 明确提示 `请使用桌面端`」，返回 `{ok:false, error}`。
 
@@ -1994,7 +2259,12 @@ window.electronAPI = {
   readNanobotChannels,
   channelConnectStart / channelConnectPoll / channelConnectCancel,
   setChannelAllowFrom / disconnectChannel,
-  // 新增（第 11、17、20 章）
+  // 已落地（D2 事件流，2026-09）：IPC 两侧只传领域对象，磁盘格式归主进程
+  eventsAppend / eventsRead / eventsRemove,
+  readSessionMeta / writeSessionMeta / listSessionMetas,
+  readSessionIndex / rebuildSessionIndex,
+  putFileBackup / getFileBackup,
+  // 目标态（第 11、17、20 章，未落地）
   safeDelete, createSnapshot, rollbackTo, readUsageStats,
 }
 ```
@@ -2015,9 +2285,9 @@ POST /api/sync/push
 | 接口 | 文件 | 职责 |
 |---|---|---|
 | `AgentRuntime` | `src/ai/runtime/types.ts` | 引擎唯一出口（第 8 章） |
-| `ToolGateway` | `src/security/toolGateway.ts` | 工具唯一收口（第 11 章） |
+| `EventStore` | `src/events/store.ts`（入口 `src/events/index.ts`） | 事件追加 / 读取 / 索引（第 9 章）——**已落地**，双实现见 9.6 |
+| `ToolGateway` | ~~`src/security/toolGateway.ts`~~ | ~~工具唯一收口~~ **已被引擎侧取代**（ADR-021）；保留为 V3 多引擎参考形态 |
 | `MemoryService` | `src/lib/memory.ts`（升级） | 记忆分层读写（第 14 章） |
-| `EventStore` | `src/lib/eventStore.ts` | 事件追加 / 读取 / 索引（第 9 章） |
 | `PlatformAdapter` | `src/platform/types.ts`（扩展） | 跨端能力唯一收口 |
 | `SyncEngine` | `src/sync/SyncEngine.ts` | 同步调度（V1.5） |
 
@@ -2037,19 +2307,24 @@ nanowork/
 │  │  ├─ runtime/          【收口 2】引擎契约层（types/index/nanobotHttp/*）
 │  │  ├─ builtin*          内置 Agent / Skill / MCP / 专家团目录
 │  │  └─ connectionManager 连接状态
+│  ├─ events/              【收口 5】事件流（types/event 领域模型 + store 契约 + factory
+│  │                       事件构造 + project 投影/审计 + recorder 记录器 + indexFile
+│  │                       纯索引 + electronStore / webStore 双实现；入口 getEventStore()，
+│  │                       见 9.6）——**已落地（A–E 全部）**
 │  ├─ security/            【收口 3】toolGateway / policy / snapshot / audit
 │  ├─ sync/                【收口 4】SyncClient / SyncEngine / syncRegistry（V1.5）
 │  ├─ lib/
-│  │  ├─ eventStore.ts     事件追加/读取/索引
 │  │  ├─ memory.ts         记忆分层服务
 │  │  ├─ cron.ts           cron/rrule 校验与描述
 │  │  ├─ prompts/          提示词模板装配（编译期或运行期读取）
 │  │  └─ ...               既有工具
 │  ├─ stores/              Zustand 内存视图（不再是事实源）
-│  ├─ types/               领域模型（全部带 SyncMeta）
+│  ├─ types/               领域模型（含 event.ts；事件模型以 `@/types/event` 直达，
+│  │                       不进 barrel，见 9.6「命名坑」）
 │  ├─ components/ pages/ layout/ theme/ router/
 ├─ prompts/                提示词外置模板（mode × domain × style）
-├─ electron/               主进程（safeOps / snapshot / usage / tray / hotkey / channel*）
+├─ electron/               主进程（storageRoutes / eventRoutes + eventStore / eventIndex
+│                          / safeOps / snapshot / usage / tray / hotkey / channel*）
 ├─ tests/
 ├─ docs/
 └─ openspec/               spec-driven 规格
@@ -2118,6 +2393,9 @@ nanowork-server/                 # 云侧单仓库（V1.5 起步，monorepo）
 | ADR-019 | 渲染层持久化改为「一 key 一文件 + 按 key 路由归属」，落点表收口在纯模块 `electron/storageRoutes.ts` | **新建** | 消除写放大与「卸载丢用户资产」；纯模块可单测（路由归属 / 路径越界 / 编解码往返）。过渡落点 `sessions`/`tasks`/`artifacts` 留 ②，待 D2 实体化消化（见 18.2.5） |
 | ADR-020 | `src/ai/runtime/nanobotHttp/**` 是**唯一**允许知道引擎 wire 格式的位置；渲染层只允许 import `@/ai/runtime`（及其 `./types`） | **新建** | 把「防腐层」从口号变成可检查的边界：`session_id`/`access_mode`/`mcpServers`/`jobs.json`/`delta.nanobot_event` 只出现在该目录内。契约层不出现任何引擎特有字段；`ChatHandle` 等 transport 原语不上浮（见 8.2.1 / 8.4.1） |
 | ADR-021 | 工具权限的**唯一收口落在引擎**（`before_execute_tool` 否决通道 + 审批回传端点），不是客户端网关；`access_mode`（作用域）与 `tool_approval`（询问）为**正交两轴**，`full` 作为更粗开关覆盖逐条批准 | **新建** | 客户端只收单向 SSE，看不见也拦不住引擎进程内的工具执行——把门控写在客户端是「给没有门的墙装锁」。代价：引擎侧需维护 vendored fork 的 LOCAL PATCH，且非流式（multipart）路径无审批通道须 fail-closed。取代 11.1 的客户端 `ToolGateway` 草案（保留为 V3 参考形态）。见 10.3.1 / 11.1.1 |
+| ADR-022 | 事件流的**磁盘格式归主进程独占**（IPC 只传领域对象）；纯索引逻辑下沉到 `src/events/indexFile.ts` 供主进程与 Web **共用一份**；索引层用 **JSON 索引**而非 SQLite | **新建** | 渲染层因此无法绕过契约去拼磁盘格式；纯逻辑单点实现避免两端行为漂移（契约测试同跑内存 + Web 两个实现）。V1 舍弃 SQLite（Electron 31 = Node 20 无内置 `node:sqlite`、仓库零原生依赖）换取打包链路与跨端一致，代价是列表线性扫描、无 FTS5。见 9.4 / 9.6 |
+| ADR-023 | 会话视图有**两个产地**（实时增量 / 批量重放），二者必须**同源**：事件在调用方栈上同步构造、内存视图与磁盘事件消费**同一批事件对象**；视图侧的派生值（消息 `createdAt`、权限日志 `id`/`at`、产物 `createdAt`）一律取自事件而非各自 `nowIso()`/`genId()` | **新建** | 两条路径各造一份值必然漂移，症状是「刷新前 / 刷新后不一样」且极难追查。约束方式是把不变量写成可执行测试：`tests/events/equivalence.test.ts` 用 store 的真实动作跑完一轮会话再投影比对，逐字段钉死。配套约定：`messages` 只取活跃时间线（DAG 回溯 `activePath`），`permissionLog` 取**全量**事件（审计 append-only）。见 9.6 |
+| ADR-024 | 执行模式与计划提交都**落在引擎会话作用域内**：模式是与 `access_mode` / `tool_approval` 并列的第四根轴（`WorkspaceScope.session_mode`，未知取值报错不降级）；模式禁止由 `SessionModeHook` 在 `before_execute_tool` deny 并回注工具结果；**计划经 `submit_plan` 工具通道提交**——引擎截获后不下发工具系统，转成 `kind=plan` SSE 事件，用户裁决作为下一轮用户消息回来 | **新建** | 理由同 ADR-021：模式只写在客户端/提示词里拦不住引擎进程内的工具执行。计划走工具而非「解析最终回答」是因为 LLM 输出结构不可靠，而工具调用有 schema 校验、可拒绝重来；裁决结果走用户消息而非隐式内部指令，让「当时批准了什么」在会话历史里可追溯。代价：模式/计划的两端新增字段都属 LOCAL PATCH；Plan 模式下批准动作顺带切回 Craft（否则批准的语义是空的）。见 10.1 / 10.2 |
 
 ---
 
@@ -2125,7 +2403,7 @@ nanowork-server/                 # 云侧单仓库（V1.5 起步，monorepo）
 
 | # | 风险 | 影响 | 对策 |
 |---|---|---|---|
-| 1 | 事件化迁移破坏现有功能 | 高 | 双写 → 切读 → 清理三步走；每步都有回退点；集成测试全程绿 |
+| 1 | 事件化迁移破坏现有功能 | **已消解** | 落地时历史会话已清空，故未走「双写→切读→清理」的双轨过渡，而是一次性把读写切到事件流（少一套互斥读路径）；风险由「实时视图 ≡ 事件投影」的等价性测试（`tests/events/equivalence.test.ts`）与全量单测兜住（ADR-023） |
 | 2 | nanobot API 变更 | 中高 | ADR-002 契约层；锁定版本；升级只改 `nanobotHttp/` |
 | 3 | 工具网关成为性能瓶颈 | 中 | `decide` 为纯函数（微秒级）；仅 `execute` 有 IO；决策结果缓存 |
 | 4 | 回收站方案在部分 Linux 桌面环境不可用 | 中 | fail-closed + 明确报错 + 允许用户在设置中显式声明「无回收站环境」（此时禁用删除类工具而非真删） |
@@ -2135,6 +2413,12 @@ nanowork-server/                 # 云侧单仓库（V1.5 起步，monorepo）
 | 8 | 记忆合规（个保法） | 中 | 记忆用户可见可删可导出；Dream 合并产物需审查才生效；按边界物理隔离 |
 | 9 | 与 WorkBuddy 正面竞争 | 中 | 不拼 C 端体验，拼「可私有化 + 数据主权 + 引擎可控」，打内网/政企市场 |
 | 10 | 同步冲突误覆盖 | 中 | 冲突 toast + 保留 client 快照 + 可手动还原 |
+| 11 | JSON 索引随会话数线性扫描（替代 SQLite 的代价） | 低（V1 量级） | 索引是可再生的派生物，接口留位（`readIndex` / `rebuildIndex` 返回 `SessionIndexFile`）；超阈值换回 SQLite 只需改 `src/events/indexFile.ts` 与 `electron/eventStore.ts`，渲染层不动（ADR-022） |
+| 12 | 两条推导路径（实时视图 / 事件投影）漂移 | 中 | 事件构造同步、两处消费同一批对象；视图派生值取自事件；等价性测试逐字段钉死（ADR-023）。漏记事件时 `recordFor` **上报而非静默**（内存视图仍为本次会话权威） |
+| 13 | 附件内容不入事件流 → 刷新后小图缩略图丢失 | 低（体验缺口） | 已知 V1 缺口并在 9.6「已知范围差异」明示；附件库（内容寻址 + 事件只存引用）属 R7 / M4。应急路径：`localPath` 已在事件内，Electron 端可经 `rehydrateAttachment` 重读源文件 |
+| 14 | 事件写盘失败导致磁盘与视图不一致 | 中 | `recordFor` 构造同步、写盘异步入队；失败**不回滚内存视图**（本次会话内视图仍是权威），经 toast + 控制台如实上报，下次启动以磁盘为准（`loadSessions`） |
+| 15 | 执行模式在传递链路上丢字段，**静默退化为 craft**（用户以为在 Ask，实际能写文件） | 中高 | 引擎侧未知取值**报错而非降级**（`_normalize_session_mode` 抛 `WorkspaceScopeError`）；客户端在 `capabilities.executionModes` 缺省时**隐藏**模式选择器（不留点了不生效的开关）；模式写进 `session-start` / `mode-change` 事件，事后重放可复现当时取值（ADR-024） |
+| 16 | Ask / Plan 下模型被 deny 后反复重试或直接卡死 | 中 | deny 以**工具结果回注**（说清拒绝原因与当前模式）而非中断回合，模型据此改道；Plan 下 `submit_plan` 放行且只回 ack（无副作用），保证「只读模式也有正当出口」；子代理同样组合该 hook，避免成为旁路 |
 
 ---
 
@@ -2234,6 +2518,8 @@ nanowork-server/                 # 云侧单仓库（V1.5 起步，monorepo）
 | **MCP** | Model Context Protocol，外部工具与数据源接入协议 |
 | **PermissionMode** | 会话级权限：`restricted`（默认）/ `full`（完全访问） |
 | **Plan** | 先产出计划、经批准后执行的模式 |
+| **submit_plan** | Plan 模式下模型提交计划所用的工具。引擎在工具执行前截获它，**不下发给工具系统**，而是转成 SSE 计划事件给用户；仅在 Plan 模式放行（见 10.2.1 / ADR-024） |
+| **执行模式（session_mode）** | 会话级 `ask` / `plan` / `craft`，决定「本轮能做什么」。是与 `access_mode`（作用域）、`tool_approval`（询问）并列的第四根会话轴，**由引擎在工具执行前强制**（见 10.1.1 / ADR-024） |
 | **Plugin（插件）** | 从市场分发的功能包，含 Skill/Agent/Expert/Hook/MCP 等资源 |
 | **RRULE** | RFC 5545 循环规则，如 `FREQ=MONTHLY;BYMONTHDAY=1,15` |
 | **Skill（技能）** | 单个 `SKILL.md` 描述的可复用工作流 |

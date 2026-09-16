@@ -1,11 +1,29 @@
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
-import { zustandStorage } from '@/platform';
+import { platform } from '@/platform';
 import { PLACEHOLDER_TITLES, STORAGE_KEYS } from '@/lib/constants';
 import { genId } from '@/lib/id';
 import { toast } from '@/components/Toast';
 import { connectionManager } from '@/ai/connectionManager';
 import { getRuntime } from '@/ai/runtime';
+import { CRON_SESSION_ID_PREFIX } from '@/lib/sessionImport';
+import {
+  createRecorder,
+  dropRecorder,
+  enqueueSessionTask,
+  getEventStore,
+  hasRecorder,
+  listSessionEntries,
+  messageEventIdOf,
+  metaToSession,
+  primeRecorder,
+  project,
+  recordEvents,
+  setRecordErrorSink,
+  setRecorderWorkdir,
+  toEventAttachment,
+} from '@/events';
+import type { EventFactory } from '@/events/factory';
+import type { ExecutionMode, SessionEvent, SessionMeta } from '@/types/event';
 import {
   attachmentsToUploadFiles,
   toPersistableAttachment,
@@ -22,7 +40,9 @@ import type {
   ChatMessageParam,
   MemoryState,
   Message,
+  MessagePlan,
   PermissionLog,
+  PlanVerdict,
   ProcessToolRow,
   Session,
   ToolCall,
@@ -32,6 +52,7 @@ import type {
   ApprovalRequestEvent,
   ArtifactEvent,
   ChatRequest,
+  PlanProposal,
   ProcessToolEvent,
   ToolCallEvent,
   UploadFile,
@@ -101,7 +122,13 @@ interface SessionsState {
   createSession: (
     agentId?: string,
     title?: string,
-    opts?: { workdir?: string; fullAccess?: boolean; toolApproval?: boolean },
+    opts?: {
+      workdir?: string;
+      fullAccess?: boolean;
+      toolApproval?: boolean;
+      /** 执行模式（FR-1.4）；缺省 craft */
+      mode?: ExecutionMode;
+    },
   ) => Session;
   /**
    * 注入外部来源会话（IM 频道会话）并激活。
@@ -109,6 +136,16 @@ interface SessionsState {
    * 频道会话不进入持久化白名单，每次打开从 nanobot 实时拉取。
    */
   openExternal: (session: Session) => void;
+  /**
+   * 启动水合：**会话列表来自索引**（不扫 JSONL），消息留待选中时按需加载。
+   * 索引缺失或损坏时自动重建一次（索引是可再生派生物）。
+   */
+  loadSessions: () => Promise<void>;
+  /**
+   * 按需水合单个会话：读事件流 → 重建消息 → 建立记录器。幂等，可并发调用。
+   * 外部来源会话（IM 频道 / 定时任务留痕）不落本地事件流，直接视为已就绪。
+   */
+  loadSession: (id: string) => Promise<void>;
   selectSession: (id: string) => void;
   deleteSession: (id: string) => void;
   /**
@@ -125,6 +162,14 @@ interface SessionsState {
   setSessionWorkdir: (id: string, workdir?: string) => void;
   /** 设置会话权限策略：true = 允许完全访问 */
   setSessionFullAccess: (id: string, fullAccess: boolean) => void;
+  /**
+   * 切换会话执行模式（FR-1.4）。
+   *
+   * 落到**事件**（`mode-change`）而非只落到 meta：模式切换决定了那一轮之后
+   * 引擎「能做什么」，是会话历史的一部分——重放时可以回答「这句改动是在
+   * Craft 下发生的吗」。meta 同步性则由 `persistMeta` 负责。
+   */
+  setSessionMode: (id: string, mode: ExecutionMode) => void;
   /** 设置会话级逐条批准：true = 副作用工具执行前逐一授权（FR-1.5） */
   setSessionToolApproval: (id: string, toolApproval: boolean) => void;
   /** 设置会话级模型覆盖 */
@@ -133,8 +178,13 @@ interface SessionsState {
   // —— 记忆 ——
   /** 关闭「已加载 N 条记忆」提示条 */
   dismissMemoryBar: () => void;
-  /** 异步读取记忆并缓存到指定会话（createSession 内部调用，也可手动刷新） */
-  loadMemoryInto: (sessionId: string) => Promise<void>;
+  /**
+   * 异步读取记忆并缓存到指定会话。
+   *
+   * @param silent 只预热缓存、不更新「已加载 N 条记忆」提示条。打开既有会话时用
+   *   ——提示条是「本次新建会话已注入记忆」的反馈，重开旧会话时再弹一次是噪音。
+   */
+  loadMemoryInto: (sessionId: string, opts?: { silent?: boolean }) => Promise<void>;
 
   // —— 发送 / 流式 ——
   /**
@@ -198,6 +248,38 @@ interface SessionsState {
    * 留在队列里只会反复失败。
    */
   resolveApproval: (decision: ApprovalDecision, reason?: string) => Promise<void>;
+  /**
+   * Plan 模式产出的计划到达（FR-1.5）：落到 `plan` 事件并挂在助手消息上。
+   *
+   * 与 `handleApprovalRequest` **不构成**同一类 things：计划不需要本轮回话，
+   * 引擎放行 `submit_plan` 后继续把这一轮说完，用户何时裁决由 UI 决定。
+   */
+  handlePlan: (sessionId: string, messageId: string, plan: PlanProposal) => void;
+  /**
+   * 裁决一条计划（FR-1.5）。
+   *
+   * @param planId `MessagePlan.planId`；同一会话内唯一，用它寻址而非消息 id，
+   *   是为了让未来「一条消息多份计划」不必改签名
+   * @param decision approved / rejected
+   * @param opts.approvedStepIds 批准范围（缺省 = 全批准，`[]` = 一项不批）
+   * @param opts.reason 打回意见：会被原样带给下一轮，让模型据此重规划
+   *
+   * 批准会**顺带把会话切到 Craft**——否则批准的语义是空的：引擎在 Plan 模式下
+   * 依旧拒绝一切写类工具，所谓「批准后进入执行」就成了一句谎话。
+   * 是否立刻发起下一轮由 `execute: true` 决定（缺省不自动发）。
+   *
+   * @returns 是否成功裁决（计划不存在 / 已裁决过返回 false）
+   */
+  resolvePlan: (
+    planId: string,
+    decision: PlanVerdict,
+    opts?: {
+      approvedStepIds?: string[];
+      reason?: string;
+      /** 批准后是否立即以该范围为内容发起一轮执行请求；缺省 false */
+      execute?: boolean;
+    },
+  ) => Promise<boolean>;
   clearError: () => void;
 
   // —— 内部更新工具 ——
@@ -210,6 +292,173 @@ interface SessionsState {
 }
 
 const nowIso = () => new Date().toISOString();
+
+// ————————————————————————————————————————————————————————————————
+// 事件流接线（D2 Phase C）：事件流是事实源，本 store 是内存视图
+// ————————————————————————————————————————————————————————————————
+
+/**
+ * 会话是否写入本地事件流。
+ *
+ * 三类会话**不写**——它们的真值在引擎侧，本地落盘只会制造两份互相打架的数据：
+ * - IM 频道会话（`channel`）：每次打开从 nanobot 实时拉取；
+ * - 只读留痕会话（`readonly`）：引擎已完成的历史快照；
+ * - 定时任务执行会话（`cron:` 前缀）：引擎按 run 持有，本地存副本会与下次同步重复。
+ *
+ * 前两条与旧 `persist` 的 `partialize` 白名单一致；第三条是**新增的明确排除**：
+ * 旧实现把它们持久化过（注释写着「非 readonly 以便持久化」），那其实是在本地
+ * 复制引擎的权威数据，Phase E 起不再这么做。
+ */
+function isEventStreamSession(s: Pick<Session, 'id' | 'channel' | 'readonly'>): boolean {
+  return !s.channel && !s.readonly && !s.id.startsWith(CRON_SESSION_ID_PREFIX);
+}
+
+/** 事件流操作的错误出口：提示用户 + 记控制台（内存视图不清空——它此时仍是权威） */
+function reportStreamError(sessionId: string, error: unknown): void {
+  const msg = error instanceof Error ? error.message : String(error);
+  console.error(`[sessionsStore] 事件流操作失败（${sessionId}）：`, error);
+  toast.error(`会话记录写入失败：${msg}`);
+}
+
+// 记录器的写盘失败走同一出口（模块初始化时注册一次）
+setRecordErrorSink(reportStreamError);
+
+/** 会话视图 → 元数据（`SessionMeta` 是事件流的权威元数据，见 `@/types/event`） */
+function toMeta(s: Session): SessionMeta {
+  return {
+    id: s.id,
+    title: s.title,
+    agentId: s.agentId,
+    groupId: s.groupId ?? null,
+    workdir: s.workdir,
+    // 执行模式（ask / plan / craft，FR-1.4）：缺省 craft——事件化之前的会话
+    // 一律按「可直接执行」记账，缺失值不是「未知模式」
+    mode: s.mode ?? 'craft',
+    model: s.model,
+    permissionMode: s.fullAccess ? 'full' : 'restricted',
+    toolApproval: s.toolApproval,
+    skillIds: s.skillIds,
+    channel: s.channel,
+    readonly: s.readonly,
+    pinned: s.pinned,
+    createdAt: s.createdAt,
+    updatedAt: s.updatedAt,
+  };
+}
+
+/** 取会话；不存在或非本地事件流会话时返回 null */
+function eventStreamTarget(sessionId: string): Session | null {
+  const s = useSessionsStore.getState().sessions.find((x) => x.id === sessionId);
+  return s && isEventStreamSession(s) ? s : null;
+}
+
+/**
+ * 记录一批事件（**构造同步、写盘异步**，见 `@/events/recorder` 的说明）。
+ *
+ * 外部来源会话直接跳过（正常路径）。本地会话却缺记录器说明漏了水合——此时
+ * **上报而非抛出**：本函数会在 SSE 回调栈上被调用，抛错会打断整条流，而漏记
+ * 一条事件是可恢复的（内存视图仍是当前权威，下次加载以磁盘为准）。
+ */
+function recordFor(
+  sessionId: string,
+  build: (factory: EventFactory) => SessionEvent | SessionEvent[],
+): SessionEvent[] {
+  if (!eventStreamTarget(sessionId)) return [];
+  if (!hasRecorder(sessionId)) {
+    reportStreamError(sessionId, new Error('事件记录器未就绪，本次事件未落盘'));
+    return [];
+  }
+  return recordEvents(sessionId, build);
+}
+
+/** 落盘会话元数据（标题 / 置顶 / 权限 / 模型等**非事件型**变更） */
+function persistMeta(s: Session): void {
+  if (!isEventStreamSession(s)) return;
+  void getEventStore()
+    .writeMeta(toMeta(s))
+    .catch((e: unknown) => reportStreamError(s.id, e));
+}
+
+/** `updateSession` 之后按 id 取回并落盘元数据 */
+function persistMetaOf(sessionId: string): void {
+  const target = eventStreamTarget(sessionId);
+  if (target) persistMeta(target);
+}
+
+/**
+ * 删除会话的**事件流**（JSONL + meta + 索引条目）并丢弃记录器。
+ *
+ * 必须排进该会话的写队列：否则「刚排队的追加」会在文件被删后又把它写回来。
+ * 删除完成后才丢记录器（队列条目随之释放）。
+ */
+function dropSessionStream(s: Session): void {
+  hydratedSessions.delete(s.id);
+  if (!isEventStreamSession(s)) return;
+  const { id, workdir } = s;
+  void enqueueSessionTask(id, async () => {
+    await getEventStore().removeSession(id, workdir);
+  }).then(
+    () => dropRecorder(id),
+    (e: unknown) => reportStreamError(id, e),
+  );
+}
+
+// ————————————————————————————————————————————————————————————————
+// 读路径接线（D2 Phase D）：列表来自索引，消息按需从事件流重建
+// ————————————————————————————————————————————————————————————————
+
+/**
+ * 已完成「事件 → 消息」重建的会话 id。
+ *
+ * 放模块作用域而非 store state：它是纯粹的去重标记，进 state 只会制造
+ * 无意义的订阅与重渲染（视图拿不到也不需要它）。
+ */
+const hydratedSessions = new Set<string>();
+/** 进行中的水合（并发去重：列表点击与 `send` 可能同时触发） */
+const hydrating = new Map<string, Promise<void>>();
+
+/** 记住「上次打开的会话」，供下次启动恢复；与业务数据无关，故独立于事件流 */
+function rememberActiveSession(id: string | null): void {
+  void platform.storage.set(STORAGE_KEYS.activeSession, id ?? '');
+}
+
+/**
+ * 清掉旧版整块持久化留下的数据。
+ *
+ * 该键已无任何读取方（旧的解析路径随 Phase E 一并移除），留着只会成为永远读不到
+ * 的孤儿；历史会话已由用户清空，故无需迁移，直接清理。
+ */
+function purgeLegacySessionSnapshot(): void {
+  void platform.storage.remove(STORAGE_KEYS.legacySessions).catch(() => undefined);
+}
+
+/**
+ * 闭合消息末尾未闭合的**思考段**：落一条终值 `reasoning` 事件，并同步闭合视图。
+ *
+ * 思考段是流式聚合的（逐 chunk 累积），不能逐 chunk 写盘，故采用「闭合时才落
+ * 一条终值事件」。视图侧有三个闭合时机（工具开始 / 正文开始 / 回合结束），
+ * 本函数挂在同一批时机上，保证两条推导路径不会各闭各的。
+ *
+ * 无未闭合段时是 no-op，因此可以安全地挂在每 token 的路径上。
+ */
+function flushReasoning(sessionId: string, messageId: string): void {
+  const msg = useSessionsStore
+    .getState()
+    .sessions.find((s) => s.id === sessionId)
+    ?.messages.find((m) => m.id === messageId);
+  const process = msg?.process ?? [];
+  const last = process[process.length - 1];
+  if (!last || last.kind !== 'reasoning' || last.closed) return;
+
+  // 事件与视图都基于同一份 content，先后无关；先写事件便于按 seq 阅读。
+  // 落盘后把事件 id 回写到行上，保证「实时视图」与「重放投影」的行 id 一致。
+  const [ev] = recordFor(sessionId, (f) =>
+    f.reasoning({ messageId, content: last.content, done: true }),
+  );
+  useSessionsStore
+    .getState()
+    .updateMessage(sessionId, messageId, (m) => closeOpenReasoning(m, ev?.id));
+}
 
 /**
  * 在指定会话内为「已就位的助手占位消息」发起流式响应。
@@ -239,10 +488,14 @@ async function streamAssistantReply(
   if (agent?.systemPrompt) {
     history.push({ role: 'system', content: agent.systemPrompt });
   }
-  // 记忆注入：读取本会话创建时缓存的快照，以标签块追加在 system 段末尾。
+  // 记忆注入：读取本会话缓存的快照，以标签块追加在 system 段末尾。
   // 永不写入 agent.systemPrompt，仅存在于本次请求的临时 history。
   // 用户在提示条上「关闭」后（memoryLoaded.dismissed），临时停止注入，
   // 避免旧记忆干扰当前 Agent 人设；新建会话时 dismissed 会重置。
+  //
+  // 快照是**纯缓存**、不进事件流（内容随时可从 MEMORY.md 重读）：由
+  // `createSession`（带提示条）与 `loadSession`（静默预热）写入。此处**不补读**
+  // ——它会让出一整个 microtask，破坏「send 同步进入流式态」这一可测性质。
   const memorySnapshot =
     useSessionsStore.getState().sessions.find((s) => s.id === sessionId)?.memory ?? '';
   const memoryDismissed = useSessionsStore.getState().memoryLoaded.dismissed;
@@ -299,6 +552,15 @@ async function streamAssistantReply(
     // 逐条批准（tool_approval 轴）：两种权限开关是正交的，但「完全访问」更粗——
     // 它已经表达了「别问我」，因此开启时不再叠加逐条审批，避免两个开关互相打架。
     approvalMode: session.toolApproval && !session.fullAccess ? 'ask' : undefined,
+    // 执行模式（session_mode 轴，FR-1.4）：与上面三轴同处会话级 scope。
+    // 显式传缺省值 craft 而不省略——模式决定的是「能不能写」，缺失时宁按
+    // 「可写」记账也不能让引擎猜；写清楚还能让 SSE 里的拒绝原因对得上。
+    sessionMode: session.mode ?? 'craft',
+    // Agent 工具白名单（FR-2.2）：随会话所用 Agent 的定义下发，由引擎的工具
+    // 网关强制。每轮都发而不是持久化——策略必须始终镜像**当前**的 Agent 配置，
+    // 而不是某个陈旧的快照。`?? undefined` 保持「未设置」而非「空数组」。
+    toolAllow: agent?.toolAllow ?? undefined,
+    toolDeny: agent?.toolDeny ?? undefined,
   };
 
   // 2) 为该会话建立独立流式上下文（其他会话不受影响）
@@ -355,6 +617,8 @@ async function streamAssistantReply(
         useSessionsStore.getState().handleProcessTool(sessionId, assistantId, ev),
       onApprovalRequest: (r) =>
         useSessionsStore.getState().handleApprovalRequest(sessionId, assistantId, r),
+      onPlan: (plan) =>
+        useSessionsStore.getState().handlePlan(sessionId, assistantId, plan),
       onDone: () => patchStream({ status: 'done' }),
       onError: (err) => {
         sendError = err.message;
@@ -368,17 +632,58 @@ async function streamAssistantReply(
     useSessionsStore.setState({ error: msg });
     toast.error(`发送失败：${msg}`);
   } finally {
-    // 结束（成功 / 报错 / abort）后移除该会话的流式上下文，恢复可发送状态。
-    // 顺带把本次耗时落到助手消息上（消息头「已处理 33s」的数据源）：
+    // 回合边界：先把未闭合的思考段落盘（此后不会再追加），再结算助手消息。
+    flushReasoning(sessionId, assistantId);
+
+    // 结算本次耗时（消息头「已处理 33s」的数据源）：
     // 这里是所有出口（done / error / abort）的唯一交汇点，放这里才不会漏。
-    // 已有 durationMs 时不覆盖（重放 / 持久化恢复过的消息保持原值）。
-    useSessionsStore.getState().updateMessage(sessionId, assistantId, (m) => {
-      if (m.durationMs !== undefined) return m;
+    // 已有 durationMs 时不覆盖（重放 / 水合恢复过的消息保持原值）。
+    const settle = () => {
+      const m = useSessionsStore
+        .getState()
+        .sessions.find((s) => s.id === sessionId)
+        ?.messages.find((x) => x.id === assistantId);
+      if (!m) return undefined;
+      if (m.durationMs !== undefined) return m.durationMs;
       const startedAt = Date.parse(m.createdAt);
-      if (Number.isNaN(startedAt)) return m;
+      if (Number.isNaN(startedAt)) return undefined;
       const elapsed = Date.now() - startedAt;
-      return elapsed > 0 ? { ...m, durationMs: elapsed } : m;
-    });
+      return elapsed > 0 ? elapsed : undefined;
+    };
+    // 事件与视图必须拿到同一个值：先算一次，两处共用
+    const durationMs = settle();
+    const finalMsg = useSessionsStore
+      .getState()
+      .sessions.find((s) => s.id === sessionId)
+      ?.messages.find((x) => x.id === assistantId);
+    const aborted = finalMsg?.aborted === true;
+    const reason = sendError ? 'error' : aborted ? 'aborted' : 'done';
+
+    // 助手终值 + 回合边界落盘。助手正文是流式累积的，只能在回合结束以终值落盘
+    // （同回合的工具 / 思考事件通过 messageId 关联到它，见 @/types/event）。
+    recordFor(sessionId, (f) => [
+      ...(sendError ? [f.error({ message: sendError })] : []),
+      f.message({
+        messageId: assistantId,
+        role: 'assistant',
+        content: finalMsg?.content ?? '',
+        // 创建时刻必须随事件落盘：助手消息的占位在回合**开始**就有了，
+        // 而事件要等回合**结束**才写。不带 createdAt 的话，重放投影只能退回
+        // 事件时间戳，于是「已处理 33s」的基准与刷新前不一致（见 project.ts）。
+        ...(finalMsg?.createdAt ? { createdAt: finalMsg.createdAt } : {}),
+        ...(durationMs !== undefined ? { durationMs } : {}),
+        ...(aborted ? { aborted: true } : {}),
+      }),
+      f.sessionEnd({ reason }),
+    ]);
+
+    if (durationMs !== undefined) {
+      useSessionsStore.getState().updateMessage(sessionId, assistantId, (m) => ({
+        ...m,
+        durationMs,
+      }));
+    }
+    // 结束（成功 / 报错 / abort）后移除该会话的流式上下文，恢复可发送状态
     useSessionsStore.setState((s) => {
       if (!s.streams[sessionId]) return s;
       const streams = { ...s.streams };
@@ -393,15 +698,19 @@ async function streamAssistantReply(
  * 闭合消息末尾未闭合的深度思考段。
  * 工具执行 / 正文 token / reasoning_end 到达时调用，
  * 使后续 reasoning chunk 开启新段（对应 UI 上多个「深度思考」块）。
+ *
+ * @param rowId 用事件 id 覆盖该段的行 id。行 id 只是 UI 侧标识，用事件 id 的
+ *   好处是**重载后不变**——否则同一个思考段在「实时视图」与「重放投影」里
+ *   会是两个不同的 id，两条推导路径的结果就无法逐字段比对。
  */
-function closeOpenReasoning(m: Message): Message {
+function closeOpenReasoning(m: Message, rowId?: string): Message {
   const process = m.process;
   if (!process || process.length === 0) return m;
   const last = process[process.length - 1];
   if (last.kind !== 'reasoning' || last.closed) return m;
   return {
     ...m,
-    process: [...process.slice(0, -1), { ...last, closed: true }],
+    process: [...process.slice(0, -1), { ...last, ...(rowId ? { id: rowId } : {}), closed: true }],
   };
 }
 
@@ -431,556 +740,951 @@ export function selectPendingApproval(
   return s.pendingApprovals[0];
 }
 
+/**
+ * 仅供测试：清空水合标记与在途水合。
+ *
+ * 水合状态放模块作用域（见 `hydratedSessions` 的说明），因此**不会**随
+ * `setState` 归零；用例之间若复用同一会话 id，会因「上一用例已标记就绪」
+ * 而跳过水合、记录器缺失。测试在重置事件存储时一并调用本函数。
+ */
+export function __resetHydrationForTest(): void {
+  hydratedSessions.clear();
+  hydrating.clear();
+}
+
 export const useSessionsStore = create<SessionsState>()(
-  persist(
-    (set, get) => ({
-      sessions: [],
-      activeId: null,
-      streams: {},
-      pendingApprovals: [],
-      error: null,
-      memoryLoaded: INITIAL_MEMORY_STATE,
+  (set, get) => ({
+    sessions: [],
+    activeId: null,
+    streams: {},
+    pendingApprovals: [],
+    error: null,
+    memoryLoaded: INITIAL_MEMORY_STATE,
 
+    /**
+     * 创建会话。保持**同步返回** Session（兼容既有调用方与测试）；
+     * 记忆读取为异步 IO，以 fire-and-forget 方式在后台完成并回填 session.memory。
+     */
+    createSession: (agentId, title = '新会话', opts) => {
+      const agentsState = useAgentsStore.getState();
       /**
-       * 创建会话。保持**同步返回** Session（兼容既有调用方与测试）；
-       * 记忆读取为异步 IO，以 fire-and-forget 方式在后台完成并回填 session.memory。
+       * 兜底优先级与召唤逻辑对齐：显式 agentId > 全局活跃专家团 > 全局活跃专家。
+       * 专家团绑定仅在其启用且存在启用成员时生效；
+       * agentId 取团内首位启用成员作为执行代表（完整多 Agent 编排依赖 nanobot 运行时，P2）。
        */
-      createSession: (agentId, title = '新会话', opts) => {
-        const agentsState = useAgentsStore.getState();
-        /**
-         * 兜底优先级与召唤逻辑对齐：显式 agentId > 全局活跃专家团 > 全局活跃专家。
-         * 专家团绑定仅在其启用且存在启用成员时生效；
-         * agentId 取团内首位启用成员作为执行代表（完整多 Agent 编排依赖 nanobot 运行时，P2）。
-         */
-        const groupsState = useExpertGroupsStore.getState();
-        const candidateGroup =
-          agentId === undefined && groupsState.activeGroupId
-            ? groupsState.groups.find(
-                (g) => g.id === groupsState.activeGroupId && g.enabled,
-              )
-            : undefined;
-        const groupLeader = candidateGroup
-          ? candidateGroup.memberIds
-              .map((id) => agentsState.agents.find((a) => a.id === id))
-              .find((a) => a && a.enabled)
+      const groupsState = useExpertGroupsStore.getState();
+      const candidateGroup =
+        agentId === undefined && groupsState.activeGroupId
+          ? groupsState.groups.find(
+              (g) => g.id === groupsState.activeGroupId && g.enabled,
+            )
           : undefined;
-        const boundGroup = candidateGroup && groupLeader ? candidateGroup : undefined;
-        const aid =
-          agentId ??
-          groupLeader?.id ??
-          agentsState.activeAgentId ??
-          agentsState.agents[0]?.id ??
-          '';
-        const agent = agentsState.agents.find((a) => a.id === aid);
-        const session: Session = {
-          id: genId(),
-          agentId: aid,
-          ...(boundGroup ? { groupId: boundGroup.id } : {}),
-          skillIds: agent?.skillIds?.length ? [...agent.skillIds] : undefined,
-          workdir: opts?.workdir,
-          fullAccess: opts?.fullAccess,
-          toolApproval: opts?.toolApproval,
-          title,
-          messages: [],
-          permissionLog: [],
-          createdAt: nowIso(),
-          updatedAt: nowIso(),
-        };
-        set((s) => ({
-          sessions: [session, ...s.sessions],
-          activeId: session.id,
-          // 新会话重置提示条，等异步读取结果回填
-          memoryLoaded: INITIAL_MEMORY_STATE,
-        }));
+      const groupLeader = candidateGroup
+        ? candidateGroup.memberIds
+            .map((id) => agentsState.agents.find((a) => a.id === id))
+            .find((a) => a && a.enabled)
+        : undefined;
+      const boundGroup = candidateGroup && groupLeader ? candidateGroup : undefined;
+      const aid =
+        agentId ??
+        groupLeader?.id ??
+        agentsState.activeAgentId ??
+        agentsState.agents[0]?.id ??
+        '';
+      const agent = agentsState.agents.find((a) => a.id === aid);
+      const session: Session = {
+        id: genId(),
+        agentId: aid,
+        ...(boundGroup ? { groupId: boundGroup.id } : {}),
+        skillIds: agent?.skillIds?.length ? [...agent.skillIds] : undefined,
+        workdir: opts?.workdir,
+        fullAccess: opts?.fullAccess,
+        toolApproval: opts?.toolApproval,
+        ...(opts?.mode !== undefined ? { mode: opts.mode } : {}),
+        title,
+        messages: [],
+        permissionLog: [],
+        createdAt: nowIso(),
+        updatedAt: nowIso(),
+      };
+      set((s) => ({
+        sessions: [session, ...s.sessions],
+        activeId: session.id,
+        // 新会话重置提示条，等异步读取结果回填
+        memoryLoaded: INITIAL_MEMORY_STATE,
+      }));
+      rememberActiveSession(session.id);
 
-        // 异步加载记忆，不阻塞返回
-        void get().loadMemoryInto(session.id);
-        return session;
-      },
+      // 事件流：新会话立即可写（seq 从 1 开始），故先建记录器再落 session-start。
+      // 记录器先于任何写入建立，`loadSession` 才不会把它当成「待水合」而重置 seq。
+      if (isEventStreamSession(session)) {
+        createRecorder(session.id, session.workdir);
+        recordEvents(session.id, (f) =>
+          f.sessionStart({
+            agentId: session.agentId,
+            ...(session.workdir !== undefined ? { workdir: session.workdir } : {}),
+            mode: session.mode ?? 'craft',
+            permissionMode: session.fullAccess ? 'full' : 'restricted',
+            ...(session.model !== undefined ? { model: session.model } : {}),
+          }),
+        );
+        persistMeta(session);
+      }
+      // 标记为已水合：消息就在内存里、记录器也已就绪，无需再去读盘
+      // （读了反而会把记录器的 seq 重置回 0）。`send` 据此走同步快路径。
+      hydratedSessions.add(session.id);
 
-      loadMemoryInto: async (sessionId) => {
-        if (!useSettingsStore.getState().settings.memoryEnabled) return;
-        let text = '';
-        try {
-          text = await MemoryService.load();
-        } catch {
+      // 异步加载记忆，不阻塞返回
+      void get().loadMemoryInto(session.id);
+      return session;
+    },
+
+    loadMemoryInto: async (sessionId, opts) => {
+      if (!useSettingsStore.getState().settings.memoryEnabled) return;
+      let text = '';
+      try {
+        text = await MemoryService.load();
+      } catch {
+        return;
+      }
+      // 会话可能已在读取期间被删除
+      if (!get().sessions.some((s) => s.id === sessionId)) return;
+      if (text.trim() === '') {
+        // 空记忆也落一个空串：让「`memory === undefined` = 尚未加载」这一约定
+        // 成立，避免每轮发送都重读一次 MEMORY.md
+        get().updateSession(sessionId, (s) => ({ ...s, memory: '' }));
+        return;
+      }
+
+      get().updateSession(sessionId, (s) => ({ ...s, memory: text }));
+      if (opts?.silent) return;
+      set({
+        memoryLoaded: {
+          injected: true,
+          count: MemoryService.countEntries(text),
+          dismissed: false,
+        },
+      });
+    },
+
+    dismissMemoryBar: () =>
+      set((s) => ({ memoryLoaded: { ...s.memoryLoaded, dismissed: true } })),
+
+    setSessionWorkdir: (id, workdir) => {
+      const before = get().sessions.find((x) => x.id === id);
+      get().updateSession(id, (s) => ({
+        ...s,
+        workdir,
+        updatedAt: nowIso(),
+      }));
+      const after = get().sessions.find((x) => x.id === id);
+      if (!after || !isEventStreamSession(after)) return;
+      const from = before?.workdir;
+      if (from === workdir) {
+        persistMeta(after);
+        return;
+      }
+      // 工作空间**同时是事件流的落点作用域**（`projects/<slug>/`）：变更即搬迁。
+      // 记录器的作用域先切（后续写入落新目录），搬迁任务排进同一队列——
+      // 队列保证「先把旧目录里已排队的追加写完，再读旧目录搬迁」，不会丢事件。
+      setRecorderWorkdir(id, workdir);
+      const scope = workdir;
+      void enqueueSessionTask(id, async () => {
+        const store = getEventStore();
+        if (!store.capabilities.fileBacked) {
+          // Web 无目录维度（分片存储不区分工作空间）：只需更新 meta
+          await store.writeMeta(toMeta(after));
           return;
         }
-        if (text.trim() === '') return;
-        // 会话可能已在读取期间被删除
-        if (!get().sessions.some((s) => s.id === sessionId)) return;
+        const events = await store.readEvents(id, from);
+        // 顺序：删旧（含旧索引条目）→ 写新（重建条目并算准计数）→ 写 meta。
+        // 若反过来先写新再删旧，`removeSession` 会把新条目一并删掉
+        // （索引按会话 id 计，不分作用域）。
+        await store.removeSession(id, from);
+        if (events.length > 0) {
+          await store.append({ sessionId: id, workdir: scope, events });
+        }
+        await store.writeMeta(toMeta(after));
+      }).then(undefined, (e: unknown) => reportStreamError(id, e));
+    },
 
-        get().updateSession(sessionId, (s) => ({ ...s, memory: text }));
-        set({
-          memoryLoaded: {
-            injected: true,
-            count: MemoryService.countEntries(text),
-            dismissed: false,
-          },
-        });
-      },
+    setSessionFullAccess: (id, fullAccess) => {
+      get().updateSession(id, (s) => ({
+        ...s,
+        fullAccess,
+        updatedAt: nowIso(),
+      }));
+      persistMetaOf(id);
+    },
 
-      dismissMemoryBar: () =>
-        set((s) => ({ memoryLoaded: { ...s.memoryLoaded, dismissed: true } })),
+    /**
+     * 切换执行模式。
+     *
+     * 两件事必须一起做：改内存视图 + 落 `mode-change` 事件。只改视图则刷新后
+     * 回到旧模式（用户会以为自己在 Plan 里，实际已经能写）；只写事件则 UI 不更新。
+     *
+     * 同模式重复切换是 no-op，避免用户连点把事件流灌满无意义的切换记录。
+     */
+    setSessionMode: (id, mode) => {
+      const before = get().sessions.find((x) => x.id === id);
+      if (!before) return;
+      if ((before.mode ?? 'craft') === mode) return;
+      get().updateSession(id, (s) => ({ ...s, mode, updatedAt: nowIso() }));
+      recordFor(id, (f) =>
+        f.modeChange({ from: before.mode ?? 'craft', to: mode }),
+      );
+      persistMetaOf(id);
+    },
 
-      setSessionWorkdir: (id, workdir) =>
-        get().updateSession(id, (s) => ({
-          ...s,
-          workdir,
-          updatedAt: nowIso(),
-        })),
+    setSessionToolApproval: (id, toolApproval) => {
+      get().updateSession(id, (s) => ({
+        ...s,
+        toolApproval,
+        updatedAt: nowIso(),
+      }));
+      persistMetaOf(id);
+    },
 
-      setSessionFullAccess: (id, fullAccess) =>
-        get().updateSession(id, (s) => ({
-          ...s,
-          fullAccess,
-          updatedAt: nowIso(),
-        })),
+    setSessionModel: (id, model) => {
+      get().updateSession(id, (s) => ({
+        ...s,
+        model,
+        updatedAt: nowIso(),
+      }));
+      persistMetaOf(id);
+    },
 
-      setSessionToolApproval: (id, toolApproval) =>
-        get().updateSession(id, (s) => ({
-          ...s,
-          toolApproval,
-          updatedAt: nowIso(),
-        })),
+    openExternal: (session) => {
+      set((s) => ({
+        sessions: [session, ...s.sessions.filter((x) => x.id !== session.id)],
+        activeId: session.id,
+      }));
+      rememberActiveSession(session.id);
+    },
 
-      setSessionModel: (id, model) =>
-        get().updateSession(id, (s) => ({
-          ...s,
-          model,
-          updatedAt: nowIso(),
-        })),
+    /**
+     * 启动水合：**只读索引**（每会话一条投影，加载成本与会话数而非事件数相关），
+     * 消息留白，等用户点进去再由 `loadSession` 读 JSONL 重建。
+     *
+     * 这就是 PRD 9.5 说的「列表来自索引、消息来自事件流」——旧实现的
+     * `persist` 会在启动时反序列化整个会话数组（含全部消息与 base64 附件），
+     * 会话一多就不是线性成本而是一次性卡顿。
+     */
+    loadSessions: async () => {
+      // 清掉旧版整块持久化留下的快照文件（历史会话已删除，无需迁移）
+      purgeLegacySessionSnapshot();
 
-      openExternal: (session) =>
-        set((s) => ({
-          sessions: [session, ...s.sessions.filter((x) => x.id !== session.id)],
-          activeId: session.id,
-        })),
+      const store = getEventStore();
+      let entries = await store.listSessions();
+      if (entries.length === 0) {
+        // 索引是可再生派生物：缺失（首次运行 / 被清理）或损坏时重建一次
+        entries = listSessionEntries(await store.rebuildIndex());
+      }
+      const sessions: Session[] = [];
+      for (const entry of entries) {
+        const meta = await store.readMeta(entry.id, entry.workdir);
+        if (!meta) continue;
+        if (!isEventStreamSession(meta)) continue;
+        sessions.push({ ...metaToSession(meta), messages: [], permissionLog: [] });
+      }
 
-      selectSession: (id) => set({ activeId: id }),
+      let activeId: string | null = null;
+      try {
+        const remembered = await platform.storage.get<string>(STORAGE_KEYS.activeSession);
+        if (remembered && sessions.some((s) => s.id === remembered)) activeId = remembered;
+      } catch {
+        /* 恢复「上次打开」失败不影响启动，退化为「未选中」 */
+      }
 
-      deleteSession: (id) => {
-        // 自动沉淀触发点（P1）：删除会话前尝试把历史归纳进记忆。
-        // 开关关闭时跳过；fire-and-forget，不阻塞删除。
-        const { autoSummarize } = useSettingsStore.getState().settings;
+      set({ sessions, activeId });
+      // 首屏就把当前会话的消息准备好，避免用户看到空列表后内容才刷出来
+      if (activeId) void get().loadSession(activeId);
+    },
+
+    loadSession: async (id) => {
+      if (hydratedSessions.has(id)) return;
+      const inflight = hydrating.get(id);
+      if (inflight) return inflight;
+
+      const task = (async () => {
         const target = get().sessions.find((x) => x.id === id);
-        if (autoSummarize && target && target.messages.length > 0) {
-          const history: ChatMessageParam[] = target.messages
-            .filter(
-              (m) => (m.role === 'user' || m.role === 'assistant') && m.content.trim() !== '',
-            )
-            .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content }));
-          const sourceTitle = target.title;
-          void (async () => {
-            try {
-              const summary = await MemoryService.summarize(history);
-              if (summary.trim() !== '') {
-                await MemoryService.append(summary, { source: `auto:${sourceTitle}` });
-              }
-            } catch {
-              /* 自动沉淀为附加能力，失败静默 */
-            }
-          })();
+        // 会话不存在（已被删除）或为外部来源：后者消息由引擎快照直接提供，
+        // 本地没有事件流可读，直接标记就绪以免每次选中都重走一遍判断
+        if (!target || !isEventStreamSession(target)) {
+          hydratedSessions.add(id);
+          return;
+        }
+        // 本进程内新建的会话：`createSession` 已建好记录器（seq 已对齐），
+        // 事件也都在内存视图里，无需读盘——若此时读盘会把记录器重置回 seq 0
+        if (hasRecorder(id)) {
+          hydratedSessions.add(id);
+          return;
         }
 
-        set((s) => {
-          const sessions = s.sessions.filter((x) => x.id !== id);
-          const activeId = s.activeId === id ? sessions[0]?.id ?? null : s.activeId;
-          return { sessions, activeId };
-        });
-      },
-
-      deleteSessions: (ids) => {
-        const doomed = new Set(ids);
-        if (doomed.size === 0) return;
-        set((s) => {
-          const sessions = s.sessions.filter((x) => !doomed.has(x.id));
-          // 活跃会话被删时退回列表首位；没删到任何会话则原样返回，避免无谓重渲染
-          if (sessions.length === s.sessions.length) return s;
-          const activeId =
-            s.activeId && doomed.has(s.activeId) ? sessions[0]?.id ?? null : s.activeId;
-          return { sessions, activeId };
-        });
-      },
-
-renameSession: (id, title) =>
-  get().updateSession(id, (s) => ({ ...s, title, updatedAt: nowIso() })),
-
-  togglePinSession: (id) =>
-    get().updateSession(id, (s) => ({
-      ...s,
-      pinned: !s.pinned,
-      updatedAt: nowIso(),
-    })),
-
-      updateSession: (id, updater) =>
-        set((s) => ({
-          sessions: s.sessions.map((x) => (x.id === id ? updater(x) : x)),
-        })),
-
-      updateMessage: (sessionId, messageId, updater) =>
+        const events = await getEventStore().readEvents(id, target.workdir);
+        // 读盘期间会话可能已被删除
+        const current = get().sessions.find((x) => x.id === id);
+        if (!current) return;
+        primeRecorder(id, current.workdir, events);
+        const { messages, permissionLog } = project(events);
         set((s) => ({
           sessions: s.sessions.map((x) =>
-            x.id === sessionId
-              ? {
-                  ...x,
-                  messages: x.messages.map((m) => (m.id === messageId ? updater(m) : m)),
-                  updatedAt: nowIso(),
-                }
-              : x,
-          ),
-        })),
-
-      send: async (text: string, targetSessionId?: string, attachments?: Attachment[], richContent?: string) => {
-        const trimmed = text.trim();
-        const list = attachments ?? [];
-        // 纯文本与附件至少要有其一，否则无从发起请求
-        if (!trimmed && list.length === 0) return null;
-
-        // 1) 选定/创建会话（显式指定 > 当前活跃 > 自动新建）
-        let state = get();
-        let sessionId = targetSessionId ?? state.activeId;
-        let session = sessionId ? state.sessions.find((s) => s.id === sessionId) : undefined;
-        if (!session) {
-          // agentId 传 undefined，由 createSession 按「全局活跃专家团 > 全局活跃专家」兜底
-          //（与召唤专家/召唤专家团的绑定逻辑一致）
-          const created = get().createSession(undefined, trimmed.slice(0, 24) || '新会话');
-          sessionId = created.id;
-          session = get().sessions.find((s) => s.id === sessionId);
-        }
-        if (!session || !sessionId) return null;
-        // 只读会话（定时任务执行留痕等外部来源）不允许继续对话
-        if (session.readonly) return null;
-        // 会话级并发控制：仅阻止「同一会话」重复发起流式，其他会话互不影响
-        if (get().streams[sessionId]) return null;
-        const sid = sessionId;
-
-        // 2) 追加 user + assistant(占位) 消息
-        //    纯附件发送时文本为空，网关要求 message 非空，
-        //    因此补一句「附件：a.pdf、b.xlsx」作为可读占位（同时让用户气泡有内容可看）
-        const content =
-          trimmed !== '' ? trimmed : `附件：${list.map((a) => a.name).join('、')}`;
-        const userMsg: Message = {
-          id: genId(),
-          role: 'user',
-          content,
-          // 落库前裁剪掉 object URL 与大文件内容，避免撑爆本地存储
-          ...(list.length > 0
-            ? { attachments: list.map(toPersistableAttachment) }
-            : {}),
-          // 富文本副本（徽章 token 占位）：仅本地气泡内联渲染用
-          ...(richContent ? { richContent } : {}),
-          createdAt: nowIso(),
-        };
-        const assistantId = genId();
-        const assistantMsg: Message = {
-          id: assistantId,
-          role: 'assistant',
-          content: '',
-          createdAt: nowIso(),
-        };
-        get().updateSession(sid, (s) => ({
-          ...s,
-          // 占位标题（新会话/新任务）在首条消息时自动替换为消息摘要
-          title: (PLACEHOLDER_TITLES as readonly string[]).includes(s.title)
-            ? trimmed.slice(0, 24) || list[0]?.name.slice(0, 24) || '新会话'
-            : s.title,
-          messages: [...s.messages, userMsg, assistantMsg],
-        }));
-
-        // 3) 触发助手流式响应（共用 streamAssistantReply，附件转 base64 载荷随行）
-        const { error } = await streamAssistantReply(
-          sid,
-          assistantId,
-          attachmentsToUploadFiles(list),
-        );
-        return { sessionId: sid, error };
-      },
-
-      /**
-       * 在已有用户消息上重新发送：
-       * 1) 校验（会话存在 / 非只读 / 当前未在流式 / 目标是 user 消息）；
-       * 2) 若内容有变化则覆盖该消息文本并刷新 createdAt，否则保持原状；
-       * 3) 删除该消息之后的所有消息（会话级 artifact / 文件产物落盘不受影响）；
-       * 4) 新增一条空的 assistant 占位并复用 streamAssistantReply 开启新一轮流式。
-       *
-       * 与 send() 的差异：send() 在末尾追加新 user，本方法在原位覆盖；其余流式路径一致。
-       */
-      resendFromMessage: async (sessionId, messageId, newContent) => {
-        const trimmed = newContent.trim();
-        if (!trimmed) return;
-        const session = get().sessions.find((s) => s.id === sessionId);
-        if (!session || session.readonly) return;
-        if (get().streams[sessionId]) return;
-        const idx = session.messages.findIndex((m) => m.id === messageId);
-        if (idx === -1 || session.messages[idx].role !== 'user') return;
-
-        const original = session.messages[idx];
-        const contentChanged = original.content !== trimmed;
-
-        // 1) 内容有变化才覆盖（更新文本 + 刷新时间，作为「最近一次发送时间」回显给用户）
-        //    编辑后的纯文本不再携带徽章位置信息，richContent 一并作废
-        const updatedUser: Message = contentChanged
-          ? { ...original, content: trimmed, richContent: undefined, createdAt: nowIso() }
-          : original;
-
-        // 2) 截断「原消息之后」的所有内容（包括其助手回复 / 工具调用 / 产物记录），
-        //    3) 追加新的 assistant 占位
-        const assistantId = genId();
-        const assistantMsg: Message = {
-          id: assistantId,
-          role: 'assistant',
-          content: '',
-          createdAt: nowIso(),
-        };
-        get().updateSession(sessionId, (s) => ({
-          ...s,
-          messages: [...s.messages.slice(0, idx), updatedUser, assistantMsg],
-        }));
-
-        // 4) 共用流式逻辑；原消息携带的附件一并重发（大文件已裁剪内容时自动跳过）
-        await streamAssistantReply(
-          sessionId,
-          assistantId,
-          attachmentsToUploadFiles(original.attachments),
-        );
-      },
-
-      /**
-       * 中断指定会话正在流式传输的请求。无活跃请求时静默 no-op。
-       *
-       * 1) 立刻调 runtime.abort(sessionId) → 终止底层 fetch；
-       * 2) 把该会话最后一条 assistant 消息标记 aborted=true（仅当它存在，
-       *    避免误标历史消息）；
-       * 3) 立即把该会话流式状态收敛为 idle 且 active=false，让 UI 不再显示
-       *    「正在思考 / 流式中」，响应更跟手；流真正结束由 send 的 finally
-       *    块移除条目。active=false 同时保证重复点击「停止」是幂等的。
-       */
-      abort: (sessionId) => {
-        const sid = sessionId ?? get().activeId;
-        if (!sid) return;
-        const stream = get().streams[sid];
-        if (!stream?.active) return;
-        const target = get().sessions.find((s) => s.id === sid);
-        const last = target?.messages[target.messages.length - 1];
-        if (last && last.role === 'assistant') {
-          get().updateMessage(sid, last.id, (m) => ({ ...m, aborted: true }));
-        }
-        set((s) => {
-          const cur = s.streams[sid];
-          if (!cur) return s;
-          return {
-            ...s,
-            streams: { ...s.streams, [sid]: { ...cur, status: 'idle', active: false } },
-          };
-        });
-        void getRuntime().abort(sid);
-      },
-
-      appendToken: (sessionId, messageId, chunk) =>
-        get().updateMessage(sessionId, messageId, (m) => {
-          const base = closeOpenReasoning(m);
-          return { ...base, content: base.content + chunk };
-        }),
-
-      /**
-       * 标准 OpenAI `tool_calls` 事件（展示用）。
-       *
-       * 注意：**授权不在本方法内处理**。真实引擎的逐条批准走
-       * `handleApprovalRequest`（引擎在工具执行前挂起，等待独立回传），
-       * 而 `capabilities.toolCalls === false` 时本方法根本不会被触发。
-       * 旧版在这里用 `status==='pending'` 造了一个纯本地的「假门控」——
-       * 它拦不住引擎（工具照常执行），已被 D3 的真实回环取代。
-       */
-      handleToolCall: (sessionId, messageId, ev) => {
-        get().updateMessage(sessionId, messageId, (m) => {
-          const existing = m.toolCalls ?? [];
-          const toolCalls = existing.some((t) => t.id === ev.id)
-            ? existing.map((t) =>
-                t.id === ev.id
-                  ? {
-                      ...t,
-                      status: ev.status,
-                      ...(ev.result !== undefined ? { result: ev.result } : {}),
-                    }
-                  : t,
-              )
-            : [
-                ...existing,
-                {
-                  id: ev.id,
-                  tool: ev.tool,
-                  args: ev.args,
-                  sensitive: ev.sensitive,
-                  status: ev.status,
-                  ...(ev.result !== undefined ? { result: ev.result } : {}),
-                },
-              ];
-          return { ...m, toolCalls };
-        });
-      },
-
-      handleApprovalRequest: (sessionId, messageId, req) => {
-        // 在消息上落一条 pending 行，使授权请求与过程时间线同源可见
-        get().updateMessage(sessionId, messageId, (m) => ({
-          ...m,
-          toolCalls: [
-            ...(m.toolCalls ?? []),
-            {
-              id: req.id,
-              tool: req.tool,
-              args: req.args,
-              sensitive: true,
-              status: 'pending' as ToolCall['status'],
-            },
-          ],
-        }));
-        set((s) => ({
-          pendingApprovals: [
-            ...s.pendingApprovals,
-            {
-              id: req.id,
-              sessionId,
-              messageId,
-              toolCallId: req.id,
-              tool: req.tool,
-              args: req.args,
-            },
-          ],
-        }));
-      },
-
-      resolveApproval: async (decision, reason) => {
-        const head = get().pendingApprovals[0];
-        if (!head) return;
-        // 先出队再回传：裁决只能生效一次，重复点击不应再发一次请求
-        set((s) => ({ pendingApprovals: s.pendingApprovals.slice(1) }));
-        try {
-          await getRuntime().respondApproval?.(head.id, decision, reason);
-        } catch (e) {
-          // 请求已死（超时 / 被取消）：如实提示，不假装授权成功
-          toast.error(e instanceof Error ? e.message : String(e));
-        }
-        get().updateMessage(head.sessionId, head.messageId, (m) => ({
-          ...m,
-          toolCalls: (m.toolCalls ?? []).map((t) =>
-            t.id === head.toolCallId
-              ? { ...t, status: (decision === 'allow' ? 'approved' : 'rejected') as ToolCall['status'] }
-              : t,
+            x.id === id ? { ...x, messages, permissionLog } : x,
           ),
         }));
-        get().updateSession(head.sessionId, (s) => ({
-          ...s,
-          permissionLog: [
-            ...s.permissionLog,
-            {
-              id: genId(),
-              tool: head.tool,
-              args: head.args,
-              decision: decision === 'allow' ? 'approved' : 'rejected',
-              at: nowIso(),
-            },
-          ] as PermissionLog[],
-        }));
-      },
+        // 静默预热记忆快照：它是纯缓存、不进事件流，若不在这里补上，
+        // 重开的会话将永远不注入记忆（旧版靠整块持久化顺带存了它）
+        await get().loadMemoryInto(id, { silent: true });
+        hydratedSessions.add(id);
+      })();
 
-      handleArtifact: (sessionId, messageId, ev) => {
-        const artifact: Artifact = {
-          id: ev.id,
-          type: ev.type,
-          title: ev.title,
-          content: ev.content,
-          language: ev.language,
-          url: ev.url,
-          createdAt: nowIso(),
-        };
-        get().updateMessage(sessionId, messageId, (m) => ({
-          ...m,
-          artifacts: [...(m.artifacts ?? []), artifact],
-        }));
-        useArtifactsStore.getState().recordArtifact(sessionId, artifact);
-      },
+      hydrating.set(id, task);
+      try {
+        await task;
+      } finally {
+        hydrating.delete(id);
+      }
+    },
 
-      appendReasoning: (sessionId, messageId, chunk) =>
-        get().updateMessage(sessionId, messageId, (m) => {
-          const process = [...(m.process ?? [])];
-          const last = process[process.length - 1];
-          if (last && last.kind === 'reasoning' && !last.closed) {
-            process[process.length - 1] = { ...last, content: last.content + chunk };
-          } else {
-            process.push({ id: genId(), kind: 'reasoning', content: chunk });
+    selectSession: (id) => {
+      set({ activeId: id });
+      rememberActiveSession(id);
+      void get().loadSession(id);
+    },
+
+    deleteSession: (id) => {
+      // 自动沉淀触发点（P1）：删除会话前尝试把历史归纳进记忆。
+      // 开关关闭时跳过；fire-and-forget，不阻塞删除。
+      const { autoSummarize } = useSettingsStore.getState().settings;
+      const target = get().sessions.find((x) => x.id === id);
+      if (autoSummarize && target && target.messages.length > 0) {
+        const history: ChatMessageParam[] = target.messages
+          .filter(
+            (m) => (m.role === 'user' || m.role === 'assistant') && m.content.trim() !== '',
+          )
+          .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content }));
+        const sourceTitle = target.title;
+        void (async () => {
+          try {
+            const summary = await MemoryService.summarize(history);
+            if (summary.trim() !== '') {
+              await MemoryService.append(summary, { source: `auto:${sourceTitle}` });
+            }
+          } catch {
+            /* 自动沉淀为附加能力，失败静默 */
           }
-          return { ...m, process };
+        })();
+      }
+
+      set((s) => {
+        const sessions = s.sessions.filter((x) => x.id !== id);
+        const activeId = s.activeId === id ? sessions[0]?.id ?? null : s.activeId;
+        return { sessions, activeId };
+      });
+
+      // 事件流随会话一并删除（内存视图已移除，磁盘不再保留副本）
+      if (target) dropSessionStream(target);
+    },
+
+    deleteSessions: (ids) => {
+      const doomed = new Set(ids);
+      if (doomed.size === 0) return;
+      const targets = get().sessions.filter((x) => doomed.has(x.id));
+      set((s) => {
+        const sessions = s.sessions.filter((x) => !doomed.has(x.id));
+        // 活跃会话被删时退回列表首位；没删到任何会话则原样返回，避免无谓重渲染
+        if (sessions.length === s.sessions.length) return s;
+        const activeId =
+          s.activeId && doomed.has(s.activeId) ? sessions[0]?.id ?? null : s.activeId;
+        return { sessions, activeId };
+      });
+      targets.forEach(dropSessionStream);
+    },
+
+    renameSession: (id, title) => {
+      get().updateSession(id, (s) => ({ ...s, title, updatedAt: nowIso() }));
+      persistMetaOf(id);
+    },
+
+    togglePinSession: (id) => {
+      get().updateSession(id, (s) => ({
+        ...s,
+        pinned: !s.pinned,
+        updatedAt: nowIso(),
+      }));
+      persistMetaOf(id);
+    },
+
+    updateSession: (id, updater) =>
+      set((s) => ({
+        sessions: s.sessions.map((x) => (x.id === id ? updater(x) : x)),
+      })),
+
+    updateMessage: (sessionId, messageId, updater) =>
+      set((s) => ({
+        sessions: s.sessions.map((x) =>
+          x.id === sessionId
+            ? {
+                ...x,
+                messages: x.messages.map((m) => (m.id === messageId ? updater(m) : m)),
+                updatedAt: nowIso(),
+              }
+            : x,
+        ),
+      })),
+
+    send: async (text: string, targetSessionId?: string, attachments?: Attachment[], richContent?: string) => {
+      const trimmed = text.trim();
+      const list = attachments ?? [];
+      // 纯文本与附件至少要有其一，否则无从发起请求
+      if (!trimmed && list.length === 0) return null;
+
+      // 1) 选定/创建会话（显式指定 > 当前活跃 > 自动新建）
+      let state = get();
+      let sessionId = targetSessionId ?? state.activeId;
+      let session = sessionId ? state.sessions.find((s) => s.id === sessionId) : undefined;
+      if (!session) {
+        // agentId 传 undefined，由 createSession 按「全局活跃专家团 > 全局活跃专家」兜底
+        //（与召唤专家/召唤专家团的绑定逻辑一致）
+        const created = get().createSession(undefined, trimmed.slice(0, 24) || '新会话');
+        sessionId = created.id;
+        session = get().sessions.find((s) => s.id === sessionId);
+      }
+      if (!session || !sessionId) return null;
+      // 只读会话（定时任务执行留痕等外部来源）不允许继续对话
+      if (session.readonly) return null;
+      // 会话级并发控制：仅阻止「同一会话」重复发起流式，其他会话互不影响
+      if (get().streams[sessionId]) return null;
+      const sid = sessionId;
+
+      // 事件流：先把该会话的历史事件读进内存并建立记录器（幂等，已就绪则直接返回）。
+      // 必须在追加消息之前完成——记录器未就绪时 recordFor 会拒绝落盘。
+      // 已水合的会话走同步快路径：不产生 await 边界，`send` 因此能同步进入流式态
+      // （多会话并发流式的可测性质依赖这一点）。
+      if (!hydratedSessions.has(sid)) await get().loadSession(sid);
+
+      // 2) 追加 user + assistant(占位) 消息
+      //    纯附件发送时文本为空，网关要求 message 非空，
+      //    因此补一句「附件：a.pdf、b.xlsx」作为可读占位（同时让用户气泡有内容可看）
+      const content =
+        trimmed !== '' ? trimmed : `附件：${list.map((a) => a.name).join('、')}`;
+      const userMsg: Message = {
+        id: genId(),
+        role: 'user',
+        content,
+        // 落库前裁剪掉 object URL 与大文件内容，避免撑爆本地存储
+        ...(list.length > 0
+          ? { attachments: list.map(toPersistableAttachment) }
+          : {}),
+        // 富文本副本（徽章 token 占位）：仅本地气泡内联渲染用
+        ...(richContent ? { richContent } : {}),
+        createdAt: nowIso(),
+      };
+      const assistantId = genId();
+      const assistantMsg: Message = {
+        id: assistantId,
+        role: 'assistant',
+        content: '',
+        createdAt: nowIso(),
+      };
+
+      // 占位标题（新会话 / 新任务）在首条消息时自动替换为消息摘要
+      const currentTitle = get().sessions.find((x) => x.id === sid)?.title ?? '';
+      const nextTitle = (PLACEHOLDER_TITLES as readonly string[]).includes(currentTitle)
+        ? trimmed.slice(0, 24) || list[0]?.name.slice(0, 24) || '新会话'
+        : undefined;
+
+      // 用户消息进事件流（助手占位**不落盘**：它的正文是流式累积的，
+      // 回合结束才有一条带终值的 `message` 事件）。
+      // 标题变更一并作为 `ai-title` 落盘：索引的标题取自「本次追加里的末条
+      // ai-title > meta.title」，只写 meta 会与索引读取竞争，落事件才确定。
+      recordFor(sid, (f) => [
+        f.message({
+          messageId: userMsg.id,
+          role: 'user',
+          content: userMsg.content,
+          createdAt: userMsg.createdAt,
+          ...(userMsg.attachments && userMsg.attachments.length > 0
+            ? { attachments: userMsg.attachments.map(toEventAttachment) }
+            : {}),
+          ...(userMsg.richContent ? { richContent: userMsg.richContent } : {}),
         }),
+        ...(nextTitle !== undefined ? [f.aiTitle({ title: nextTitle })] : []),
+      ]);
 
-      closeReasoning: (sessionId, messageId) =>
-        get().updateMessage(sessionId, messageId, (m) => closeOpenReasoning(m)),
+      get().updateSession(sid, (s) => ({
+        ...s,
+        ...(nextTitle !== undefined ? { title: nextTitle } : {}),
+        messages: [...s.messages, userMsg, assistantMsg],
+      }));
+      if (nextTitle !== undefined) persistMetaOf(sid);
 
-      handleProcessTool: (sessionId, messageId, ev) =>
-        get().updateMessage(sessionId, messageId, (m) => {
-          const base = closeOpenReasoning(m);
-          const process = [...(base.process ?? [])];
-          const idx = process.findIndex((p) => p.kind === 'tool' && p.id === ev.id);
-          if (ev.phase === 'start') {
-            if (idx === -1) {
-              process.push({
+      // 3) 触发助手流式响应（共用 streamAssistantReply，附件转 base64 载荷随行）
+      const { error } = await streamAssistantReply(
+        sid,
+        assistantId,
+        attachmentsToUploadFiles(list),
+      );
+      return { sessionId: sid, error };
+    },
+
+    /**
+     * 在已有用户消息上重新发送：
+     * 1) 校验（会话存在 / 非只读 / 当前未在流式 / 目标是 user 消息）；
+     * 2) 若内容有变化则覆盖该消息文本并刷新 createdAt，否则保持原状；
+     * 3) 删除该消息之后的所有消息（会话级 artifact / 文件产物落盘不受影响）；
+     * 4) 新增一条空的 assistant 占位并复用 streamAssistantReply 开启新一轮流式。
+     *
+     * 与 send() 的差异：send() 在末尾追加新 user，本方法在原位覆盖；其余流式路径一致。
+     */
+    resendFromMessage: async (sessionId, messageId, newContent) => {
+      const trimmed = newContent.trim();
+      if (!trimmed) return;
+      const snapshot = get().sessions.find((s) => s.id === sessionId);
+      if (!snapshot || snapshot.readonly) return;
+      if (get().streams[sessionId]) return;
+
+      // 事件流就绪后再定位目标消息：既要能落盘，也要能查到分支点。
+      // 已水合时是同步快路径（不产生额外的 await 边界）。
+      if (!hydratedSessions.has(sessionId)) await get().loadSession(sessionId);
+
+      const session = get().sessions.find((s) => s.id === sessionId);
+      if (!session) return;
+      const idx = session.messages.findIndex((m) => m.id === messageId);
+      if (idx === -1 || session.messages[idx].role !== 'user') return;
+      /**
+       * 分支点 = 被替换消息当初落盘的那条 `message` 事件。
+       *
+       * 「编辑后重发」作废该消息之后的全部内容，但事件流**只增不改**，那些事件
+       * 仍留在文件里。新事件从被替换处**分叉**（parentId 指向它），于是
+       * 「从最新事件沿 parentId 回溯」这条活跃时间线天然跳过废弃分支
+       * （见 `@/events/project` 的 `activePath`）。必须在下一条消息落盘前取，
+       * 否则索引已被刷新成新事件 id。
+       */
+      const branchFrom = messageEventIdOf(sessionId, messageId);
+
+      const original = session.messages[idx];
+      const contentChanged = original.content !== trimmed;
+
+      // 1) 内容有变化才覆盖（更新文本 + 刷新时间，作为「最近一次发送时间」回显给用户）
+      //    编辑后的纯文本不再携带徽章位置信息，richContent 一并作废
+      const updatedUser: Message = contentChanged
+        ? { ...original, content: trimmed, richContent: undefined, createdAt: nowIso() }
+        : original;
+
+      // 2) 截断「原消息之后」的所有内容（包括其助手回复 / 工具调用 / 产物记录），
+      //    3) 追加新的 assistant 占位
+      const assistantId = genId();
+      const assistantMsg: Message = {
+        id: assistantId,
+        role: 'assistant',
+        content: '',
+        createdAt: nowIso(),
+      };
+
+      // 重发同样要落一条用户消息事件（即使内容未变）：它是新分支的起点，
+      // 也是「该消息的时间戳/内容以最新一次为准」的依据
+      recordFor(sessionId, (f) =>
+        f.message(
+          {
+            messageId: updatedUser.id,
+            role: 'user',
+            content: updatedUser.content,
+            createdAt: updatedUser.createdAt,
+            ...(updatedUser.attachments && updatedUser.attachments.length > 0
+              ? { attachments: updatedUser.attachments.map(toEventAttachment) }
+              : {}),
+            ...(updatedUser.richContent ? { richContent: updatedUser.richContent } : {}),
+          },
+          branchFrom !== undefined ? { parentId: branchFrom } : undefined,
+        ),
+      );
+
+      get().updateSession(sessionId, (s) => ({
+        ...s,
+        messages: [...s.messages.slice(0, idx), updatedUser, assistantMsg],
+      }));
+
+      // 4) 共用流式逻辑；原消息携带的附件一并重发（大文件已裁剪内容时自动跳过）
+      await streamAssistantReply(
+        sessionId,
+        assistantId,
+        attachmentsToUploadFiles(original.attachments),
+      );
+    },
+
+    /**
+     * 中断指定会话正在流式传输的请求。无活跃请求时静默 no-op。
+     *
+     * 1) 立刻调 runtime.abort(sessionId) → 终止底层 fetch；
+     * 2) 把该会话最后一条 assistant 消息标记 aborted=true（仅当它存在，
+     *    避免误标历史消息）；
+     * 3) 立即把该会话流式状态收敛为 idle 且 active=false，让 UI 不再显示
+     *    「正在思考 / 流式中」，响应更跟手；流真正结束由 send 的 finally
+     *    块移除条目。active=false 同时保证重复点击「停止」是幂等的。
+     */
+    abort: (sessionId) => {
+      const sid = sessionId ?? get().activeId;
+      if (!sid) return;
+      const stream = get().streams[sid];
+      if (!stream?.active) return;
+      const target = get().sessions.find((s) => s.id === sid);
+      const last = target?.messages[target.messages.length - 1];
+      if (last && last.role === 'assistant') {
+        get().updateMessage(sid, last.id, (m) => ({ ...m, aborted: true }));
+      }
+      set((s) => {
+        const cur = s.streams[sid];
+        if (!cur) return s;
+        return {
+          ...s,
+          streams: { ...s.streams, [sid]: { ...cur, status: 'idle', active: false } },
+        };
+      });
+      void getRuntime().abort(sid);
+    },
+
+    appendToken: (sessionId, messageId, chunk) => {
+      // 正文开始 = 思考段结束：先把未闭合的段落到事件流，再追加正文
+      flushReasoning(sessionId, messageId);
+      get().updateMessage(sessionId, messageId, (m) => {
+        const base = closeOpenReasoning(m);
+        return { ...base, content: base.content + chunk };
+      });
+    },
+
+    /**
+     * 标准 OpenAI `tool_calls` 事件（展示用）。
+     *
+     * 注意：**授权不在本方法内处理**。真实引擎的逐条批准走
+     * `handleApprovalRequest`（引擎在工具执行前挂起，等待独立回传），
+     * 而 `capabilities.toolCalls === false` 时本方法根本不会被触发。
+     * 旧版在这里用 `status==='pending'` 造了一个纯本地的「假门控」——
+     * 它拦不住引擎（工具照常执行），已被 D3 的真实回环取代。
+     */
+    handleToolCall: (sessionId, messageId, ev) => {
+      get().updateMessage(sessionId, messageId, (m) => {
+        const existing = m.toolCalls ?? [];
+        const toolCalls = existing.some((t) => t.id === ev.id)
+          ? existing.map((t) =>
+              t.id === ev.id
+                ? {
+                    ...t,
+                    status: ev.status,
+                    ...(ev.result !== undefined ? { result: ev.result } : {}),
+                  }
+                : t,
+            )
+          : [
+              ...existing,
+              {
                 id: ev.id,
-                kind: 'tool',
                 tool: ev.tool,
                 args: ev.args,
-                status: 'running',
-              });
-            } else {
-              const prev = process[idx] as ProcessToolRow;
-              process[idx] = { ...prev, tool: ev.tool, args: ev.args, status: 'running' };
+                sensitive: ev.sensitive,
+                status: ev.status,
+                ...(ev.result !== undefined ? { result: ev.result } : {}),
+              },
+            ];
+        return { ...m, toolCalls };
+      });
+    },
+
+    handleApprovalRequest: (sessionId, messageId, req) => {
+      // 在消息上落一条 pending 行，使授权请求与过程时间线同源可见
+      get().updateMessage(sessionId, messageId, (m) => ({
+        ...m,
+        toolCalls: [
+          ...(m.toolCalls ?? []),
+          {
+            id: req.id,
+            tool: req.tool,
+            args: req.args,
+            sensitive: true,
+            status: 'pending' as ToolCall['status'],
+          },
+        ],
+      }));
+      set((s) => ({
+        pendingApprovals: [
+          ...s.pendingApprovals,
+          {
+            id: req.id,
+            sessionId,
+            messageId,
+            toolCallId: req.id,
+            tool: req.tool,
+            args: req.args,
+          },
+        ],
+      }));
+    },
+
+    resolveApproval: async (decision, reason) => {
+      const head = get().pendingApprovals[0];
+      if (!head) return;
+      // 先出队再回传：裁决只能生效一次，重复点击不应再发一次请求
+      set((s) => ({ pendingApprovals: s.pendingApprovals.slice(1) }));
+      try {
+        await getRuntime().respondApproval?.(head.id, decision, reason);
+      } catch (e) {
+        // 请求已死（超时 / 被取消）：如实提示，不假装授权成功
+        toast.error(e instanceof Error ? e.message : String(e));
+      }
+      // 裁决落盘（`source: 'engine'` = 引擎侧审批回环，见 D3）。视图侧的
+      // 工具卡片状态与 `permissionLog` 都由它重放出来，故一条事件足够。
+      // 权限日志条目的 id / 时间取事件自身的值，使刷新前后是同一条记录
+      // （而不是每次打开都新造一个 id，导致「同一次裁决」看起来有多个）。
+      const [recorded] = recordFor(head.sessionId, (f) =>
+        f.permissionDecision({
+          messageId: head.messageId,
+          callId: head.toolCallId,
+          tool: head.tool,
+          args: head.args,
+          decision: decision === 'allow' ? 'approved' : 'rejected',
+          ...(reason ? { reason } : {}),
+          source: 'engine',
+        }),
+      );
+      get().updateMessage(head.sessionId, head.messageId, (m) => ({
+        ...m,
+        toolCalls: (m.toolCalls ?? []).map((t) =>
+          t.id === head.toolCallId
+            ? { ...t, status: (decision === 'allow' ? 'approved' : 'rejected') as ToolCall['status'] }
+            : t,
+        ),
+      }));
+      get().updateSession(head.sessionId, (s) => ({
+        ...s,
+        permissionLog: [
+          ...s.permissionLog,
+          {
+            id: recorded?.id ?? genId(),
+            tool: head.tool,
+            args: head.args,
+            decision: decision === 'allow' ? 'approved' : 'rejected',
+            at: recorded ? new Date(recorded.timestamp).toISOString() : nowIso(),
+          },
+        ] as PermissionLog[],
+      }));
+    },
+
+    /**
+     * 计划到达（FR-1.5）。
+     *
+     * 空步骤不下发：不是我们替模型决定「这不算计划」，而是 UI 上没有可勾选的
+     * 内容时该卡片只会制造困惑——引擎侧已对空 `steps` 直接 deny，这里是双保险。
+     */
+    handlePlan: (sessionId, messageId, plan) => {
+      if (plan.steps.length === 0) return;
+      // 计划随消息落盘（运行时先构造使 视图/事件 同源，投影时按同一形状重建）
+      recordFor(sessionId, (f) =>
+        f.plan({ messageId, planId: plan.planId, steps: plan.steps }),
+      );
+      get().updateMessage(sessionId, messageId, (m) => ({
+        ...m,
+        plan: { planId: plan.planId, steps: plan.steps, status: 'pending' },
+      }));
+    },
+
+    /**
+     * 裁决计划（FR-1.5）。
+     *
+     * 寻址用 `planId` 而非「当前活跃会话的最后一条计划」：计划的裁决可以在
+     * 用户切走会话、模型又产出新计划之后才发生，靠位置推断会批错对象。
+     *
+     * 批准 = 「这首轮不再只是讨论」：除了落 `plan-decision`，还要把会话切成
+     * Craft。少做这一步，批准就只剩装饰意义——Plan 模式下引擎照样拒绝写工具。
+     */
+    resolvePlan: async (planId, decision, opts) => {
+      let hit: { sessionId: string; messageId: string; plan: MessagePlan } | null = null;
+      for (const s of get().sessions) {
+        const m = s.messages.find((x) => x.plan?.planId === planId);
+        if (m?.plan) {
+          hit = { sessionId: s.id, messageId: m.id, plan: m.plan };
+          break;
+        }
+      }
+      if (!hit) return false;
+      // 已裁决过：事件流只增不改，重复裁决只会append 出矛盾的审计记录
+      if (hit.plan.status !== 'pending') return false;
+
+      const approvedIds = opts?.approvedStepIds ?? hit.plan.steps.map((s) => s.id);
+      recordFor(hit.sessionId, (f) =>
+        f.planDecision({
+          messageId: hit.messageId,
+          planId,
+          decision,
+          ...(opts?.reason ? { reason: opts.reason } : {}),
+          // 「全批准」用显式列表而非缺值表达：重放时无需猜测「当时是全选还是没勾」
+          approvedStepIds: approvedIds,
+        }),
+      );
+      get().updateMessage(hit.sessionId, hit.messageId, (m) => ({
+        ...m,
+        ...(m.plan
+          ? {
+              plan: {
+                ...m.plan,
+                status: decision,
+                approvedStepIds: approvedIds,
+                ...(opts?.reason ? { reason: opts.reason } : {}),
+              },
             }
-          } else {
-            const row: ProcessToolRow = {
-              ...(idx !== -1
-                ? (process[idx] as ProcessToolRow)
-                : {
-                    id: ev.id,
-                    kind: 'tool' as const,
-                    tool: ev.tool,
-                    args: ev.args,
-                    status: 'running' as const,
-                  }),
-              status: ev.phase === 'end' ? 'done' : 'error',
+          : {}),
+      }));
+
+      if (decision === 'rejected') {
+        // 打回不切模式：用户还要在 Plan 里继续讨论修订版计划，切成 Craft 会
+        // 让模型立刻动手——那完全违背了他刚做的决定
+        return true;
+      }
+
+      get().setSessionMode(hit.sessionId, 'craft');
+      if (!opts?.execute) return true;
+
+      // 立即执行：把批准范围**作为一轮用户消息**发出去。
+      // 刻意不发隐式指令——模型需要看到被批准的具体范围，审计时也要能在会话里
+      // 读到「当时批准了什么」，而不是只剩一句「用户批准了计划」。
+      const session = get().sessions.find((s) => s.id === hit.sessionId);
+      if (!session) return true;
+      if (get().streams[hit.sessionId]) {
+        toast.error('本轮回复尚未结束，请等它说完再执行计划');
+        return true;
+      }
+      const stepText = hit.plan.steps
+        .filter((s) => approvedIds.includes(s.id))
+        .map((s, i) => `${i + 1}. ${s.text}`)
+        .join('\n');
+      await get().send(
+        `按以下已批准的计划执行（不要超出该范围）：\n${stepText}`,
+        hit.sessionId,
+      );
+      return true;
+    },
+
+    handleArtifact: (sessionId, messageId, ev) => {
+      // 产物进事件流（V1 自包含内容，见 ArtifactEvent 的说明）：否则刷新后
+      // 气泡里的内联产物会整块消失——旧实现是随会话快照持久化的，不能倒退。
+      // 先落事件再据此构造视图对象：`createdAt` / 事件 id 都以事件为准，否则
+      // 「实时视图」与「重放投影」会各自造时间，刷新前后不一致。
+      const [recorded] = recordFor(sessionId, (f) =>
+        f.artifact({
+          messageId,
+          artifactId: ev.id,
+          kind: ev.type,
+          name: ev.title ?? '',
+          content: ev.content,
+          ...(ev.language ? { language: ev.language } : {}),
+          ...(ev.url ? { url: ev.url } : {}),
+        }),
+      );
+      const artifact: Artifact = {
+        id: ev.id,
+        type: ev.type,
+        ...(ev.title !== undefined ? { title: ev.title } : {}),
+        content: ev.content,
+        ...(ev.language !== undefined ? { language: ev.language } : {}),
+        ...(ev.url !== undefined ? { url: ev.url } : {}),
+        createdAt: recorded ? new Date(recorded.timestamp).toISOString() : nowIso(),
+      };
+      get().updateMessage(sessionId, messageId, (m) => ({
+        ...m,
+        artifacts: [...(m.artifacts ?? []), artifact],
+      }));
+      useArtifactsStore.getState().recordArtifact(sessionId, artifact);
+    },
+
+    appendReasoning: (sessionId, messageId, chunk) =>
+      get().updateMessage(sessionId, messageId, (m) => {
+        const process = [...(m.process ?? [])];
+        const last = process[process.length - 1];
+        if (last && last.kind === 'reasoning' && !last.closed) {
+          process[process.length - 1] = { ...last, content: last.content + chunk };
+        } else {
+          process.push({ id: genId(), kind: 'reasoning', content: chunk });
+        }
+        return { ...m, process };
+      }),
+
+    /** 闭合末尾未闭合的思考段（`reasoning_end` 到达时）：落盘 + 闭合视图 */
+    closeReasoning: (sessionId, messageId) => flushReasoning(sessionId, messageId),
+
+    /**
+     * 工具执行进度行（start=新增 running 行 / end=done / error=error）。
+     *
+     * 副作用：开始执行会闭合当前思考段（与视图侧 `closeOpenReasoning` 同一时机），
+     * 因此这里先 `flushReasoning` 把该段落盘，再落工具事件，最后更新视图——
+     * 三者顺序与 `seq` 顺序一致，重放时过程时间线才是同样的排列。
+     */
+    handleProcessTool: (sessionId, messageId, ev) => {
+      flushReasoning(sessionId, messageId);
+      recordFor(sessionId, (f) =>
+        ev.phase === 'start'
+          ? f.functionCall({
+              messageId,
+              callId: ev.id,
+              name: ev.tool,
+              args: ev.args,
+            })
+          : f.functionCallResult({
+              messageId,
+              callId: ev.id,
+              name: ev.tool,
+              status: ev.phase === 'end' ? 'ok' : 'error',
               ...(ev.result !== undefined ? { result: ev.result } : {}),
               ...(ev.error !== undefined ? { error: ev.error } : {}),
-            };
-            if (idx !== -1) process[idx] = row;
-            else process.push(row);
+            }),
+      );
+      get().updateMessage(sessionId, messageId, (m) => {
+        const base = closeOpenReasoning(m);
+        const process = [...(base.process ?? [])];
+        const idx = process.findIndex((p) => p.kind === 'tool' && p.id === ev.id);
+        if (ev.phase === 'start') {
+          if (idx === -1) {
+            process.push({
+              id: ev.id,
+              kind: 'tool',
+              tool: ev.tool,
+              args: ev.args,
+              status: 'running',
+            });
+          } else {
+            const prev = process[idx] as ProcessToolRow;
+            process[idx] = { ...prev, tool: ev.tool, args: ev.args, status: 'running' };
           }
-          return { ...base, process };
-        }),
-
-      retry: async () => {
-        const state = get();
-        const session = state.sessions.find((s) => s.id === state.activeId);
-        if (!session) return;
-        const lastUser = [...session.messages].reverse().find((m) => m.role === 'user');
-        // 把原消息携带的附件与富文本副本一并重发（纯文本消息相应字段为 undefined，行为不变）
-        if (lastUser)
-          await get().send(lastUser.content, undefined, lastUser.attachments, lastUser.richContent);
-      },
-
-      clearError: () => set({ error: null }),
-    }),
-    {
-      name: STORAGE_KEYS.sessions,
-      storage: zustandStorage,
-      // 持久化仅本地会话数据，不持久化运行时状态；
-      // 频道会话（channel 有值）每次从 nanobot 实时拉取，不落本地存储，
-      // 同时避免重载后 activeId 指向未恢复的频道会话
-      partialize: (s) => {
-        // 频道会话与只读会话均为外部来源快照，不持久化（每次打开实时拉取）
-        const sessions = s.sessions.filter((x) => !x.channel && !x.readonly);
-        const activeId = sessions.some((x) => x.id === s.activeId)
-          ? s.activeId
-          : null;
-        return { sessions, activeId };
-      },
+        } else {
+          const row: ProcessToolRow = {
+            ...(idx !== -1
+              ? (process[idx] as ProcessToolRow)
+              : {
+                  id: ev.id,
+                  kind: 'tool' as const,
+                  tool: ev.tool,
+                  args: ev.args,
+                  status: 'running' as const,
+                }),
+            status: ev.phase === 'end' ? 'done' : 'error',
+            ...(ev.result !== undefined ? { result: ev.result } : {}),
+            ...(ev.error !== undefined ? { error: ev.error } : {}),
+          };
+          if (idx !== -1) process[idx] = row;
+          else process.push(row);
+        }
+        return { ...base, process };
+      });
     },
-  ),
+
+    retry: async () => {
+      const state = get();
+      const session = state.sessions.find((s) => s.id === state.activeId);
+      if (!session) return;
+      const lastUser = [...session.messages].reverse().find((m) => m.role === 'user');
+      // 把原消息携带的附件与富文本副本一并重发（纯文本消息相应字段为 undefined，行为不变）
+      if (lastUser)
+        await get().send(lastUser.content, undefined, lastUser.attachments, lastUser.richContent);
+    },
+
+    clearError: () => set({ error: null }),
+  }),
 );

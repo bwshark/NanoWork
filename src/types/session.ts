@@ -1,3 +1,4 @@
+import type { ExecutionMode } from './event';
 import type { Message } from './message';
 import type { PermissionLog } from './permission';
 
@@ -26,6 +27,16 @@ export interface Session {
    * 中 approvalMode 的推导）。
    */
   toolApproval?: boolean;
+  /**
+   * 会话级执行模式（FR-1.4）：`ask` / `plan` 只读，`craft` 可直接改动文件。
+   *
+   * **缺省即 `craft`**——这是刻意的向后兼容：事件化之前的会话按 craft 记账，
+   * 读取时用 `?? 'craft'` 而不是把缺失当成某种「未知模式」。
+   *
+   * 注意它**决定的是能不能写**，不是「回答得详不详细」：ask / plan 下写类工具
+   * 被引擎的工具网关 deny（客户端拦不住，也不能靠提示词约束）。
+   */
+  mode?: ExecutionMode;
   /** 会话级模型覆盖；未设置时回退全局默认模型 */
   model?: string;
   /** 会话来源 IM 频道（如 dingtalk / feishu）；缺省为本地会话 */

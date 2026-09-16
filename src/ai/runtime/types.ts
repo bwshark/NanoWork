@@ -27,6 +27,7 @@ import type {
   TaskRunRecord,
   ToolCallStatus,
 } from '@/types';
+import type { ExecutionMode, PlanStep } from '@/types/event';
 
 // 领域类型（模型目录 / 连接状态 / 运行记录）由 `@/types` 定义，
 // 这里仅做转出，使调用方「只 import 一处」即可拿到完整契约面。
@@ -61,7 +62,7 @@ export interface ChatRequest {
   /** 会话级权限策略：restricted=默认沙箱 / full=完全访问 */
   accessMode?: 'restricted' | 'full';
   /**
-   * 会话级工具审批策略：
+   * 会话级逐条批准策略：
    * - `auto`（缺省）：工具直接执行，不打断对话；
    * - `ask`：副作用工具（写文件 / 执行命令 / MCP 调用等）执行**前**必须由用户
    *   逐条裁决，引擎侧挂起等待（超时按拒绝处理，fail-closed）。
@@ -69,6 +70,29 @@ export interface ChatRequest {
    * 与 `accessMode` 是正交的两轴：前者管「能碰哪里」，后者管「要不要先问」。
    */
   approvalMode?: 'auto' | 'ask';
+  /**
+   * 会话级执行模式（FR-1.4）：缺省 `craft`。
+   *
+   * `ask` / `plan` 下引擎在工具网关层**拒绝**写类工具调用，而不是「先做再问」；
+   * 因此这是**能写到哪**的第三根轴，与前两根互不替代。
+   *
+   * `plan` 额外开启 `submit_plan` 工具：模型用它把结构化计划交给用户裁决，
+   * 事件经 `StreamHandlers.onPlan` 下发（计划只允许提交，不允诺执行）。
+   */
+  sessionMode?: ExecutionMode;
+  /**
+   * Agent 工具白名单（FR-2.2）：本会话所用 Agent 声明的工具授权。
+   *
+   * 这是第四根轴——前三根管「能碰哪里 / 要不要问 / 能不能写」，这一根管
+   * **「这个 Agent 有没有这个能力」**。约束在引擎的工具网关强制，不依赖提示词。
+   *
+   * - `toolAllow` 省略（undefined）= 该 Agent 未声明限制；传**空数组** =
+   *   一个工具都不许（两者语义不同，不能混）；
+   * - `toolDeny` **永远优先于** `toolAllow`。
+   */
+  toolAllow?: string[];
+  /** Agent 工具黑名单（FR-2.2）；优先级高于 `toolAllow` */
+  toolDeny?: string[];
   /** 随请求上传的文件 */
   files?: UploadFile[];
 }
@@ -148,6 +172,17 @@ export interface ArtifactEvent {
   url?: string;
 }
 
+/**
+ * Plan 模式下发的待裁决计划（FR-1.5）。
+ *
+ * 步骤形状**复用** `@/types/event` 的 `PlanStep` 而非另立一套：同一份计划要
+ * 在运行时（本类型）与落盘（事件）之间往返，两处各自定义必然漂移。
+ */
+export interface PlanProposal {
+  planId: string;
+  steps: PlanStep[];
+}
+
 /** 流式事件回调集合（页面/store 仅通过此契约与 runtime 交互） */
 export interface StreamHandlers {
   /** 流式文本片段 */
@@ -169,6 +204,14 @@ export interface StreamHandlers {
    * 要么回裁决，要么让流中断；悬空不回会让工具调用卡到超时（判为拒绝）。
    */
   onApprovalRequest?(req: ApprovalRequestEvent): void;
+  /**
+   * Plan 模式产出的计划（FR-1.5）。
+   *
+   * 与审批请求的关键区别：**它不等回话**。引擎放行 `submit_plan` 后本轮就继续
+   * 走完，用户的裁决由下一轮请求带回（模式切到 craft 后再发一条消息）。
+   * 实现方不应在本回调里阻塞等待——那是 `onApprovalRequest` 的语义。
+   */
+  onPlan?(plan: PlanProposal): void;
   /** 状态变化：思考 / 流式 / 工具中 / 完成 */
   onStatus(status: 'thinking' | 'streaming' | 'tooling' | 'done'): void;
   /** 正常结束 */
@@ -214,6 +257,14 @@ export interface RuntimeCapabilities {
    * 报 false 时 UI 必须隐藏「逐条批准」开关，不得提供无效的授权入口。
    */
   toolApproval: boolean;
+  /**
+   * 支持会话级执行模式（FR-1.4）与计划投递（FR-1.5）：引擎按 turn 接受
+   * 执行模式并在 `plan` 模式下把 `submit_plan` 的结果下发为流事件。
+   *
+   * 报 false 时 UI 必须隐藏执行模式选择器——留着一个点了不生效的开关，
+   * 比没有开关更糟（用户会以为自己在 Plan 模式，实际每一句都能改文件）。
+   */
+  executionModes: boolean;
   /** 支持的 IM 渠道标识（取值域与产品侧 `ChannelKind` 一致） */
   channels: ChannelKind[];
   /** 支持会话级隔离 */

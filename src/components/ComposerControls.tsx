@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import {
   Box,
   Button,
@@ -14,8 +14,13 @@ import VerifiedUserIcon from '@mui/icons-material/VerifiedUser';
 import GppMaybeIcon from '@mui/icons-material/GppMaybe';
 import FolderOpenIcon from '@mui/icons-material/FolderOpen';
 import ClearIcon from '@mui/icons-material/Clear';
+import QuestionAnswerIcon from '@mui/icons-material/QuestionAnswer';
+import ChecklistIcon from '@mui/icons-material/Checklist';
+import BuildIcon from '@mui/icons-material/Build';
 import { platform } from '@/platform';
 import { useSessionsStore } from '@/stores/sessionsStore';
+import { getRuntime } from '@/ai/runtime';
+import type { ExecutionMode } from '@/types/event';
 
 /** 从路径取末级目录名用于展示（跨平台分隔符兼容） */
 function dirBasename(p: string): string {
@@ -25,12 +30,49 @@ function dirBasename(p: string): string {
 }
 
 /**
+ * 执行模式三选项（FR-1.4）。
+ *
+ * 文案刻意**先说能不能改文件**——用户对这三个词最可能的误解是「这只是回答
+ * 风格」，而它实际约束的是工具网关：Ask / Plan 下写类工具被引擎 deny，
+ * 不是「提示词自律」，是调用根本做不成。
+ */
+const MODE_OPTIONS: ReadonlyArray<{
+  value: ExecutionMode;
+  label: string;
+  caption: string;
+  icon: ReactNode;
+}> = [
+  {
+    value: 'ask',
+    label: 'Ask · 只问不改',
+    caption: '只读探索，写类工具被引擎直接拒绝',
+    icon: <QuestionAnswerIcon fontSize="small" />,
+  },
+  {
+    value: 'plan',
+    label: 'Plan · 先出计划',
+    caption: '产出可勾选的计划，批准后才进入执行',
+    icon: <ChecklistIcon fontSize="small" />,
+  },
+  {
+    value: 'craft',
+    label: 'Craft · 直接执行',
+    caption: '允许改动文件与执行命令（受权限开关约束）',
+    icon: <BuildIcon fontSize="small" />,
+  },
+];
+
+/**
  * 输入框工具条的「会话级上下文」控件：工作空间选择 + 权限设定。
  * - 工作空间：Electron 弹原生目录选择；Web 降级 File System Access API。
  *   未选择目录的会话归入「默认工作空间」。
  * - 权限：两个正交开关——「逐条批准」（细：改动环境的操作执行前先问）与
  *   「允许完全访问」（粗：直接放开，等于不再逐条询问）。
- * 两者均作用于当前会话（无活跃会话时先创建会话再应用）。
+ * - 执行模式（FR-1.4）：Ask / Plan / Craft，决定「能不能改东西」这一层。
+ * 三者均作用于当前会话（无活跃会话时先创建会话再应用）。
+ *
+ * 执行模式选择器受 `capabilities.executionModes` 门控：引擎不支持时必须隐藏，
+ * 不能留一个点了不生效的开关——那会让用户以为自己在 Plan 里，实际句句能写。
  */
 export function ComposerControls() {
   const activeSessionId = useSessionsStore((s) => s.activeId);
@@ -41,9 +83,11 @@ export function ComposerControls() {
   const setSessionWorkdir = useSessionsStore((s) => s.setSessionWorkdir);
   const setSessionFullAccess = useSessionsStore((s) => s.setSessionFullAccess);
   const setSessionToolApproval = useSessionsStore((s) => s.setSessionToolApproval);
+  const setSessionMode = useSessionsStore((s) => s.setSessionMode);
 
   const [wsMenuAnchor, setWsMenuAnchor] = useState<null | HTMLElement>(null);
   const [permAnchor, setPermAnchor] = useState<null | HTMLElement>(null);
+  const [modeAnchor, setModeAnchor] = useState<null | HTMLElement>(null);
 
   /** 无活跃会话时先创建（继承当前全局活跃专家团 / 专家），返回会话 id */
   const ensureSession = (): string => {
@@ -66,6 +110,10 @@ export function ComposerControls() {
 
   const fullAccess = activeSession?.fullAccess ?? false;
   const toolApproval = activeSession?.toolApproval ?? false;
+  const mode: ExecutionMode = activeSession?.mode ?? 'craft';
+  const currentMode = MODE_OPTIONS.find((o) => o.value === mode) ?? MODE_OPTIONS[2];
+  // 能力门控：同步取当前实现即可（单例惰性构造，不含 IO）
+  const modesSupported = getRuntime().capabilities.executionModes === true;
 
   return (
     <>
@@ -104,6 +152,55 @@ export function ComposerControls() {
       >
         {fullAccess ? '完全访问' : toolApproval ? '逐条批准' : '默认权限'}
       </Button>
+
+      {/* 执行模式按钮（FR-1.4）：不支持能力时整块隐藏，不留无效入口 */}
+      {modesSupported && (
+        <Button
+          size="small"
+          aria-label="切换执行模式"
+          startIcon={currentMode.icon}
+          onClick={(e) => setModeAnchor(e.currentTarget)}
+          sx={{
+            textTransform: 'none',
+            color: 'text.secondary',
+            fontSize: 12,
+            '&:hover': { bgcolor: 'action.hover', color: 'text.primary' },
+          }}
+        >
+          {currentMode.label}
+        </Button>
+      )}
+
+      {/* 执行模式菜单 */}
+      <Menu
+        anchorEl={modeAnchor}
+        open={!!modeAnchor}
+        onClose={() => setModeAnchor(null)}
+        slotProps={{ paper: { sx: { minWidth: 280 } } }}
+      >
+        {MODE_OPTIONS.map((opt) => (
+          <MenuItem
+            key={opt.value}
+            selected={opt.value === mode}
+            onClick={() => {
+              setModeAnchor(null);
+              setSessionMode(ensureSession(), opt.value);
+            }}
+          >
+            <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1 }}>
+              <Box sx={{ color: opt.value === mode ? 'primary.main' : 'text.secondary', mt: 0.1 }}>
+                {opt.icon}
+              </Box>
+              <Box sx={{ minWidth: 0 }}>
+                <Typography variant="body2">{opt.label}</Typography>
+                <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+                  {opt.caption}
+                </Typography>
+              </Box>
+            </Box>
+          </MenuItem>
+        ))}
+      </Menu>
 
       {/* 工作空间选择菜单 */}
       <Menu

@@ -10,6 +10,7 @@ import { useAgentsStore } from '@/stores/agentsStore';
 import { useChannelsStore } from '@/stores/channelsStore';
 import { useChannelSessionsStore } from '@/stores/channelSessionsStore';
 import { useMcpStore } from '@/stores/mcpStore';
+import { useSessionsStore } from '@/stores/sessionsStore';
 
 /**
  * 顶层壳：AppLayout（侧栏 + 横幅 + Outlet）+ 全局 Toast + 权限门控弹窗。
@@ -19,6 +20,9 @@ import { useMcpStore } from '@/stores/mcpStore';
  */
 export function App() {
   useEffect(() => {
+    // 会话水合：列表来自事件流索引（不扫 JSONL），当前会话的消息按需加载。
+    // 这是「事件流是事实源」的读入口——取代了旧版整块持久化的自动恢复。
+    void useSessionsStore.getState().loadSessions();
     // 桌面端主进程与窗口是并行启动的：nanobot 为 Python 进程，spawn 后需数秒
     // 才真正 listen。若此处只探测一次，首探必然 ECONNREFUSED 并永久固化离线。
     void (async () => {

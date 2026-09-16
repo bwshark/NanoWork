@@ -1,9 +1,37 @@
 import type { Artifact } from './artifact';
+import type { PlanStep } from './event';
 import type { ProcessEvent } from './process';
 import type { ToolCall } from './toolcall';
 
 /** 消息角色 */
 export type Role = 'user' | 'assistant' | 'tool';
+
+/** 计划裁决结果（与 plan-decision 事件的 `decision` 同源） */
+export type PlanVerdict = 'approved' | 'rejected';
+
+/**
+ * 消息上挂载的计划（FR-1.5）。
+ *
+ * 由 Plan 模式的 `submit_plan` 产出（`plan` 事件），用户裁决落在
+ * `plan-decision` 事件上——二者配合，计划随会话重载后可原样回显，
+ * 而不是刷新就消失的临时 UI 态。
+ */
+export interface MessagePlan {
+  planId: string;
+  steps: PlanStep[];
+  /** pending=待裁决 / approved=已批准 / rejected=已打回 */
+  status: PlanVerdict | 'pending';
+  /** 打回理由（仅 rejected 时有意义） */
+  reason?: string;
+  /**
+   * 批准范围：被勾选步骤的 id。
+   *
+   * **缺省 = 全批准**，`[]` = 一项都没勾（合法的「批准了一份空范围」）。
+   * 这个「缺值与空值不同义」的约定源自 `PlanDecisionEvent`，视图层不得擅自
+   * 把它归一化成数组——否则「全批准」与「批准了零项」在数据上就无从区分。
+   */
+  approvedStepIds?: string[];
+}
 
 /**
  * 附件大类（决定 Composer 预览条 / 消息气泡里的图标与渲染策略）。
@@ -52,6 +80,8 @@ export interface Message {
   toolCalls?: ToolCall[];
   /** 消息内富产物 */
   artifacts?: Artifact[];
+  /** Plan 模式产出的待裁决计划（仅 assistant 消息，FR-1.5） */
+  plan?: MessagePlan;
   /** 过程时间线（深度思考段 / 工具执行行，网关进度事件流式聚合，按到达顺序交错） */
   process?: ProcessEvent[];
   /**

@@ -22,6 +22,8 @@ import type {
   ChannelSendResult,
   DesktopConfig,
   DesktopConfigResult,
+  EventAppendParams,
+  EventAppendResult,
   NanobotChannelSessionDetail,
   NanobotChannelSessionSummary,
   NanobotCronHistoryDeleteResult,
@@ -40,6 +42,8 @@ import {
   unwrapLegacyValue,
   type StorageRoots,
 } from './storageRoutes';
+import { createEventStore } from './eventStore';
+import type { SessionMeta } from '../src/types/event';
 
 const isDev = !app.isPackaged;
 
@@ -265,6 +269,15 @@ function pickInitialBackgroundColor(): string {
   if (persisted === 'dark') return '#0b1120';
   return nativeTheme.shouldUseDarkColors ? '#0b1120' : '#f5f7fa';
 }
+
+// ——————————————————————————————————————————————
+// 事件流存储（D2）：append-only 事件流成为事实源
+//
+// 落点规则见 electron/eventRoutes.ts，索引纯逻辑见 electron/eventIndex.ts，
+// IO 层在 electron/eventStore.ts（只依赖 node:fs，有单测覆盖），此处仅持有实例。
+// ——————————————————————————————————————————————
+
+const eventStore = createEventStore(STORAGE_ROOTS);
 
 // ——————————————————————————————————————————————
 // 桌面端集成：系统托盘 + 全局快捷键
@@ -1824,6 +1837,35 @@ async function clearDirFiles(dir: string, extensions: string[]): Promise<void> {
 ipcMain.handle('storage:clear', async () => {
   await clearStorageFiles();
 });
+
+// —— 事件流桥（D2：渲染层经 window.electronAPI 调用）——
+// 落点规则见 electron/eventRoutes.ts，索引纯逻辑见 electron/eventIndex.ts，
+// IO 在 electron/eventStore.ts。IPC 两侧只传领域对象，磁盘格式由 eventStore 独占；
+// sessionId / hash 由 eventRoutes 做单层片段安全校验（越界直接抛错）。
+ipcMain.handle(
+  'events:append',
+  async (_e, params: EventAppendParams): Promise<EventAppendResult> =>
+    eventStore.append(params),
+);
+ipcMain.handle('events:read', async (_e, sessionId: string, workdir?: string | null) =>
+  eventStore.readEvents(sessionId, workdir),
+);
+ipcMain.handle('events:remove', async (_e, sessionId: string, workdir?: string | null) => {
+  await eventStore.remove(sessionId, workdir);
+});
+ipcMain.handle('meta:read', async (_e, sessionId: string, workdir?: string | null) =>
+  eventStore.readMeta(sessionId, workdir),
+);
+ipcMain.handle('meta:write', async (_e, meta: SessionMeta) => {
+  await eventStore.writeMeta(meta);
+});
+ipcMain.handle('meta:list', async () => eventStore.listMetas());
+ipcMain.handle('index:read', async () => eventStore.readIndex());
+ipcMain.handle('index:rebuild', async () => eventStore.rebuildIndex());
+ipcMain.handle('file-backup:put', async (_e, hash: string, content: string) => {
+  await eventStore.putBackup(hash, content);
+});
+ipcMain.handle('file-backup:get', async (_e, hash: string) => eventStore.getBackup(hash));
 
 // —— 通知桥 ——
 ipcMain.on('app:notify', (_e, title: string, body: string) => {

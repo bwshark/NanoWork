@@ -43,6 +43,10 @@ function mergeAgents(stored: Agent[]): Agent[] {
       enabled: over.enabled,
       systemPrompt: over.systemPrompt?.trim() ? over.systemPrompt : b.systemPrompt,
       skillIds: over.skillIds?.length ? over.skillIds : b.skillIds,
+      // FR-2.2：工具策略的用户覆盖同样以「用户设过就用用户的」为准。
+      // 判据是「字段存在」而不是长度——空白名单是有效取值（一个工具都不许）。
+      toolAllow: over.toolAllow ?? b.toolAllow,
+      toolDeny: over.toolDeny ?? b.toolDeny,
       // 头像：内置 Agent 不接受用户上传，因此不取 over.avatar；
       // 派生占位（名称首字符 + hashColor）由 UI 层做
       source: 'builtin' as const,
@@ -75,6 +79,10 @@ export const useAgentsStore = create<AgentsState>()(
           name: partial?.name ?? '新 Agent',
           systemPrompt: partial?.systemPrompt ?? '',
           skillIds: partial?.skillIds ?? [],
+          // FR-2.2：工具策略。刻意用 `?? undefined` 而不是 `?? []`——
+          // 空数组是「一个工具都不许」，不能拿来充当「用户还没设置」。
+          toolAllow: partial?.toolAllow,
+          toolDeny: partial?.toolDeny,
           imBinding: partial?.imBinding ?? null,
           enabled: partial?.enabled ?? true,
           createdAt: nowIso(),

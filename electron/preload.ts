@@ -15,6 +15,21 @@ const api: ElectronAPI = {
   storageSet: (key: string, value: string) => ipcRenderer.invoke('storage:set', key, value),
   storageRemove: (key: string) => ipcRenderer.invoke('storage:remove', key),
   storageClear: () => ipcRenderer.invoke('storage:clear'),
+  // —— 事件流桥（D2）——
+  eventsAppend: (params) => ipcRenderer.invoke('events:append', params),
+  eventsRead: (sessionId: string, workdir?: string | null) =>
+    ipcRenderer.invoke('events:read', sessionId, workdir),
+  eventsRemove: (sessionId: string, workdir?: string | null) =>
+    ipcRenderer.invoke('events:remove', sessionId, workdir),
+  readSessionMeta: (sessionId: string, workdir?: string | null) =>
+    ipcRenderer.invoke('meta:read', sessionId, workdir),
+  writeSessionMeta: (meta) => ipcRenderer.invoke('meta:write', meta),
+  listSessionMetas: () => ipcRenderer.invoke('meta:list'),
+  readSessionIndex: () => ipcRenderer.invoke('index:read'),
+  rebuildSessionIndex: () => ipcRenderer.invoke('index:rebuild'),
+  putFileBackup: (hash: string, content: string) =>
+    ipcRenderer.invoke('file-backup:put', hash, content),
+  getFileBackup: (hash: string) => ipcRenderer.invoke('file-backup:get', hash),
   notify: (title: string, body: string) => ipcRenderer.send('app:notify', title, body),
   writeTextFile: (path: string, content: string) =>
     ipcRenderer.invoke('fs:writeTextFile', path, content),

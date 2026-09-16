@@ -22,7 +22,8 @@ import { extractArtifacts } from './artifactExtractor';
  * 网关 [LOCAL PATCH] 注入的进度事件结构（delta.nanobot_event）。
  * kind=reasoning：深度思考片段；kind=reasoning_end：思考段结束；
  * kind=tool：工具执行阶段事件（phase=start/end/error，含 call_id/name/arguments/result/error）；
- * kind=approval_request：逐条批准请求（引擎已挂起，等待 POST /v1/tool-approvals/{id}）。
+ * kind=approval_request：逐条批准请求（引擎已挂起，等待 POST /v1/tool-approvals/{id}）；
+ * kind=plan：Plan 模式下 submit_plan 产出的结构化计划（plan_id / steps，FR-1.5）。
  */
 interface NanobotStreamEvent {
   kind?: string;
@@ -37,10 +38,17 @@ interface NanobotStreamEvent {
   id?: string;
   tool?: string;
   args?: Record<string, unknown>;
+  /** kind=plan：计划 id 与步骤清单 */
+  plan_id?: string;
+  steps?: Array<{ id?: string; text?: string; status?: string }>;
 }
 
 /** 结果/错误展示文本截断上限（过程时间线仅做摘要展示） */
 const PROCESS_TEXT_MAX = 4000;
+
+/** plan 步骤的合法状态（与 `@/types/event` 的 `PlanStep` 一致，此处窄化成字面量元组以便收窄未知值） */
+const PLAN_STEP_STATUSES = ['pending', 'running', 'done', 'skipped'] as const;
+type PlanStepStatus = (typeof PLAN_STEP_STATUSES)[number];
 
 /** 任意工具结果转展示文本：字符串原样、其余 JSON 序列化，超长截断 */
 function toDisplayText(value: unknown): string | undefined {
@@ -168,6 +176,14 @@ export class NanobotClient {
       ...(req.accessMode ? { access_mode: req.accessMode } : {}),
       // 逐条批准开关：与 access_mode 同处会话级 scope（tool_approval 轴）
       ...(req.approvalMode ? { approval_mode: req.approvalMode } : {}),
+      // 执行模式：与上面三轴同处会话级 scope（session_mode 轴，FR-1.4）
+      ...(req.sessionMode ? { session_mode: req.sessionMode } : {}),
+      // Agent 工具白名单（FR-2.2，第四根轴）：由引擎的工具网关强制，不靠提示词。
+      // 判据是「不是 undefined」——空数组是**已声明的空白名单**（一个工具都不许），
+      // 用真值判断会把它当成「未声明」从而静默放开全部工具。
+      ...(req.agentId ? { agent_id: req.agentId } : {}),
+      ...(req.toolAllow !== undefined ? { tool_allow: req.toolAllow } : {}),
+      ...(req.toolDeny !== undefined ? { tool_deny: req.toolDeny } : {}),
     };
     const auth = this.authHeaders();
 
@@ -182,7 +198,8 @@ export class NanobotClient {
     //
     // 注意（已核对 nanobot/nanobot/api/server.py 的 _parse_multipart）：
     // multipart 路径只识别 message / session_id / model / workspace / access_mode /
-    // approval_mode / files，**不解析 stream**，该分支下 stream 恒为 False，
+    // approval_mode / session_mode / agent_id / tool_allow / tool_deny / files，
+    // **不解析 stream**，该分支下 stream 恒为 False，
     // 网关只会回完整 JSON（非 SSE）。
     // 因此前端必须兼容非流式响应（见 streamFormRequest.handleNonStreamResponse）。
     // 这里仍补上 stream：网关后续若支持 multipart 流式，前端无需改动即可自动生效。
@@ -195,6 +212,16 @@ export class NanobotClient {
     if (req.workspace) form.append('workspace', req.workspace);
     if (req.accessMode) form.append('access_mode', req.accessMode);
     if (req.approvalMode) form.append('approval_mode', req.approvalMode);
+    // multipart 分支的 server 侧解析已同步支持 session_mode；上传文件时也带上，
+    // 否则「带附件的一轮」会静默退回 craft（只读约束在这一轮失效）
+    if (req.sessionMode) form.append('session_mode', req.sessionMode);
+    // 带附件的一轮也必须带上 Agent 工具策略，否则「带附件」成为最小权限的旁路
+    // （与 session_mode 同样的漏法）。multipart 没有原生数组，用逗号分隔串——
+    // 引擎侧 `normalize_tool_names` 接受这个形态。空数组发成空串，语义是
+    // 「已声明的空白名单」，与 JSON 分支保持一致。
+    if (req.agentId) form.append('agent_id', req.agentId);
+    if (req.toolAllow !== undefined) form.append('tool_allow', req.toolAllow.join(','));
+    if (req.toolDeny !== undefined) form.append('tool_deny', req.toolDeny.join(','));
     req.files.forEach((f: UploadFile) => {
       const mime = f.mimeType ?? inferMime(f.name);
       const bytes = Uint8Array.from(atob(f.content), (c) => c.charCodeAt(0));
@@ -428,6 +455,21 @@ export class NanobotClient {
               ...(nbEvent.call_id ? { callId: String(nbEvent.call_id) } : {}),
             });
             handlers.onStatus('tooling');
+          } else if (nbEvent.kind === 'plan' && nbEvent.plan_id) {
+            // 计划是「给用户看的清单」，不是待办数据流：步骤缺字段时按引擎
+            // 已归一化的形状补齐，绝不因一条脏数据把这轮的全部内容丢掉。
+            handlers.onPlan?.({
+              planId: String(nbEvent.plan_id),
+              steps: (nbEvent.steps ?? [])
+                .filter((s) => typeof s?.text === 'string' && s.text.trim() !== '')
+                .map((s, i) => ({
+                  id: String(s?.id ?? `s${i + 1}`),
+                  text: String(s?.text ?? ''),
+                  status: (PLAN_STEP_STATUSES as readonly string[]).includes(s?.status ?? '')
+                    ? (s?.status as PlanStepStatus)
+                    : ('pending' as PlanStepStatus),
+                })),
+            });
           }
         }
 

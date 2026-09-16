@@ -50,7 +50,7 @@ describe('resolveRoute：落点归属', () => {
   });
 
   it.each([
-    [STORAGE_KEYS.sessions, 'sessions.json'],
+    [STORAGE_KEYS.legacySessions, 'sessions.json'],
     [STORAGE_KEYS.tasks, 'tasks.json'],
     [STORAGE_KEYS.artifacts, 'artifacts.json'],
   ])('运行时数据 %s 落在 ② %s（不占 ① 的位置）', (key, rel) => {
@@ -134,7 +134,7 @@ describe('sanitizeSegment：文件名片段的收敛', () => {
 
 describe('serializeRouteValue：落盘形态', () => {
   const jsonRoute = resolveRoute(STORAGE_KEYS.settings, roots);
-  const compactRoute = resolveRoute(STORAGE_KEYS.sessions, roots);
+  const compactRoute = resolveRoute(STORAGE_KEYS.legacySessions, roots);
   const textRoute = resolveRoute(`${MEMORY_KEY_PREFIX}default`, roots);
 
   it('json 路由落盘为真实结构，而不是被转义的字符串', () => {
