@@ -45,6 +45,11 @@ import {
 import { createEventStore } from './eventStore';
 import { CredentialVault, safeStorageCipher } from './credentialVault';
 import { probeMcpServer, type McpProbeRequest } from './mcpProbe';
+import {
+  installPluginPackage,
+  readInstalledPlugins,
+  uninstallPluginPackage,
+} from './pluginPackage';
 import type { SessionMeta } from '../src/types/event';
 
 const isDev = !app.isPackaged;
@@ -73,6 +78,21 @@ const LEGACY_STORE_FILE = join(app.getPath('userData'), 'nanowork-store.json');
  * 但归属与生命周期各自独立）。用户如需复用既有技能，应显式迁移目录内容。
  */
 const USER_SKILLS_DIR = join(productDir(STORAGE_ROOTS), 'skills');
+
+/**
+ * 用户级插件目录：`~/.nanowork/plugins`，每个子目录是一个插件包
+ * （包根一份 `plugin.json`）。
+ *
+ * **必须与引擎的 `default_user_plugins_dir()` 指向同一处**，否则会出现
+ * 「界面装上了、引擎看不见」——这是本功能最容易踩的坑。引擎的实现读
+ * `NANOWORK_HOME` / `CODEBUDDY_HOME` 作为基址（不是 `/.nanowork` 后缀），
+ * 这里照抄同一套取法：网关是 Electron 的子进程，环境变量会继承，
+ * 用户在 shell 里设了基址时两边仍然一致。
+ */
+const USER_PLUGINS_DIR = join(
+  process.env.NANOWORK_HOME || process.env.CODEBUDDY_HOME || productDir(STORAGE_ROOTS),
+  'plugins',
+);
 
 /**
  * 连接器凭据保险库：`~/.nanowork/connectors/.credentials.v3.json`。
@@ -2918,6 +2938,48 @@ ipcMain.handle('skills:loadUser', async (_e, workspace?: string) => {
     }
   }
   return skills;
+});
+
+// —— 插件包生命周期（FR-3.4）——
+/**
+ * 三条 IPC **只做文件系统那一半**（扫 / 装 / 卸）。
+ *
+ * 刻意的职责切分：**包长什么样、装在不在**是主进程的事（要读盘），
+ * **激活没有**是引擎的事（`GET /v1/plugins`，激活标记指纹绑定）。客户端
+ * 不复刻引擎的哈希、也不存一份自己的激活真相——两份真相不一致时无法裁决谁对。
+ */
+
+/** 扫描：坏包进 `skipped`，其余照常返回（一个坏包不该让页面看起来什么都没装） */
+ipcMain.handle('plugins:scan', async () => {
+  const { plugins, skipped } = await readInstalledPlugins(USER_PLUGINS_DIR);
+  return { plugins, skipped, pluginsRoot: USER_PLUGINS_DIR };
+});
+
+/**
+ * 安装：把来源目录复制进 `USER_PLUGINS_DIR/<清单 name>`。
+ * 校验全部前置（清单非法 / 名字不合规 / 来源在插件根之内）→ 失败时不落盘。
+ */
+ipcMain.handle(
+  'plugins:install',
+  async (_e, sourceDir: unknown, overwrite?: unknown) => {
+    if (typeof sourceDir !== 'string' || sourceDir.trim() === '') {
+      return { ok: false, error: '未指定插件包来源目录', errorKind: 'source-missing' as const };
+    }
+    return installPluginPackage({
+      sourceDir,
+      pluginsRoot: USER_PLUGINS_DIR,
+      overwrite: overwrite === true,
+    });
+  },
+);
+
+/** 卸载：删除包目录（不可撤销）。名字非法或路径越界一律拒绝。 */
+ipcMain.handle('plugins:uninstall', async (_e, name: unknown) => {
+  if (typeof name !== 'string' || name.trim() === '') {
+    return { ok: false, error: '未指定插件名' };
+  }
+  const removed = await uninstallPluginPackage(USER_PLUGINS_DIR, name);
+  return removed ? { ok: true } : { ok: false, error: `插件「${name}」不存在或名字不合法` };
 });
 
 /**

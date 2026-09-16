@@ -1,9 +1,40 @@
 import type { ChannelConnectResponse, McpToolInfo, Skill } from '@/types';
+import type { PluginInstallResult, PluginScanResult } from '@/types/plugin';
 import type {
   SessionEvent,
   SessionIndexFile,
   SessionMeta,
 } from '@/types/event';
+
+// 插件领域类型声明在 `@/types/plugin.ts`（**唯一声明处**，主进程也引它）。
+// 这里只做转出，让 platform 消费方「只 import 一处」即可拿到完整契约面。
+export type {
+  InstalledPlugin,
+  PluginActivation,
+  PluginDrift,
+  PluginEngineEntry,
+  PluginEngineIndex,
+  PluginInstallResult,
+  PluginManifest,
+  PluginPermissions,
+  PluginResourceGroup,
+  PluginResourceId,
+  PluginScanResult,
+  PluginView,
+} from '@/types/plugin';
+
+/**
+ * 插件启停结果（IPC / 适配层返回）。
+ *
+ * 与技能三态覆盖的 `SkillOverrideSyncResult` 刻意分开：插件启停**由引擎执行**
+ * （指纹绑定的激活标记只能引擎签），客户端只是转达，所以没有「本地已改、
+ * 引擎未变」这种中间态，也就没有 `changed` / `needsRestart`。
+ */
+export interface PluginActionResult {
+  ok: boolean;
+  /** 失败原因（面向用户，已本地化） */
+  error?: string;
+}
 
 /** nanobot channels 同步结果（主进程返回） */
 export interface ChannelSyncResult {
@@ -437,6 +468,41 @@ export interface PlatformAdapter {
    * - web：无文件系统权限，返回 ok=false。
    */
   readFileAsBase64(path: string): Promise<ReadFileBase64Result>;
+  /**
+   * 扫描已安装插件包（FR-3.4，只读）。
+   *
+   * 扫的是产品自有目录 `~/.nanowork/plugins` 下的包，**不做安装/启用判断**：
+   * 磁盘事实归扫描，激活状态归引擎（`readEnginePlugins`）。
+   * - electron：主进程读盘并解析 `plugin.json`；
+   * - web：无文件系统权限，返回空结果（`pluginsRoot` 为空串）。
+   */
+  scanPlugins(): Promise<PluginScanResult>;
+  /**
+   * 安装（复制）一个插件包到 `~/.nanowork/plugins/<name>`。
+   *
+   * 目录名取**清单里的 `name`**，不是来源目录名（来源可能是
+   * `my-plugin-1.2.0/`）。清单非法或目录已存在时**不落盘**。
+   * - electron：主进程完成校验与复制；
+   * - web：无文件系统权限，返回 `ok=false`。
+   * @param overwrite 已安装时是否覆盖（升级场景）
+   */
+  installPlugin(sourceDir: string, overwrite?: boolean): Promise<PluginInstallResult>;
+  /**
+   * 卸载插件（删除包目录，不可撤销）。名字非法或目录越界时拒绝。
+   * - electron：主进程删除；
+   * - web：返回 `ok=false`。
+   */
+  uninstallPlugin(name: string): Promise<PluginActionResult>;
+  /**
+   * 应用元信息（名称 / 版本 / 运行时版本 / 平台）。
+   *
+   * 存在的理由之一：插件清单的 `engines.nanowork` 区间要拿**当前版本**去判，
+   * 而这个版本只有主进程知道。放进适配层同时收掉了渲染层直接读
+   * `window.electronAPI` 的越界写法（`TitleBar` 早先就是这么取版本的）。
+   * - electron：`app.getVersion()` 等；
+   * - web：返回 `null`（浏览器里没有「应用版本」这个概念）。
+   */
+  appInfo(): Promise<AppInfo | null>;
 }
 
 /** 本地文件 base64 读取结果 */
@@ -621,6 +687,15 @@ export interface ElectronAPI {
   onSkillsChanged(cb: () => void): () => void;
   /** 原生目录选择对话框，返回所选目录绝对路径；取消返回 null */
   pickDirectory(): Promise<string | null>;
+  // —— 插件包生命周期（FR-3.4）——
+  // 只做文件系统那一半（扫 / 装 / 卸）：激活状态由引擎的 /v1/plugins 给出，
+  // 不走 IPC——引擎才是权威，客户端不复刻指纹哈希。
+  /** 扫描 `~/.nanowork/plugins` 下已安装的插件包（只读） */
+  pluginsScan(): Promise<PluginScanResult>;
+  /** 安装（复制）插件包到 `~/.nanowork/plugins/<清单 name>` */
+  pluginsInstall(sourceDir: string, overwrite?: boolean): Promise<PluginInstallResult>;
+  /** 卸载插件（删除包目录，不可撤销） */
+  pluginsUninstall(name: string): Promise<PluginActionResult>;
   /** 窗口最小化 */
   windowMinimize(): void;
   /** 窗口最大化/还原切换 */

@@ -15,15 +15,108 @@ import type {
 } from '@/types';
 import type { ChatRequest } from '@/ai/runtime/types';
 
-/** 自动摘要的最大字数约束（对应 PRD：≤150 字） */
+/** 自动摘要的**单节**字数上限（对应 PRD：≤150 字） */
 const SUMMARY_MAX_CHARS = 150;
 
-/** 自动摘要提示模板：要求结构化输出决策/偏好/待办 */
+/** 结构化摘要的两节标签；解析见 parseSummary */
+const SUMMARY_IDENTITY_TAG = '[身份]';
+const SUMMARY_TASK_TAG = '[任务]';
+
+/**
+ * 自动摘要提示模板：要求**分节**输出，而不是一段笼统摘要。
+ *
+ * 分节不是格式洁癖——「落到哪一层」由内容性质决定，不能由调用方一刀切切：
+ * 用户的称呼 / 职业是**跨项目**事实（L2 用户级），换一个工作区依然成立；
+ * 而项目决策与待办只对**当前工作区**有意义（L3）。
+ *
+ * 旧版只输出一段文本（且限定「决策 / 偏好 / 待办」三类），带来两个后果：
+ * 身份类事实要么被写进工作区记忆（换个工作区就丢），要么压根不属于那三类而被
+ * 整段丢弃 —— 后者正是「我告诉过它我叫什么，新会话却不知道」的直接原因。
+ */
 const SUMMARY_SYSTEM_PROMPT = [
-  '你是会话记忆归纳助手。请将下面的对话压缩为一段中文摘要，用于长期记忆存档。',
-  `要求：不超过 ${SUMMARY_MAX_CHARS} 字；只保留「关键决策」「用户偏好」「待办事项」三类信息；`,
-  '若三类信息均不存在，直接输出空字符串。不要输出解释性文字，不要使用 Markdown 标题。',
+  '你是会话记忆归纳助手。请把下面的对话压缩为用于长期记忆存档的中文摘要。',
+  '严格按下面两节输出，两节都必须出现；某一节没有内容就写「无」：',
+  '',
+  `${SUMMARY_IDENTITY_TAG} 用户的称呼或姓名、年龄段、职业与专业背景、所在组织与角色、稳定的个人偏好。`,
+  `${SUMMARY_TASK_TAG} 本次会话的关键决策、已确认方案、待办事项、项目专有事实。`,
+  '',
+  `要求：全文不超过 ${SUMMARY_MAX_CHARS} 字；只保留跨会话仍有价值的信息；`,
+  '不要输出解释性文字，不要使用 Markdown 标题，不要复述本条要求。',
 ].join('\n');
+
+/** 模型表示「这一节没有内容」的几种写法（归一化为空串） */
+const SUMMARY_EMPTY_TOKENS = new Set(['无', 'none', 'n/a', 'na', '-', '—', '（无）', '(无)']);
+
+/**
+ * 摘要导出为两节后的结构。
+ * `identity` → L2 用户级（跨项目）；`task` → L3 工作区级。
+ */
+export interface StructuredSummary {
+  identity: string;
+  task: string;
+}
+
+/** 两节都为空（等价于「这次没什么可记的」） */
+export function isEmptySummary(s: StructuredSummary): boolean {
+  return s.identity === '' && s.task === '';
+}
+
+/**
+ * 把模型输出解析成两节。
+ *
+ * 刻意**容错**：模型可能漏标签、写多行、或加 `**加粗**` 包裹。因此：
+ * - 命中两节标签 → 按标签切分；
+ * - 只命中间一节 → 另一节为空，命中的那节按标签取；
+ * - 完全没有标签（旧模型 / 被截断）→ 整段视为 `task`，保持与旧实现一致的行为，
+ *   不会因为一次解析失败就把整轮对话的记忆丢掉。
+ */
+export function parseSummary(text: string): StructuredSummary {
+  const src = (text ?? '').trim();
+  if (src === '') return { identity: '', task: '' };
+
+  const idIdx = src.indexOf(SUMMARY_IDENTITY_TAG);
+  const taskIdx = src.indexOf(SUMMARY_TASK_TAG);
+
+  if (idIdx === -1 && taskIdx === -1) {
+    return { identity: '', task: clampSummary(src) };
+  }
+
+  const cut = (body: string) => {
+    const trimmed = body.trim().replace(/^\*\*|\*\*$/g, '').trim();
+    return SUMMARY_EMPTY_TOKENS.has(trimmed.toLowerCase()) ? '' : clampSummary(trimmed);
+  };
+
+  if (idIdx !== -1 && taskIdx !== -1) {
+    // 两节都在：按各自标签的位置切，**不假设先后顺序**——
+    // 模型偶尔会先写任务再补身份，把顺序当成约束会让其中一节凭空消失。
+    const idBodyStart = idIdx + SUMMARY_IDENTITY_TAG.length;
+    const taskBodyStart = taskIdx + SUMMARY_TASK_TAG.length;
+    if (idIdx < taskIdx) {
+      return {
+        identity: cut(src.slice(idBodyStart, taskIdx)),
+        task: cut(src.slice(taskBodyStart)),
+      };
+    }
+    return {
+      identity: cut(src.slice(idBodyStart)),
+      task: cut(src.slice(taskBodyStart, idIdx)),
+    };
+  }
+
+  if (idIdx !== -1) {
+    return {
+      identity: cut(src.slice(idIdx + SUMMARY_IDENTITY_TAG.length)),
+      task: '',
+    };
+  }
+  return { identity: '', task: cut(src.slice(taskIdx + SUMMARY_TASK_TAG.length)) };
+}
+
+/** 单节截断到上限（保留首部，摘要的价值集中在开头） */
+function clampSummary(text: string): string {
+  const s = (text ?? '').trim();
+  return s.length > SUMMARY_MAX_CHARS ? s.slice(0, SUMMARY_MAX_CHARS) : s;
+}
 
 /** 记忆块去重标记的隐藏注释前缀（与 SUMMARY:<hash> 配套） */
 const DEDUP_MARKER_OPEN = '<!-- SUMMARY:';
@@ -54,15 +147,72 @@ function hashContent(s: string): string {
 /** 工作区索引在 storage 中的 key（记录已知工作区 key 列表，用于多工作区切换） */
 const WORKSPACE_INDEX_KEY = `${MEMORY_KEY_PREFIX}index`;
 
+/** 兜底工作区 key：无工作目录的会话（空目录 / IM 会话）与历史数据都用它 */
+export const DEFAULT_WORKSPACE_KEY = 'default';
+
+/**
+ * 工作目录 → 工作区记忆 key（L3 隔离键）。
+ *
+ * 形态 `<basename>-<hash8>`：`D:\Workspace\study\foo` → `foo-1a2b3c4d`。
+ *
+ * - **带 basename**：`~/.nanowork/memory/` 下的文件名要能被用户一眼认出来
+ *   （纯哈希会让「去哪个文件找记忆」变成猜谜）。
+ * - **带 hash**：同名目录（两个项目都有 `src`）不能互相覆盖记忆。
+ * - **归一化只做三件事**（反斜杠→斜杠、去尾斜杠、转小写）：Windows 路径大小写
+ *   不敏感，`D:\Work` 与 `d:/work/` 必须落同一个 key，否则同一个工作区的记忆会被
+ *   劈成两半——这是最难排查的一类「记忆时有时无」。
+ * - **无 workdir → `default`**：与 V1 的历史记忆保持连续，升级不会让老记忆失联。
+ * - **字符集收敛到 `[a-z0-9._-]`**：主进程 `sanitizeSegment` 会再做一次白名单清洗，
+ *   这里先收敛是为了让**渲染层看到的 key 与落盘文件名一致**（否则「导出」的
+ *   默认文件名会与磁盘上的真实文件对不上）。
+ */
+export function workspaceKeyFor(workdir: string | undefined | null): string {
+  const raw = (workdir ?? '').trim();
+  if (raw === '') return DEFAULT_WORKSPACE_KEY;
+
+  const normalized = raw.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+  if (normalized === '') return DEFAULT_WORKSPACE_KEY;
+
+  const parts = normalized.split('/').filter((p) => p !== '');
+  const base = (parts[parts.length - 1] ?? '')
+    .replace(/[^a-z0-9._-]+/g, '-')
+    .replace(/^[._-]+/, '')
+    .replace(/-{2,}/g, '-')
+    .replace(/-$/, '')
+    .slice(0, 24);
+
+  const hash = hashContent(normalized).padStart(8, '0');
+  return base === '' ? hash : `${base}-${hash}`;
+}
+
+/**
+ * 记忆在磁盘上的真实落点（仅用于展示）。
+ *
+ * Electron 下它是**真实文件**（Electron 由主进程 `storageRoutes` 把
+ * `nanowork.memory.<key>` / `nanowork.userMemory` 路由成这两条路径）；
+ * Web 端没有文件系统，落 `localStorage`，返回一句人话而不是编一个假路径。
+ *
+ * 之所以要在界面上写出来：这份记忆此前既不可见也不可查，
+ * 「到底记没记住」只能靠模型复述来猜，出了问题无从下手。
+ */
+export function memoryDiskPath(scope: MemoryScope, workspaceKey: string): string {
+  if (platform.env !== 'electron') return '浏览器本地存储（Web 端无文件落点）';
+  return scope === 'user'
+    ? '~/.nanowork/MEMORY.md'
+    : `~/.nanowork/memory/${workspaceKey}.md`;
+}
+
 /** 作用域的展示元信息（记忆页切换器用） */
 const SCOPE_DEFS: Record<MemoryScope, { label: string; description: string }> = {
   user: {
     label: '用户级',
-    description: '跨项目生效（L2）。按 FR-4.2 只在**用户显式要求**时写入，自动沉淀不进这一层。',
+    description:
+      '跨项目生效（L2）。写入方：你在本页的手动编辑，以及自动沉淀识别出的**身份类**事实（称呼/职业/稳定偏好）。',
   },
   workspace: {
     label: '工作区级',
-    description: '当前工作区的长期记忆（L3）。会话结束的自动摘要与「记住这条」都落在这里。',
+    description:
+      '当前工作区的长期记忆（L3）。会话结束的自动摘要与「记住这条」都落在这里；按工作目录隔离，换工作区互不影响。',
   },
 };
 
@@ -84,13 +234,21 @@ const SCOPE_DEFS: Record<MemoryScope, { label: string; description: string }> = 
  * - **作用域分层**：新增 `user` 作用域落 `~/.nanowork/MEMORY.md`（跨项目，L2），
  *   与既有的 `workspace` 作用域（`memory/<key>.md`，L3）并列。scope 作为**可选
  *   尾参**接入既有方法，缺省 `'workspace'` —— 既有调用方语义不变。
+ *
+ * 增强（记忆修复）：
+ * - **工作区 key 真正被接线**。此前 `useWorkspace()` 只有定义、生产代码零调用，
+ *   `currentKey` 恒为 `'default'`，L3 隔离形同虚设（所有工作区共用一份记忆）。
+ *   现在 `loadMemoryInto` 会按**会话的 workdir** 显式传入 key（见 `workspaceKeyFor`）。
+ * - **读写方法增加末位 `workspaceKey`**：异步沉淀可能在调用方切换工作区之后才落盘，
+ *   依赖全局 `currentKey` 会把 A 工作区的摘要写进 B 工作区。显式传参从根上消灭
+ *   这类竞态；不传时仍回落 `currentKey`，老的调用点行为不变。
  */
 class MemoryServiceImpl {
-  /** 当前工作区 key（默认 'default'；多工作区通过 useWorkspace 切换） */
-  private currentKey = 'default';
+  /** 当前工作区 key（默认 DEFAULT_WORKSPACE_KEY；由 loadMemoryInto 随活跃会话切换） */
+  private currentKey: string = DEFAULT_WORKSPACE_KEY;
 
   /** 多工作区索引（已知工作区 key 列表） */
-  private workspaceIndex: string[] = ['default'];
+  private workspaceIndex: string[] = [DEFAULT_WORKSPACE_KEY];
 
   constructor() {
     // 启动时尝试从 storage 恢复工作区索引
@@ -104,7 +262,9 @@ class MemoryServiceImpl {
         const parsed = JSON.parse(raw) as unknown;
         if (Array.isArray(parsed)) {
           this.workspaceIndex = (parsed as string[]).filter((k) => typeof k === 'string');
-          if (!this.workspaceIndex.includes('default')) this.workspaceIndex.unshift('default');
+          if (!this.workspaceIndex.includes(DEFAULT_WORKSPACE_KEY)) {
+            this.workspaceIndex.unshift(DEFAULT_WORKSPACE_KEY);
+          }
         }
       }
     } catch {
@@ -114,7 +274,7 @@ class MemoryServiceImpl {
 
   /** 切换当前工作区（并登记到索引） */
   useWorkspace(key: string): void {
-    this.currentKey = key || 'default';
+    this.currentKey = key || DEFAULT_WORKSPACE_KEY;
     if (!this.workspaceIndex.includes(this.currentKey)) {
       this.workspaceIndex.push(this.currentKey);
       void this.persistIndex();
@@ -161,14 +321,17 @@ class MemoryServiceImpl {
   /**
    * 作用域 → storage key（§14.1 的四层在 V1 落地两层）。
    *
-   * - `workspace` → `nanowork.memory.<currentKey>` → `~/.nanowork/memory/<key>.md`
+   * - `workspace` → `nanowork.memory.<workspaceKey>` → `~/.nanowork/memory/<key>.md`
    * - `user` → `nanowork.userMemory` → `~/.nanowork/MEMORY.md`
    *
    * 用户级刻意不复用 `MEMORY_KEY_PREFIX`：那个前缀是动态路由，套上去会得到
    * `memory/user.md`——一个谁都不认的孤儿文件（见 constants.ts 的注释）。
+   *
+   * `workspaceKey` 缺省回落 `currentKey`，让既有调用点语义不变。
    */
-  private storageKeyForScope(scope: MemoryScope): string {
-    return scope === 'user' ? USER_MEMORY_KEY : this.storageKey();
+  private storageKeyForScope(scope: MemoryScope, workspaceKey?: string): string {
+    if (scope === 'user') return USER_MEMORY_KEY;
+    return this.storageKeyFor(workspaceKey ?? this.currentKey);
   }
 
   /** 按指定 key 读取记忆全文（不切换 currentKey） */
@@ -195,10 +358,11 @@ class MemoryServiceImpl {
    * 读取记忆全文。读取失败或从未写入时返回空串（不抛出，避免阻塞会话创建）。
    *
    * `scope` 缺省为 `'workspace'`——既有调用方拿到的语义与改动前**完全一致**。
+   * `workspaceKey` 同理（缺省 `currentKey`）。
    */
-  async load(scope: MemoryScope = 'workspace'): Promise<string> {
+  async load(scope: MemoryScope = 'workspace', workspaceKey?: string): Promise<string> {
     if (scope === 'user') return this.loadRawKey(USER_MEMORY_KEY);
-    return this.loadByKey(this.currentKey);
+    return this.loadByKey(workspaceKey ?? this.currentKey);
   }
 
   /**
@@ -213,14 +377,21 @@ class MemoryServiceImpl {
    * `scope` 刻意放在**末位可选参数**（而非 PRD 14.2 示例的首位）：本服务已有
    * 40 余处 `save(text)` 调用，改成首位会让「改一行实现」变成「改四十个调用点」，
    * 收益为零而回归风险不小。语义与 PRD 一致，只是参数位置不同。
+   *
+   * `workspaceKey` 紧随其后：异步沉淀可能在用户切换工作区之后才落盘，依赖全局
+   * `currentKey` 会把 A 的摘要写进 B。显式传参消灭这类竞态；不传则行为不变。
    */
-  async save(fullText: string, scope: MemoryScope = 'workspace'): Promise<void> {
-    await platform.storage.set(this.storageKeyForScope(scope), fullText ?? '');
+  async save(
+    fullText: string,
+    scope: MemoryScope = 'workspace',
+    workspaceKey?: string,
+  ): Promise<void> {
+    await platform.storage.set(this.storageKeyForScope(scope, workspaceKey), fullText ?? '');
   }
 
   /** 清空记忆（等价于 save('')） */
-  async clear(scope: MemoryScope = 'workspace'): Promise<void> {
-    await this.save('', scope);
+  async clear(scope: MemoryScope = 'workspace', workspaceKey?: string): Promise<void> {
+    await this.save('', scope, workspaceKey);
   }
 
   /**
@@ -229,11 +400,16 @@ class MemoryServiceImpl {
    *
    * FR-4.2 的「用户显式要求才写」由**调用方**保证：自动沉淀与「记住这条」都用
    * 缺省的 `workspace` 作用域，只有记忆页在用户级作用域下的编辑才会写 `user`。
+   *
+   * 本次修正 FR-4.2 的一处过窄解读：自动沉淀**可以**写用户级，但仅限其中的
+   * **身份类**事实（见 P1-B 分流）。这里 `append` 只负责按 scope + workspaceKey
+   * 落盘，分流策略在调用方。
    */
   async append(
     content: string,
     opts: MemoryAppendOptions = {},
     scope: MemoryScope = 'workspace',
+    workspaceKey?: string,
   ): Promise<void> {
     const trimmed = (content ?? '').trim();
     if (!trimmed) return;
@@ -241,7 +417,7 @@ class MemoryServiceImpl {
     const hash = hashContent(trimmed);
     const marker = `${DEDUP_MARKER_OPEN}${hash}${DEDUP_MARKER_CLOSE}`;
 
-    const existing = await this.load(scope);
+    const existing = await this.load(scope, workspaceKey);
     // 幂等去重：同一内容（同 hash）不重复追加
     if (existing.includes(marker)) return;
 
@@ -251,7 +427,7 @@ class MemoryServiceImpl {
 
     const next =
       existing.trim() === '' ? block : `${existing.replace(/\s+$/, '')}\n\n${block}`;
-    await this.save(`${next}\n`, scope);
+    await this.save(`${next}\n`, scope, workspaceKey);
   }
 
   /** 各作用域的规模概览（记忆页的作用域切换器用） */
@@ -353,14 +529,18 @@ class MemoryServiceImpl {
   }
 
   /**
-   * 让模型对会话历史生成 ≤150 字结构化摘要（P1 自动沉淀用）。
+   * 让模型对会话历史生成 ≤150 字**分节**摘要（P1 自动沉淀用）。
    * 复用 connectionManager.getClient()，仅收集流式文本，不落任何 UI 状态。
+   *
+   * 返回结构化两节而不是一段文本：调用方按「身份 → L2、任务 → L3」分别落盘。
+   * 失败与「没什么可记的」都收敛为两节皆空，调用方据此跳过写入。
    */
-  async summarize(history: ChatMessageParam[]): Promise<string> {
+  async summarize(history: ChatMessageParam[]): Promise<StructuredSummary> {
+    const empty: StructuredSummary = { identity: '', task: '' };
     const dialogue = (history ?? []).filter(
       (m) => m.role !== 'system' && m.content.trim() !== '',
     );
-    if (dialogue.length === 0) return '';
+    if (dialogue.length === 0) return empty;
 
     const messages: ChatMessageParam[] = [
       { role: 'system', content: SUMMARY_SYSTEM_PROMPT },
@@ -382,10 +562,10 @@ class MemoryServiceImpl {
         onError: () => undefined,
       });
     } catch {
-      return '';
+      return empty;
     }
 
-    return text.trim().slice(0, SUMMARY_MAX_CHARS);
+    return parseSummary(text);
   }
 }
 

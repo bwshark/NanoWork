@@ -28,6 +28,7 @@ import type {
   ToolCallStatus,
 } from '@/types';
 import type { ExecutionMode, PlanStep } from '@/types/event';
+import type { PluginEngineIndex } from '@/types/plugin';
 
 // 领域类型（模型目录 / 连接状态 / 运行记录）由 `@/types` 定义，
 // 这里仅做转出，使调用方「只 import 一处」即可拿到完整契约面。
@@ -413,6 +414,29 @@ export interface AgentRuntime {
    * 避免「同一个事实有两个真值来源」）。
    */
   transcribe?(req: TranscribeRequest): Promise<string>;
+
+  /**
+   * 引擎侧插件索引（FR-3.4）。**方法存在性即能力声明**（同 `transcribe`）。
+   *
+   * 语义边界：返回的是**引擎的激活状态**，不是「本地装了什么」——
+   * 「装了什么」由文件系统扫描给出（`platform.scanPlugins`）。两者刻意分开，
+   * 因为「磁盘上有包」与「引擎认它」是两件事，合并成一个布尔值就无法表达
+   * 「装了但没激活」这种最常见的中间态。
+   *
+   * 契约要求：**不抛异常**（读不到 → `available: false` + `error`）。
+   * 「网关没起」是常态，不该让整个插件页崩掉。
+   */
+  listPlugins?(): Promise<PluginEngineIndex>;
+
+  /**
+   * 切换插件启停（FR-3.4）。只改**引擎侧**激活标记，
+   * **不动** `settings.enabledPlugins`（那是用户意图，由 store 显式同步）——
+   * 两件事分开调用，失败时才能分清到底是哪一半没生效。
+   */
+  setPluginEnabled?(
+    name: string,
+    enabled: boolean,
+  ): Promise<{ ok: boolean; error?: string }>;
 }
 
 /** 该引擎实现不支持某个配置域时抛出（调用方据此走降级分支，而非静默） */

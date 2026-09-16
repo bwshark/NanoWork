@@ -217,7 +217,7 @@ export interface Settings {
   apiToken: string;          // nanobot apiToken/key
   theme: 'light' | 'dark';
   memoryEnabled: boolean;    // 记忆注入开关（默认 true）
-  autoSummarize: boolean;    // 会话结束自动沉淀摘要（默认 false）
+  autoSummarize: boolean;    // 会话结束自动沉淀摘要（默认 true）
 }
 
 // types/agent.ts

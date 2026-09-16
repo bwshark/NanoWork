@@ -30,6 +30,7 @@ import PsychologyIcon from "@mui/icons-material/Psychology";
 import GridViewIcon from "@mui/icons-material/GridView";
 import AutoFixHighIcon from "@mui/icons-material/AutoFixHigh";
 import HubIcon from "@mui/icons-material/Hub";
+import ExtensionIcon from "@mui/icons-material/Extension";
 import BookmarksOutlinedIcon from "@mui/icons-material/BookmarksOutlined";
 import TuneIcon from "@mui/icons-material/Tune";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
@@ -81,6 +82,9 @@ const LIBRARY_ITEMS: NavLinkItem[] = [
   { label: "专家", icon: <PsychologyIcon />, to: ROUTES.agents },
   { label: "技能", icon: <AutoFixHighIcon />, to: ROUTES.skills },
   { label: "连接器", icon: <HubIcon />, to: ROUTES.mcp },
+  // 插件排在最后：它是「把上面几样打包在一起」的更高一层单位，
+  // 放在连接器之前会让人以为它和技能 / 连接器是同一档的东西。
+  { label: "插件", icon: <ExtensionIcon />, to: ROUTES.plugins },
 ];
 
 /**

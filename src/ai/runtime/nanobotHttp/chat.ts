@@ -17,6 +17,13 @@ import {
   extractRawToolCalls,
 } from './sseToolCalls';
 import { extractArtifacts } from './artifactExtractor';
+import {
+  readPluginIndex,
+  setPluginEnabledInEngine,
+  type PluginRequestContext,
+  type PluginToggleOutcome,
+} from './plugins';
+import type { PluginEngineIndex } from '@/types/plugin';
 
 /**
  * 网关 [LOCAL PATCH] 注入的进度事件结构（delta.nanobot_event）。
@@ -135,6 +142,26 @@ export class NanobotClient {
       label: m.label ?? m.id,
       model: m.model ?? m.id,
     }));
+  }
+
+  /**
+   * 读引擎侧插件索引（`GET /v1/plugins`，FR-3.4）。
+   *
+   * 复用本类的 endpoint 解析与鉴权头（含开发态代理改写）——`plugins.ts`
+   * 只管 wire，不自己拼地址，否则开发态要改两处。
+   */
+  listPlugins(): Promise<PluginEngineIndex> {
+    return readPluginIndex(this.pluginContext());
+  }
+
+  /** 切换插件启停（`POST /v1/plugins/{name}`） */
+  setPluginEnabled(name: string, enabled: boolean): Promise<PluginToggleOutcome> {
+    return setPluginEnabledInEngine(this.pluginContext(), name, enabled);
+  }
+
+  private pluginContext(): PluginRequestContext {
+    const { endpoint } = this.getConfig();
+    return { endpoint, headers: this.authHeaders() };
   }
 
   /**

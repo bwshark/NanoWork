@@ -5,6 +5,7 @@ import { useAgentsStore } from '@/stores/agentsStore';
 import { useArtifactsStore } from '@/stores/artifactsStore';
 import { NanobotClient } from '@/ai/runtime/nanobotHttp/chat';
 import { resetEventStream } from './helpers/eventStream';
+import { cronRecordsToSession } from '@/lib/sessionImport';
 import type { ChatHandle, ChatRequest, StreamHandlers } from '@/ai/runtime/types';
 
 /** 重置所有相关 store 到初始态，避免用例之间跨用例串扰 */
@@ -339,11 +340,170 @@ describe('sessionsStore: 记忆注入 (T22~T28)', () => {
 });
 
 /**
+ * 自动沉淀：**触发点**与**作用域分流**。
+ *
+ * 这是「我告诉过它我叫什么，新建会话却不知道」的直接回归防线：
+ * - 触发点必须有**两个**（关闭 / 新建会话），只挂 deleteSession 会让
+ *   「说一句 → 直接新建会话」整段落在空档里；
+ * - 分流必须按内容性质：身份类进用户级（跨项目），任务类进工作区级
+ *   （按会话 workdir 隔离），否则换个工作区身份就丢了。
+ */
+describe('自动沉淀：触发点与作用域分流', () => {
+  /** 轮询等待 fire-and-forget 的沉淀链路跑完（最多 ~1s） */
+  async function waitFor(pred: () => boolean) {
+    for (let i = 0; i < 20; i++) {
+      if (pred()) return;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+  }
+
+  async function stubMemory() {
+    const { MemoryService } = await import('@/lib/memory');
+    const summarize = vi
+      .spyOn(MemoryService, 'summarize')
+      .mockResolvedValue({ identity: '明明，中医药背景', task: '决定先修 P0' });
+    const append = vi.spyOn(MemoryService, 'append').mockResolvedValue(undefined);
+    return { summarize, append };
+  }
+
+  it('createSession 对上一条会话补触发：身份写用户级、任务写工作区级(workdir key)', async () => {
+    const prev = useSessionsStore
+      .getState()
+      .createSession('agent-test', '上一条', { workdir: 'D:/ws/proj' });
+    await useSessionsStore.getState().send('我叫明明', prev.id);
+
+    useSettingsStore.getState().setSettings({ autoSummarize: true });
+    const { append } = await stubMemory();
+
+    useSessionsStore.getState().createSession('agent-test', '新会话');
+    await waitFor(() => append.mock.calls.length >= 2);
+
+    expect(append).toHaveBeenCalledWith('明明，中医药背景', expect.anything(), 'user');
+    expect(append).toHaveBeenCalledWith(
+      '决定先修 P0',
+      expect.anything(),
+      'workspace',
+      expect.stringContaining('proj-'),
+    );
+  });
+
+  it('deleteSession 走同一条分流规则', async () => {
+    const s = useSessionsStore
+      .getState()
+      .createSession('agent-test', '待删', { workdir: 'D:/ws/other' });
+    await useSessionsStore.getState().send('随便说点', s.id);
+
+    useSettingsStore.getState().setSettings({ autoSummarize: true });
+    const { append } = await stubMemory();
+
+    useSessionsStore.getState().deleteSession(s.id);
+    await waitFor(() => append.mock.calls.length >= 2);
+
+    expect(append).toHaveBeenCalledWith(
+      '决定先修 P0',
+      expect.anything(),
+      'workspace',
+      expect.stringContaining('other-'),
+    );
+  });
+
+  it('autoSummarize=false 时任何触发点都不调模型', async () => {
+    const s = useSessionsStore.getState().createSession('agent-test', 'A');
+    await useSessionsStore.getState().send('你好', s.id);
+
+    const { summarize } = await stubMemory();
+    useSessionsStore.getState().createSession('agent-test', 'B');
+    useSessionsStore.getState().deleteSession(s.id);
+    await new Promise((r) => setTimeout(r, 60));
+
+    expect(summarize).not.toHaveBeenCalled();
+  });
+
+  it('同一会话只沉淀一次：反复新建会话不会重复归纳同一段历史', async () => {
+    const s = useSessionsStore.getState().createSession('agent-test', '唯一一条');
+    await useSessionsStore.getState().send('你好', s.id);
+
+    useSettingsStore.getState().setSettings({ autoSummarize: true });
+    const { summarize } = await stubMemory();
+
+    useSessionsStore.getState().createSession('agent-test', 'B');
+    await waitFor(() => summarize.mock.calls.length >= 1);
+    useSessionsStore.getState().createSession('agent-test', 'C');
+    useSessionsStore.getState().createSession('agent-test', 'D');
+    await new Promise((r) => setTimeout(r, 80));
+
+    expect(summarize).toHaveBeenCalledTimes(1);
+  });
+
+  it('摘要两节皆空时不写任何一层', async () => {
+    const s = useSessionsStore.getState().createSession('agent-test', '没内容');
+    await useSessionsStore.getState().send('嗯', s.id);
+
+    useSettingsStore.getState().setSettings({ autoSummarize: true });
+    const { MemoryService } = await import('@/lib/memory');
+    vi.spyOn(MemoryService, 'summarize').mockResolvedValue({ identity: '', task: '' });
+    const append = vi.spyOn(MemoryService, 'append').mockResolvedValue(undefined);
+
+    useSessionsStore.getState().createSession('agent-test', 'B');
+    await new Promise((r) => setTimeout(r, 80));
+
+    expect(append).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Agent 侧受控记忆写入（P2-A）：`<memory-save>` 块。
+ *
+ * 两条一起钉：① 协议标记**不得**出现在用户可见正文里（视图与事件流都不能有）；
+ * ② 块的内容要按 `scope` 落对层。前者是「刷新后标签冒出来」的回归防线，
+ * 后者是分流的执行侧。
+ */
+describe('Agent 记忆写入协议', () => {
+  it('块从正文与事件流中剥离，并按 scope 落盘', async () => {
+    vi.spyOn(NanobotClient.prototype, 'sendMessage').mockImplementation(
+      (_req, handlers: StreamHandlers): ChatHandle => {
+        handlers.onStatus('streaming');
+        handlers.onToken('好的，记下了。\n<memory-save scope="user">用户叫明明</memory-save>');
+        handlers.onStatus('done');
+        handlers.onDone();
+        return { done: Promise.resolve(), abort: () => {} };
+      },
+    );
+    const { MemoryService } = await import('@/lib/memory');
+    const append = vi.spyOn(MemoryService, 'append').mockResolvedValue(undefined);
+    useSettingsStore.getState().setSettings({ autoSummarize: true });
+
+    const s = useSessionsStore
+      .getState()
+      .createSession('agent-test', '记一条', { workdir: 'D:/ws/proj' });
+    await useSessionsStore.getState().send('记住我叫明明', s.id);
+
+    // ① 视图：正文已剥离
+    const view = useSessionsStore
+      .getState()
+      .sessions.find((x) => x.id === s.id)
+      ?.messages.find((m) => m.role === 'assistant');
+    expect(view?.content).toBe('好的，记下了。');
+
+    // ② 事件流：落盘的是同一份剥离后的正文（否则刷新一次标签就回来了）
+    const { getEventStore } = await import('@/events');
+    const events = await getEventStore().readEvents(s.id, 'D:/ws/proj');
+    const msgEvent = events.find((e) => e.type === 'message' && e.role === 'assistant');
+    expect(msgEvent && 'content' in msgEvent ? msgEvent.content : '').toBe('好的，记下了。');
+
+    // ③ 落盘：身份类进用户级
+    await new Promise((r) => setTimeout(r, 50));
+    expect(append).toHaveBeenCalledWith('用户叫明明', { source: 'agent' }, 'user', expect.anything());
+  });
+});
+
+/**
  * 分组级「从列表中移除」改为**真删**后引入的批量删除。
  *
- * 与单条 `deleteSession` 的关键差别：批量路径**刻意不做自动沉淀**——
- * 一个自动任务分组动辄几十条执行记录，逐条调模型总结既慢又无检索价值。
- * 这里把这个「不做」也钉成断言，避免以后有人「顺手对齐」单条逻辑。
+ * 批量路径对**定时任务执行记录**（`cron:` 前缀）与引擎只读留痕**不沉淀**：
+ * 一个自动任务分组动辄几十条执行记录，逐条调模型总结既慢又无检索价值——
+ * 这些 run 的真值在引擎侧，不是用户对话。守卫在 `sedimentSession` 内部，
+ * 单条删除与批量删除走同一条规则。
  */
 describe('deleteSessions：分组级批量删除', () => {
   it('一次删掉整组会话，其它会话不受影响', () => {
@@ -379,15 +539,25 @@ describe('deleteSessions：分组级批量删除', () => {
     expect(useSessionsStore.getState().sessions).toBe(before);
   });
 
-  it('不做自动沉淀：autoSummarize 打开且会话有消息时也不调模型', async () => {
-    const session = useSessionsStore.getState().createSession('agent-test', 'A');
-    await useSessionsStore.getState().send('你好，请介绍一下你自己', session.id);
+  it('定时任务执行记录不做自动沉淀：autoSummarize 打开且带消息也不调模型', async () => {
+    // 定时任务会话带 `cron:` 前缀，且默认 readonly —— 两条守卫任一命中都不该归纳
+    const cron = cronRecordsToSession(
+      'cron-abc',
+      '每日行业快讯',
+      [
+        { role: 'user', content: '今天有什么新闻' },
+        { role: 'assistant', content: '有几条' },
+      ],
+      new Date().toISOString(),
+      new Date().toISOString(),
+    );
+    useSessionsStore.setState((s) => ({ sessions: [cron, ...s.sessions] }));
 
     useSettingsStore.getState().setSettings({ autoSummarize: true });
     const { MemoryService } = await import('@/lib/memory');
     const spy = vi.spyOn(MemoryService, 'summarize');
 
-    useSessionsStore.getState().deleteSessions([session.id]);
+    useSessionsStore.getState().deleteSessions([cron.id]);
 
     expect(spy).not.toHaveBeenCalled();
     expect(useSessionsStore.getState().sessions).toHaveLength(0);

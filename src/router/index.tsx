@@ -6,6 +6,7 @@ import { AgentsPage } from '@/pages/agents/AgentsPage';
 import { MyAgentsPage } from '@/pages/agents/MyAgentsPage';
 import { SkillsPage } from '@/pages/skills/SkillsPage';
 import { McpPage } from '@/pages/mcp/McpPage';
+import { PluginsPage } from '@/pages/plugins/PluginsPage';
 import { TasksPage } from '@/pages/tasks/TasksPage';
 import { SettingsPage } from '@/pages/settings/SettingsPage';
 import { ArtifactsPage } from '@/pages/artifacts/ArtifactsPage';
@@ -25,6 +26,7 @@ export const router = createBrowserRouter([
       { path: ROUTES.myAgents, element: <MyAgentsPage /> },
       { path: ROUTES.skills, element: <SkillsPage /> },
       { path: ROUTES.mcp, element: <McpPage /> },
+      { path: ROUTES.plugins, element: <PluginsPage /> },
       { path: ROUTES.tasks, element: <TasksPage /> },
       { path: ROUTES.settings, element: <SettingsPage /> },
       { path: ROUTES.artifacts, element: <ArtifactsPage /> },

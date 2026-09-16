@@ -30,8 +30,9 @@ import type { AssembledSection } from '@/types';
  * 6  domain               工作领域约束
  * 7  user-instructions    <user_custom_instructions>
  * 8  memory               长期记忆块
- * 9  skills               本会话挂载的技能正文
- * 10 local-time           本地时间（相对时间换算基准）
+ * 9  memory-write         记忆写入协议（Agent 主动记一条的写法）
+ * 10 skills               本会话挂载的技能正文
+ * 11 local-time           本地时间（相对时间换算基准）
  * ```
  *
  * 三条排序理由，都不是随手排的：
@@ -93,6 +94,11 @@ export interface AssemblePromptInput {
   userInstructions?: string;
   /** 记忆块的**已包裹**正文（含边界指令行），见 MemoryService.wrapForInjection */
   memory?: string;
+  /**
+   * 记忆写入协议正文（`MEMORY_WRITE_INSTRUCTION`）。
+   * 是否注入由调用方决定（与记忆注入同开同关），装配器只负责摆位置。
+   */
+  memoryWrite?: string;
   /** 本会话挂载的技能正文（已按挂载顺序排好） */
   skills?: string[];
   /** 本地时间提示正文 */
@@ -164,6 +170,9 @@ export function assemblePromptSections(input: AssemblePromptInput): AssembledSec
     ),
   );
   push('memory', input.memory ?? '');
+  // 写入协议紧贴记忆块之后：模型刚「读完」已有记忆，紧接着就看到「怎么写新的」。
+  // 放在 skills 之前是因为它属于身份/上下文层，而技能是操作层。
+  push('memory-write', input.memoryWrite ?? '');
   for (const skill of input.skills ?? []) push('skills', skill);
   push('local-time', input.localTime ?? '');
 

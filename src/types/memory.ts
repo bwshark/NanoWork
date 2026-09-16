@@ -27,12 +27,27 @@ export interface MemoryState {
 /**
  * 记忆作用域（design §14.1 四层里的 L2 / L3）。
  *
- * - `user`：用户级长期记忆，落 `~/.nanowork/MEMORY.md`（跨项目生效，L2）；
- *   按 FR-4.2「用户显式要求才写」——**只有用户在记忆页亲手写**才会落盘，
- *   会话结束的自动沉淀不走这一层。
- * - `workspace`：工作区长期记忆，落 `~/.nanowork/memory/<workspaceKey>.md`（L3）。
+ * - `user`：用户级长期记忆，落 `~/.nanowork/MEMORY.md`（跨项目生效，L2）。
+ *   写入方有三处：用户在记忆页亲手编辑、自动沉淀识别出的**身份类**事实
+ *   （称呼/职业/稳定偏好），以及 Agent 在用户明确要求下写的
+ *   `<memory-save scope="user">`。
+ * - `workspace`：工作区长期记忆，落 `~/.nanowork/memory/<workspaceKey>.md`（L3），
+ *   按会话的工作目录隔离。
  */
 export type MemoryScope = 'user' | 'workspace';
+
+/**
+ * Agent 在回答里声明的「这一条请记住」（`<memory-save>` 块，P2-A）。
+ *
+ * 它只是**意图**：真正的落盘（时间戳、来源、幂等去重标记）由
+ * `MemoryService.append` 统一负责。见 `src/lib/memoryDirective.ts`。
+ */
+export interface MemoryDirective {
+  /** 落到哪一层；省略时按 `workspace` */
+  scope: MemoryScope;
+  /** 待写入的正文（已 trim，非空） */
+  content: string;
+}
 
 /** 某个作用域的记忆概览（记忆页的作用域切换用） */
 export interface MemoryScopeSummary {

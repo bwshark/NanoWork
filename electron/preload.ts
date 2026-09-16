@@ -75,8 +75,17 @@ const api: ElectronAPI = {
   /** 读取本地文件为 base64（复制消息粘贴恢复附件用） */
   readFileAsBase64: (path: string) =>
     ipcRenderer.invoke('fs:readFileAsBase64', path),
-  loadUserSkills: () => ipcRenderer.invoke('skills:loadUser'),
+  // ⚠️ `workspace` 必须透传：丢掉它主进程就只会扫用户级目录，
+  // 项目级技能（`<workspace>/skills`）会静默消失（界面上看不出任何异常）。
+  loadUserSkills: (workspace?: string) =>
+    ipcRenderer.invoke('skills:loadUser', workspace),
   pickDirectory: () => ipcRenderer.invoke('dialog:pickDirectory'),
+  // —— 插件包生命周期（FR-3.4）：只做文件系统那一半 ——
+  // 激活状态走引擎的 /v1/plugins，不经 IPC——引擎才是权威。
+  pluginsScan: () => ipcRenderer.invoke('plugins:scan'),
+  pluginsInstall: (sourceDir: string, overwrite?: boolean) =>
+    ipcRenderer.invoke('plugins:install', sourceDir, overwrite),
+  pluginsUninstall: (name: string) => ipcRenderer.invoke('plugins:uninstall', name),
   // ——— 窗口控制（自绘标题栏）———
   windowMinimize: () => ipcRenderer.send('window:minimize'),
   windowToggleMaximize: () => ipcRenderer.send('window:toggle-maximize'),

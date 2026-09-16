@@ -4,6 +4,7 @@ import { WebStorageAdapter, webPickDirectory, webWriteTextFile } from './storage
 import { ElectronStorageAdapter } from './storage.electron';
 import { notify } from './notification';
 import type {
+  AppInfo,
   ChannelConnectAction,
   ChannelSyncResult,
   CredentialVaultStatus,
@@ -273,6 +274,45 @@ export const platform: PlatformAdapter = {
       ok: false,
       error: 'Web 端不支持读取本地文件，请使用桌面端',
     });
+  },
+  // —— 插件包生命周期（FR-3.4）——
+  /**
+   * 扫描已安装插件。Web 端返回**空结果但不算错误**：
+   * 浏览器里没有 `~/.nanowork/plugins` 可扫，这不是故障。
+   * 返回值带 `pluginsRoot`，界面据此显示「插件目录在哪 / 为什么是空的」。
+   */
+  scanPlugins: () => {
+    if (isElectron() && window.electronAPI) {
+      return window.electronAPI.pluginsScan();
+    }
+    return Promise.resolve({ plugins: [], skipped: [], pluginsRoot: '' });
+  },
+  /**
+   * 安装插件。Web 端**拒绝**而不是假装成功：安装要往产品自有目录写文件，
+   * 浏览器做不到；报 ok=false 至少能让用户知道该换桌面端。
+   */
+  installPlugin: (sourceDir: string, overwrite?: boolean) => {
+    if (isElectron() && window.electronAPI) {
+      return window.electronAPI.pluginsInstall(sourceDir, overwrite);
+    }
+    return Promise.resolve({
+      ok: false,
+      error: 'Web 端无法安装插件包，请使用桌面端',
+      errorKind: 'io' as const,
+    });
+  },
+  uninstallPlugin: (name: string) => {
+    if (isElectron() && window.electronAPI) {
+      return window.electronAPI.pluginsUninstall(name);
+    }
+    return Promise.resolve({ ok: false, error: 'Web 端无法卸载插件包，请使用桌面端' });
+  },
+  /** 应用元信息：Web 端没有「应用版本」这个概念，如实返回 null */
+  appInfo: () => {
+    if (isElectron() && window.electronAPI) {
+      return window.electronAPI.appGetInfo();
+    }
+    return Promise.resolve(null);
   },
 };
 

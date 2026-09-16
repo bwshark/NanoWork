@@ -13,7 +13,7 @@ import {
 } from '@mui/material';
 import PersonOutlineIcon from '@mui/icons-material/PersonOutline';
 import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
-import { MemoryService } from '@/lib/memory';
+import { MemoryService, memoryDiskPath } from '@/lib/memory';
 import { platform } from '@/platform';
 import { MEMORY_FILENAME } from '@/lib/constants';
 import { toast } from '@/components/Toast';
@@ -26,8 +26,8 @@ import type { MemoryScope, MemoryScopeSummary } from '@/types';
  *
  * | 作用域 | 落点 | 写入时机 |
  * |---|---|---|
- * | 用户级（L2） | `~/.nanowork/MEMORY.md` | **仅用户显式编辑本页**；自动沉淀永不写这一层 |
- * | 工作区级（L3） | `~/.nanowork/memory/<workspaceKey>.md` | 会话结束自动摘要 + 「记住这条」 |
+ * | 用户级（L2） | `~/.nanowork/MEMORY.md` | 用户显式编辑本页 + 自动沉淀识别出的**身份类**事实 |
+ * | 工作区级（L3） | `~/.nanowork/memory/<workspaceKey>.md` | 会话结束自动摘要 + 「记住这条」+ Agent 的 `<memory-save>` |
  *
  * 两个刻意的设计点：
  *
@@ -87,15 +87,17 @@ export function MemoryPage() {
   const save = () =>
     runAction(() => MemoryService.save(text, scope), '记忆已保存', '保存失败');
 
+  const workspaceKey = MemoryService.resolveWorkspaceKey();
+  /** 磁盘上的真实落点（工作区级随活跃会话的工作目录变化） */
+  const diskPath = memoryDiskPath(scope, workspaceKey);
+
   /**
    * 导出当前作用域。
    * 工作区级带 workspace key：两层默认文件名相同，不带 key 会在下载目录里
    * 互相覆盖，而用户通常只有一份备份。
    */
   const exportName =
-    scope === 'user'
-      ? MEMORY_FILENAME
-      : `MEMORY.${MemoryService.resolveWorkspaceKey()}.md`;
+    scope === 'user' ? MEMORY_FILENAME : `MEMORY.${workspaceKey}.md`;
 
   const exportFile = () =>
     runAction(
@@ -124,7 +126,8 @@ export function MemoryPage() {
       </Typography>
       <Typography sx={{ fontSize: 13, color: 'text.secondary', mb: 2 }}>
         长期记忆分两层注入。开启注入后，内容会在每次会话以标签块追加到 system
-        提示末尾，不会污染 Agent 自身的提示词模板。
+        提示末尾，不会污染 Agent 自身的提示词模板；会话结束时自动沉淀，身份类事实
+        进用户级、项目结论进工作区级。
       </Typography>
 
       <ToggleButtonGroup
@@ -161,17 +164,28 @@ export function MemoryPage() {
 
       <Paper variant="outlined" sx={{ p: 2, bgcolor: 'background.paper' }}>
         {current && (
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5 }}>
-            <Chip
-              size="small"
-              variant="outlined"
-              label={exportName}
-              sx={{ fontSize: 11, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}
-            />
+          <Box
+            sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5, flexWrap: 'wrap' }}
+          >
+            {/* 磁盘落点：让「记忆到底存在哪」看得见，而不是只能靠文档描述去猜 */}
+            <Tooltip title={`记忆文件的实际落点：${diskPath}`}>
+              <Chip
+                size="small"
+                variant="outlined"
+                icon={<FolderOutlinedIcon sx={{ fontSize: 14 }} />}
+                label={diskPath}
+                sx={{
+                  fontSize: 11,
+                  height: 22,
+                  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                  cursor: 'help',
+                }}
+              />
+            </Tooltip>
             <Tooltip title={current.description}>
               <Typography
                 noWrap
-                sx={{ fontSize: 12, color: 'text.secondary', cursor: 'help' }}
+                sx={{ fontSize: 12, color: 'text.secondary', cursor: 'help', minWidth: 0 }}
               >
                 {current.description}
               </Typography>

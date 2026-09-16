@@ -64,7 +64,14 @@ const DEFAULT_SETTINGS: Settings = {
   apiToken: '',
   theme: 'system',
   memoryEnabled: true,
-  autoSummarize: false,
+  /**
+   * 会话结束自动沉淀摘要。**默认开启**。
+   *
+   * 旧默认是 false，后果不是「少写一点记忆」，而是整个跨会话记忆链路从未被触发过
+   * ——用户告诉 AI 自己的名字，新开会话依然一问三不知。自动沉淀是记忆功能的
+   * 唯一写入源（另一处手动「记住这条」要用户主动点），把它默认关掉等于默认没有记忆。
+   */
+  autoSummarize: true,
   transcription: DEFAULT_TRANSCRIPTION,
   desktop: DEFAULT_DESKTOP,
   workspaceAliases: {},
@@ -111,7 +118,7 @@ export const useSettingsStore = create<SettingsState>()(
     {
       name: STORAGE_KEYS.settings,
       storage: zustandStorage,
-      version: 8,
+      version: 9,
       migrate: (persistedState) => {
         const state = persistedState as Partial<SettingsState> | undefined;
         if (state?.settings?.gatewayEndpoint?.includes(':8765')) {
@@ -155,6 +162,11 @@ export const useSettingsStore = create<SettingsState>()(
           )
             ? state.settings.hiddenSessions
             : [];
+          // v9：自动沉淀默认改为开启。老版本的 false 无法区分「用户显式关闭」与
+          // 「吃了默认值」——而实际磁盘证据表明从未有任何记忆文件被写出，说明全部
+          // 是后者。因此升级时统一提升为 true（migrate 每次版本变更只跑一次，
+          // 用户升级后手动关掉不会再被覆盖）。详见 reports/memory-diagnosis-*.md。
+          state.settings.autoSummarize = true;
         }
         return state ?? { settings: DEFAULT_SETTINGS, status: DEFAULT_STATUS };
       },

@@ -32,6 +32,7 @@ import {
   type TranscribeRequest,
 } from '../types';
 import type { ChannelConfig, ChannelKind, MCPConfig, TaskConfig } from '@/types';
+import type { PluginEngineIndex } from '@/types/plugin';
 
 /** 引擎当前支持的 IM 渠道（对齐 nanobot 各 channel manifest） */
 const SUPPORTED_CHANNELS: ChannelKind[] = [
@@ -168,5 +169,20 @@ export class NanobotHttpRuntime implements AgentRuntime {
 
   listRuns(query: RunQuery): Promise<TaskRunRecord[]> {
     return listRunsFromRuntime(query);
+  }
+
+  /**
+   * 插件域（FR-3.4）直接委托 transport：它们是纯粹的
+   * 「读一次 / 发一次」，没有跨模块编排，也没有需要登记的在途状态。
+   * 不走 `sync` / `read` 的 section 分派——那两个入口的语义是
+   * 「整域替换」，而插件启停是**单条动作**，塞进去会让调用方误以为
+   * 可以整表覆盖引擎的激活状态（那会绕过指纹校验）。
+   */
+  listPlugins(): Promise<PluginEngineIndex> {
+    return this.client.listPlugins();
+  }
+
+  setPluginEnabled(name: string, enabled: boolean): Promise<{ ok: boolean; error?: string }> {
+    return this.client.setPluginEnabled(name, enabled);
   }
 }

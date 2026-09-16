@@ -316,7 +316,7 @@ V1 的方案是把 cron 镜像进本地 `nanobot` 的 `jobs.json`（已实现）
 | FR-3.1 | Skill 管理 | P0 | ✅ | both | 目录展示 + 启停 + 能力详情 + 搜索；用户级（`~/.nanowork/skills`）与项目级（`<workspace>/skills`）目录扫描 + `fs.watch` 热加载；`skillOverrides` 三态 `off` / `user-invocable-only` / `on`；`allowed-tools` / `user-invocable` frontmatter 落地（见 §12.4 落地说明） |
 | FR-3.2 | Connector（MCP）管理 | P0 | ✅ | both | CRUD + 同步 + **真实连接测试**（主进程探针真实走 `initialize` / `tools/list`，替代原先 `delay(700)` 的假实现）+ **工具级授权**（`disabledTools` 黑名单 → 引擎 `MCPServerConfig.disabled_tools`）+ **凭据加密存储**（`~/.nanowork/connectors/.credentials.v3.json`，Electron `safeStorage` 托管密钥；渲染层只拿 key 名，见 §12.4.2） |
 | FR-3.3 | Expert 包 | P1 | 🟡 | both | 专家可打包分发（含头像、初始提示词、绑定技能）（V2） |
-| FR-3.4 | **Plugin 形态** | **P1** | ⬜ | both | 一个插件 = 清单 + SKILL.md + agents/ + experts/ + hooks/ + mcp/ + prompt/ + commands/ + skills/ + scripts/；支持安装 / 升级 / 卸载 / 版本锁定 |
+| FR-3.4 | **Plugin 形态** | **P1** | ✅ | both | 一个插件 = 清单 + SKILL.md + agents/ + experts/ + hooks/ + mcp/ + prompt/ + commands/ + skills/ + scripts/；安装 / 升级 / 卸载 + 版本区间校验已落地（**市场流程与版本锁定写入未做**，属 FR-3.7/3.8）；激活状态权威在引擎（指纹绑定标记 + `GET /v1/plugins`），客户端只做文件系统那一半，见 §12.2.1 |
 | FR-3.5 | 扩展市场 | P2 | ⬜ | both | 远程市场索引 + 一键安装 + 来源可信校验（签名/哈希）（V2） |
 | FR-3.6 | 生命周期钩子 | P2 | ⬜ | both | 插件可在会话开始 / 工具调用前后 / 会话结束挂载钩子 |
 | FR-3.7 | **市场注册与来源分级** | **P1** | ⬜ | both | 市场注册表含 `type`（directory/zip）/ `isBuiltIn` / `autoUpdate` / `lastSyncAt`；目录型不联网；远程型按 `autoUpdate` 决定启动拉取或按需拉取；**这两字段即「能否离线 / 失败怎么办」的判据**（见 12.5） |
@@ -328,7 +328,7 @@ V1 的方案是把 cron 镜像进本地 `nanobot` 的 `jobs.json`（已实现）
 | 编号 | 名称 | 优先级 | 现状 | 环境 | 验收标准 |
 |---|---|---|---|---|---|
 | FR-4.1 | 工作区记忆 | P0 | ✅ | both | `MEMORY.md` 读写 / 注入 / 幂等去重 / 多工作区（已实现，单测覆盖） |
-| FR-4.2 | 用户级长期记忆 | **P0** | ✅ | both | `~/.nanowork/MEMORY.md`（用户显式要求才写）；跨项目生效。**已落地**：`MemoryService` 增加 `scope` 分层——`user` → ① `MEMORY.md`，`workspace` → ① `memory/<key>.md`；`scope` 作为**末位可选参数**接入（40+ 既有调用点语义不变）。**「只在用户显式要求时写」由调用方保证**：自动摘要与「记住这条」一律走 `workspace`，只有记忆页在用户级作用域下的编辑才写 `user`。记忆页顶部按作用域切换，切层强制重新读盘 |
+| FR-4.2 | 用户级长期记忆 | **P0** | ✅ | both | `~/.nanowork/MEMORY.md`（跨项目生效）。**已落地**：`MemoryService` 增加 `scope` 分层——`user` → ① `MEMORY.md`，`workspace` → ① `memory/<key>.md`；`scope` 作为**末位可选参数**接入（40+ 既有调用点语义不变）。**写入方三类**（2026-09-17 修正，原「仅用户显式要求」过窄）：①记忆页手动编辑；②自动沉淀识别出的**身份类**事实（称呼/年龄段/职业/稳定偏好）；③Agent 在用户明确要求下写的 `<memory-save scope="user">`。任务类事实仍只进 L3。记忆页顶部按作用域切换，切层强制重新读盘，并显示**磁盘真实落点** |
 | FR-4.3 | 身份文件 | **P1** | ✅ | both | `SOUL.md` / `IDENTITY.md` / `USER.md` 每会话注入 `<identity_context>`；支持 `BOOTSTRAP.md` 一次性引导模式（引导完成后删除）。**已落地**：四文件落 ① 根目录；引擎 `context.py` 把三个身份文件合成**单个** `<identity_context>` 块（`AGENTS.md` 留在块外，按 PRD 13.3）；`IDENTITY.md` 为新增的「我是谁」模板；`BOOTSTRAP.md` **非空**才进引导态（空文件 = 用户自己关掉了流程）；「完成引导」删除该文件；`/persona` 人格页可编辑四者，**空文件与未写过是两种状态**；身份文件**豁免** `storage:clear`（清本地数据不该抹掉人格） |
 | FR-4.4 | 记忆分级与命名空间 | P1 | ⬜ | both | 个人 / 项目 / 组织三级；命名空间按「租户 + 用户 + 工作区」隔离；组织记忆由管理员注入 |
 | FR-4.5 | 记忆可见可删 | **P0** | ✅ | both | 记忆页可查看 / 编辑 / 删除 / 导出；删除为真实删除（合规要求，见 FR-8.6）。**已落地**：两层（用户级 / 工作区级）各有独立的查看 / 编辑 / 清空 / 导出，导出文件名按作用域区分（两层默认同名 `MEMORY.md`，不带 key 会在下载目录互相覆盖） |
@@ -552,7 +552,7 @@ V1 的方案是把 cron 镜像进本地 `nanobot` 的 `jobs.json`（已实现）
 >     推送失败在技能页显示告警——界面显示「已停用」而模型照旧在用，是用户永远不会自己发现的不一致。
 >   - **UI**：技能卡片的三态选择器（Switch 表达不出中间档）+ 来源层级徽标 + `allowed-tools` / `user-invocable`
 >     真实字段展示；内置与项目级技能不给删除入口（删了会「复活」，真实删除动作不在界面上）。
->   - **未做**（仍属 M3 范围）：FR-3.4（Plugin 包格式）、FR-3.7/3.8（市场注册表与版本化缓存）
+>   - **未做**（仍属 M3 范围）：FR-3.4（Plugin 包格式，见下一批）、FR-3.7/3.8（市场注册表与版本化缓存）
 >     未开工，因此 **M3 仍未闭合**。
 >
 > - **M3 第三批：连接器连接测试、工具级授权与凭据加密（2026-09-16，FR-3.2；引擎侧 + 主进程 + 客户端）**：
@@ -579,6 +579,52 @@ V1 的方案是把 cron 镜像进本地 `nanobot` 的 `jobs.json`（已实现）
 >     「黑名单不连带停 resources/prompts」这条与白名单分叉的语义。
 >
 > 三套 `tsc`、`vitest`（**61 文件 / 947 用例**）与引擎侧 `pytest` 全绿（`tests/security` 165、审批链与 utils 370、`tests/agent/test_agent_tool_policy.py` 36）。`ruff check nanobot/ tests/` 全清。**环境类红 8 条**（`tests/tools` 的 mcp 探测/连接走网络、`fitz` 缺失、web_fetch 重定向 3 条；本次改动前后 failed 数均为 8，无回归）。
+>
+> - **M3 第四批：Plugin 包格式与插件页（2026-09-16，FR-3.4；引擎侧 + 主进程 + 客户端）**：
+>   - **一份清单、两个读者**（§12.2.1 有完整取舍）：不再为插件造第二套 schema。包根
+>     `plugin.json` 同时满足两边——引擎读它认得的子集（`$schema` / `name` /
+>     `description` / `extensions.dev.nanobot.*`），nanowork 读扩展字段（`version` /
+>     `category` / `main` / `permissions` / `engines`）。位置仍兼容 PRD 写的
+>     `.nanowork-plugin/plugin.json` 作为**回退**，且顺序即优先级，与引擎
+>     `_PLUGIN_MANIFEST_RELPATHS` 逐字一致。
+>   - **引擎侧补用户级插件目录**：原先插件只能从 `<workspace>/plugins` 发现，
+>     用户级 `~/.nanowork/plugins` 完全够不着。现在 `default_user_plugins_dir()`
+>     （`NANOWORK_HOME` 可改基址）贯通 `discover_agent_plugins` /
+>     `set_agent_plugin_enabled` / MCP 与技能装配全部调用点；扫描顺序
+>     `workspace → user`（**先到先得**，与 PRD 优先级链反向，同技能目录的既有结论）。
+>   - **`GET /v1/plugins` + `POST /v1/plugins/{name}`（`[LOCAL PATCH]`）**：插件启停原先只挂在
+>     WebUI 通道上，渲染层走 `/v1` **够不到**。现在开一条最小入口：读只给
+>     `name/displayName/description/category/enabled/mcpServers`（**不含包路径**——不泄漏
+>     文件系统布局），写只接受 `enable/disable`。非法动作 400、未知插件 404、
+>     **包在启用过程中被改动 → 409**（引擎拒绝签发激活标记，这不是服务端故障，别报 500）。
+>     workspace 取自 AgentLoop 而非请求体：激活要往 `plugin-data/` 落盘，让请求方指定
+>     工作区等于让它决定往哪写。
+>   - **客户端只做「文件系统那一半」**：主进程扫 / 装 / 卸（`electron/pluginPackage.ts`），
+>     激活状态一律问引擎。**客户端不复刻指纹哈希**——那套标记与包内容绑定，
+>     复刻一遍就变成「两份可能不一致的真相，且无法裁决谁对」。
+>   - **插件页表达三件事，刻意不合并成一个开关**：装了什么（磁盘）、引擎激活没有（事实）、
+>     想不想启用（意图）三份输入各存各的，不一致显式算成 `PluginDrift` 摆在卡片上。
+>     「装了 + 想启用 + 引擎没激活」（`intent-only`）是这个功能**最常见的状态**而不是异常
+>     ——改了包内容指纹就失效。静默对齐会让它变成一次无痕的自我治愈，问题从此查不出来。
+>   - **写操作顺序：引擎先行、意图后写**。引擎拒绝时 `settings.enabledPlugins` 一个字都不动，
+>     否则界面会显示一个不成立的「已启用」；失败时两处都不动并把原因摆上界面。
+>   - **`plugins` 刻意没有 storage key**：`pluginsStore` 里全是**事实**（磁盘 / 引擎），
+>     每次从权威重读即可，落盘只会制造第二份可能过期的真相。唯一需要持久化的用户意图
+>     落在 `settings.enabledPlugins`。同时 `~/.nanowork/plugins/` 属用户资产，
+>     被 `knownRouteFiles` 的不变量排除在「清空数据」之外（该用例本次真的拦下了一版错误实现）。
+>   - **顺带修掉的既有缺陷**：`preload.ts` 的 `loadUserSkills` **丢掉了 `workspace` 参数**，
+>     导致 Electron 下项目级技能（`<workspace>/skills`）**从未被扫描**——界面上看不出任何异常；
+>     另修 `installPluginPackage` 的自拷贝守卫顺序（原先排在 `already-installed` 之后，
+>     `overwrite: true` 时会先 `rm` 掉目标再从一个已被删除的来源复制，是数据丢失路径）。
+>   - **测试**：`tests/electron/pluginPackage.test.ts`（51）、`tests/pluginIntent.test.ts`（27）、
+>     `tests/pluginsRuntime.test.ts`（15，**真起 HTTP 服务器**验线格式，不 mock fetch）、
+>     `tests/pluginsStore.test.ts`（15）；引擎侧 `tests/test_api_plugins.py`（11）+
+>     `tests/agent/test_agent_plugins.py` 追加用户级目录 / 优先级 / 位置回退用例。
+>   - **未做（仍属 M3 范围）**：FR-3.7/3.8（市场注册表与版本化缓存）未开工，
+>     因此**市场安装流程与版本锁定写入**都还没有——当前版本只解析并展示 `engines`
+>     区间与版本号，安装来源是本地目录。**M3 仍未闭合**。
+>
+> 三套 `tsc`、`vitest`（**65 文件 / 1055 用例**）与 `vite build` 全绿。引擎侧 `pytest`：`tests/agent` + `tests/config` + `tests/command` + `tests/api` 全绿；`tests/tools` 环境类红 8 条（同上一批，无回归），另有 2 条 Windows 符号链接权限用例（环境性）。
 >
 > **D2 遗留**：附件内容仍不入事件流（附件库属 R7/M4，见 9.6 的「已知范围差异」）。
 >
@@ -1580,6 +1626,83 @@ my-plugin/
 
 `skillOverrides` 三态：`off` / `user-invocable-only` / `on`（对齐 WorkBuddy 的精细控制）。
 
+### 12.2.1 落地说明（2026-09-16，FR-3.4）
+
+本节上面那段是**设计意图**；下面记实现时改掉的三处，以及为什么改。改回去之前先读完。
+
+**① 清单位置：包根 `plugin.json` 为主，`.nanowork-plugin/plugin.json` 为回退。**
+
+引擎已经有一套 agent-plugins.org 规范的插件包（包根 `plugin.json`），且它才是**唯一激活权威**。
+再按本节原样造一套 `.nanowork-plugin/plugin.json` 会让同一个包出现**两份互相矛盾的清单**
+（引擎读 A、客户端读 B，不一致时无法裁决）。
+
+所以做成「**一份清单、两个读者**」：
+
+```jsonc
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json", // 引擎必需
+  "name": "tencent-docs",          // 引擎 + 客户端共用（也是安装后的目录名）
+  "description": "文档处理与转换",   // 引擎 + 客户端共用
+  "version": "1.2.0",              // 客户端扩展
+  "main": "SKILL.md",              // 客户端扩展（默认 SKILL.md）
+  "permissions": { "tools": ["Read", "Write"], "network": ["docs.qq.com"] }, // 客户端扩展
+  "engines": { "nanowork": ">=1.0.0" },                                      // 客户端扩展
+  "extensions": {
+    "dev.nanobot": { "displayName": "腾讯文档", "category": "interaction", "accentColor": "#4f46e5", "logo": "./assets/logo.png" }
+  }
+}
+```
+
+两侧的校验强度**刻意一致**（`$schema` 必须命中 + `name` 必须过同一条正则，
+含「禁止 `--` 与 `..`」——引擎用 `--` 拼多 server 命名空间 `<plugin>--<server>`）。
+引擎拒收的包客户端也不接受，否则会出现「装上了但引擎看不见」。
+
+位置回退「**先判存在再解析**」：高优先级位置存在但内容坏 = **明确失败**，
+不悄悄回退到低优先级位置——回退会让一份坏清单被另一份好清单掩盖。
+（两侧实现逐字对齐：引擎 `_read_first_object` ↔ 客户端 `readManifestPayload`。）
+
+**② `enabledPlugins` 的实际形态是字符串数组，不是本节写的对象。**
+
+```jsonc
+// 本节原设计（对象）           // 实际落地（数组）
+{ "enabledPlugins": {            [ "tencent-docs@builtin",
+    "tencent-docs@builtin": true,   "my-plugin@local" ]
+    "my-plugin@local": false } }
+```
+
+理由：对象形态里 `false` 与「条目不存在」**语义重复**（关闭 = 从表里删掉），
+多出来的一层除了制造「写 `false` 还是删键」的分歧没有别的作用。
+数组是更小的公开面，也与技能覆盖表「**只写非默认档**」的既有纪律一致。
+
+⚠️ **它是「意图」不是「事实」**：事实在引擎侧（激活标记与包内容**指纹绑定**），
+只有引擎能回答「到底激活没有」。两者不一致时界面**显式提示**（`PluginDrift`），
+绝不静默对齐——静默对齐会让「明明启用了却没生效」变成一次无痕的自我治愈。
+
+**③ 职责切分：客户端只做文件系统那一半。**
+
+| 动作 | 谁执行 | 通道 |
+|---|---|---|
+| 扫已安装包 | Electron 主进程 | IPC `plugins:scan`（Web 端返回空 + `pluginsRoot`） |
+| 安装 / 卸载 | Electron 主进程 | IPC `plugins:install` / `plugins:uninstall` |
+| 读激活状态 | **引擎** | `GET /v1/plugins`（`[LOCAL PATCH]`） |
+| 启停 | **引擎** | `POST /v1/plugins/{name}`，body `{"action":"enable"\|"disable"}` |
+
+客户端**不复刻引擎的指纹哈希**，也不存一份自己的激活真相。
+安装只复制包、**不改激活状态**；启用是独立动作（引擎先行、意图后写）。
+
+还有一处刻意的取舍：`GET /v1/plugins` **不回包路径**。
+包路径不泄漏给渲染层是次要的，主要理由是「客户端本来就能自己扫到路径」——
+让它经引擎绕一圈反而多出一个可能不一致的来源。
+
+**仍未做**（属 FR-3.7/3.8）：市场注册表、版本化缓存目录（§12.6）、
+以及「版本锁定」的**写入**。当前版本只做区间校验与版本展示，安装来源是本地目录。
+
+**也还没做**：§12.8 的 C1（专家 / 技能 / 插件共用一张启用开关表）。
+本次落地的只是**包格式与生命周期**：插件自己的意图表是 `settings.enabledPlugins`，
+技能仍是 `skillOverrides`，专家仍是自己的 store。合并这三张表要连同 §18 数据模型
+一起改，不在本批范围内——但**扫描口径已经统一**（都从 `~/.nanowork/<kind>/` 扫，
+关键判定都由引擎做权威），合表时只需要搬状态。
+
 ## 12.3 SKILL.md 规范
 
 ```markdown
@@ -1682,6 +1805,42 @@ user-invocable: true              # 是否可由用户直接 / 调用
 - **写入成功才算数**：保险库写失败时不更新 `authKeyNames`。否则界面显示"已配置"、实际保险库里什么都没有，而这是静默的。
 
 > **架构差异备忘**：引擎侧其实有 MCP 运行时状态（`MCPProvider.runtime_status`），但它挂在 **websocket 通道**的 HTTP 路由上；nanowork 渲染层走的是 `/v1` OpenAI 兼容接口，**拿不到**那份状态。所以"实时状态"在本项目里落在**探针**上（按需 + 同步时刷新），而不是订阅引擎推送。这是刻意的：探针同时是工具清单的唯一来源，两件事共用一个机制，少一条需要长期维护的状态通道。
+
+### 12.4.3 落地说明（2026-09-16，FR-3.4）
+
+**① 用户级插件目录是 `~/.nanowork/plugins`，引擎原先够不着它。**
+
+引擎的插件发现**只有** `<workspace>/plugins`（`_children(workspace / "plugins")`），
+用户级目录一个都没有——「把插件装到本机、所有工作区都能用」这件事在引擎侧做不到。
+本次补 `default_user_plugins_dir()`（`NANOWORK_HOME` 可改基址，
+与 `default_user_skills_dir` 同源同理，刻意做成**函数**而非模块常量：
+单测在导入后才改环境变量，模块常量会把宿主机第一次导入时的取值冻住）。
+
+**两侧必须指向同一处**：主进程的 `USER_PLUGINS_DIR`（`electron/main.ts`）
+与引擎的 `default_user_plugins_dir()` 用同一套取法（先看 `NANOWORK_HOME` /
+`CODEBUDDY_HOME`，再回落到 `~/.nanowork`）。不一致的症状是
+「界面装上了、引擎看不见」——本功能最容易踩的坑。
+
+**② 插件发现的扫描顺序是 `workspace → user`，同样是「先到先得」。**
+
+与 §12.4.1 ② 的结论一致（引擎靠 `skip_names` 先到先得），
+所以扫描顺序与优先级链**反向**：先扫工作区、再扫用户级，
+才能让项目内的同名插件压过用户级那份。写成「按优先级链顺序扫」会让优先级正好反过来。
+
+**③ 组件位置回退（`.nanowork-plugin/`）已落地，但只是**回退**。**
+
+`_PLUGIN_MANIFEST_RELPATHS = ("plugin.json", ".nanowork-plugin/plugin.json")`、
+`_PLUGIN_MCP_RELPATHS = ("mcp.json", "mcp/mcp.json")`，顺序即优先级。
+语义是「**先判存在再解析**」：高优先级位置存在但内容坏 = 明确失败，
+不悄悄回退——回退会让一份坏清单被另一份好清单掩盖。客户端实现逐字对齐。
+
+**④ 启停接口在 `/v1` 上，但语义被刻意收窄。**
+
+`POST /v1/plugins/{name}` 只接受 `{"action": "enable" | "disable"}`：
+**不接受安装 / 卸载**（那要写文件系统，是桌面端主进程的事），
+**不接受指定 workspace**（激活要往 `plugin-data/` 落盘，让请求方指定工作区
+等于让它决定往哪写）。包在启用过程中被改动时返回 **409**——
+引擎拒绝签发与内容不符的激活标记，这不是服务端故障，客户端文案要与 500 区分开。
 
 ## 12.5 分发来源与联网要求（WorkBuddy 本机实测）
 
@@ -1909,9 +2068,16 @@ WorkBuddy 的提示词资产是一个 **10 组合（交互模式 × 领域）× 
 | 层 | 位置 | 写入方 | 现状 |
 |---|---|---|---|
 | L1 云端画像 | 服务端注入 `<memory>` 块 | 服务端自动学习 | ⬜（V1.5 后才有意义） |
-| L2 用户级长期记忆 | `~/.nanowork/MEMORY.md` | 用户显式要求才写 | ✅ 记忆页用户级作用域 |
-| L3 工作区记忆 | `<workspace>/.nanowork/memory/YYYY-MM-DD.md` + `MEMORY.md` | 每次实质工作后追加 | 🟡 已落 `memory/<key>.md`（①），缺按日日志 |
+| L2 用户级长期记忆 | `~/.nanowork/MEMORY.md` | 记忆页手动编辑；自动沉淀的**身份类**分节；Agent `<memory-save scope="user">` | ✅ 记忆页用户级作用域 |
+| L3 工作区记忆 | `~/.nanowork/memory/<workspaceKey>.md` | 自动沉淀的**任务类**分节；「保存为记忆」；Agent `<memory-save>` 默认档 | ✅ 已落 `memory/<key>.md`（①），缺按日日志 |
 | L4 身份文件 | `SOUL.md` / `IDENTITY.md` / `USER.md` | 引导生成 + 用户编辑 | ✅ `/persona` 人格页（FR-4.3） |
+
+> **2026-09-17 修正**：L3 的落点由 `<workspace>/.nanowork/memory/` 改为
+> `~/.nanowork/memory/<workspaceKey>.md`。产品不往用户的工作目录写任何文件；
+> 隔离靠 key（工作目录的 `<basename>-<hash8>`）而不是靠目录位置。
+> L2 的写入方也从「仅用户显式要求」扩为三类——把称呼/职业这类跨项目事实
+> 排除在自动沉淀之外，等于每次新会话都要重新自我介绍（详见
+> `docs/prd-memory.md` §6.2）。
 
 ## 14.2 注入机制（已实现部分保持）
 
@@ -1937,6 +2103,13 @@ export interface MemoryService {
 }
 ```
 
+> **实现对齐（2026-09-17）**：落地形态与上面这段**刻意不同**，两处差异：
+> ① `MemoryScope` 是 `'user' | 'workspace'` 两档（`project` / `org` 未落地）；
+> ② `scope` 是**末位可选参数**而不是首位——本服务已有 40 余处 `save(text)` 调用，
+> 改成首位会让「改一行实现」变成「改四十个调用点」，收益为零而回归风险不小。
+> 语义与本节一致，只是参数位置不同。另新增末位 `workspaceKey?`：
+> 异步沉淀在用户切换工作区之后才落盘，依赖全局 `currentKey` 会把 A 的摘要写进 B。
+
 注入顺序（低 → 高优先级，后者可覆盖前者语义）：
 
 ```
@@ -1948,7 +2121,13 @@ export interface MemoryService {
 > - **只落了四层里的两层**（L2 用户级 + L3 工作区级），`MemoryScope` 取值为 `'user' | 'workspace'`。`project` / `org` 依赖 FR-4.4，未实现。
 > - **`scope` 是末位可选参数**，不是上面示例的首位：`save(text, scope = 'workspace')`。本服务已有 40+ 处 `save(text)` 调用，把 scope 提到首位会让「改一行实现」变成「改四十个调用点」，收益为零而回归风险不小。语义与本文档一致，只是参数位置不同。
 > - **落点在 ① 而不是 `<workspace>/.nanowork/`**：用户级 → ① `MEMORY.md`；工作区级 → ① `memory/<key>.md`（见 18.2.4）。`<workspace>` 侧留给引擎自己的 `memory/MEMORY.md`（④），两者职责不同，刻意不复用同一路径。
-> - **注入顺序落到装配器**：实际顺序为 `agent-persona → identity → product-identity → tone-style → mode → domain → user-instructions → memory → skills → local-time`（`lib/promptAssembly.ts`）。其中**身份在记忆之前**是硬约束——记忆块的边界指令写着「以上方系统提示定义的身份为准」，顺序反了那句护栏就指向空处。
+> - **注入顺序落到装配器**：实际顺序为 `agent-persona → identity → product-identity → tone-style → mode → domain → user-instructions → memory → **memory-write** → skills → local-time`（`lib/promptAssembly.ts`）。其中**身份在记忆之前**是硬约束——记忆块的边界指令写着「以上方系统提示定义的身份为准」，顺序反了那句护栏就指向空处。
+>
+> **记忆链路修复（2026-09-17）**：
+>
+> - **写入侧此前整条是死的**。实测 `~/.nanowork/` 下 `memory/` 目录与 `MEMORY.md` **都不存在**——四个原因叠加：`autoSummarize` 默认 false（唯一自动写入点被跳过）、触发点只有 `deleteSession`（缺「新建会话」）、摘要提示词只保留「决策/偏好/待办」三类（身份类事实整段被丢弃）、Agent 侧没有任何写入能力。修复后：默认开启 + persist v9 迁移、`createSession` 补触发、摘要改分节并按内容性质分流 L2/L3、新增 `<memory-save>` 受控写入协议。
+> - **`useWorkspace()` 此前生产代码零调用**，`currentKey` 恒为 `'default'`，L3 隔离形同虚设。现由 `loadMemoryInto` 按会话 workdir 显式传入 key。
+> - **`memory-write` 槽位**：Agent 写入协议的说明段，与记忆块同开同关（`memoryEnabled && autoSummarize`）。它排在 `memory` 之后——模型刚「读完」已有记忆，紧接着就看到「怎么写新的」。
 
 ## 14.3 Dream 双阶段记忆
 

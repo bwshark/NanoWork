@@ -28,7 +28,12 @@ import {
   attachmentsToUploadFiles,
   toPersistableAttachment,
 } from '@/lib/attachments';
-import { MemoryService } from '@/lib/memory';
+import { MemoryService, isEmptySummary, workspaceKeyFor } from '@/lib/memory';
+import {
+  MEMORY_WRITE_INSTRUCTION,
+  parseMemoryDirectives,
+  stripMemoryDirectives,
+} from '@/lib/memoryDirective';
 import { IdentityService } from '@/lib/identity';
 import { PromptLibrary } from '@/lib/promptLibrary';
 import {
@@ -515,6 +520,12 @@ async function streamAssistantReply(
       ? MemoryService.wrapForInjection(memorySnapshot)
       : '';
 
+  // 记忆写入协议：与记忆能力同开同关。
+  // 关掉 autoSummarize 就等于「不要长期记忆」，此时再告诉模型怎么记一条，
+  // 它只会反复追问「要我记住吗」而写不进去——能力与说明必须成对出现。
+  const memoryWrite =
+    settings.memoryEnabled && settings.autoSummarize ? MEMORY_WRITE_INSTRUCTION : '';
+
   // 技能注入：把本会话挂载且已启用的技能 prompt 追加在 system 段末尾。
   const skills = useSkillsStore
     .getState()
@@ -550,6 +561,7 @@ async function streamAssistantReply(
     domain: PromptLibrary.resolveSync('domain', domain),
     userInstructions: settings.userCustomPrompt,
     memory: memoryBlock,
+    memoryWrite,
     skills: skills.map((sk) => sk.prompt),
     localTime: localTimeNote,
   }).map((section) => ({ role: 'system' as const, content: section.content }));
@@ -690,6 +702,25 @@ async function streamAssistantReply(
     const aborted = finalMsg?.aborted === true;
     const reason = sendError ? 'error' : aborted ? 'aborted' : 'done';
 
+    /**
+     * 受控记忆写入（P2-A）：模型可能在本轮回答里夹带 `<memory-save>` 块。
+     *
+     * 剥离必须发生在**落盘之前**，且视图与事件用同一份结果——否则刷新一次
+     * 协议标记就会从事件流里冒出来（实时视图 ≡ 重放投影，见 tests/events/equivalence）。
+     * abort 的轮次不处理：半截回答里的指令块不可信。
+     */
+    const rawContent = finalMsg?.content ?? '';
+    const directives = aborted ? [] : parseMemoryDirectives(rawContent);
+    const visibleContent =
+      directives.length > 0 ? stripMemoryDirectives(rawContent) : rawContent;
+
+    if (visibleContent !== rawContent) {
+      useSessionsStore.getState().updateMessage(sessionId, assistantId, (m) => ({
+        ...m,
+        content: visibleContent,
+      }));
+    }
+
     // 助手终值 + 回合边界落盘。助手正文是流式累积的，只能在回合结束以终值落盘
     // （同回合的工具 / 思考事件通过 messageId 关联到它，见 @/types/event）。
     recordFor(sessionId, (f) => [
@@ -697,7 +728,7 @@ async function streamAssistantReply(
       f.message({
         messageId: assistantId,
         role: 'assistant',
-        content: finalMsg?.content ?? '',
+        content: visibleContent,
         // 创建时刻必须随事件落盘：助手消息的占位在回合**开始**就有了，
         // 而事件要等回合**结束**才写。不带 createdAt 的话，重放投影只能退回
         // 事件时间戳，于是「已处理 33s」的基准与刷新前不一致（见 project.ts）。
@@ -707,6 +738,34 @@ async function streamAssistantReply(
       }),
       f.sessionEnd({ reason }),
     ]);
+
+    /**
+     * 落盘：协议块只是**意图**，真正的写入统一交给 MemoryService.append
+     * ——时间戳、来源、幂等去重标记都由它负责，模型碰不到文件格式。
+     * 失败静默：记不住一条不该让用户看到一次发送失败。
+     */
+    if (directives.length > 0) {
+      const s = useSettingsStore.getState().settings;
+      if (s.memoryEnabled && s.autoSummarize) {
+        const workspaceKey = workspaceKeyFor(
+          useSessionsStore.getState().sessions.find((x) => x.id === sessionId)?.workdir,
+        );
+        void (async () => {
+          for (const d of directives) {
+            try {
+              await MemoryService.append(
+                d.content,
+                { source: 'agent' },
+                d.scope,
+                workspaceKey,
+              );
+            } catch {
+              /* 记忆写入失败不影响本轮回答 */
+            }
+          }
+        })();
+      }
+    }
 
     if (durationMs !== undefined) {
       useSessionsStore.getState().updateMessage(sessionId, assistantId, (m) => ({
@@ -783,6 +842,69 @@ export function __resetHydrationForTest(): void {
   hydrating.clear();
 }
 
+/** 本轮进程内已完成自动沉淀的会话 id（同一会话不重复归纳） */
+const sedimentedSessions = new Set<string>();
+
+/** 供测试复位沉淀去重状态（与 __resetHydrationForTest 配套） */
+export function __resetSedimentForTest(): void {
+  sedimentedSessions.clear();
+}
+
+/**
+ * 自动沉淀：把一次「会话结束」的历史归纳成长期记忆。
+ *
+ * **触发点**（对齐 PRD-memory「会话结束（关闭 / 新建会话）」）：
+ * - `deleteSession` / `deleteSessions`：会话被关闭/删除时；
+ * - `createSession`：切走时对**上一个会话**补触发——这一步以前完全缺失，
+ *   而「说一句 → 新建会话 → 问我是谁」恰好整段落在那个空档里。
+ *
+ * **分流**（本次修复的核心）：摘要按内容性质分两节落不同层。
+ * - `identity`（称呼/年龄段/职业/稳定偏好）→ **L2 用户级**，跨项目生效；
+ * - `task`（本次决策/待办/项目专有事实）→ **L3 工作区级**，按会话 workdir 隔离。
+ *
+ * 工作区 key 由**会话的 workdir** 现算，而不是读落盘那一刻的全局 `currentKey`——
+ * 归纳是异步的，期间用户完全可能切到别的工作区，用 `currentKey` 会把 A 的摘要
+ * 写进 B，这类串味比「没记忆」更难排查。
+ *
+ * 同一会话只沉淀一次（`sedimentedSessions`）：`createSession` 的补触发在每次
+ * 新建会话时都会重新挑选「上一个会话」，没有这层去重会反复归纳同一段历史。
+ */
+function sedimentSession(target: Session): void {
+  if (!useSettingsStore.getState().settings.autoSummarize) return;
+  // 定时任务执行记录与引擎只读留痕**不归纳**：一个自动任务分组动辄几十条 run，
+  // 逐条调模型既慢又无检索价值，而这些 run 的真值本就在引擎侧（不是用户对话）。
+  // 这条守卫让「批量关闭自动任务分组」依然是零模型调用。
+  if (target.readonly) return;
+  if (target.id.startsWith(CRON_SESSION_ID_PREFIX)) return;
+  if (target.messages.length === 0) return;
+  if (sedimentedSessions.has(target.id)) return;
+  sedimentedSessions.add(target.id);
+
+  const history: ChatMessageParam[] = target.messages
+    .filter((m) => (m.role === 'user' || m.role === 'assistant') && m.content.trim() !== '')
+    .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content }));
+  if (history.length === 0) return;
+
+  const source = `auto:${target.title}`;
+  const workspaceKey = workspaceKeyFor(target.workdir);
+
+  // fire-and-forget：归纳要调一次模型，绝不能阻塞删除/新建这些交互动作
+  void (async () => {
+    try {
+      const summary = await MemoryService.summarize(history);
+      if (isEmptySummary(summary)) return;
+      if (summary.identity !== '') {
+        await MemoryService.append(summary.identity, { source }, 'user');
+      }
+      if (summary.task !== '') {
+        await MemoryService.append(summary.task, { source }, 'workspace', workspaceKey);
+      }
+    } catch {
+      /* 自动沉淀为附加能力，失败静默 */
+    }
+  })();
+}
+
 export const useSessionsStore = create<SessionsState>()(
   (set, get) => ({
     sessions: [],
@@ -797,6 +919,8 @@ export const useSessionsStore = create<SessionsState>()(
      * 记忆读取为异步 IO，以 fire-and-forget 方式在后台完成并回填 session.memory。
      */
     createSession: (agentId, title = '新会话', opts) => {
+      // 切走前的会话 id —— 「新建会话」是 PRD 定义的会话结束信号之一
+      const prevSessionId = get().activeId;
       const agentsState = useAgentsStore.getState();
       /**
        * 兜底优先级与召唤逻辑对齐：显式 agentId > 全局活跃专家团 > 全局活跃专家。
@@ -846,6 +970,25 @@ export const useSessionsStore = create<SessionsState>()(
       }));
       rememberActiveSession(session.id);
 
+      // 自动沉淀触发点之二（新建会话）：对上一个会话补触发一次归纳。
+      // 用户「告诉它我是谁 → 直接新建会话」时不会经过删除路径，若只挂 deleteSession，
+      // 这一段对话永远不会进入记忆——这正是「新会话就忘了」的直接成因。
+      if (prevSessionId && prevSessionId !== session.id) {
+        void (async () => {
+          try {
+            const prev = get().sessions.find((s) => s.id === prevSessionId);
+            if (!prev) return;
+            // 重启后重开的会话，消息可能还没水合；先补读盘再判定是否值得归纳
+            // （已水合的会话在 loadSession 里会立刻返回，不产生额外 IO）
+            if (prev.messages.length === 0) await get().loadSession(prev.id);
+            const fresh = get().sessions.find((s) => s.id === prevSessionId);
+            if (fresh) sedimentSession(fresh);
+          } catch {
+            /* 沉淀为附加能力，失败静默 */
+          }
+        })();
+      }
+
       // 事件流：新会话立即可写（seq 从 1 开始），故先建记录器再落 session-start。
       // 记录器先于任何写入建立，`loadSession` 才不会把它当成「待水合」而重置 seq。
       if (isEventStreamSession(session)) {
@@ -871,10 +1014,17 @@ export const useSessionsStore = create<SessionsState>()(
     },
 
     loadMemoryInto: async (sessionId, opts) => {
+      // 工作区隔离键由**会话的 workdir** 决定（P1-A）。
+      // 先切 currentKey 再判开关：currentKey 影响的是「记忆页与手动保存落到哪个
+      // 文件」，属于落点归属，不该被「是否注入记忆」这个开关影响。
+      const workdir = get().sessions.find((s) => s.id === sessionId)?.workdir;
+      const workspaceKey = workspaceKeyFor(workdir);
+      MemoryService.useWorkspace(workspaceKey);
+
       if (!useSettingsStore.getState().settings.memoryEnabled) return;
       let text = '';
       try {
-        text = await MemoryService.load();
+        text = await MemoryService.load('workspace', workspaceKey);
       } catch {
         return;
       }
@@ -1084,28 +1234,9 @@ export const useSessionsStore = create<SessionsState>()(
     },
 
     deleteSession: (id) => {
-      // 自动沉淀触发点（P1）：删除会话前尝试把历史归纳进记忆。
-      // 开关关闭时跳过；fire-and-forget，不阻塞删除。
-      const { autoSummarize } = useSettingsStore.getState().settings;
+      // 自动沉淀触发点之一（关闭会话）：删除前把历史归纳进记忆。
       const target = get().sessions.find((x) => x.id === id);
-      if (autoSummarize && target && target.messages.length > 0) {
-        const history: ChatMessageParam[] = target.messages
-          .filter(
-            (m) => (m.role === 'user' || m.role === 'assistant') && m.content.trim() !== '',
-          )
-          .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content }));
-        const sourceTitle = target.title;
-        void (async () => {
-          try {
-            const summary = await MemoryService.summarize(history);
-            if (summary.trim() !== '') {
-              await MemoryService.append(summary, { source: `auto:${sourceTitle}` });
-            }
-          } catch {
-            /* 自动沉淀为附加能力，失败静默 */
-          }
-        })();
-      }
+      if (target) sedimentSession(target);
 
       set((s) => {
         const sessions = s.sessions.filter((x) => x.id !== id);
@@ -1121,6 +1252,8 @@ export const useSessionsStore = create<SessionsState>()(
       const doomed = new Set(ids);
       if (doomed.size === 0) return;
       const targets = get().sessions.filter((x) => doomed.has(x.id));
+      // 批量关闭同样是「会话结束」，逐个体沉淀（已沉淀过的会被去重跳过）
+      targets.forEach(sedimentSession);
       set((s) => {
         const sessions = s.sessions.filter((x) => !doomed.has(x.id));
         // 活跃会话被删时退回列表首位；没删到任何会话则原样返回，避免无谓重渲染

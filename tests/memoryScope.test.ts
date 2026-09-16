@@ -125,9 +125,18 @@ describe('MemoryService：作用域概览', () => {
     expect(user?.lastWrittenAt).toBeNull();
   });
 
-  it('用户级作用域的说明写明「显式要求才写」（FR-4.2）', async () => {
+  /**
+   * FR-4.2 的实现对齐：用户级**可以**被自动写入，但仅限**身份类**事实。
+   *
+   * 旧断言要求说明里出现「显式」二字（当时语义是「只有用户亲手写才进这一层」）。
+   * 那种解读过窄：称呼/职业是跨项目事实，自动沉淀丢掉它们就等于每次新会话都要
+   * 重新自我介绍——这正是本轮修复的 bug。说明文案因此改成「列写入方」，
+   * 断言也随之改为检查两个写入方都在、且身份类被点名。
+   */
+  it('用户级作用域的说明列明两个写入方，并点名身份类事实（FR-4.2）', async () => {
     const summaries = await MemoryService.scopeSummaries();
     const user = summaries.find((s) => s.scope === 'user');
-    expect(user?.description).toMatch(/显式/);
+    expect(user?.description).toMatch(/手动编辑/);
+    expect(user?.description).toMatch(/身份/);
   });
 });

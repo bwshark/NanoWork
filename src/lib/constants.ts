@@ -30,6 +30,8 @@ export const ROUTES = {
   myAgents: '/agents/mine',
   skills: '/skills',
   mcp: '/mcp',
+  /** 插件包页（FR-3.4）：装了什么 / 引擎激活没有 / 是否想启用 */
+  plugins: '/plugins',
   tasks: '/tasks',
   settings: '/settings',
   artifacts: '/artifacts',
@@ -61,6 +63,12 @@ export const STORAGE_KEYS = {
   agents: 'nanowork.agents',
   expertGroups: 'nanowork.expertGroups',
   skills: 'nanowork.skills',
+  // ⚠️ 这里**刻意没有** `plugins` 键。插件（FR-3.4）的持久化只有一处：
+  // `settings.enabledPlugins`（用户意图）。已安装清单与引擎激活状态都是**事实**，
+  // 每次从权威重新读（磁盘扫描 / `GET /v1/plugins`），落盘只会制造第二份可能
+  // 过期的真相。且 `~/.nanowork/plugins/` 属用户资产，绝不能被「清空数据」
+  // 带走（`knownRouteFiles` 有一条不变量专门守这个）。
+  // 日后若真要为插件加持久化状态，先读该不变量再决定落点。
   mcp: 'nanowork.mcp',
   tasks: 'nanowork.tasks',
   artifacts: 'nanowork.artifacts',

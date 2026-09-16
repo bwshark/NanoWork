@@ -1,8 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { MemoryService } from '@/lib/memory';
+import { MemoryService, isEmptySummary, memoryDiskPath, parseSummary, workspaceKeyFor } from '@/lib/memory';
+import { parseMemoryDirectives, stripMemoryDirectives } from '@/lib/memoryDirective';
 import { useSettingsStore, DEFAULT_TRANSCRIPTION, DEFAULT_DESKTOP } from '@/stores/settingsStore';
 import { NanobotClient } from '@/ai/runtime/nanobotHttp/chat';
 import { MEMORY_KEY_PREFIX } from '@/lib/constants';
+import { platform } from '@/platform';
 
 /** 重置 settings 到初始态，避免跨用例串扰 */
 function resetSettings() {
@@ -172,40 +174,183 @@ describe('MemoryService: meta 元信息 (T26)', () => {
 describe('MemoryService: summarize (T28)', () => {
   afterEach(() => vi.restoreAllMocks());
 
-  it('历史为空时 summarize 返回空串（不报错）', async () => {
-    expect(await MemoryService.summarize([])).toBe('');
-  });
-
-  it('summarize 收集流式文本并截断到 150 字', async () => {
-    const longText = '摘'.repeat(200);
+  /** 打桩网关，让流式返回指定文本 */
+  function stubGateway(text: string) {
     vi.spyOn(NanobotClient.prototype, 'probe').mockResolvedValue('connected');
-    vi.spyOn(NanobotClient.prototype, 'sendMessage').mockImplementation(
-      (_req, handlers) => {
-        handlers.onToken(longText);
-        handlers.onDone();
-        return { done: Promise.resolve(), abort: () => { } };
-      },
-    );
+    vi.spyOn(NanobotClient.prototype, 'sendMessage').mockImplementation((_req, handlers) => {
+      handlers.onToken(text);
+      handlers.onDone();
+      return { done: Promise.resolve(), abort: () => {} };
+    });
+  }
 
-    const history = [
-      { role: 'user' as const, content: '帮我写个函数' },
-      { role: 'assistant' as const, content: '好的' },
-    ];
-    const summary = await MemoryService.summarize(history);
-    expect(summary).toBe('摘'.repeat(150));
+  const history = [
+    { role: 'user' as const, content: '我是明明，做中医药临床研究' },
+    { role: 'assistant' as const, content: '你好明明' },
+  ];
+
+  it('历史为空时 summarize 返回两节皆空（不报错）', async () => {
+    const s = await MemoryService.summarize([]);
+    expect(s).toEqual({ identity: '', task: '' });
+    expect(isEmptySummary(s)).toBe(true);
   });
 
-  it('网关异常时 summarize 静默返回空串', async () => {
+  it('summarize 解析分节输出，两节各自截断到 150 字', async () => {
+    stubGateway(`[身份] ${'身'.repeat(200)}\n[任务] ${'任'.repeat(200)}`);
+    const summary = await MemoryService.summarize(history);
+    expect(summary.identity).toBe('身'.repeat(150));
+    expect(summary.task).toBe('任'.repeat(150));
+  });
+
+  it('缺失标签时整段归入 task（不丢记忆）', async () => {
+    stubGateway('用户做中医药研究，决定本周交付 P0 修复。');
+    const summary = await MemoryService.summarize(history);
+    expect(summary.identity).toBe('');
+    expect(summary.task).toBe('用户做中医药研究，决定本周交付 P0 修复。');
+  });
+
+  it('网关异常时 summarize 静默返回两节皆空', async () => {
     vi.spyOn(NanobotClient.prototype, 'probe').mockResolvedValue('offline');
     vi.spyOn(NanobotClient.prototype, 'sendMessage').mockRejectedValue(
       new Error('gateway offline'),
     );
+    expect(await MemoryService.summarize(history)).toEqual({ identity: '', task: '' });
+  });
+});
 
-    const history = [
-      { role: 'user' as const, content: '帮我写个函数' },
-      { role: 'assistant' as const, content: '好的' },
-    ];
-    expect(await MemoryService.summarize(history)).toBe('');
+describe('parseSummary: 容错解析', () => {
+  it('两节齐全时按标签切分', () => {
+    expect(parseSummary('[身份] 明明，中医药背景\n[任务] 决定先修 P0')).toEqual({
+      identity: '明明，中医药背景',
+      task: '决定先修 P0',
+    });
+  });
+
+  it('模型用「无」占位时归一化为空串', () => {
+    expect(parseSummary('[身份] 无\n[任务] 修 P0')).toEqual({ identity: '', task: '修 P0' });
+    expect(parseSummary('[身份] 明明\n[任务] N/A')).toEqual({ identity: '明明', task: '' });
+  });
+
+  it('标签顺序颠倒也能各归其位', () => {
+    expect(parseSummary('[任务] 修 P0\n[身份] 明明')).toEqual({
+      identity: '明明',
+      task: '修 P0',
+    });
+  });
+
+  it('只出现一节时另一节为空', () => {
+    expect(parseSummary('[身份] 明明')).toEqual({ identity: '明明', task: '' });
+    expect(parseSummary('[任务] 修 P0')).toEqual({ identity: '', task: '修 P0' });
+  });
+
+  it('加粗包裹的标签内容仍能取到', () => {
+    expect(parseSummary('[身份] **明明**')).toEqual({ identity: '明明', task: '' });
+  });
+
+  it('空串与无标签整段分别处理', () => {
+    expect(parseSummary('')).toEqual({ identity: '', task: '' });
+    expect(parseSummary('一段没有标签的摘要')).toEqual({
+      identity: '',
+      task: '一段没有标签的摘要',
+    });
+  });
+});
+
+describe('workspaceKeyFor: 工作目录 → 记忆 key', () => {
+  it('无 workdir 回落 default（与历史记忆保持连续）', () => {
+    expect(workspaceKeyFor(undefined)).toBe('default');
+    expect(workspaceKeyFor('')).toBe('default');
+    expect(workspaceKeyFor('   ')).toBe('default');
+  });
+
+  it('形态为 <basename>-<hash8>，文件名可读', () => {
+    const key = workspaceKeyFor('D:\\Workspace\\study\\nanowork');
+    expect(key).toMatch(/^nanowork-[0-9a-f]{8}$/);
+  });
+
+  it('大小写 / 斜杠 / 尾斜杠归一化后落到同一个 key', () => {
+    const a = workspaceKeyFor('D:\\Workspace\\Study\\Nanowork');
+    const b = workspaceKeyFor('d:/workspace/study/nanowork/');
+    expect(a).toBe(b);
+  });
+
+  it('同名目录不互相覆盖', () => {
+    expect(workspaceKeyFor('D:/a/src')).not.toBe(workspaceKeyFor('D:/b/src'));
+  });
+
+  it('字符集收敛到 [a-z0-9._-]，与主进程白名单一致', () => {
+    const key = workspaceKeyFor('D:/工作 区/我的项目 (1)');
+    expect(key).toMatch(/^[a-z0-9._-]+$/);
+  });
+});
+
+describe('memoryDiskPath: 展示用落点', () => {
+  const originalEnv = platform.env;
+  afterEach(() => {
+    platform.env = originalEnv;
+  });
+
+  it('Electron 下给出两条真实文件路径', () => {
+    platform.env = 'electron';
+    expect(memoryDiskPath('user', 'ignored')).toBe('~/.nanowork/MEMORY.md');
+    expect(memoryDiskPath('workspace', 'nanowork-1a2b3c4d')).toBe(
+      '~/.nanowork/memory/nanowork-1a2b3c4d.md',
+    );
+  });
+
+  it('Web 下给一句人话，而不是编一个假路径', () => {
+    platform.env = 'web';
+    expect(memoryDiskPath('workspace', 'nanowork-1a2b3c4d')).toBe(
+      '浏览器本地存储（Web 端无文件落点）',
+    );
+  });
+});
+
+describe('memoryDirective: Agent 记忆写入协议', () => {
+  it('解析 scope 属性，缺省与拼错都收敛为 workspace', () => {
+    expect(parseMemoryDirectives('<memory-save scope="user">A</memory-save>')).toEqual([
+      { scope: 'user', content: 'A' },
+    ]);
+    expect(parseMemoryDirectives('<memory-save>B</memory-save>')).toEqual([
+      { scope: 'workspace', content: 'B' },
+    ]);
+    expect(parseMemoryDirectives('<memory-save scope="USER">C</memory-save>')).toEqual([
+      { scope: 'user', content: 'C' },
+    ]);
+    expect(parseMemoryDirectives('<memory-save scope="全局">D</memory-save>')).toEqual([
+      { scope: 'workspace', content: 'D' },
+    ]);
+  });
+
+  it('多个块按出现顺序返回，空块被丢弃', () => {
+    const text = [
+      '<memory-save scope="user">名字是明明</memory-save>',
+      '<memory-save>   </memory-save>',
+      '<memory-save scope="workspace">决定修 P0</memory-save>',
+    ].join('\n');
+    expect(parseMemoryDirectives(text)).toEqual([
+      { scope: 'user', content: '名字是明明' },
+      { scope: 'workspace', content: '决定修 P0' },
+    ]);
+  });
+
+  it('无块时返回空数组（不误伤普通正文）', () => {
+    expect(parseMemoryDirectives('普通回答，没有任何标记')).toEqual([]);
+  });
+
+  it('strip 后块消失、正文保留，且不留多余空行', () => {
+    const text = '先看结论。\n<memory-save scope="user">名字是明明</memory-save>\n';
+    expect(stripMemoryDirectives(text)).toBe('先看结论。');
+  });
+
+  it('未闭合的开标签连同其后内容一起丢弃（半截协议不外泄）', () => {
+    const text = '结论在此。\n<memory-save scope="user">写到一半';
+    expect(stripMemoryDirectives(text)).toBe('结论在此。');
+  });
+
+  it('strip 幂等：没有标记时原样返回', () => {
+    const text = '没有任何标记的正文';
+    expect(stripMemoryDirectives(text)).toBe(text);
   });
 });
 

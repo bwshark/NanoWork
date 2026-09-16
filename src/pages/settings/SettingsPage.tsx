@@ -269,9 +269,9 @@ export function SettingsPage() {
           记忆
         </Typography>
         <Typography sx={{ fontSize: 13, color: 'text.secondary', mb: 1 }}>
-          长期记忆分两层：工作区级（会话自动摘要与「记住这条」落在这里）与用户级
-          （只在记忆页手动编辑，跨项目生效）。开启注入后，会话创建时读取一次并在 system
-          提示末尾以标签块注入。
+          长期记忆分两层：工作区级（按工作目录隔离，会话的决策与待办落这里）与用户级
+          （跨项目生效，你的称呼 / 职业 / 稳定偏好落这里）。开启注入后，会话创建时读取一次并在
+          system 提示末尾以标签块注入。
         </Typography>
         <FormControlLabel
           control={
@@ -289,7 +289,7 @@ export function SettingsPage() {
               onChange={(e) => setSettings({ autoSummarize: e.target.checked })}
             />
           }
-          label="会话结束自动沉淀摘要"
+          label="会话结束自动沉淀摘要（关闭则新会话不会记得你是谁）"
         />
         <Box sx={{ mt: 1 }}>
           <Button component={RouterLink} to={ROUTES.memory} variant="outlined">

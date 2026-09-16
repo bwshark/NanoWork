@@ -13,7 +13,7 @@ import BookmarkAddIcon from '@mui/icons-material/BookmarkAdd';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import ScheduleIcon from '@mui/icons-material/Schedule';
 import { parseCronJobId } from '@/ai/cronTaskMirror';
-import { MemoryService } from '@/lib/memory';
+import { MemoryService, workspaceKeyFor } from '@/lib/memory';
 import { useSessionsStore, selectSessionStreamStatus } from '@/stores/sessionsStore';
 import { useSessionUiStore } from '@/stores/sessionUiStore';
 import { useAgentsStore } from '@/stores/agentsStore';
@@ -75,10 +75,14 @@ export function AssistantMessage({ message, agentId, sessionId }: AssistantMessa
     return msgs?.[msgs.length - 1]?.id === message.id;
   });
   const isStreaming = streamStatus !== 'idle' && isLastOfSession;
-  const activeTitle = useSessionsStore((s) => {
-    const session = s.sessions.find((x) => x.id === s.activeId);
-    return session?.title ?? '会话';
-  });
+  // 「记住这条」的落点是**这条消息所属会话**的工作区，而不是当前活跃会话：
+  // 全局搜索结果里对旧会话的消息做操作时，两者并不相同。
+  const activeTitle = useSessionsStore(
+    (s) => s.sessions.find((x) => x.id === sessionId)?.title ?? '会话',
+  );
+  const memoryWorkspaceKey = useSessionsStore((s) =>
+    workspaceKeyFor(s.sessions.find((x) => x.id === sessionId)?.workdir),
+  );
 
   // 署名：会话绑定的专家 / 专家团（找不到时退回「助手」）
   const agent = useAgentsStore((s) => s.agents.find((a) => a.id === agentId));
@@ -142,7 +146,12 @@ export function AssistantMessage({ message, agentId, sessionId }: AssistantMessa
     if (saving) return;
     setSaving(true);
     try {
-      await MemoryService.append(message.content, { source: activeTitle });
+      await MemoryService.append(
+        message.content,
+        { source: activeTitle },
+        'workspace',
+        memoryWorkspaceKey,
+      );
       toast.success('已保存到记忆');
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
