@@ -119,11 +119,20 @@ const USER_FILES: Record<string, FileEntry> = {
  * `legacySessions`（`sessions.json`）是 D2 Phase E 之前的旧版会话整块快照，
  * 已无任何读写方；保留这条路由只为让渲染层能把它**一次性清掉**（见
  * `sessionsStore.loadSessions`），否则会留下一个永远读不到的孤儿文件。
+ *
+ * ⚠️ 登记纪律：`format` 必须与**值的真实形态**一致——json 路由会无条件
+ * `JSON.parse` 后落盘（见 `serializeRouteValue`），裸文本（id、token、纯字符串）
+ * 一旦落到 json 路由，写入必然失败。新增 key 时先问一句「值是 JSON 文本吗」。
  */
 const RUNTIME_FILES: Record<string, FileEntry> = {
   [STORAGE_KEYS.legacySessions]: { rel: 'sessions.json', format: 'json' },
   [STORAGE_KEYS.tasks]: { rel: 'tasks.json', format: 'json' },
   [STORAGE_KEYS.artifacts]: { rel: 'artifacts.json', format: 'json' },
+  // 「上次打开的会话」的值是**裸 session id**（渲染层读回来直接与 id 比对，
+  // 从不 JSON.parse），必须按 text 落。若不登记，它会掉进 misc 兜底的 json
+  // 路由，`JSON.parse('<uuid>')` 必然抛错——写盘整条失败（表现为渲染层未捕获
+  // 拒绝 + 主进程 handler 报错），而失败是静默的，只是「重启后记不住上次会话」。
+  [STORAGE_KEYS.activeSession]: { rel: 'active-session.txt', format: 'text' },
   [DEVICE_ID_STORAGE_KEY]: { rel: 'device-id.txt', format: 'text' },
 };
 

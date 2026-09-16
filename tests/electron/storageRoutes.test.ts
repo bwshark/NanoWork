@@ -74,6 +74,24 @@ describe('resolveRoute：落点归属', () => {
     expect(route.format).toBe('text');
   });
 
+  /**
+   * 回归：`nanowork.ui.activeSession` 的值是裸 session id，曾因未登记而掉进
+   * misc 兜底的 json 路由，`JSON.parse('<uuid>')` 抛错导致写盘整条失败
+   * （症状：控制台 "Error occurred in handler for 'storage:set'"，
+   * 且「重启记住上次会话」静默失效）。
+   */
+  it('「上次打开的会话」落 ② 的裸文本文件（值是 session id，不是 JSON）', () => {
+    const route = resolveRoute(STORAGE_KEYS.activeSession, roots);
+    expect(route.filePath).toBe(join(USER_DATA, 'active-session.txt'));
+    expect(route.format).toBe('text');
+    expect(route.scope).toBe('runtime');
+
+    // 裸 id 原样落盘、原样读回——不再经过 JSON.parse
+    const id = '1234abcd-5678-4def-9012-3456789abcde';
+    expect(serializeRouteValue(id, route)).toBe(id);
+    expect(serializeRouteValue('', route)).toBe('');
+  });
+
   it('记忆索引落 ① memory/index.json，工作区记忆落 ① memory/<ws>.md', () => {
     const index = resolveRoute(`${MEMORY_KEY_PREFIX}index`, roots);
     expect(index.filePath).toBe(join(memoryDir(roots), 'index.json'));
@@ -89,6 +107,18 @@ describe('resolveRoute：落点归属', () => {
     const route = resolveRoute('nanowork.someFutureStore', roots);
     expect(route.filePath).toBe(join(miscDir(roots), 'nanowork.someFutureStore.json'));
     expect(route.scope).toBe('runtime');
+  });
+
+  /**
+   * 反回归：`STORAGE_KEYS` 里每个 key 都必须有显式落点。
+   * 掉进 misc 兜底意味着「落点形态靠猜」——json 兜底会把裸文本值写崩（见
+   * activeSession 的回归用例），所以未登记要在单测里直接暴露。
+   */
+  it('STORAGE_KEYS 全部显式登记，没有一个掉进 misc 兜底', () => {
+    const unregistered = Object.values(STORAGE_KEYS).filter((key) =>
+      resolveRoute(key, roots).filePath.startsWith(miscDir(roots) + sep),
+    );
+    expect(unregistered).toEqual([]);
   });
 
   it('所有落点都在两个根之内（没有任何 key 逃逸）', () => {

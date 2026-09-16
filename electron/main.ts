@@ -107,7 +107,18 @@ async function readRouteFile(key: string): Promise<string | null> {
 /** 按落点写入（自动建父目录 + 按 key 串行化） */
 async function writeRouteFile(key: string, value: string): Promise<void> {
   const route = resolveRoute(key, STORAGE_ROOTS);
-  const text = serializeRouteValue(value, route);
+  let text: string;
+  try {
+    text = serializeRouteValue(value, route);
+  } catch (err) {
+    // 值形态与落点不符（典型：裸文本写进了 json 路由）时补上 key 再抛。
+    // 裸 JSON.parse 报错只有「position N」这种位置信息，日志里定位不到是谁写的。
+    throw new Error(
+      `[storage] key「${key}」的值与落点形态不符，无法写入 ${route.filePath}：${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+  }
   await enqueueWrite(route.filePath, async () => {
     await fs.mkdir(dirname(route.filePath), { recursive: true });
     await fs.writeFile(route.filePath, text, 'utf-8');
