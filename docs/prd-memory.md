@@ -292,6 +292,6 @@ MEMORY 块与写入前逐字节相同。这排除了「模型没看见」以外�
 | 写入方 | 本 PRD 描述的全部路径 | 引擎的 Dream 归纳（定时批处理） |
 | 是否随会话 workdir 变化 | **是**（L3 按 key 隔离） | **否**（绑定引擎配好的那个 workspace） |
 
-引擎记忆的 workspace 由 `nanobot.config.json` 决定（本项目为
+引擎记忆的 workspace 由 `nanowork.config.json` 决定（本项目为
 `<repo>/.nanowork-Workspace`），`build_system_prompt(workspace=…)` 只影响
 prompts/skills 覆盖，**不改记忆落点**。因此不要期望「换个工作区，引擎记忆跟着换」。

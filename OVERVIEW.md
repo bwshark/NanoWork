@@ -123,7 +123,7 @@ npm run verify:gateway            # 网关链路集成测试（monkeypatch fetch
 真实网关（详见根 `README.md` 第 3 节与 `docs/engine-dev-setup.md`）：
 
 ```bash
-.\nanobot\nanobot\.venv\Scripts\nanobot.exe serve --config nanobot.config.json --host 127.0.0.1 --port 8900 -v
+.\nanobot\nanobot\.venv\Scripts\nanobot.exe serve --config nanowork.config.json --host 127.0.0.1 --port 8900 -v
 ```
 
 > 客户端默认网关为 `http://127.0.0.1:8900`（`src/lib/constants.ts`）。**端口不一致会连不上**。

@@ -28,9 +28,9 @@ run/
 .env
 .env.*
 !.env.example
-nanobot.config.yaml
-nanobot.config.yml
-nanobot.config.json
+nanowork.config.yaml
+nanowork.config.yml
+nanowork.config.json
 pairing.json
 weixin/
 cli-apps/*_registry_cache.json

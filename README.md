@@ -86,7 +86,7 @@ C:\Users\xinmi\.workbuddy\binaries\python\versions\3.13.12\python.exe -m venv na
 
 #### 3.2 配置网关
 
-新建 `nanobot.config.json`（**已 gitignore，密钥不出本机**）：
+新建 `nanowork.config.json`（**已 gitignore，密钥不出本机**）：
 
 ```json
 {
@@ -116,7 +116,7 @@ C:\Users\xinmi\.workbuddy\binaries\python\versions\3.13.12\python.exe -m venv na
 
 ```bash
 # 终端 A：启动 nanobot 网关（默认监听 127.0.0.1:8900）
-.\nanobot\nanobot\.venv\Scripts\nanobot.exe serve --config nanobot.config.json --host 127.0.0.1 --port 8900 -v
+.\nanobot\nanobot\.venv\Scripts\nanobot.exe serve --config nanowork.config.json --host 127.0.0.1 --port 8900 -v
 
 # 终端 B：启动前端
 npm run dev
@@ -190,7 +190,7 @@ nanowork/
 ├─ tests/                    # vitest 单测 + 网关集成测试
 ├─ docs/                     # 文档索引（README.md）+ v2 主文档 + adr/ + 工程约定
 ├─ .github/workflows/ci.yml  # CI：typecheck ×3 + vitest + build + 平台边界检查
-├─ nanobot.config.json       # 真实网关配置（gitignore，含密钥）
+├─ nanowork.config.json       # 真实网关配置（gitignore，含密钥）
 ├─ nanobot/                  # ⚠️ 独立 git 仓库（上游 HKUDS/nanobot），被 .gitignore 忽略，非 submodule
 │  └─ nanobot/.venv/         # 项目级 nanobot 运行环境（gitignore）
 ├─ package.json / vite.config.ts / tsconfig*.json / tailwind.config.js

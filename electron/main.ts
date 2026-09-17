@@ -97,7 +97,7 @@ const USER_PLUGINS_DIR = join(
 /**
  * 连接器凭据保险库：`~/.nanowork/connectors/.credentials.v3.json`。
  *
- * 密钥值只在这里与 `nanobot.config.json`（引擎消费必需）出现，且保险库那份
+ * 密钥值只在这里与 `nanowork.config.json`（引擎消费必需）出现，且保险库那份
  * 由 `safeStorage` 加密（OS 凭据库托管密钥，即 PRD §12.7 里 `.master.key` 的角色）。
  * 渲染层的持久化镜像与 IPC 回读**都拿不到值**，只有密钥名清单。
  *
@@ -161,8 +161,7 @@ async function writeRouteFile(key: string, value: string): Promise<void> {
     // 值形态与落点不符（典型：裸文本写进了 json 路由）时补上 key 再抛。
     // 裸 JSON.parse 报错只有「position N」这种位置信息，日志里定位不到是谁写的。
     throw new Error(
-      `[storage] key「${key}」的值与落点形态不符，无法写入 ${route.filePath}：${
-        err instanceof Error ? err.message : String(err)
+      `[storage] key「${key}」的值与落点形态不符，无法写入 ${route.filePath}：${err instanceof Error ? err.message : String(err)
       }`,
     );
   }
@@ -300,8 +299,8 @@ function parseSettingsDocument(raw: string | null): {
     const parsed: unknown = JSON.parse(raw);
     return typeof parsed === 'object' && parsed !== null
       ? (parsed as {
-          state?: { settings?: { theme?: unknown; desktop?: Partial<DesktopConfig> } };
-        })
+        state?: { settings?: { theme?: unknown; desktop?: Partial<DesktopConfig> } };
+      })
       : null;
   } catch {
     return null;
@@ -528,7 +527,7 @@ interface NanobotLaunchConfig {
   config?: string;
 }
 
-/** 项目本地兜底配置：nanobot/nanobot/.venv 里的可执行文件 + 项目根 nanobot.config.json */
+/** 项目本地兜底配置：nanobot/nanobot/.venv 里的可执行文件 + 项目根 nanowork.config.json */
 function fallbackLaunchConfig(): NanobotLaunchConfig {
   const root = join(__dirname, '..');
   const venvBin =
@@ -536,13 +535,13 @@ function fallbackLaunchConfig(): NanobotLaunchConfig {
       ? join(root, 'nanobot', 'nanobot', '.venv', 'Scripts', 'nanobot.exe')
       : join(root, 'nanobot', 'nanobot', '.venv', 'bin', 'nanobot');
   const bin = existsSync(venvBin) ? venvBin : 'nanobot';
-  return { bin, host: '127.0.0.1', port: '8900', config: join(root, 'nanobot.config.json') };
+  return { bin, host: '127.0.0.1', port: '8900', config: join(root, 'nanowork.config.json') };
 }
 
 /**
  * 读取 nanobot 启动配置。
  * 优先级：环境变量 > userData/nanowork.nanobot.json > 项目本地兜底。
- * userData 配置未显式给出 config 时同样回退项目本地 nanobot.config.json，
+ * userData 配置未显式给出 config 时同样回退项目本地 nanowork.config.json，
  * 保证 channels 同步有确定的合并目标。
  */
 async function readNanobotConfig(): Promise<NanobotLaunchConfig> {

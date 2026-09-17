@@ -4,7 +4,7 @@
  * ## 它解决什么问题
  *
  * 凭据原先有两份**明文**落盘：渲染层的持久化镜像 `~/.nanowork/mcp.json`
- * （zustand persist 把 `auth` 一并写下去）和引擎消费的 `nanobot.config.json`
+ * （zustand persist 把 `auth` 一并写下去）和引擎消费的 `nanowork.config.json`
  * （`env` / `Authorization` 头）。前者是本应用自己的存储，完全没必要留明文。
  *
  * 本模块把"密钥值"收敛到一个加密文件：

@@ -1746,7 +1746,7 @@ user-invocable: true              # 是否可由用户直接 / 调用
 
 **③ 三态覆盖的存储有两跳，不是一跳。**
 客户端把启用态存在 `skills/index.json`（技能的索引与状态本来就同源，拆到 `settings.json`
-会变成一次操作两处写、必然漂移），随后**推送**到 `nanobot.config.json` 的
+会变成一次操作两处写、必然漂移），随后**推送**到 `nanowork.config.json` 的
 `agents.defaults.skillOverrides`。引擎只认后者——不推的话，界面上的「停用」只是本地不显示，
 模型照旧能自主加载该技能。推送**只含非默认档**（`on` 省略），因此「调回启用」表现为从表里消失，
 和引擎侧「读不到即 `on`」天然一致；推送失败会在技能页显示告警，不静默。
@@ -1794,7 +1794,7 @@ user-invocable: true              # 是否可由用户直接 / 调用
 |---|---|---|
 | 渲染层持久化（`~/.nanowork/mcp.json`、localStorage） | **已消灭** | `partialize` 剔除 `auth`；`auth` 退化为编辑草稿，不是持久化字段 |
 | 保险库 `~/.nanowork/connectors/.credentials.v3.json` | **加密**（0600） | `safeStorage` 托管密钥（即 §12.7 里 `.master.key` 的角色：OS 凭据库本来就是主密钥） |
-| 引擎 `nanobot.config.json` 的 `env` / `Authorization` | **明文**（必需） | 引擎要拿它去连 server，无法回避 |
+| 引擎 `nanowork.config.json` 的 `env` / `Authorization` | **明文**（必需） | 引擎要拿它去连 server，无法回避 |
 
 第三份消不掉，除非改用 `${VAR}` 环境变量间接引用；但环境变量只能由**本进程托管的** serve 子进程继承，外部托管的网关拿不到，引擎的 `resolve_config_env_vars` 遇到缺失变量会**直接拒绝加载配置**——那会把"没配凭据"升级成"网关起不来"。因此当前选择是：明文留在引擎配置里，把**我们自己的副本**加密并收紧到 0600。
 
@@ -2379,7 +2379,7 @@ rollbackTo(commitSeq: number): Promise<{ ok: true; restored: string[] } | { ok: 
 |---|---|---|---|---|
 | ① | 产品自有目录 | `~/.nanowork/` | 跨工作区、跨端的用户资产 | `settings.json`、`mcp.json`、`channels.json`、`experts/{agents,groups}.json`、`skills/`（含 `index.json`）、`memory/`（工作区级记忆）、`MEMORY.md`（**用户级记忆**兼工作区级导出名）、身份文件 `SOUL.md` / `IDENTITY.md` / `USER.md` / `BOOTSTRAP.md`、`prompts/<kind>/<key>.md`（提示词外置覆盖） |
 | ② | Electron 用户数据目录 | `<userData>`（Win 打包后 `%APPDATA%\nanowork`） | 运行时数据 | `sessions.json`、`tasks.json`、`artifacts.json`、`device-id.txt`、`misc/`（未登记 key 兜底）、`nanowork-store.json.migrated`（旧 blob 备份） |
-| ③ | 引擎配置目录 | `{nanobot config 所在目录}`（本机 = 仓库根） | 引擎配置及其派生数据 | `nanobot.config.json`、`sessions/<workspace_id>/`、`llm_usage.sqlite3` |
+| ③ | 引擎配置目录 | `{nanobot config 所在目录}`（本机 = 仓库根） | 引擎配置及其派生数据 | `nanowork.config.json`、`sessions/<workspace_id>/`、`llm_usage.sqlite3` |
 | ④ | 引擎工作区 | `{config.agents.defaults.workspace}`（本机 = `<repo>/.nanowork-workspace/`） | 引擎运行时工作区 | `memory/MEMORY.md`、`cron/jobs.json`、`cron/runs/` |
 
 ② 归 Electron 管理；③ 与 ④ 由**引擎**决定，在 `electron/main.ts` 的 `resolveNanobotWorkspacePath()` 中解析（读 config 的 `agents.defaults.workspace` 并展开 `~`，缺省回退 `~/.nanobot/workspace`，与引擎 `get_workspace_path` 一致）。**只有 ① 是产品自己定的。**
@@ -2427,7 +2427,7 @@ rollbackTo(commitSeq: number): Promise<{ ok: true; restored: string[] } | { ok: 
 - 主进程不再吞异常：`fs:writeTextFile` 越界时抛错，由调用方 `MemoryPage` 呈现。
 
 **② 与用户资产相关的目录出现两套相近命名 —— 保持现状（已决议）。**
-工作区级是 `.nanowork-workspace`（④，引擎 workspace），用户级是 `.nanowork`（①，产品自有）。两者职责不同（引擎运行时 vs 产品用户资产），**不建议此刻改名**——`nanobot.config.json` 的 `agents.defaults.workspace` 已指向它，改名前须先迁移其中的 `memory/` 与 `cron/`；仅在新项目初始化时改用中性名（如 `<repo>/.workspace`）。
+工作区级是 `.nanowork-workspace`（④，引擎 workspace），用户级是 `.nanowork`（①，产品自有）。两者职责不同（引擎运行时 vs 产品用户资产），**不建议此刻改名**——`nanowork.config.json` 的 `agents.defaults.workspace` 已指向它，改名前须先迁移其中的 `memory/` 与 `cron/`；仅在新项目初始化时改用中性名（如 `<repo>/.workspace`）。
 
 ### 18.2.5 目标态落地：key → 文件的路由（M1 实施）★
 

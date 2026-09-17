@@ -33,7 +33,7 @@ nanobot serve --host 127.0.0.1 --port 8900
 > 本仓库的推荐做法不是 `pip install`，而是用仓库内已就绪的隔离环境（editable 安装，改源码即生效）：
 >
 > ```bash
-> .\nanobot\nanobot\.venv\Scripts\nanobot.exe serve --config nanobot.config.json --host 127.0.0.1 --port 8900 -v
+> .\nanobot\nanobot\.venv\Scripts\nanobot.exe serve --config nanowork.config.json --host 127.0.0.1 --port 8900 -v
 > ```
 >
 > 详见根 `README.md` 第 3 节 与 `docs/engine-dev-setup.md`。

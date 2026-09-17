@@ -163,8 +163,8 @@ cd nanobot
 | 项 | 值 | 来源 |
 |---|---|---|
 | 客户端默认网关 | `http://127.0.0.1:8900` | `src/lib/constants.ts` |
-| 启动网关 | `.\nanobot\nanobot\.venv\Scripts\nanobot.exe serve --config nanobot.config.json --host 127.0.0.1 --port 8900 -v` | 根 `README.md` 第 3.3 节 |
-| 配置文件 | `nanobot.config.json`（**已 gitignore，含密钥**） | 根 `README.md` 第 3.2 节 |
+| 启动网关 | `.\nanobot\nanobot\.venv\Scripts\nanobot.exe serve --config nanowork.config.json --host 127.0.0.1 --port 8900 -v` | 根 `README.md` 第 3.3 节 |
+| 配置文件 | `nanowork.config.json`（**已 gitignore，含密钥**） | 根 `README.md` 第 3.2 节 |
 | 引擎工作区 / 用户目录 | `resolveNanobotWorkspacePath()`；用户资产在 `~/.nanowork` | ADR-018 / v2 §18.2 |
 
 > **端口不一致会连不上**：`docs/gateway-e2e.md` 曾把网关写成 `8765`，已于 2026-09-17 修正为 `8900`。
