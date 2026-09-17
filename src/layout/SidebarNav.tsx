@@ -301,7 +301,7 @@ export function SidebarNav() {
         ))}
         <NavRow
           item={{
-            label: "IM 频道",
+            label: "助理",
             icon: <SmartphoneIcon />,
             to: ROUTES.im,
           }}
@@ -984,7 +984,11 @@ function SessionList() {
    */
   const submitGroupRename = () => {
     if (!renameDialog) return;
-    setWorkspaceAlias(renameDialog.key, renameDialog.value, renameDialog.fallback);
+    setWorkspaceAlias(
+      renameDialog.key,
+      renameDialog.value,
+      renameDialog.fallback,
+    );
     setRenameDialog(null);
   };
 
@@ -1140,11 +1144,21 @@ function SessionList() {
                 {/* 折叠箭头紧贴标题右侧（常驻，不随 hover 变化） */}
                 {isCollapsed ? (
                   <ExpandMoreIcon
-                    sx={{ fontSize: 16, color: "text.secondary", flexShrink: 0, ml: 0.75 }}
+                    sx={{
+                      fontSize: 16,
+                      color: "text.secondary",
+                      flexShrink: 0,
+                      ml: 0.75,
+                    }}
                   />
                 ) : (
                   <ExpandLessIcon
-                    sx={{ fontSize: 16, color: "text.secondary", flexShrink: 0, ml: 0.75 }}
+                    sx={{
+                      fontSize: 16,
+                      color: "text.secondary",
+                      flexShrink: 0,
+                      ml: 0.75,
+                    }}
                   />
                 )}
                 {/* 弹性垫片：标题与箭头靠左成组，行尾留给 hover 才出现的操作图标 */}

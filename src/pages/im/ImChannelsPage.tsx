@@ -416,7 +416,7 @@ function Hero() {
       </Box>
 
       <Typography sx={{ mt: 3, fontSize: 22, fontWeight: 700 }}>
-        IM 频道
+        助理设置
       </Typography>
       <Typography
         variant="body2"
