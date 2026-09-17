@@ -23,8 +23,20 @@ npx vitest run tests/gateway.integration.test.ts
 
 ```bash
 pip install nanobot
-nanobot serve --host 127.0.0.1 --port 8765
+nanobot serve --host 127.0.0.1 --port 8900
 ```
+
+> ⚠️ **端口必须与本项目客户端默认值一致**。客户端默认网关为 **`http://127.0.0.1:8900`**
+> （见 `src/lib/constants.ts`）。若把网关起在别的端口（例如 `8765`），必须在 ConnectionBanner
+> 里手改 endpoint，否则连接失败。
+>
+> 本仓库的推荐做法不是 `pip install`，而是用仓库内已就绪的隔离环境（editable 安装，改源码即生效）：
+>
+> ```bash
+> .\nanobot\nanobot\.venv\Scripts\nanobot.exe serve --config nanobot.config.json --host 127.0.0.1 --port 8900 -v
+> ```
+>
+> 详见根 `README.md` 第 3 节 与 `docs/engine-dev-setup.md`。
 
 > 注：经源码确认，nanobot 当前版本的 `/v1/chat/completions` 仅流式返回 `delta.content`
 > 纯文本，不含 `tool_calls` / `artifacts` 事件，但支持 `session_id` 隔离与文件上传。

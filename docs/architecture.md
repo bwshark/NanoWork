@@ -1,5 +1,7 @@
 # 系统架构设计文档 — 类 WorkBuddy 智能体客户端助手（基于 nanobot）
 
+> ⚠️ **已取代（历史存档）**：本文为 V1 架构初版，**内容已被 `nanowork-prd-design-v2.md` 第 7 章（五层架构）与第 22 章（目录规划）取代**。下文的分层图与 AIClient / `platform` 约定仍有参考价值，但**文件清单已过期**（缺 `platform` / `nanobotBridge` / `im` / `composer` / `memory` 等），第 3.2 节与 T04 引用的 `src/ai/types.ts` / `nanobotClient.ts` 已在 D1 迁至 `src/ai/runtime/types.ts` / `src/ai/runtime/nanobotHttp/chat.ts`。**以 v2 为准，本文件除本横幅外不再编辑**（治理约定见 `docs/README.md` 第八节）。
+
 > 文档状态：架构初版（对应 PRD v1）
 > 架构师：高见远（Gao）｜主理人：齐活林（team-lead）
 > 工程师（实现）：寇豆码
@@ -50,7 +52,7 @@ flowchart TB
     PRE["preload.ts → window.electronAPI"]
   end
   subgraph EXT["外部"]
-    GW["nanobot 网关<br/>127.0.0.1:8765 (OpenAI 兼容)"]
+    GW["nanobot 网关<br/>127.0.0.1:8900 (OpenAI 兼容)"]
   end
 
   PAGES --> SHARED
@@ -213,7 +215,7 @@ nanowork/
 export type ConnectionStatus = 'connected' | 'offline';
 
 export interface Settings {
-  gatewayEndpoint: string;   // 默认 http://127.0.0.1:8765/v1
+  gatewayEndpoint: string;   // 默认 http://127.0.0.1:8900/v1
   apiToken: string;          // nanobot apiToken/key
   theme: 'light' | 'dark';
   memoryEnabled: boolean;    // 记忆注入开关（默认 true）
@@ -651,7 +653,7 @@ typescript@^5.5.0
 
 - nanobot 是 HKUDS 的 Python 自托管 Agent 框架，**不安装进本项目**。
 - 客户端仅通过 HTTP 访问其 OpenAI 兼容 API：`{endpoint}/chat/completions`（SSE 流式）、`/models`。
-- 默认网关地址 `http://127.0.0.1:8765`（gateway 长运行服务）；endpoint 与 apiToken 在设置中可配。
+- 默认网关地址 `http://127.0.0.1:8900`（gateway 长运行服务）；endpoint 与 apiToken 在设置中可配。**注**：本行原写作 `8765`，正确值为 `8900`（见 `src/lib/constants.ts`）。
 - 桌面端主进程（P2 增强）可负责拉起/管理 nanobot 进程，首版渲染层仅做 HTTP 调用。
 
 ---

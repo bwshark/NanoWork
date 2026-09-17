@@ -47,13 +47,17 @@ cd nanobot
 ```
 
 > venv 位于 `nanobot/nanobot/.venv`（editable 安装直接指向源码 `nanobot/nanobot/`，改源码即生效，无需重装）。
+> 完整约定与排错见 `docs/engine-dev-setup.md`。
+>
+> ⚠️ **`nanobot/` 是独立 git 仓库**（上游 `HKUDS/nanobot`），**被本仓库 `.gitignore` 忽略，且不是 submodule**。
+> 也就是说：**clone 本仓库拿不到引擎源码**，需另行获取，步骤见 `docs/engine-dev-setup.md` 第一节。
 
 ## 快速开始
 
 ### 1. 安装依赖
 
 ```bash
-cd D:\Workspace\Codes\nanowork
+cd D:\Workspace\study\nanowork
 npm install
 ```
 
@@ -149,12 +153,20 @@ npm run build:electron   # electron-builder 产出可分发包（dist-electron/�
 ## 测试与质量
 
 ```bash
-npx vitest run           # 运行全部单测（当前 80/80 通过）
+npm test                 # 全部单测（vitest）：66 个用例文件 / 1085 个用例全绿
 npm run verify:gateway   # 网关链路集成测试（monkeypatch fetch 全链路）
-npm run build            # 类型检查 + 构建（src + electron 双 tsconfig 均 0 错误）
+npm run typecheck        # 渲染层 src/ 类型检查
+npm run typecheck:electron  # 桌面外壳 electron/
+npm run typecheck:tests  # 测试代码 tests/
+npm run build            # typecheck + typecheck:electron + vite build
 ```
 
-测试覆盖：网关集成、记忆去重 / 多工作区、cron 校验、会话 / 任务 / 工具调用等。
+测试覆盖：网关集成、事件等价性（实时视图 ≡ 事件投影）、权限 / 工具网关、记忆去重 / 多工作区、cron 校验、会话 / 任务 / 工具调用等。
+
+> 上述四类检查已固化为 CI（`.github/workflows/ci.yml`），另含两条**平台边界检查**：
+> `window.electronAPI` 只允许出现在 `src/platform/`（ADR-004 / ADR-010），
+> 引擎 wire 字段只允许出现在 `src/ai/runtime/nanobotHttp/`（ADR-020）。
+> 引擎侧 pytest **不在 CI 内**——引擎是独立仓库且被本仓库忽略，原因见 `docs/engine-dev-setup.md`。
 
 ---
 
@@ -174,11 +186,12 @@ nanowork/
 │  ├─ theme/                # MUI 主题
 │  ├─ types/                # 全局类型
 │  ├─ App.tsx / main.tsx
-├─ electron/                 # 桌面外壳：main / preload / builder.config / electron-env
+├─ electron/                 # 桌面外壳：main / preload / builder.config / storageRoutes / eventStore …
 ├─ tests/                    # vitest 单测 + 网关集成测试
-├─ docs/                     # prd / architecture / gateway-e2e 等
+├─ docs/                     # 文档索引（README.md）+ v2 主文档 + adr/ + 工程约定
+├─ .github/workflows/ci.yml  # CI：typecheck ×3 + vitest + build + 平台边界检查
 ├─ nanobot.config.json       # 真实网关配置（gitignore，含密钥）
-├─ nanobot/                  # nanobot 源码仓库（editable 安装）
+├─ nanobot/                  # ⚠️ 独立 git 仓库（上游 HKUDS/nanobot），被 .gitignore 忽略，非 submodule
 │  └─ nanobot/.venv/         # 项目级 nanobot 运行环境（gitignore）
 ├─ package.json / vite.config.ts / tsconfig*.json / tailwind.config.js
 └─ OVERVIEW.md               # 交付概览与状态
@@ -196,10 +209,19 @@ nanowork/
 
 ## 相关文档
 
-- `docs/prd.md` — 产品需求
-- `docs/architecture.md` — 架构设计
-- `docs/gateway-e2e.md` — 网关端到端验证指南
-- `OVERVIEW.md` — 交付概览与迭代状态
+> **唯一事实源是 `docs/nanowork-prd-design-v2.md`**（需求 + 设计 + ADR 总纲）。
+> 任何文档与它冲突，以它为准；任何文档与**代码**冲突，以代码为准。索引见 `docs/README.md`。
+
+| 文档 | 用途 |
+|---|---|
+| `docs/nanowork-prd-design-v2.md` ⭐ | 唯一事实源：需求 + 设计 + ADR |
+| `docs/README.md` | 文档索引（登记制 + 一致性看板 + 阅读路径） |
+| `docs/adr/` | 架构决策记录（ADR-0001 ~ ADR-0024） |
+| `docs/engine-dev-setup.md` | 引擎仓库边界、venv 约定、本地开发与排错 |
+| `docs/upstream-merge-conflicts.md` | 上游合并冲突面清单（`[LOCAL PATCH]` 全量） |
+| `docs/gateway-e2e.md` | 网关端到端验证指南 |
+| `OVERVIEW.md` | 交付概览与迭代状态 |
+| `docs/architecture.md` / `docs/chat.md` | **已取代（历史存档）**，文首有横幅，勿作实现依据 |
 
 ## License
 

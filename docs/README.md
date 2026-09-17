@@ -70,6 +70,8 @@
 | `agents/issue-tracker.md` | 现行 | Issue / Spec 以 GitHub Issue 为载体，`gh` CLI 操作约定；「PR 是否作为需求入口」开关 |
 | `agents/triage-labels.md` | 现行 | 5 个 triage 角色 → 本仓库实际标签串的映射表 |
 | `agents/domain.md` | 现行 | 领域文档消费约定：优先读 `CONTEXT.md` / `CONTEXT-MAP.md` / `docs/adr/`（单上下文仓库） |
+| `engine-dev-setup.md` | 现行 | 引擎仓库边界（`nanobot/` 为同级独立仓库、非 submodule）、venv 固定约定、本地开发 / 测试 / 排错步骤、对象库修复记录（2026-09-17） |
+| `upstream-merge-conflicts.md` | 现行 | 上游合并冲突面清单：`[LOCAL PATCH]` 标记按文件与行号全量登记，附合并操作步骤与再打补丁顺序 |
 
 ---
 
@@ -78,10 +80,17 @@
 | 文件 | 状态 | 说明 |
 |---|---|---|
 | `README.md`（根） | 现行 | 使用入门：安装、启动命令、npm scripts、已知限制 |
-| `OVERVIEW.md`（根） | **增量（待重写）** | 交付状态章节停留在「T01–T36 完成」，未反映 IM 渠道 / 扫码接入 / 专家团 / 语音输入 / 思考过程时间线等后续实现。需按 v2 第 1.2 节（现状代码基线）重写 |
+| `OVERVIEW.md`（根） | 增量（每期收口时重写） | **2026-09-17 已按 v2 第 1.2 节重写**：补入 IM 5 渠道 + 扫码接入、专家团三模式、语音输入、思考过程时间线、`src/ai/runtime/` 契约层、平台抽象层；新增「V1 里程碑实测状态」「质量门禁实测」「遗留风险」三节 |
 | `AGENTS.md`（根） | 现行 | Agent 技能入口：issue tracker / triage labels / domain docs 三份指引 |
 | `openspec/config.yaml` | 现行 | 平台归口约定（`web` / `electron`），v2 需求表的「环境」列沿用此口径 |
-| `docs/adr/` | **待建** | 架构决策记录目录，由 `/domain-modeling` 惰性创建。v2 第 23 章已给出 ADR 摘要，落地后逐条迁入 |
+| `docs/adr/` | 现行 | 架构决策记录目录（**2026-09-17 建立**）。v2 第 23 章 ADR-001 ~ ADR-024 已逐条迁入为 `ADR-0001.md` ~ `ADR-0024.md`，索引见 `docs/adr/README.md` |
+
+> ⚠️ **本仓库之外的代码（引擎）**：`nanobot/` 是**同级独立 git 仓库**（上游 `HKUDS/nanobot`），
+> 被根 `.gitignore` 忽略，且**不是 submodule** —— 也就是说 **clone 本仓库拿不到引擎源码**，
+> 需另行获取（步骤见 `engine-dev-setup.md` 第一节）。
+> 引擎侧承载了 V1 的安全与执行模式成果（工具网关、回收站改道、审计留痕、执行模式、提示词外置），
+> 其 104 处 `[LOCAL PATCH]` 全量清单与上游合并风险见 `upstream-merge-conflicts.md`。
+> 引擎仓库不在父仓库版本控制内，因此**父仓库 CI 不含引擎侧测试**（原因见 `.github/workflows/ci.yml` 头部注释）。
 
 ---
 
@@ -124,18 +133,20 @@
 |---|---|---|---|
 | 1 | `README.md`（根） | WorkBuddy 归属误标为「网易有道」 | ✅ |
 | 2 | `OVERVIEW.md`（根） | 同上 | ✅ |
-| 3 | `OVERVIEW.md`（根） | 交付状态未反映 IM 渠道 / 扫码接入 / 专家团 / 语音输入等已实现能力 | ⬜ |
+| 3 | `OVERVIEW.md`（根） | 交付状态未反映 IM 渠道 / 扫码接入 / 专家团 / 语音输入等已实现能力 | ✅ |
 | 4 | `docs/prd.md` | WorkBuddy 归属误标为「网易有道」 | ✅ |
-| 5 | `docs/prd.md` | `FR-010` 标注「首版仅预留」，实际 5 渠道 + 扫码接入已实现 | ⬜ |
-| 6 | `docs/architecture.md` | 默认网关写成 `127.0.0.1:8765`，应为 `8900` | ⬜ |
-| 7 | `docs/architecture.md` | 文件清单过期（缺 `platform` / `nanobotBridge` / `im` / `composer` / `memory` 等），或在文首标注「历史版本，以 v2 为准」。另：3.2 节与 T04 引用的 `src/ai/types.ts` / `nanobotClient.ts` 已在 D1 迁至 `src/ai/runtime/types.ts` / `runtime/nanobotHttp/chat.ts`（见 v2 第 8.4.1 节） | ⬜ |
-| 8 | `docs/chat.md` | 无编号、无验收标准；需收编进 v2 后在文首标注已被取代 | ⬜ |
-| 9 | `docs/nanowork-prd.md` | 定位为企业平台，与代码基线不符；需在文首加注「V3 阶段需求，见 v2 第 2.3 节」 | ⬜ |
-| 10 | `docs/user-sync-login.md` | 已被 `cross-platform-sync-design.md` 整合；需加 superseded 横幅 | ⬜ |
-| 11 | `docs/cloud-sync-design.md` | 同上，需加 superseded 横幅 | ⬜ |
-| 12 | `docs/gateway-e2e.md` | 第 2 节写 `nanobot serve --port 8765`，与项目默认网关 `8900` 不一致，照做会连不上 | ⬜ |
+| 5 | `docs/prd.md` | `FR-010` 标注「首版仅预留」，实际 5 渠道 + 扫码接入已实现 | ✅ |
+| 6 | `docs/architecture.md` | 默认网关写成 `127.0.0.1:8765`，应为 `8900` | ✅ |
+| 7 | `docs/architecture.md` | 文件清单过期（缺 `platform` / `nanobotBridge` / `im` / `composer` / `memory` 等），或在文首标注「历史版本，以 v2 为准」。另：3.2 节与 T04 引用的 `src/ai/types.ts` / `nanobotClient.ts` 已在 D1 迁至 `src/ai/runtime/types.ts` / `runtime/nanobotHttp/chat.ts`（见 v2 第 8.4.1 节） | ✅ |
+| 8 | `docs/chat.md` | 无编号、无验收标准；需收编进 v2 后在文首标注已被取代 | ✅ |
+| 9 | `docs/nanowork-prd.md` | 定位为企业平台，与代码基线不符；需在文首加注「V3 阶段需求，见 v2 第 2.3 节」 | ✅ |
+| 10 | `docs/user-sync-login.md` | 已被 `cross-platform-sync-design.md` 整合；需加 superseded 横幅 | ✅ |
+| 11 | `docs/cloud-sync-design.md` | 同上，需加 superseded 横幅 | ✅ |
+| 12 | `docs/gateway-e2e.md` | 第 2 节写 `nanobot serve --port 8765`，与项目默认网关 `8900` 不一致，照做会连不上 | ✅ |
+| 13 | `src/`（4 文件） | **平台边界越界**：`src/layout/AppLayout.tsx`、`src/components/TitleBar.tsx`、`src/pages/settings/SettingsPage.tsx`、`src/events/electronStore.ts` 直连 `window.electronAPI`，未收口到 `src/platform/`。v2 §18.2.3 原则 3 原写「仅出现在 `src/platform/`」，**该断言不成立，已在该节加勘误** | ⬜ 待收口（已在 CI 基线登记） |
+| 14 | `src/`（2 文件） | **引擎 wire 字段泄漏**：`src/lib/channelScan.ts`、`src/types/channel.ts` 含 `session_id`，未收进 `src/ai/runtime/nanobotHttp/`，与 ADR-020 的边界声明不符 | ⬜ 待收口（已在 CI 基线登记） |
 
-> 第 12 条为本次编写索引时新发现：`gateway-e2e.md` 的「真实网关」步骤会让读者把网关起在 `8765`，而客户端默认指向 `8900`，导致连接失败。建议在 v2 中统一为「nanobot 自身默认端口以 `nanobot serve --help` 为准；本项目客户端默认 `8900`」。
+> **以上 12 条已于 2026-09-17 全部修复**（第 1、2、4 条此前已修）。第 3 条按 v2 第 1.2 节重写 `OVERVIEW.md`；第 5 条改为状态勘误并注明仍未做的是「引擎侧 IM 结果回推」（v2 `FR-6.3`）；第 6/7 条修正端口并在 `architecture.md` 文首加「已取代（历史存档）」横幅；第 8~11 条在 `chat.md` / `nanowork-prd.md` / `user-sync-login.md` / `cloud-sync-design.md` 文首加对应横幅；第 12 条修正网关启动命令为 `8900` 并加端口一致性提示。
 
 ---
 

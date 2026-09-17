@@ -2409,7 +2409,7 @@ rollbackTo(commitSeq: number): Promise<{ ok: true; restored: string[] } | { ok: 
 
 1. **用户资产进 ①，不进 ②。** ② 是 Electron 的实现细节（卸载即可能被清），且单文件 blob 无法按实体同步。V1 已把**数据实体**拆开（事件流 JSONL + `SyncMeta`），**渲染层持久化**也已在 M1 落成「一 key 一文件 + 按 key 路由归属」（见 18.2.5）——用户资产（`settings` / `mcp` / `channels` / `experts` / `skills` 索引 / 记忆）全部进 ①，仅 `sessions` / `tasks` / `artifacts` 作过渡落点留在 ②，待 D2 的实体化结构（`projects/<slug>/*.jsonl` + `index/sessions.db`）落地后消化。
 2. **引擎产物留在 ③ / ④，不要「统一」到 ①。** 引擎按 config 自己寻址，搬动会让它找不到文件，`FR-5.x` 的 cron 热加载随之失效。③ / ④ 的路径只允许一个来源：`resolveNanobotWorkspacePath()`。
-3. **渲染层只经 `platform` 访问 ①，禁止自拼路径。** 现状守得很干净（`window.electronAPI` 仅出现在 `src/platform/`），需固化为 CI 检查——ADR-004 的工具网关收口依赖这条边界。
+3. **渲染层只经 `platform` 访问 ①，禁止自拼路径。** ~~现状守得很干净（`window.electronAPI` 仅出现在 `src/platform/`）~~ **⚠️ 2026-09-17 实测勘误**：该断言不成立——`window.electronAPI` 有 **4 处例外**落在 `src/platform/` 之外：`src/layout/AppLayout.tsx`、`src/components/TitleBar.tsx`、`src/pages/settings/SettingsPage.tsx`（UI 直连窗口控制 / 桌面配置）与 `src/events/electronStore.ts`（事件存储适配器，位置在 `src/events/` 而非 `src/platform/`）。均已用 `?.` 或 `isElectron()` 守卫，Web 下不会崩，但**绕过了 `platform` 收口**，属「落点与声明不一致」。该边界已固化为 CI 检查（`.github/workflows/ci.yml` 的 `platform-boundary` 作业），采用**基线棘轮**策略：上述 4 个文件登记为基线例外（新增越界即红），收口工作另行排期——ADR-004 的工具网关收口依赖这条边界。
 
 ### 18.2.4 两个实测缺陷（M1 已关闭）
 

@@ -1,0 +1,151 @@
+name: CI
+
+# 门禁范围说明
+# ------------
+# 本仓库（父仓库）只包含**渲染层 src/ + 桌面外壳 electron/ + 测试 tests/ + 文档 docs/**。
+# 引擎侧 nanobot/ 是同级的独立 git 仓库，且被父仓库 .gitignore 忽略
+# （见 docs/engine-dev-setup.md），因此 CI 无法对其跑 pytest ——
+# 引擎侧门禁目前在本地手动执行，命令与固定 venv 路径见 docs/engine-dev-setup.md。
+#
+# 对应 v2 第 18.2.3 节原则 3（平台边界固化为 CI 检查）与 ADR-004 / ADR-010 / ADR-020。
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend-gate:
+    name: 渲染层门禁（typecheck ×3 + vitest + build）
+    runs-on: ubuntu-latest
+    env:
+      # 渲染层门禁不需要 Electron 二进制（体积大且下载易失败），Web 构建不受影响
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 类型检查（渲染层 src/）
+        run: npm run typecheck
+
+      - name: 类型检查（桌面外壳 electron/）
+        run: npm run typecheck:electron
+
+      - name: 类型检查（测试代码 tests/）
+        # 历史上这条不在 build 门禁内，测试代码的类型漂移无人发现
+        run: npm run typecheck:tests
+
+      - name: 单元测试（vitest）
+        run: npm test
+
+      - name: 生产构建
+        run: npm run build
+
+  platform-boundary:
+    name: 平台边界检查（ADR-004 / ADR-010 / ADR-020）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # ------------------------------------------------------------------
+      # 检查一：渲染层不得直连 window.electronAPI（收口在 src/platform/）
+      # ------------------------------------------------------------------
+      - name: 渲染层不得直连 window.electronAPI
+        run: |
+          set -euo pipefail
+
+          # 基线例外（技术债，2026-09-17 实测登记）---------------------------------
+          # 这 4 个文件当前越界，属 v2 §18.2.3 原则 3 的「落点与声明不一致」。
+          # 它们均已用 ?. 或 isElectron() 守卫，Web 下不会崩，但绕过了 platform 收口。
+          # 本作业采用「基线棘轮」：基线内的越界只告警，基线外任何新增越界即失败。
+          # 收口这 4 处后，请把对应项从下面删掉。
+          BASELINE="src/layout/AppLayout.tsx src/components/TitleBar.tsx src/pages/settings/SettingsPage.tsx src/events/electronStore.ts"
+          # ----------------------------------------------------------------------
+
+          # 只统计**代码行**命中：排除行注释与块注释续行（形如 ` * ...`），
+          # 否则纯注释里提到 window.electronAPI 也会被误判为越界。
+          hits=$(grep -rIn --include='*.ts' --include='*.tsx' 'window\.electronAPI' src \
+                 | grep -vE ':[0-9]+:[[:space:]]*(//|\*|/\*)' \
+                 | cut -d: -f1 | sort -u || true)
+
+          if [ -z "$hits" ]; then
+            echo "越界 0 处（基线也已清空，可删除 BASELINE 列表）"
+            exit 0
+          fi
+
+          fail=0
+          for f in $hits; do
+            case " $BASELINE " in
+              *" $f "*)
+                echo "::warning title=基线例外::$f 仍直连 window.electronAPI（已登记，待收口）"
+                ;;
+              *)
+                echo "::error title=新增越界::$f 直连 window.electronAPI，渲染层必须经 src/platform/ 访问"
+                fail=1
+                ;;
+            esac
+          done
+
+          if [ "$fail" -eq 1 ]; then
+            echo "平台边界检查失败：渲染层只允许经 src/platform/ 暴露的能力访问主进程。"
+            exit 1
+          fi
+          echo "平台边界检查通过（仅剩已登记基线例外）。"
+
+      # ------------------------------------------------------------------
+      # 检查二：引擎 wire 格式不得泄漏到 src/ai/runtime/ 之外（ADR-020）
+      # ------------------------------------------------------------------
+      - name: 引擎 wire 字段不得泄漏到 src/ai/runtime/ 之外
+        run: |
+          set -euo pipefail
+
+          # ADR-020：src/ai/runtime/nanobotHttp/** 是唯一允许知道引擎 wire 格式的位置。
+          # 只查「引擎特有字段名」，不查通用概念（mcpServers 等属契约/配置概念，允许出现）。
+          #
+          # 基线例外（2026-09-17 实测登记）：
+          #   src/lib/channelScan.ts / src/types/channel.ts
+          #     —— 走的是 settings.channel.connect.* 认证 WebSocket 帧，是与
+          #        /v1/chat/completions 并列的另一条引擎协议，尚未收进 runtime 层。
+          BASELINE="src/lib/channelScan.ts src/types/channel.ts"
+
+          hits=$(grep -rInE --include='*.ts' --include='*.tsx' \
+                   '\b(session_id|access_mode|nanobot_event)\b' src \
+                 | grep -v '^src/ai/runtime/' \
+                 | grep -vE ':[0-9]+:[[:space:]]*(//|\*|/\*)' \
+                 | cut -d: -f1 | sort -u || true)
+
+          if [ -z "$hits" ]; then
+            echo "wire 泄漏 0 处（基线也已清空，可删除 BASELINE 列表）"
+            exit 0
+          fi
+
+          fail=0
+          for f in $hits; do
+            case " $BASELINE " in
+              *" $f "*)
+                echo "::warning title=基线例外::$f 含引擎 wire 字段（已登记，待收口）"
+                ;;
+              *)
+                echo "::error title=wire 泄漏::$f 出现引擎 wire 字段，应收进 src/ai/runtime/nanobotHttp/"
+                fail=1
+                ;;
+            esac
+          done
+
+          if [ "$fail" -eq 1 ]; then
+            echo "wire 边界检查失败：渲染层只允许 import @/ai/runtime（及其 ./types）。"
+            exit 1
+          fi
+          echo "wire 边界检查通过（仅剩已登记基线例外）。"
