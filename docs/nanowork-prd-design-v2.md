@@ -2084,9 +2084,9 @@ WorkBuddy 的提示词资产是一个 **10 组合（交互模式 × 领域）× 
 现有机制设计良好，予以保留：
 
 - 注入标签：`<!-- MEMORY -->` … `<!-- /MEMORY -->`（在 `lib/constants.ts`）
-- 幂等去重：`<!-- SUMMARY:<hash> -->` 标记，重复内容不重复追加
+- 幂等去重：`<!-- SUMMARY:<hash> -->` 标记，重复内容不重复追加（2026-09-17 起另加**语句级**判定：归一化后相等也算重复，见本节末「语义重复不落盘」）
 - 不污染 `agent.systemPrompt`：记忆只在 `send` / `createSession` 的临时 history 中注入
-- 会话级快照：`session.memory` 缓存 `createSession` 时读取的内容，避免每请求重复 IO
+- 会话级快照：`session.memory` 缓存 `createSession` 时读取的内容，避免每请求重复 IO；配套 `memoryVersion` + `memoryWorkspaceKey` 做**过期判定**，写入发生后自动重读（见 14.2 的「注入快照必须会失效」）
 
 **扩展点**：把 `MemoryService` 从「单文件读写」升级为**分层服务**：
 
@@ -2127,7 +2127,11 @@ export interface MemoryService {
 >
 > - **写入侧此前整条是死的**。实测 `~/.nanowork/` 下 `memory/` 目录与 `MEMORY.md` **都不存在**——四个原因叠加：`autoSummarize` 默认 false（唯一自动写入点被跳过）、触发点只有 `deleteSession`（缺「新建会话」）、摘要提示词只保留「决策/偏好/待办」三类（身份类事实整段被丢弃）、Agent 侧没有任何写入能力。修复后：默认开启 + persist v9 迁移、`createSession` 补触发、摘要改分节并按内容性质分流 L2/L3、新增 `<memory-save>` 受控写入协议。
 > - **`useWorkspace()` 此前生产代码零调用**，`currentKey` 恒为 `'default'`，L3 隔离形同虚设。现由 `loadMemoryInto` 按会话 workdir 显式传入 key。
+> - **注入侧补齐两层（P0 修复）**：写入侧从 P1-B 起就把身份类事实分到 L2，而 `loadMemoryInto` 只读 `workspace` 一层——**全仓生产链路上 `load('user')` 零调用**，L2 成了一份「写得进、读不出」的文件（症状：在 `D:\test` 说的「我叫什么」，换到 `D:\tmp` 就问不出，尽管 `~/.nanowork/MEMORY.md` 里躺着这条事实）。现由 `MemoryService.loadForInjection` 并行读两层 → `composeMemoryForInjection` 合成一段注入正文；块内定序为**用户级在前、工作区级在后**，并在护栏句补一句「两者冲突时以用户级为准」。注意这与本节上面的注入顺序示意（工作区 → 用户）方向相反：那张图说的是**层间优先级**（用户级更高，排得更靠后），而块内定序服务于护栏句的「以上方为准」——用户级是理解一切的基准，必须先出现。
 > - **`memory-write` 槽位**：Agent 写入协议的说明段，与记忆块同开同关（`memoryEnabled && autoSummarize`）。它排在 `memory` 之后——模型刚「读完」已有记忆，紧接着就看到「怎么写新的」。
+> - **系统报错不得成为记忆（P1 修复，2026-09-17）**：网关在配额 / 鉴权失败时会把**错误原文当作正常 `delta.content`** 吐进 SSE 流，**通道层面分辨不出**这一帧是回答还是报错。事故形态：用户提问撞上 provider 配额耗尽 → 错误原文被 `summarize` 当模型输出收下 → 不含 `[身份]/[任务]` 标签 → `parseSummary` 整段降级为 `task` → 以「会话摘要」名义写进长期记忆，此后每次会话都被注入。现设三道防线（`summarize` 入口剔除报错条目 + 要求至少一次有效回答、`parseSummary` 出口整段像报错则丢弃），判据 `looksLikeSystemError` 要求「强特征词 **且** 中文字符占比 < 15%」双重成立——只匹配特征词会误杀「排查 API key 配额」这类正常中文摘要；中文报错认不出来是已知代价，由 `onError` 丢弃已累积文本兜底。输入侧同步收紧：`aborted` 的助手消息（半截回答）不参与归纳。
+> - **语义重复不落盘（2026-09-17）**：去重原先只做**字节级** `hash(正文)` 比对，改个标点就是「新内容」，于是用户级 `MEMORY.md` 里攒出三条同一事实（「明明 / 20 岁 / 新疆 / 返京」），分别来自自动沉淀的 `[身份]` 节与两次模型主动 `<memory-save scope="user">`。**不要用相似度阈值解决**——实测真实的两条改写式重复覆盖率仅 0.25~0.45，而「20 岁 → 25 岁」这类**更新**高达 0.90、「同前缀补充新信息」高达 1.00；压低阈值到能识别前者，就会把后者一并误杀（静默丢记忆）。故分工为：代码层只做机械重复（`normalizeForDedup` 归一化后相等即跳过，`append` 返回 `skipped-duplicate`），语义判断交给模型——`MEMORY_WRITE_INSTRUCTION` 要求它写前先核对已注入的记忆块，`summarize(history, { knownFacts })` 让自动沉淀也看得到已有记忆且只输出「新增或变化」的事实。详见 `docs/prd-memory.md` §6.6。
+> - **注入快照必须会失效（2026-09-17 修复）**：`session.memory` 是纯缓存，原先只在 `createSession` / `loadSession` 生成一次，`send` 路径明确不补读——于是会话一旦建立，其后的所有写入（本会话上一轮的 `<memory-save>`、别处会话的自动沉淀、记忆页编辑）都进不了注入。实测：写入「用户擅长前端 GIS 开发」后 13 秒、57 秒的两次提问，注入的 MEMORY 块与写入前**逐字节相同**（证据取自事件流里存着的完整请求体）。现补上「产出依据」`memoryVersion`（`MemoryService.writeVersion()`，唯一递增点是 `save()` 且递增在写入完成之后）+ `memoryWorkspaceKey`，以**同步**判定 `isMemorySnapshotStale()` 决定是否付一次读盘。补刷点是 `selectSession` 与 `streamAssistantReply` 步骤 0.1。**顺序是硬约束**：刷新要读盘（异步），必须排在流式槽位**同步占位之后**——「已水合的会话 `send` 同步进入流式态」是并发互斥的前提，有专门用例守着（把刷新挪回 `send` 即失败）。详见 `docs/prd-memory.md` §6.7。
 
 ## 14.3 Dream 双阶段记忆
 

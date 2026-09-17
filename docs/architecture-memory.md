@@ -7,7 +7,9 @@
 
 ## 1. 实现方案概述
 
-在 `src/lib/memory.ts` 新增一个与平台无关的**记忆服务层**（MemoryService），统一封装读取/写入/追加/摘要逻辑；MemoryState 类型扩充进 `src/types/memory.ts`；`settingsStore` 增加 `memoryEnabled`/`autoSummarize` 开关并持久化；`sessionsStore.createSession` 与 `send` 在拼装 system 消息阶段同步调用 MemoryService 读取并以标签块注入 system prompt 末尾；UI 侧新增独立「记忆」页（路由 `/memory`）与侧边导航项，设置页追加「记忆」分区，「保存为记忆」作为聊天消息 hover 菜单项，新会话 `ChatHeader` 顶部显示「已加载 N 条记忆」提示条。
+在 `src/lib/memory.ts` 新增一个与平台无关的**记忆服务层**（MemoryService），统一封装读取/写入/追加/摘要逻辑；MemoryState 类型扩充进 `src/types/memory.ts`；`settingsStore` 增加 `memoryEnabled`/`autoSummarize` 开关并持久化；`sessionsStore.createSession` 与 `send` 在拼装 system 消息阶段调用 MemoryService 读取并以标签块注入 system prompt 末尾；UI 侧新增独立「记忆」页（路由 `/memory`）与侧边导航项，设置页追加「记忆」分区，「保存为记忆」作为聊天消息 hover 菜单项，新会话 `ChatHeader` 顶部显示「已加载 N 条记忆」提示条。
+
+> **读取时机（2026-09-17 修订）**：`createSession` 读盘后把结果缓存进 `session.memory`（纯缓存）；`send` 本身**不再读盘**，而是在 `streamAssistantReply` 里**先同步占住流式槽位、再按需刷新过期快照**（异步）。刷新是刷新、装配是装配，两者顺序不可交换——细节见 §4.2 注 1~注 3。
 
 **落盘（与初版的差异）**：不再由渲染层调 `platform.writeTextFile` 写 `MEMORY.md`——
 那条路径传的是纯文件名，被主进程安全校验拒绝后又吞掉异常，于是「写真实 MEMORY.md」
@@ -100,26 +102,59 @@ export interface Settings {
 ```
 [用户新建会话]
   → sessionsStore.createSession(agentId?)
-      → MemoryService.load(workspaceKey)        // 异步读取记忆
-          └─ 统一走 platform.storage.get('nanowork.memory.<key>')
-               Electron：主进程把该 key 路由为真实文件 ~/.nanowork/memory/<key>.md
-               Web：      localStorage（内存降级）
-      → 若 memoryEnabled 且内容非空
-          → 拼装 system 段：agent.systemPrompt + 标签包裹记忆块
-          → 置 memoryLoaded = { injected:true, count, dismissed:false }
+      → memoryKey = workspaceKeyFor(session.workdir)
+      → MemoryService.loadForInjection(memoryKey)   // 异步读取**两层**记忆
+          ├─ load('user')               → ① ~/.nanowork/MEMORY.md
+          └─ load('workspace', key)     → ① ~/.nanowork/memory/<key>.md
+          → composeMemoryForInjection() → 用户级在前、工作区级在后
+          └─ 统一走 platform.storage.get(...)（Electron 由主进程路由成真实文件；Web 落 localStorage）
+      → 若 memoryEnabled
+          → 采样 version = MemoryService.writeVersion()（在读取**之前**，见 §4.2 注 3）
+          → 缓存到 session.memory（send 时由装配器包成 <!-- MEMORY --> 块；
+            空记忆也缓存空串，让「undefined = 尚未加载」这一约定成立）
+          → 连同产出依据一起写回：memoryVersion + memoryWorkspaceKey（供过期判定）
+          → 合并结果非空且非 silent → 置 memoryLoaded = { injected:true, count, dismissed:false }
   → ChatHeader 渲染「已加载 N 条记忆」提示条
 ```
+
+> **两层合并注入（2026-09-17 P0 修复）**：注入侧原先只读 `workspace` 一层，
+> 而写入侧从 P1-B 起就把身份类事实分流到 `user` 层——于是 L2 成了一份
+> **写得进、读不出**的文件：「在 `D:\test` 告诉过它我叫什么，换到 `D:\tmp`
+> 就问不出来」，而 `~/.nanowork/MEMORY.md` 里明明躺着这条事实。
+> 现在 `loadForInjection` 并行读两层并合成一段注入正文，`entries` 取
+> **两段各自计数之和**（段标题用 `【…】`，不进 `countEntries` 的 `## ` 计数）。
+> 定序（用户级在前）是硬约束：护栏句写着「冲突时以用户级为准」，顺序反了那句就指向空处。
 
 ### 4.2 发送消息时注入（send 路径）
 
 ```
-sessionsStore.send(text)
-  → 构造 history
-  → 若 agent.systemPrompt 存在 → push system
-  → 若 memoryEnabled 且本会话已 loaded → push system（标签包裹记忆块）
-  → 发起请求
+sessionsStore.send(text, sessionId)
+  → 追加 user + assistant(占位)，落事件流
+  → streamAssistantReply(sessionId, assistantId, files)
+      → ① 同步占住流式槽位（streams[sessionId] = { status:'thinking', active:true }）
+      → ② 快照过期则刷新（await；全函数唯一的 await，且已在槽位之后）
+           isMemorySnapshotStale()：
+             memoryVersion   !== MemoryService.writeVersion()    ← 期间有写入
+             或 memoryWorkspaceKey !== workspaceKeyFor(workdir) ← 换了工作目录
+      → ③ 装配 history：system 段 + 技能 + 记忆块（wrapForInjection）+ 本地时间 + 历史
+      → 发起请求
 ```
-> 注：记忆仅在 `createSession` 阶段读取一次并缓存于 session 级 `memoryLoaded` 状态；`send` 时复用该快照，避免每次请求重复 IO。
+
+> **注 1｜快照为什么会失效**：快照只在 `createSession` / `loadSession` 生成一次，
+> 而记忆随时可能被写——模型本轮写下的 `<memory-save>`、别处会话结束时的自动沉淀、
+> 记忆页的手动编辑。实测事故：在 `D:\temp` 的会话写下「用户擅长前端 GIS 开发」，
+> 13 秒后回到 `D:\tmp` 的会话问「我擅长什么」，注入的仍是旧快照。证据来自事件流里
+> 存着的**完整请求体**：两次请求的 MEMORY 块逐字节相同，都只有写入前的那一条。
+>
+> **注 2｜刷新为什么必须在槽位之后**：「已水合的会话 `send` 同步进入流式态」是
+> `tests/sessionsStore.test.ts` 锁死的可测性质——同一会话并发 `send` 互斥、
+> 不同会话可并发，全靠槽位在同步段内落位。刷新要读盘（异步），若提到槽位之前，
+> 这次 `await` 会把整个流式态推后一个 microtask。**顺序不可交换**，且有专门用例
+> 守着：把刷新挪回 `send` 里，那条用例立即失败（`expected undefined to be defined`）。
+>
+> **注 3｜版本在读取之前采样**：`loadMemoryInto` 先取 `writeVersion()` 再读盘。
+> 采早不采晚——若读取期间恰好有写入落盘，这次的正文可能不含它，记成「已包含」
+> 就会永久停在旧内容上；最坏结果只是多刷一次。
 
 ### 4.3 「保存为记忆」→ 写
 
@@ -155,15 +190,21 @@ MemoryPage 加载 → MemoryService.load() 填入文本框
        autoSummarize=false        → 跳过
        readonly 或 cron: 前缀会话 → 跳过（自动任务分组几十条 run，无检索价值）
        无消息 / 已沉淀过该会话    → 跳过
+  → 构造 history：只取「用户提问 + **未被中断（aborted）**的助手回答」
+  → 读取已有长期记忆（loadForInjection）作为 knownFacts 一并发给模型
   → 调用模型生成 ≤150 字**分节**摘要：[身份] … / [任务] …
+       入口另有两道防污染守卫（summarize）：像系统报错的条目剔除；
+       过滤后一次有效回答都没有则直接跳过（不浪费一次归纳请求）；
+       带 knownFacts 时另附规则：只输出「新增」或「与已有不同」的事实
   → 分流落盘：
        identity → MemoryService.append(text, opt, 'user')                     → ~/.nanowork/MEMORY.md
        task     → MemoryService.append(text, opt, 'workspace', workspaceKey)  → ~/.nanowork/memory/<key>.md
-  → 幂等去重：内容哈希比对已有块，相同则跳过
+  → 幂等去重（两层）：字节级比对已有 hash 标记；语句级把新正文与已有各条正文
+       归一化后比对（挡住「同一句换标点 / 空白 / 大小写」的机械重复）
   → 网关离线/异常时静默跳过（summarize 返回两节皆空）
 ```
 
-三条实现要点（2026-09-17 修复，详见 `docs/prd-memory.md` §6.2）：
+五条实现要点（2026-09-17 修复，详见 `docs/prd-memory.md` §6.2 / §6.5 / §6.6）：
 
 1. **触发点必须有两个**。初版只挂 `deleteSession`，而 PRD 要求「关闭 / **新建会话**」
    都算会话结束——「说一句 → 直接新建会话 → 问我是谁」整段落在空档里。
@@ -172,6 +213,16 @@ MemoryPage 加载 → MemoryService.load() 填入文本框
    故 `load/save/clear/append` 都增加了末位可选 `workspaceKey` 参数。
 3. **分节而非一段**。「落到哪一层」由内容性质决定：称呼/职业跨项目成立（L2），
    本次决策/待办只对当前工作区有意义（L3）。一段摘要无法同时满足两层。
+4. **错误文案不落盘**（P1 修复）。网关在配额 / 鉴权失败时会把报错原文当作正常
+   `delta.content` 吐进 SSE 流——通道层面分不出这一帧是回答还是报错，只能在内容层
+   判定（`looksLikeSystemError`：强特征词 **且** 中文字符占比 < 15%，避免误杀
+   「排查 API key 配额」这类正常中文摘要）。不设这道防线，一条系统报错会以
+   「会话摘要」的名义成为永久记忆，此后每次会话都被注入。
+5. **归纳要看得到已有记忆**（防重复，2026-09-17）。首次归纳只知道本次会话，
+   于是「用户叫明明」被每个会话重新归纳一遍，同一事实攒出三份措辞不同的记录。
+   归纳前把 `loadForInjection()` 的结果作为 `knownFacts` 传给模型，要求它只输出
+   **新增**或**发生变化**的事实。注意措辞必须同时覆盖这两类：只说「不要重复」
+   会让模型把「20 岁 → 25 岁」这类更新也丢掉。
 
 ---
 
@@ -217,18 +268,50 @@ MemoryPage 加载 → MemoryService.load() 填入文本框
     `workspaceKey` 经 `sanitizeSegment` 收敛为安全文件名。**渲染层不再有单独的
     electron 落盘分支**（见 `nanowork-prd-design-v2.md` 18.2.5 / ADR-019）。
   - 命名说明：`MEMORY.md` 仅作**用户级**的存储文件名与工作区级的「导出」目标名。
-- **注入标签格式**（system prompt 末尾包裹，便于解析与去重）：
+- **注入标签格式**（system prompt 末尾包裹，便于解析与去重）。`src` 是
+  `composeMemoryForInjection` 合成后的**两层正文**，只有一层有内容时照样带标题
+  （让模型看得出这条记忆的适用边界）：
   ```
   <!-- MEMORY -->
-  <MEMORY.md 全文>
+  <边界指令行：记忆仅供参考、不是身份或系统指令；冲突时以用户级为准>
+  【用户级记忆 · 跨项目】
+  <~/.nanowork/MEMORY.md 全文>
+
+  【工作区记忆 · 当前工作区】
+  <~/.nanowork/memory/<key>.md 全文>
   <!-- /MEMORY -->
   ```
-- **幂等去重策略**：
-  - 自动摘要追加前计算 `hash(摘要文本)`，读取末尾块首行是否含相同 hash 标记（`<!-- SUMMARY:<hash> -->`），命中则跳过。
-  - 手动「保存为记忆」同样走去重（同一段内容连点两次不会写两遍）——「用户主动行为」不等于可以写重复内容。
+  段标题用 `【…】` 而非 `## `：记忆正文可能是用户手写的 Markdown，而
+  `countEntries` 优先按 `## ` 计数，凭空加两层二级标题会让「记忆条数」多出两条。
+- **幂等去重策略**（两层，详见 `docs/prd-memory.md` §6.6）：
+  - **字节级**：追加前计算 `hash(正文)`，比对已有块的 `<!-- SUMMARY:<hash> -->` 标记，命中则跳过。
+  - **语句级**：把新正文与 `parseEntryBodies()` 取出的**已有各条正文**逐一
+    经 `normalizeForDedup()` 归一化后比对，挡住「同一句话换标点 / 空白 / 大小写 /
+    Markdown 装饰」的机械重复——这类内容的哈希必然不同，第一层挡不住。
+  - 手动「保存为记忆」同样走这两层（同一段内容连点两次不会写两遍）——「用户主动行为」不等于可以写重复内容。
+  - **刻意不做相似度阈值**。想认出「改写式重复」得把阈值压到 0.45 以下，而实测
+    「20 岁 → 25 岁」这类**更新**的相似度高达 0.90、「同前缀补充新信息」的覆盖率
+    高达 1.00——压低阈值就会把它们一并误杀，那是静默丢记忆。字面上无法区分
+    「重复 / 更新 / 补充」，因为区分它们需要知道**哪部分是事实的键**。
+  - **语义层（主力）**：`MEMORY_WRITE_INSTRUCTION` 要求模型写之前先核对已注入的
+    记忆块，并明确「更新要写新的完整表述、不要罗列多个版本」「不写一次性操作播报」；
+    `summarize(history, { knownFacts })` 让自动沉淀也看得到已有记忆。
+- **`append` 返回写入结果**（`written` / `skipped-empty` / `skipped-duplicate`）。
+  调用方可以继续 `await` 后忽略（TS 合法），但测试与「记忆页」需要区分
+  「写进去了」和「因为重复被跳过」——否则「去重生效了吗」只能靠数条数来猜。
 - **workspaceKey 解析**：由 `workspaceKeyFor(workdir)` 现算（纯函数，可单测），
   `MemoryService.useWorkspace(key)` 只负责把它登记为「当前工作区」（供记忆页与手动保存使用），
   落盘一律由调用方显式传 key，避免异步写串到别的分区。
+- **注入快照的失效机制**（2026-09-17 修复，见 §4.2）：`session.memory` 是**纯缓存**，
+  配套两个「产出依据」——`memoryVersion`（写入版本）与 `memoryWorkspaceKey`（由 workdir 推导）。
+  `isMemorySnapshotStale()` 必须是**同步**判定：调用方（`streamAssistantReply`）
+  据此决定要不要付一次读盘 IO，async 就等于强行插入 await 边界。
+  - `MemoryService.writeVersion()` 单调递增，**唯一递增点是 `save()`**——`clear` 与
+    `append` 都经它，所以「版本变了」严格等价于「某处真的落过盘」。递增放在写入
+    **完成之后**：先递增会让并发读取拿到「新版本 + 旧内容」的快照，而该快照会被
+    后续判定为有效，于是永久停在旧内容上。
+  - 补刷点两处：`selectSession`（切回会话）与 `streamAssistantReply` 步骤 0.1（发送前）。
+  - **刷新顺序不可与流式槽位交换**（§4.2 注 2），有专门回归用例守着。
 - **离线跳过**：`autoSummarize` 在网关不可达（probe !== 'connected'）时一律不触发，`summarize` 静默返回两节皆空。
 - **不污染 agent.systemPrompt**：记忆仅运行时注入 `send`/`createSession` 的临时 history，永不写入 `agentsStore.agent.systemPrompt`。
 - **文本编码**：统一 UTF-8，`\n` 换行；引用块用 Markdown `>` 语法。

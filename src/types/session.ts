@@ -54,8 +54,25 @@ export interface Session {
    * 本会话创建时读取到的记忆原文快照（未包裹标签）。
    * send 时复用该快照注入 system 段，避免每次请求重复 IO。
    * 永不写回 agent.systemPrompt。
+   *
+   * 它是**纯缓存**：内容随时可从 `MEMORY.md` 重读，所以必须记录下面两个
+   * 「产出依据」，否则会话存活期间的任何写入都进不来（见 `memoryVersion`）。
    */
   memory?: string;
+  /**
+   * 生成上面那份快照时的记忆写入版本（`MemoryService.writeVersion()`）。
+   * 与当前版本不等 = 期间有写入（模型 `<memory-save>` / 自动沉淀 / 记忆页编辑），
+   * 下一轮发送前会重读。undefined = 从未产出过快照，由 createSession /
+   * loadSession 的异步预热负责；预热在途时一律**不判过期**（避免误刷）。
+   * 补刷发生在 `streamAssistantReply` 步骤 0.1——流式槽位同步占位之后，
+   * 这样「send 同步进入流式态」与「注入最新记忆」两个目标同时成立。
+   */
+  memoryVersion?: number;
+  /**
+   * 生成快照时使用的记忆工作区键（由 `workdir` 推导）。
+   * 用户改了会话的工作目录后，同一份快照指向的就是另一个文件了，必须一并失效。
+   */
+  memoryWorkspaceKey?: string;
   createdAt: string;
   updatedAt: string;
 }

@@ -310,6 +310,36 @@ describe('会话装配：用户自定义指令与记忆', () => {
     await sendOnce();
     expect(joinedSystem()).toContain('应该出现的记忆');
   });
+
+  /**
+   * P0 修复的端到端形态：**两层都要进请求**。
+   *
+   * 只测 `loadForInjection` 能合并没有用——历史教训是「函数对了但没接线」。
+   * 这里断言真正发出去的 system 段里两段都在、且用户级在前。
+   */
+  it('用户级与工作区级记忆一并注入，用户级在前（P0 修复）', async () => {
+    await MemoryService.save('用户叫明明，跨项目成立', 'user');
+    await MemoryService.save('本项目决定先修 P0', 'workspace', 'default');
+
+    await sendOnce();
+
+    const text = joinedSystem();
+    expect(text).toContain('用户叫明明，跨项目成立');
+    expect(text).toContain('本项目决定先修 P0');
+    expect(text.indexOf('用户叫明明，跨项目成立')).toBeLessThan(
+      text.indexOf('本项目决定先修 P0'),
+    );
+  });
+
+  it('只有用户级记忆时也能注入（修复前只读工作区级 → 空块）', async () => {
+    await MemoryService.save('用户叫明明，跨项目成立', 'user');
+
+    await sendOnce();
+
+    const text = joinedSystem();
+    expect(text).toContain('用户叫明明，跨项目成立');
+    expect(text).toContain('【用户级记忆');
+  });
 });
 
 describe('会话装配：技能段', () => {
@@ -365,5 +395,61 @@ describe('会话装配：技能段', () => {
     useSkillsStore.setState({ skills, loaded: true });
     await sendOnce();
     expect(joinedSystem()).not.toContain('不该出现的技能正文');
+  });
+});
+
+describe('会话装配：记忆快照失效（2026-09-17 修复）', () => {
+  /**
+   * 事故复现：模型在同一个会话里写下 `<memory-save scope="user">`（用户刚说了
+   * 「我擅长前端 GIS 开发」），13 秒后用户再问「我擅长什么」——注入的仍是会话
+   * 创建时那份快照，新记忆完全看不到。事件流里存着完整请求体，两次请求的
+   * MEMORY 块逐字节相同，都只有写入前的那一条。
+   *
+   * 根因不在模型，而在快照**永不失效**：`Session.memory` 只在 createSession /
+   * loadSession 生成一次，而 send 明确不补读。所以这里守的是「写完立刻可见」。
+   */
+  it('模型本轮写下的记忆，下一轮发送立即生效（无需重开会话）', async () => {
+    // `<memory-save>` 落盘的前提是 memoryEnabled && autoSummarize 同时打开
+    useSettingsStore.getState().setSettings({ autoSummarize: true });
+    vi.spyOn(NanobotClient.prototype, 'sendMessage').mockImplementation(
+      (req: ChatRequest, handlers: StreamHandlers): ChatHandle => {
+        captured.push(req);
+        const lastUser = [...req.messages].reverse().find((m) => m.role === 'user');
+        const text = typeof lastUser?.content === 'string' ? lastUser.content : '';
+        handlers.onToken(
+          /GIS/.test(text)
+            ? '收到。\n<memory-save scope="user">用户擅长前端 GIS 开发。</memory-save>'
+            : '好。',
+        );
+        handlers.onStatus('done');
+        handlers.onDone();
+        return { done: Promise.resolve(), abort: () => {} };
+      },
+    );
+
+    const session = useSessionsStore.getState().createSession('agent-test', '记忆快照会话');
+    await waitForMemoryLoaded(session.id);
+    await useSessionsStore.getState().send('我擅长前端 GIS 开发', session.id);
+    await waitForSessionWrites(session.id);
+
+    // 落盘是 fire-and-forget（记不住一条不该阻塞本轮回答），所以等它真的落定
+    await vi.waitFor(async () => {
+      expect(await MemoryService.load('user')).toContain('前端 GIS 开发');
+    });
+
+    // 第二轮：同一个会话，不重开、不重建
+    captured = [];
+    await useSessionsStore.getState().send('我擅长什么开发', session.id);
+    await waitForSessionWrites(session.id);
+
+    expect(joinedSystem()).toContain('用户擅长前端 GIS 开发');
+  });
+
+  it('记忆未变化时不重读（快路径仍是纯同步快照）', async () => {
+    await MemoryService.save('已有记忆');
+    const session = useSessionsStore.getState().createSession('agent-test', '无写入会话');
+    await waitForMemoryLoaded(session.id);
+    // 预热后没有任何写入 → 快照即最新
+    expect(useSessionsStore.getState().isMemorySnapshotStale(session.id)).toBe(false);
   });
 });

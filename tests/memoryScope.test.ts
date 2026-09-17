@@ -100,6 +100,61 @@ describe('MemoryService：作用域化追加', () => {
   });
 });
 
+describe('MemoryService：两层合并注入（P0 修复）', () => {
+  /**
+   * 修复前的症状：`loadMemoryInto` 只读 `workspace` 一层，而 `sedimentSession`
+   * 从 P1-B 起把身份类事实写进 `user` 层——「在 A 工作区告诉过它我叫什么，
+   * 换到 B 工作区就问不出来」，记忆其实就躺在 `~/.nanowork/MEMORY.md` 里。
+   */
+  it('两层都有内容时，用户级在前、工作区级在后', async () => {
+    await MemoryService.save('用户级：用户叫明明', 'user');
+    await MemoryService.save('工作区级：先修 P0');
+
+    const { text } = await MemoryService.loadForInjection('default');
+
+    expect(text).toContain('用户级：用户叫明明');
+    expect(text).toContain('工作区级：先修 P0');
+    // 定序是硬约束：护栏句写着「冲突时以用户级为准」，顺序反了那句就指向空处
+    expect(text.indexOf('用户级：用户叫明明')).toBeLessThan(text.indexOf('工作区级：先修 P0'));
+  });
+
+  it('只写了用户级也会被读到（修复前只读工作区级，这里会是空块）', async () => {
+    await MemoryService.save('用户级身份事实', 'user');
+
+    const { text, entries } = await MemoryService.loadForInjection('default');
+
+    expect(text).toContain('用户级身份事实');
+    expect(entries).toBe(1);
+  });
+
+  it('两层皆空返回空串与零条数', async () => {
+    const { text, entries } = await MemoryService.loadForInjection('default');
+    expect(text).toBe('');
+    expect(entries).toBe(0);
+  });
+
+  it('段标题不进条数：entries 是两段各自计数之和', async () => {
+    await MemoryService.save('用户段', 'user');
+    await MemoryService.save('工作区段');
+
+    const { entries } = await MemoryService.loadForInjection('default');
+
+    // 标题用 `【…】` 而非 `## `，正是为了不干扰 countEntries 的二级标题计数
+    expect(entries).toBe(2);
+  });
+
+  it('工作区段按显式 key 取，不受 currentKey 影响', async () => {
+    await MemoryService.save('A 区内容', 'workspace', 'ws-a');
+    await MemoryService.save('B 区内容', 'workspace', 'ws-b');
+    MemoryService.useWorkspace('ws-b');
+
+    const { text } = await MemoryService.loadForInjection('ws-a');
+
+    expect(text).toContain('A 区内容');
+    expect(text).not.toContain('B 区内容');
+  });
+});
+
 describe('MemoryService：作用域概览', () => {
   it('返回用户级与工作区级两项，带展示元信息', async () => {
     await MemoryService.save('## 一条\n内容', 'user');

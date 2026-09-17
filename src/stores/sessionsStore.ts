@@ -198,6 +198,23 @@ interface SessionsState {
    */
   loadMemoryInto: (sessionId: string, opts?: { silent?: boolean }) => Promise<void>;
 
+  /**
+   * 会话里缓存的记忆快照是否已过期（**同步**判定：调用方据此决定要不要付一次
+   * IO，所以它本身绝不能是 async）。
+   *
+   * 为何需要：快照只在 createSession / loadSession 生成一次，而记忆随时可能被写
+   * ——模型本轮写下的 `<memory-save>`、另一个会话结束时的自动沉淀、记忆页的手动
+   * 编辑。实测事故：A 会话写下「用户擅长前端 GIS 开发」，13 秒后 B 会话问
+   * 「我擅长什么」，注入的仍是旧快照（证据是事件流里存着的完整请求体）。
+   *
+   * 两个判据：写入版本变了、或会话的 workdir 换了（同一份快照指向另一个文件）。
+   *
+   * 补刷点有两处：`selectSession`（切回会话时）与 `streamAssistantReply` 步骤 0.1
+   * （发送前）。后者刻意排在流式槽位同步占位**之后**——判定与刷新都是异步 IO，
+   * 提到占位之前会把「send 同步进入流式态」推后一个 microtask。
+   */
+  isMemorySnapshotStale: (sessionId: string) => boolean;
+
   // —— 发送 / 流式 ——
   /**
    * 在指定会话内发送消息并流式接收回复。
@@ -494,13 +511,29 @@ async function streamAssistantReply(
   if (!session) return { error: '会话不存在' };
   const agents = useAgentsStore.getState().agents;
 
+  // 0) 同步占住流式槽位——**必须在任何 await 之前**。
+  // 「同一会话并发 send 被拒绝、不同会话可并发」依赖这一性质：
+  // tests/sessionsStore.test.ts 的并发用例在不 await 的情况下就断言 streams[sid] 已就绪。
+  useSessionsStore.setState((s) => ({
+    streams: { ...s.streams, [sessionId]: { status: 'thinking', active: true } },
+    error: null,
+  }));
+
+  // 0.1) 记忆快照过期则刷新。**位置在槽位之后，不是之前**：读盘是异步的，若提到
+  // 槽位前面，这次 await 会把「同步进入流式态」整体推后一个 microtask，并发互斥
+  // 随之失效。快照过期 = 会话存活期间记忆被写过（本会话上一轮的 `<memory-save>`、
+  // 别处会话的自动沉淀、记忆页编辑），不刷就会拿旧快照回答——「刚告诉它我会 GIS，
+  // 下一句它却不知道」正是这么来的。loadMemoryInto 自带 try/catch，失败静默保留旧快照。
+  if (useSessionsStore.getState().isMemorySnapshotStale(sessionId)) {
+    await useSessionsStore.getState().loadMemoryInto(sessionId, { silent: true });
+  }
+
   // 1) 构造 history：system 段（统一经装配器）+ 历史消息
   //
   // 装配走 `assemblePromptSections`（§13.3）：段序与标签统一收口在那里，本函数
-  // 只负责把各来源解析成字符串。**全程同步**——见下面记忆快照的注释：
-  // 这里多一个 await 就会破坏「send 同步进入流式态」，所以三个服务都提供
-  // 同步取值（PromptLibrary.resolveSync / IdentityService.contentSync /
-  // 会话缓存的 memory 快照），异步读盘在启动时另行完成。
+  // 只负责把各来源解析成字符串。**装配段全程同步**（上面 0.1 是唯一的 await，
+  // 且已在槽位之后）——这正是三个服务都提供同步取值的原因
+  // （PromptLibrary.resolveSync / IdentityService.contentSync / 会话缓存的 memory 快照）。
   const agent = agents.find((a) => a.id === session.agentId);
   const settings = useSettingsStore.getState().settings;
 
@@ -510,8 +543,8 @@ async function streamAssistantReply(
   // 避免旧记忆干扰当前 Agent 人设；新建会话时 dismissed 会重置。
   //
   // 快照是**纯缓存**、不进事件流（内容随时可从 MEMORY.md 重读）：由
-  // `createSession`（带提示条）与 `loadSession`（静默预热）写入。此处**不补读**
-  // ——它会让出一整个 microtask，破坏「send 同步进入流式态」这一可测性质。
+  // `createSession`（带提示条）与 `loadSession`（静默预热）写入，`selectSession`
+  // 在切回会话时补刷一次；本函数开头（步骤 0.1）还会在流式槽位占位后补刷一次。
   const memorySnapshot =
     useSessionsStore.getState().sessions.find((s) => s.id === sessionId)?.memory ?? '';
   const memoryDismissed = useSessionsStore.getState().memoryLoaded.dismissed;
@@ -605,12 +638,6 @@ async function streamAssistantReply(
     toolAllow: agent?.toolAllow ?? undefined,
     toolDeny: agent?.toolDeny ?? undefined,
   };
-
-  // 2) 为该会话建立独立流式上下文（其他会话不受影响）
-  useSessionsStore.setState((s) => ({
-    streams: { ...s.streams, [sessionId]: { status: 'thinking', active: true } },
-    error: null,
-  }));
 
   /**
    * 更新该会话的流式上下文。
@@ -868,6 +895,16 @@ export function __resetSedimentForTest(): void {
  *
  * 同一会话只沉淀一次（`sedimentedSessions`）：`createSession` 的补触发在每次
  * 新建会话时都会重新挑选「上一个会话」，没有这层去重会反复归纳同一段历史。
+ *
+ * **防污染**（P1）：输入侧只收「用户提问 + 未被中断的助手回答」，输出侧由
+ * `MemoryService.summarize` 与 `parseSummary` 拦下系统报错文案——网关在配额 /
+ * 鉴权失败时会把错误原文当作正常 content 吐进 SSE 流，通道层面分辨不出，
+ * 不设这道防线它就会以「会话摘要」的名义写进长期记忆。详见 src/lib/memory.ts。
+ *
+ * **防重复**：归纳前把已有的长期记忆作为 `knownFacts` 交给模型，要求它只输出
+ * 「新增的或发生变化的事实」。靠内容比对去重行不通——同一事实的多种措辞在字符
+ * 层面并不相似（实测覆盖率仅 0.25~0.45），而把阈值压低到能识别它们时，又会把
+ * 「年龄 20 → 25」这类**更新**一并误杀。判断「重复还是更新」需要理解语义。
  */
 function sedimentSession(target: Session): void {
   if (!useSettingsStore.getState().settings.autoSummarize) return;
@@ -882,6 +919,10 @@ function sedimentSession(target: Session): void {
 
   const history: ChatMessageParam[] = target.messages
     .filter((m) => (m.role === 'user' || m.role === 'assistant') && m.content.trim() !== '')
+    // 被用户中断的助手消息是**半截回答**，不作为归纳依据（与正文里
+    // `<memory-save>` 指令块按 aborted 跳过是同一条理由：残缺输出不可信）。
+    // 用户提问本身保留——话已经说出口，被中断不代表没说过。
+    .filter((m) => !(m.role === 'assistant' && m.aborted === true))
     .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content }));
   if (history.length === 0) return;
 
@@ -891,7 +932,11 @@ function sedimentSession(target: Session): void {
   // fire-and-forget：归纳要调一次模型，绝不能阻塞删除/新建这些交互动作
   void (async () => {
     try {
-      const summary = await MemoryService.summarize(history);
+      // 把**已有的长期记忆**一并交给归纳模型。这是对抗「同一事实换种措辞反复写入」
+      // 的主要手段：模型看不到已记内容时，「用户叫明明」会被每个会话重新归纳一遍，
+      // 而字符级的近似判定救不了改写式重复（见 memory.ts 的 isSameStatement 实测表）。
+      const { text: knownFacts } = await MemoryService.loadForInjection(workspaceKey);
+      const summary = await MemoryService.summarize(history, { knownFacts });
       if (isEmptySummary(summary)) return;
       if (summary.identity !== '') {
         await MemoryService.append(summary.identity, { source }, 'user');
@@ -1022,30 +1067,51 @@ export const useSessionsStore = create<SessionsState>()(
       MemoryService.useWorkspace(workspaceKey);
 
       if (!useSettingsStore.getState().settings.memoryEnabled) return;
-      let text = '';
+      // 版本在**读取之前**采样：若读取期间恰好有写入落盘，这次的正文可能不含它，
+      // 记成「已包含」就会永久停在旧内容上。采早不采晚，最坏结果只是多刷一次。
+      const version = MemoryService.writeVersion();
+      let loaded: { text: string; entries: number };
       try {
-        text = await MemoryService.load('workspace', workspaceKey);
+        // 注入**两层**（L2 用户级 + L3 工作区级）：写入侧从 P1-B 起就按内容性质分流，
+        // 这里只读工作区级等于把身份类事实写进一份没人读的文件——「在 A 工作区
+        // 告诉过它我叫什么，换到 B 工作区就问不出来」正是这么来的。
+        loaded = await MemoryService.loadForInjection(workspaceKey);
       } catch {
         return;
       }
       // 会话可能已在读取期间被删除
       if (!get().sessions.some((s) => s.id === sessionId)) return;
-      if (text.trim() === '') {
-        // 空记忆也落一个空串：让「`memory === undefined` = 尚未加载」这一约定
-        // 成立，避免每轮发送都重读一次 MEMORY.md
-        get().updateSession(sessionId, (s) => ({ ...s, memory: '' }));
-        return;
-      }
-
-      get().updateSession(sessionId, (s) => ({ ...s, memory: text }));
+      // 空记忆也落一个空串：让「`memory === undefined` = 尚未加载」这一约定成立。
+      // 同时记下产出依据（版本 + 工作区键），供 isMemorySnapshotStale 判断过期。
+      get().updateSession(sessionId, (s) => ({
+        ...s,
+        memory: loaded.text,
+        memoryVersion: version,
+        memoryWorkspaceKey: workspaceKey,
+      }));
+      // 空记忆不弹提示条
+      if (loaded.text === '') return;
       if (opts?.silent) return;
       set({
         memoryLoaded: {
           injected: true,
-          count: MemoryService.countEntries(text),
+          count: loaded.entries,
           dismissed: false,
         },
       });
+    },
+
+    isMemorySnapshotStale: (sessionId) => {
+      // 记忆关掉时不注入，刷新没有意义
+      if (!useSettingsStore.getState().settings.memoryEnabled) return false;
+      const session = get().sessions.find((s) => s.id === sessionId);
+      // 从未产出过快照：预热在途，或本该由 createSession / loadSession 负责。
+      // 这里**刻意不补读**——补读会插入一个 await 边界，而「已水合的会话 send
+      // 同步进入流式态」是可测性质（tests/sessionsStore.test.ts 的并发用例）。
+      if (!session || session.memoryVersion === undefined) return false;
+      if (session.memoryVersion !== MemoryService.writeVersion()) return true;
+      // workdir 变了 → 同一份快照已经指向另一个记忆文件
+      return session.memoryWorkspaceKey !== workspaceKeyFor(session.workdir);
     },
 
     dismissMemoryBar: () =>
@@ -1230,6 +1296,11 @@ export const useSessionsStore = create<SessionsState>()(
     selectSession: (id) => {
       set({ activeId: id });
       rememberActiveSession(id);
+      // 已水合的会话会走 loadSession 的早退分支（不再预热），所以过期检查单独补一次：
+      // 切回会话时就刷新，下一轮发送才能继续走同步快路径。
+      if (get().isMemorySnapshotStale(id)) {
+        void get().loadMemoryInto(id, { silent: true });
+      }
       void get().loadSession(id);
     },
 
@@ -1325,6 +1396,10 @@ export const useSessionsStore = create<SessionsState>()(
       // 必须在追加消息之前完成——记录器未就绪时 recordFor 会拒绝落盘。
       // 已水合的会话走同步快路径：不产生 await 边界，`send` 因此能同步进入流式态
       // （多会话并发流式的可测性质依赖这一点）。
+      //
+      // 记忆快照的过期检查**不在这里**：这里补一次 await 就把同步快路径推后了一个
+      // microtask。它已内聚到 `streamAssistantReply` 的步骤 0.1——先同步占住流式
+      // 槽位，再刷新快照，两个目标同时成立。
       if (!hydratedSessions.has(sid)) await get().loadSession(sid);
 
       // 2) 追加 user + assistant(占位) 消息
@@ -1410,6 +1485,8 @@ export const useSessionsStore = create<SessionsState>()(
 
       // 事件流就绪后再定位目标消息：既要能落盘，也要能查到分支点。
       // 已水合时是同步快路径（不产生额外的 await 边界）。
+      // 记忆快照的过期刷新与 send 同源，都在 `streamAssistantReply` 步骤 0.1
+      // （流式槽位占位之后），此处不再补 —— 理由同上。
       if (!hydratedSessions.has(sessionId)) await get().loadSession(sessionId);
 
       const session = get().sessions.find((s) => s.id === sessionId);

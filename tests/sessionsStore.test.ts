@@ -362,7 +362,7 @@ describe('自动沉淀：触发点与作用域分流', () => {
     const summarize = vi
       .spyOn(MemoryService, 'summarize')
       .mockResolvedValue({ identity: '明明，中医药背景', task: '决定先修 P0' });
-    const append = vi.spyOn(MemoryService, 'append').mockResolvedValue(undefined);
+    const append = vi.spyOn(MemoryService, 'append').mockResolvedValue('written');
     return { summarize, append };
   }
 
@@ -442,12 +442,38 @@ describe('自动沉淀：触发点与作用域分流', () => {
     useSettingsStore.getState().setSettings({ autoSummarize: true });
     const { MemoryService } = await import('@/lib/memory');
     vi.spyOn(MemoryService, 'summarize').mockResolvedValue({ identity: '', task: '' });
-    const append = vi.spyOn(MemoryService, 'append').mockResolvedValue(undefined);
+    const append = vi.spyOn(MemoryService, 'append').mockResolvedValue('written');
 
     useSessionsStore.getState().createSession('agent-test', 'B');
     await new Promise((r) => setTimeout(r, 80));
 
     expect(append).not.toHaveBeenCalled();
+  });
+
+  /**
+   * P1：被用户中断的助手消息是半截回答，不该成为归纳依据。
+   *
+   * 与正文里 `<memory-save>` 指令块按 `aborted` 跳过同源——残缺输出不可信。
+   * 用户提问仍要保留：话已经说出口，被中断不代表没说过。
+   */
+  it('被中断的助手消息不参与归纳，用户提问保留', async () => {
+    const s = useSessionsStore.getState().createSession('agent-test', '被中断');
+    await useSessionsStore.getState().send('我是明明', s.id);
+
+    const messages = useSessionsStore.getState().sessions.find((x) => x.id === s.id)!.messages;
+    const last = messages[messages.length - 1];
+    expect(last.role).toBe('assistant');
+    useSessionsStore.getState().updateMessage(s.id, last.id, (m) => ({ ...m, aborted: true }));
+
+    useSettingsStore.getState().setSettings({ autoSummarize: true });
+    const { summarize } = await stubMemory();
+
+    useSessionsStore.getState().createSession('agent-test', '新会话');
+    await waitFor(() => summarize.mock.calls.length >= 1);
+
+    const [history] = summarize.mock.calls[0];
+    expect(history.some((m) => m.role === 'assistant')).toBe(false);
+    expect(history.some((m) => m.role === 'user' && m.content === '我是明明')).toBe(true);
   });
 });
 
@@ -470,7 +496,7 @@ describe('Agent 记忆写入协议', () => {
       },
     );
     const { MemoryService } = await import('@/lib/memory');
-    const append = vi.spyOn(MemoryService, 'append').mockResolvedValue(undefined);
+    const append = vi.spyOn(MemoryService, 'append').mockResolvedValue('written');
     useSettingsStore.getState().setSettings({ autoSummarize: true });
 
     const s = useSessionsStore
@@ -561,5 +587,76 @@ describe('deleteSessions：分组级批量删除', () => {
 
     expect(spy).not.toHaveBeenCalled();
     expect(useSessionsStore.getState().sessions).toHaveLength(0);
+  });
+});
+
+describe('sessionsStore: 记忆快照失效 (2026-09-17 修复)', () => {
+  /**
+   * `loadSession` 对**已水合**的会话直接早退（不再预热记忆快照），于是「切走 → 期间
+   * 别处写入记忆 → 切回来」这条最普通的路径上，会话会一直带着旧快照。实测事故里
+   * 正是这样：在 `D:/temp` 的会话写下技能，切回 `D:/tmp` 的会话问同一件事，注入的
+   * 还是几十分钟前的快照。
+   */
+  it('切回已加载的会话时，若期间有写入则刷新快照', async () => {
+    const { MemoryService } = await import('@/lib/memory');
+    const s = useSessionsStore.getState().createSession('agent-test', '会话A');
+    // 等首轮预热落定（它是 fire-and-forget）。此时记忆为空 → 快照是空串
+    await vi.waitFor(() => {
+      expect(
+        useSessionsStore.getState().sessions.find((x) => x.id === s.id)?.memory,
+      ).toBe('');
+    });
+
+    // 期间在别处写入：模型 `<memory-save>`、自动沉淀、记忆页编辑都走 append
+    await MemoryService.append('用户擅长前端 GIS 开发', { source: 'agent' }, 'user');
+
+    useSessionsStore.getState().selectSession(s.id);
+    await vi.waitFor(() => {
+      expect(
+        useSessionsStore.getState().sessions.find((x) => x.id === s.id)?.memory,
+      ).toContain('前端 GIS 开发');
+    });
+  });
+
+  it('workdir 变化也算失效（同一份快照已指向另一个记忆文件）', async () => {
+    const s = useSessionsStore.getState().createSession('agent-test', '会话B');
+    await vi.waitFor(() => {
+      expect(
+        useSessionsStore.getState().sessions.find((x) => x.id === s.id)?.memory,
+      ).toBe('');
+    });
+    expect(useSessionsStore.getState().isMemorySnapshotStale(s.id)).toBe(false);
+
+    useSessionsStore.getState().setSessionWorkdir(s.id, 'D:\\tmp');
+    expect(useSessionsStore.getState().isMemorySnapshotStale(s.id)).toBe(true);
+  });
+
+  /**
+   * 刷新记忆要读盘（异步），而「流式槽位」必须在同一个 tick 内占住——否则同一会话
+   * 连续两次 send 会双双通过顶部守卫，发出两个请求。所以刷新只能发生在槽位**之后**。
+   *
+   * 这条断言是顺序的守门人：把刷新放回 `send` 里（`await` 在 `streamAssistantReply`
+   * 之前）它就会失败——那时槽位要等一个 microtask 才落位。
+   */
+  it('快照过期需要刷新时，send 仍同步进入流式态', async () => {
+    const { MemoryService } = await import('@/lib/memory');
+    const s = useSessionsStore.getState().createSession('agent-test', '会话C');
+    // 等首轮预热落定——快照带上 memoryVersion 才算「产出过」，此前 isMemorySnapshotStale
+    // 一律返回 false（预热在途，不该误判为过期）。
+    await vi.waitFor(() => {
+      expect(
+        useSessionsStore.getState().sessions.find((x) => x.id === s.id)?.memoryVersion,
+      ).toBeTypeOf('number');
+    });
+
+    // 制造过期。用 save 而非 append：append 同内容会被幂等跳过，版本号不增，
+    // 那样测的就不是「过期 + 需要刷新」这条路径了。
+    await MemoryService.save('刷新测试：用户在做 GIS 可视化项目', 'user');
+    expect(useSessionsStore.getState().isMemorySnapshotStale(s.id)).toBe(true);
+
+    // 不 await 立即断言：槽位必须在同步段内落位
+    const p = useSessionsStore.getState().send('我擅长什么', s.id);
+    expect(useSessionsStore.getState().streams[s.id]).toBeDefined();
+    await p;
   });
 });
