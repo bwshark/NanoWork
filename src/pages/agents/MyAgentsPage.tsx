@@ -50,7 +50,12 @@ import {
   hoverCardSx,
 } from "@/lib/cardSx";
 import type { Agent, ExpertGroup, ExpertGroupMode, IMPlatform } from "@/types";
-import { isBuiltinAgentId, isBuiltinGroupId, EXPERT_GROUP_MODE_LABEL, EXPERT_GROUP_MODE_DESC } from "@/types";
+import {
+  isBuiltinAgentId,
+  isBuiltinGroupId,
+  EXPERT_GROUP_MODE_LABEL,
+  EXPERT_GROUP_MODE_DESC,
+} from "@/types";
 
 /** IM 平台中文标签 */
 const PLATFORM_LABEL: Record<IMPlatform, string> = {
@@ -253,9 +258,7 @@ export function MyAgentsPage() {
     <Box sx={{ mt: 1.5, display: "flex", alignItems: "center", gap: 0.5 }}>
       <FormControlLabel
         sx={{ m: 0 }}
-        control={
-          <Switch size="small" checked={enabled} onChange={onToggle} />
-        }
+        control={<Switch size="small" checked={enabled} onChange={onToggle} />}
         label={
           <Typography sx={{ fontSize: 12, color: "text.secondary" }}>
             {enabled ? "启用" : "停用"}
@@ -316,7 +319,8 @@ export function MyAgentsPage() {
                 {a.imBinding
                   ? `IM·${PLATFORM_LABEL[a.imBinding.platform]}`
                   : a.skillIds.length
-                    ? skills.find((s) => s.id === a.skillIds[0])?.name ?? "专家"
+                    ? (skills.find((s) => s.id === a.skillIds[0])?.name ??
+                      "专家")
                     : "专家"}
               </Typography>
             </Box>
@@ -339,7 +343,9 @@ export function MyAgentsPage() {
                   />
                 )
               }
-              tooltip={a.enabled ? "召唤该专家到当前会话" : "该专家已停用，无法召唤"}
+              tooltip={
+                a.enabled ? "召唤该专家到当前会话" : "该专家已停用，无法召唤"
+              }
               disabled={!a.enabled}
               onSummon={() => summonAgent(a)}
             />
@@ -542,7 +548,13 @@ export function MyAgentsPage() {
         size="small"
         startIcon={<ChevronLeftIcon sx={{ fontSize: 18 }} />}
         onClick={() => navigate(ROUTES.agents)}
-        sx={{ px: 0, minWidth: 0, textTransform: "none", color: "text.secondary", mb: 0.5 }}
+        sx={{
+          px: 0,
+          minWidth: 0,
+          textTransform: "none",
+          color: "text.secondary",
+          mb: 0.5,
+        }}
       >
         全部专家
       </Button>
@@ -552,7 +564,9 @@ export function MyAgentsPage() {
           <Typography variant="h5" fontWeight={700}>
             我的专家
           </Typography>
-          <Typography sx={{ fontSize: 12.5, color: "text.secondary", mt: 0.25 }}>
+          <Typography
+            sx={{ fontSize: 12.5, color: "text.secondary", mt: 0.25 }}
+          >
             共 {myAgents.length} 位专家 · {myGroups.length} 个专家团
           </Typography>
         </Box>
@@ -573,11 +587,18 @@ export function MyAgentsPage() {
         />
       </Box>
 
-      <TabsBlock tab={tab} onChange={setTab} agentCount={myAgents.length} groupCount={myGroups.length} />
+      <TabsBlock
+        tab={tab}
+        onChange={setTab}
+        agentCount={myAgents.length}
+        groupCount={myGroups.length}
+      />
 
       {/** 检索无结果时仍给出提示；空列表（无检索）由创建卡片顺排在末尾承载引导，无须额外文案。 */}
       {query.trim() &&
-      (tab === "agents" ? filteredAgents.length === 0 : filteredGroups.length === 0) ? (
+      (tab === "agents"
+        ? filteredAgents.length === 0
+        : filteredGroups.length === 0) ? (
         <Box sx={{ py: 8, textAlign: "center" }}>
           <Typography sx={{ fontSize: 14, color: "text.secondary" }}>
             未找到匹配「{query.trim()}」的{tab === "agents" ? "专家" : "专家团"}
@@ -654,7 +675,7 @@ export function MyAgentsPage() {
         maxWidth="sm"
         fullWidth
       >
-        <DialogTitle>{editing ? "编辑 Agent" : "新建 Agent"}</DialogTitle>
+        <DialogTitle>{editing ? "编辑专家" : "新建专家"}</DialogTitle>
         <DialogContent>
           <TextField
             fullWidth
@@ -760,7 +781,9 @@ export function MyAgentsPage() {
                   <Box>
                     <Typography sx={{ fontSize: 13 }}>{option}</Typography>
                     {AGENT_TOOL_LABELS[option] && (
-                      <Typography sx={{ fontSize: 11, color: "text.secondary" }}>
+                      <Typography
+                        sx={{ fontSize: 11, color: "text.secondary" }}
+                      >
                         {AGENT_TOOL_LABELS[option]}
                       </Typography>
                     )}
@@ -896,7 +919,9 @@ export function MyAgentsPage() {
             label="名称"
             placeholder="如：市场分析团"
             value={groupForm.name ?? ""}
-            onChange={(e) => setGroupForm({ ...groupForm, name: e.target.value })}
+            onChange={(e) =>
+              setGroupForm({ ...groupForm, name: e.target.value })
+            }
           />
           <TextField
             fullWidth
@@ -904,7 +929,9 @@ export function MyAgentsPage() {
             label="副标题（可选）"
             placeholder="如：Marketing"
             value={groupForm.role ?? ""}
-            onChange={(e) => setGroupForm({ ...groupForm, role: e.target.value })}
+            onChange={(e) =>
+              setGroupForm({ ...groupForm, role: e.target.value })
+            }
           />
           <TextField
             fullWidth
@@ -913,7 +940,9 @@ export function MyAgentsPage() {
             minRows={2}
             label="描述"
             value={groupForm.description ?? ""}
-            onChange={(e) => setGroupForm({ ...groupForm, description: e.target.value })}
+            onChange={(e) =>
+              setGroupForm({ ...groupForm, description: e.target.value })
+            }
           />
           <TextField
             fullWidth
@@ -921,7 +950,9 @@ export function MyAgentsPage() {
             label="图标（emoji，可选）"
             placeholder="如：🧩"
             value={groupForm.icon ?? ""}
-            onChange={(e) => setGroupForm({ ...groupForm, icon: e.target.value })}
+            onChange={(e) =>
+              setGroupForm({ ...groupForm, icon: e.target.value })
+            }
           />
           <Typography sx={{ fontSize: 13, mt: 1, mb: 0.5 }}>
             协作模式
@@ -930,14 +961,19 @@ export function MyAgentsPage() {
             fullWidth
             value={groupForm.mode ?? "sequential"}
             onChange={(e) =>
-              setGroupForm({ ...groupForm, mode: e.target.value as ExpertGroupMode })
+              setGroupForm({
+                ...groupForm,
+                mode: e.target.value as ExpertGroupMode,
+              })
             }
           >
-            {(Object.keys(EXPERT_GROUP_MODE_LABEL) as ExpertGroupMode[]).map((m) => (
-              <MenuItem key={m} value={m}>
-                {EXPERT_GROUP_MODE_LABEL[m]}
-              </MenuItem>
-            ))}
+            {(Object.keys(EXPERT_GROUP_MODE_LABEL) as ExpertGroupMode[]).map(
+              (m) => (
+                <MenuItem key={m} value={m}>
+                  {EXPERT_GROUP_MODE_LABEL[m]}
+                </MenuItem>
+              ),
+            )}
           </Select>
           <Typography variant="caption" color="text.secondary">
             {EXPERT_GROUP_MODE_DESC[groupForm.mode ?? "sequential"]}
@@ -951,7 +987,10 @@ export function MyAgentsPage() {
             multiple
             value={groupForm.memberIds ?? []}
             onChange={(e) =>
-              setGroupForm({ ...groupForm, memberIds: e.target.value as string[] })
+              setGroupForm({
+                ...groupForm,
+                memberIds: e.target.value as string[],
+              })
             }
             renderValue={(sel) =>
               (sel as string[])
@@ -1024,12 +1063,20 @@ function TabsBlock({
   return (
     <Box sx={{ borderBottom: 1, borderColor: "divider", mb: 2 }}>
       <Box role="tablist" sx={{ display: "flex", gap: 0.5 }}>
-        {(
-          [
-            { key: "agents" as PageTab, label: "专家", icon: <PersonIcon sx={{ fontSize: 16 }} />, count: agentCount },
-            { key: "groups" as PageTab, label: "专家团", icon: <GroupsIcon sx={{ fontSize: 16 }} />, count: groupCount },
-          ]
-        ).map((t) => {
+        {[
+          {
+            key: "agents" as PageTab,
+            label: "专家",
+            icon: <PersonIcon sx={{ fontSize: 16 }} />,
+            count: agentCount,
+          },
+          {
+            key: "groups" as PageTab,
+            label: "专家团",
+            icon: <GroupsIcon sx={{ fontSize: 16 }} />,
+            count: groupCount,
+          },
+        ].map((t) => {
           const active = tab === t.key;
           return (
             <Box

@@ -1,376 +1,56 @@
-import { useRef, useState, useMemo, useEffect } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   Box,
   Button,
-  Card,
-  CardContent,
-  Chip,
   IconButton,
   InputAdornment,
-  Menu,
-  MenuItem,
-  Select,
-  Tab,
-  Tabs,
+  Stack,
   TextField,
-  Tooltip,
   Typography,
 } from "@mui/material";
 import SearchIcon from "@mui/icons-material/Search";
-import AddIcon from "@mui/icons-material/Add";
 import AddCircleOutlineIcon from "@mui/icons-material/AddCircleOutline";
-import CheckIcon from "@mui/icons-material/Check";
-import MoreHorizIcon from "@mui/icons-material/MoreHoriz";
-import CircularProgress from "@mui/material/CircularProgress";
 import Inventory2OutlinedIcon from "@mui/icons-material/Inventory2Outlined";
+import SettingsOutlinedIcon from "@mui/icons-material/SettingsOutlined";
 import ArrowBackIcon from "@mui/icons-material/ArrowBack";
-import ChecklistIcon from "@mui/icons-material/Checklist";
-import LockOutlinedIcon from "@mui/icons-material/LockOutlined";
 import { useSkillsStore } from "@/stores/skillsStore";
 import { useSessionsStore } from "@/stores/sessionsStore";
 import { toast } from "@/components/Toast";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { parseSkillFromMarkdown } from "@/lib/skillParser";
-import {
-  SKILL_OVERRIDE_META,
-  SKILL_OVERRIDES,
-  resolveSkillOverride,
-} from "@/lib/skillOverrides";
 import { platform } from "@/platform";
-import { clampLines, hoverCardSx, iconTileSx } from "@/lib/cardSx";
-import type { Skill, SkillOverride, SkillScope } from "@/types";
+import { SkillMarketCard } from "@/components/skills/SkillMarketCard";
+import { SkillInstalledCard } from "@/components/skills/SkillInstalledCard";
+import { SkillDetailDialog } from "@/components/skills/SkillDetailDialog";
+import {
+  skillCategorySx,
+  skillCountBadgeSx,
+  skillGridSx,
+  skillSearchSx,
+  skillTopBarButtonSx,
+} from "@/components/skills/skillCardSx";
+import { SKILL_OVERRIDE_OFF, SKILL_OVERRIDE_ON } from "@/lib/skillOverrides";
+import type { Skill, SkillOverride } from "@/types";
 
-/** 右上角「⋯」菜单按钮：低对比常驻，hover 提亮。 */
-const menuIconButtonSx = {
-  p: 0.5,
-  color: "text.secondary",
-  transition: "color .18s ease, background-color .18s ease",
-  "&:hover": { color: "text.primary", bgcolor: "action.hover" },
-};
-
-/** 右上角圆角方形图标按钮（安装「+」）：与卡片描边同族，hover 时提亮。 */
-const squareIconButtonSx = {
-  p: 0.5,
-  width: 30,
-  height: 30,
-  border: "1px solid",
-  borderColor: "divider",
-  borderRadius: "9px",
-  color: "text.secondary",
-  transition: "border-color .18s ease, color .18s ease, background-color .18s ease",
-  "&:hover": {
-    borderColor: "var(--hover-border)",
-    color: "text.primary",
-    bgcolor: "action.hover",
-  },
-};
-
-/** 来源层级徽标文案（PRD §12.4 的发现顺序） */
-const SCOPE_LABEL: Record<SkillScope, string> = {
-  builtin: '内置',
-  user: '用户级',
-  project: '项目级',
-};
+/** 安装反馈时长：给「点了有反应」留一个可见的节奏，不做假进度条 */
+const INSTALL_FEEDBACK_MS = 800;
 
 /**
- * 能否从列表里删掉这个技能。
+ * 技能市场页（FR-003 / FR-3.1）：搜索、分类筛选、三态启停、本地安装。
  *
- * 内置技能随应用发布，删了下次启动就回来；项目级技能来自
- * `<workspace>/skills` 目录、每进一次页面就重扫一遍，从列表里抹掉同样会「复活」。
- * 两者的真实删除动作都不在界面上（前者改代码，后者删文件），
- * 所以不给删除入口 —— 与 `skillsStore.isUserOwnedSkill` 的判据保持一致。
- */
-function canDelete(skill: Skill): boolean {
-  return skill.source !== 'builtin' && skill.scope !== 'project';
-}
-
-/**
- * 三态覆盖控件（FR-3.1）。
+ * 两个视图的分工（参考样式把它们的差别做得很明确）：
+ * - 「全部技能」是一张**目录**：整卡可点开详情，hover 展开描述，右上角是安装；
+ * - 「我安装的」是一份**开关面板**：卡片常驻，右侧开关直接控制自动触发，
+ *   hover 才露出 ⋯ 菜单与「仅手动调用」，停用后卡片压暗但不消失。
  *
- * 用 Select 而不是 Switch：这三档不是「开 / 关」的二元关系，
- * `user-invocable-only`（用户能唤起、模型看不见）用开关表达不出来，
- * 硬塞成开关会让用户以为只有两种状态。
+ * 后者的关键差别是「停用不等于卸载」：技能还在磁盘上，用户必须能原地再打开它。
+ * 因此「我安装的」列表直接取 store 全量，而不是按 `enabled` 过滤 ——
+ * 一关开关就从列表里消失，会让「停用」看起来像「卸载」。
  */
-function SkillStateControl({
-  skill,
-  disabled,
-  onSetOverride,
-}: {
-  skill: Skill;
-  disabled?: boolean;
-  onSetOverride: (id: string, override: SkillOverride) => void;
-}) {
-  const override = resolveSkillOverride(skill);
-  const meta = SKILL_OVERRIDE_META[override];
-  return (
-    <Tooltip title={meta.description}>
-      <Select
-        size="small"
-        variant="outlined"
-        value={override}
-        disabled={disabled}
-        onChange={(e) => onSetOverride(skill.id, e.target.value as SkillOverride)}
-        aria-label={`${skill.name} 生效方式`}
-        sx={{
-          minWidth: 104,
-          fontSize: 12.5,
-          '& .MuiSelect-select': { py: 0.5 },
-        }}
-      >
-        {SKILL_OVERRIDES.map((value) => (
-          <MenuItem key={value} value={value} sx={{ fontSize: 13 }}>
-            {SKILL_OVERRIDE_META[value].label}
-          </MenuItem>
-        ))}
-      </Select>
-    </Tooltip>
-  );
-}
-
-/**
- * 技能卡片：「全部技能」与「我安装的」两个视图共用，右上角操作按视图区分：
- * - market（全部技能）三态：未安装「+」→ 安装中 loading → 已安装「✓ + ⋯ 菜单」；
- *   停用后恢复「+」外观，点击可重新启用。
- * - installed（我安装的）：始终为三态选择器，直接改生效档（停用后移出该视图）。
- */
-function SkillCard({
-  skill,
-  view,
-  onToggle,
-  onDelete,
-  onSetOverride,
-  onInstalled,
-}: {
-  skill: Skill;
-  /** 所处视图：market = 全部技能市场；installed = 我安装的列表 */
-  view: "market" | "installed";
-  onToggle: (id: string) => void;
-  onDelete: (skill: Skill) => void;
-  /** 三态覆盖入口（FR-3.1） */
-  onSetOverride: (id: string, override: SkillOverride) => void;
-  /** 安装流程完成时回调（仅 market 视图的「+」流程会触发） */
-  onInstalled?: (id: string) => void;
-}) {
-  const [installing, setInstalling] = useState(false);
-  const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
-  const installTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  // 卸载时清理未完成的安装定时器，避免对已卸载组件 setState
-  useEffect(() => {
-    return () => {
-      if (installTimer.current) clearTimeout(installTimer.current);
-    };
-  }, []);
-
-  const handleInstall = () => {
-    setInstalling(true);
-    installTimer.current = setTimeout(() => {
-      onToggle(skill.id);
-      setInstalling(false);
-      onInstalled?.(skill.id);
-    }, 800);
-  };
-
-  /** 右上角操作区：installed 视图为三态选择器；market 视图为三态按钮 */
-  const renderAction = () => {
-    if (view === "installed") {
-      return (
-        <>
-          <SkillStateControl skill={skill} onSetOverride={onSetOverride} />
-          {/*
-           * 可删除的技能才给 ⋯ 菜单。内置技能删了下次启动就回来，
-           * 项目级技能来自仓库目录、重进页面就重扫回来 —— 给入口只会误导。
-           */}
-          {canDelete(skill) && (
-            <>
-              <IconButton
-                size="small"
-                aria-label={`${skill.name} 操作菜单`}
-                onClick={(e) => setMenuAnchor(e.currentTarget)}
-                sx={menuIconButtonSx}
-              >
-                <MoreHorizIcon sx={{ fontSize: 18 }} />
-              </IconButton>
-              <Menu
-                anchorEl={menuAnchor}
-                open={!!menuAnchor}
-                onClose={() => setMenuAnchor(null)}
-                transformOrigin={{ horizontal: "right", vertical: "top" }}
-                anchorOrigin={{ horizontal: "right", vertical: "bottom" }}
-              >
-                <MenuItem
-                  onClick={() => {
-                    setMenuAnchor(null);
-                    onDelete(skill);
-                  }}
-                >
-                  删除
-                </MenuItem>
-              </Menu>
-            </>
-          )}
-        </>
-      );
-    }
-    if (skill.enabled) {
-      return (
-        <>
-          <IconButton
-            size="small"
-            aria-label={`${skill.name} 操作菜单`}
-            onClick={(e) => setMenuAnchor(e.currentTarget)}
-            sx={menuIconButtonSx}
-          >
-            <MoreHorizIcon sx={{ fontSize: 18 }} />
-          </IconButton>
-          <CheckIcon
-            sx={{ fontSize: 18, color: "text.secondary" }}
-            aria-label="已安装"
-          />
-          <Menu
-            anchorEl={menuAnchor}
-            open={!!menuAnchor}
-            onClose={() => setMenuAnchor(null)}
-            transformOrigin={{ horizontal: "right", vertical: "top" }}
-            anchorOrigin={{ horizontal: "right", vertical: "bottom" }}
-          >
-            <MenuItem
-              onClick={() => {
-                onToggle(skill.id);
-                setMenuAnchor(null);
-              }}
-            >
-              停用
-            </MenuItem>
-            {skill.source === "local" && (
-              <MenuItem
-                onClick={() => {
-                  setMenuAnchor(null);
-                  onDelete(skill);
-                }}
-              >
-                删除
-              </MenuItem>
-            )}
-          </Menu>
-        </>
-      );
-    }
-    if (installing) {
-      return (
-        <Box
-          sx={{
-            width: 30,
-            height: 30,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-          }}
-        >
-          <CircularProgress size={18} aria-label="安装中" />
-        </Box>
-      );
-    }
-    return (
-      <IconButton
-        size="small"
-        aria-label={`安装 ${skill.name}`}
-        onClick={handleInstall}
-        sx={squareIconButtonSx}
-      >
-        <AddIcon sx={{ fontSize: 18 }} />
-      </IconButton>
-    );
-  };
-
-  return (
-    <Card
-      variant="outlined"
-      sx={[
-        hoverCardSx,
-        {
-          opacity: skill.enabled ? 1 : 0.72,
-          transition:
-            "opacity .2s ease, background-color .18s ease, border-color .18s ease, box-shadow .18s ease",
-        },
-      ]}
-    >
-      <CardContent sx={{ p: 2.5, "&:last-child": { pb: 2.5 } }}>
-        <Box sx={{ display: "flex", alignItems: "center", gap: 1.5 }}>
-          <Box sx={iconTileSx(skill.name)} aria-hidden>
-            {skill.icon ?? "📦"}
-          </Box>
-          <Typography
-            fontWeight={600}
-            sx={{ flex: 1, minWidth: 0, fontSize: 15, lineHeight: 1.4 }}
-            noWrap
-          >
-            {skill.name}
-          </Typography>
-          {renderAction()}
-        </Box>
-        <Typography
-          title={skill.description}
-          sx={{
-            mt: 1.5,
-            fontSize: 12.5,
-            color: "text.secondary",
-            lineHeight: 1.6,
-            minHeight: 40,
-            ...clampLines(2),
-          }}
-        >
-          {skill.description}
-        </Typography>
-        {/*
-         * 能力元信息行：来源层级 + SKILL.md 里声明的真实约束。
-         * 全部取自已解析字段，不展示"推测出来的"能力 ——
-         * 技能卡片上写一个它其实没有的权限，比不写更糟。
-         */}
-        <Box sx={{ display: "flex", alignItems: "center", gap: 0.75, mt: 1.5, flexWrap: "wrap" }}>
-          {skill.scope && (
-            <Chip
-              size="small"
-              variant="outlined"
-              label={SCOPE_LABEL[skill.scope]}
-              sx={{ height: 20, fontSize: 11 }}
-            />
-          )}
-          {skill.allowedTools && skill.allowedTools.length > 0 && (
-            <Tooltip title={`工具白名单：${skill.allowedTools.join('、')}`}>
-              <Chip
-                size="small"
-                variant="outlined"
-                icon={<LockOutlinedIcon sx={{ fontSize: 13 }} />}
-                label={`${skill.allowedTools.length} 个工具`}
-                aria-label={`工具白名单：${skill.allowedTools.join('、')}`}
-                sx={{ height: 20, fontSize: 11 }}
-              />
-            </Tooltip>
-          )}
-          {skill.userInvocable === false && (
-            <Tooltip title="SKILL.md 声明 user-invocable: false，不会出现在用户的直接调用入口">
-              <Chip
-                size="small"
-                variant="outlined"
-                label="不可手动调用"
-                sx={{ height: 20, fontSize: 11 }}
-              />
-            </Tooltip>
-          )}
-        </Box>
-      </CardContent>
-    </Card>
-  );
-}
-
-/** 技能市场页（FR-003 / FR-3.1）：搜索、分类筛选、三态启停、本地安装 */
 export function SkillsPage() {
   const skills = useSkillsStore((s) => s.skills);
-  const toggleSkill = useSkillsStore((s) => s.toggleSkill);
   const setSkillOverride = useSkillsStore((s) => s.setSkillOverride);
-  const installSkill = useSkillsStore((s) => s.installSkill);
   const removeSkill = useSkillsStore((s) => s.removeSkill);
   const refresh = useSkillsStore((s) => s.refresh);
   const syncError = useSkillsStore((s) => s.syncError);
@@ -386,9 +66,7 @@ export function SkillsPage() {
 
   /**
    * 每次进入技能市场页面都重新扫描本地目录并合并。
-   * 不再依赖 `loaded` 守卫——手动「刷新本地」按钮已移除，
-   * 但用户仍可能在本会话中新增/删除本地 .md 文件，
-   * 重入页面时需要把最新目录反映上来。
+   * 用户可能在本会话中新增/删除本地 .md 文件，重入页面时需要把最新目录反映上来。
    */
   useEffect(() => {
     void refresh(workspace);
@@ -406,12 +84,30 @@ export function SkillsPage() {
 
   const [q, setQ] = useState("");
   const [category, setCategory] = useState("全部");
-  /** 视图模式：「全部」走全量市场；「已安装」独立二级页面布局 */
+  /** 视图模式：「all」走全量市场；「installed」是已安装的开关面板 */
   const [view, setView] = useState<"all" | "installed">("all");
   /** 「我安装的」视图内的检索关键字（与 AllView 的 q 独立，互不影响） */
   const [installedQuery, setInstalledQuery] = useState("");
   const [toDelete, setToDelete] = useState<Skill | null>(null);
+  /** 详情弹窗只记 id：技能状态在弹窗打开期间会被安装/停用改动，直接存对象会显示旧状态 */
+  const [detailId, setDetailId] = useState<string | null>(null);
+  /** 安装反馈中的技能 id（由页面统一调度，卡片不持有定时器） */
+  const [installingIds, setInstallingIds] = useState<ReadonlySet<string>>(() => new Set());
+  /** 批量管理模式：整卡改为勾选 */
+  const [bulk, setBulk] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(() => new Set());
+
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const installTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+
+  // 卸载时清掉未完成的安装定时器，避免对已卸载组件 setState
+  useEffect(() => {
+    const timers = installTimers.current;
+    return () => {
+      timers.forEach((t) => clearTimeout(t));
+      timers.clear();
+    };
+  }, []);
 
   /**
    * 本次会话刚安装的技能 id 集合：安装完成后市场页保留展示（⋯ ✓ 态），
@@ -420,12 +116,53 @@ export function SkillsPage() {
   const [freshInstalledIds, setFreshInstalledIds] = useState<ReadonlySet<string>>(
     () => new Set(),
   );
-  const handleInstalled = (id: string) =>
-    setFreshInstalledIds((prev) => new Set(prev).add(id));
 
   /**
-   * 市场视图列表池：全部未安装技能 + 本次会话刚安装的技能（保留 ✓⋯ 态）。
-   * 已安装技能只出现在「我安装的」视图，避免同一技能两个入口并存。
+   * 安装 = 把这个技能从 `off` 提到 `on`。
+   *
+   * 市场里的技能**本来就在 store 里**（扫描/内置的结果，只是被停用），
+   * 所以这里不需要往列表里插一条新记录——那会制造出同一技能的两条数据。
+   * 走 `setSkillOverride` 而不是直接改本地 state：引擎侧的覆盖表要一起更新，
+   * 否则界面显示"已安装"而模型仍然看不到它。
+   */
+  const handleInstall = (skill: Skill) => {
+    if (installTimers.current.has(skill.id)) return;
+    setInstallingIds((prev) => new Set(prev).add(skill.id));
+    const timer = setTimeout(() => {
+      installTimers.current.delete(skill.id);
+      setInstallingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(skill.id);
+        return next;
+      });
+      setSkillOverride(skill.id, SKILL_OVERRIDE_ON);
+      setFreshInstalledIds((prev) => new Set(prev).add(skill.id));
+      toast.success(`已安装技能：${skill.name}`);
+    }, INSTALL_FEEDBACK_MS);
+    installTimers.current.set(skill.id, timer);
+  };
+
+  const toggleSelected = (id: string) =>
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  const applyBulk = (override: SkillOverride) => {
+    if (selectedIds.size === 0) return;
+    selectedIds.forEach((id) => setSkillOverride(id, override));
+    toast.success(
+      `已${override === SKILL_OVERRIDE_OFF ? "停用" : "启用"} ${selectedIds.size} 个技能`,
+    );
+    setSelectedIds(new Set());
+    setBulk(false);
+  };
+
+  /**
+   * 市场视图列表池：全部未启用技能 + 本次会话刚安装的技能（保留 ✓⋯ 态）。
+   * 已启用的技能不再往市场里塞一份，避免同一技能两个入口并存。
    */
   const marketPool = useMemo(
     () => skills.filter((s) => !s.enabled || freshInstalledIds.has(s.id)),
@@ -437,9 +174,16 @@ export function SkillsPage() {
     return ["全部", ...Array.from(set)];
   }, [marketPool]);
 
-  const installedCount = skills.filter((s) => s.enabled).length;
+  /**
+   * 「我安装的」列表池就是 **store 里的全部技能**。
+   *
+   * 它是一份开关面板，不是结果列表 —— 开关管的是「要不要自动触发」，
+   * 不是「在不在本地」。所以停用后卡片留在原地（整体压暗、开关变灰），
+   * 用户能直接把它再打开；一关开关就蒸发掉会让「停用」看起来像「卸载」。
+   */
+  const installedCount = skills.length;
 
-  /** AllView 过滤：市场池（未安装 + 本次新安装）+ 分类筛选 + 关键字检索（q） */
+  /** AllView 过滤：市场池 + 分类筛选 + 关键字检索（q） */
   const filteredAll = useMemo(() => {
     let list = marketPool;
     if (category !== "全部") {
@@ -457,9 +201,9 @@ export function SkillsPage() {
     return list;
   }, [marketPool, category, q]);
 
-  /** InstalledView 过滤：仅启用 + installedQuery 关键字检索 */
+  /** InstalledView 过滤：全部技能 + installedQuery 关键字检索 */
   const filteredInstalled = useMemo(() => {
-    let list = skills.filter((s) => s.enabled);
+    let list = skills;
     if (installedQuery.trim()) {
       const lower = installedQuery.toLowerCase();
       list = list.filter(
@@ -473,13 +217,19 @@ export function SkillsPage() {
 
   /**
    * 当前分类下已无可安装技能时回退到「全部」，
-   * 避免 Tabs 收到不在选项中的 value（MUI 会告警且不高亮任何 Tab）。
+   * 避免分类胶囊收到不在选项中的值（不高亮任何一项，看起来像坏了）。
    */
   useEffect(() => {
     if (category !== "全部" && !categories.includes(category)) {
       setCategory("全部");
     }
   }, [categories, category]);
+
+  /** 详情弹窗取 store 里的实时对象：安装/停用后弹窗里的按钮与状态要立刻跟上 */
+  const detailSkill = useMemo(() => {
+    if (!detailId) return null;
+    return skills.find((s) => s.id === detailId) ?? null;
+  }, [detailId, skills]);
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -488,7 +238,7 @@ export function SkillsPage() {
     try {
       const text = await file.text();
       const skill = parseSkillFromMarkdown(text, file.name);
-      installSkill(skill);
+      useSkillsStore.getState().installSkill(skill);
       toast.success(`已安装技能：${skill.name}`);
     } catch (err) {
       toast.error(
@@ -496,6 +246,12 @@ export function SkillsPage() {
       );
     }
     e.target.value = "";
+  };
+
+  const enterInstalled = () => {
+    setView("installed");
+    setBulk(false);
+    setSelectedIds(new Set());
   };
 
   return (
@@ -512,216 +268,228 @@ export function SkillsPage() {
           当前界面上的选择已保存在本地；引擎侧仍按上一次成功同步的配置运行。
         </Alert>
       )}
+
       {view === "installed" ? (
         <>
-      {/*
-       * 「我安装的」视图：面包屑返回 + 大标题 + 工具栏 + 卡片网格
-       * 与「全部技能」共用 SkillCard 组件，仅过滤条件不同（仅 enabled + installedQuery）。
-       */}
-      <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 2 }}>
-        <IconButton onClick={() => setView("all")} size="small" aria-label="返回全部技能">
-          <ArrowBackIcon fontSize="small" />
-        </IconButton>
-        <Typography variant="body2" color="text.secondary">
-          全部技能
-        </Typography>
-      </Box>
-      <Box
-        sx={{
-          display: "flex",
-          alignItems: "center",
-          gap: 2,
-          mb: 3,
-          flexWrap: "wrap",
-        }}
-      >
-        <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-          <Typography variant="h5" fontWeight={700}>
-            我安装的
-          </Typography>
-          <Box
-            sx={{
-              px: 1,
-              py: 0.25,
-              borderRadius: 999,
-              bgcolor: "action.hover",
-              color: "text.secondary",
-              fontSize: 13,
-              fontWeight: 600,
-              lineHeight: 1.5,
-            }}
-          >
-            {installedCount}
+          {/*
+           * 「我安装的」视图：面包屑返回 + 大标题 + 工具栏 + 卡片网格。
+           * 与「全部技能」共用图标与描述排版，差别在右侧是开关而不是安装按钮。
+           */}
+          <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 1.5 }}>
+            <IconButton onClick={() => setView("all")} size="small" aria-label="返回全部技能">
+              <ArrowBackIcon fontSize="small" />
+            </IconButton>
+            <Typography variant="body2" color="text.secondary">
+              全部技能
+            </Typography>
           </Box>
-        </Box>
-        <Box sx={{ flex: 1 }} />
-        <Button
-          variant="outlined"
-          size="small"
-          startIcon={<ChecklistIcon />}
-          sx={{ textTransform: "none" }}
-        >
-          批量管理
-        </Button>
-        <TextField
-          size="small"
-          placeholder="搜索已安装的技能"
-          value={installedQuery}
-          onChange={(e) => setInstalledQuery(e.target.value)}
-          sx={{ width: 220 }}
-          InputProps={{
-            startAdornment: (
-              <InputAdornment position="start">
-                <SearchIcon fontSize="small" />
-              </InputAdornment>
-            ),
-          }}
-        />
-      </Box>
-      <Box
-        sx={{
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))",
-          gap: 2,
-          alignItems: "flex-start",
-        }}
-      >
-        {filteredInstalled.map((s) => (
-          <SkillCard
-            key={s.id}
-            skill={s}
-            view="installed"
-            onToggle={toggleSkill}
-            onDelete={setToDelete}
-            onSetOverride={setSkillOverride}
-          />
-        ))}
-      </Box>
-      {filteredInstalled.length === 0 && (
-        <Box sx={{ textAlign: "center", py: 8, color: "text.secondary" }}>
-          <Typography>
-            {installedQuery.trim()
-              ? "未找到匹配「" + installedQuery.trim() + "」的已安装技能"
-              : "暂无启用的技能"}
-          </Typography>
-        </Box>
-      )}
-      </>
+
+          <Stack
+            direction="row"
+            alignItems="center"
+            spacing={2}
+            sx={{ mb: 2.5, flexWrap: "wrap" }}
+          >
+            <Stack direction="row" alignItems="center" spacing={1}>
+              <Typography variant="h6" fontWeight={700}>
+                我安装的
+              </Typography>
+              <Box sx={skillCountBadgeSx}>{installedCount}</Box>
+            </Stack>
+            <Box sx={{ flex: 1 }} />
+            <Button
+              size="small"
+              endIcon={<SettingsOutlinedIcon sx={{ fontSize: 17 }} />}
+              onClick={() => {
+                setBulk((b) => !b);
+                setSelectedIds(new Set());
+              }}
+              sx={skillTopBarButtonSx}
+            >
+              {bulk ? "退出批量" : "批量管理"}
+            </Button>
+            <TextField
+              size="small"
+              placeholder="搜索已安装的技能"
+              value={installedQuery}
+              onChange={(e) => setInstalledQuery(e.target.value)}
+              sx={skillSearchSx}
+              InputProps={{
+                startAdornment: (
+                  <InputAdornment position="start">
+                    <SearchIcon sx={{ fontSize: 18 }} />
+                  </InputAdornment>
+                ),
+              }}
+            />
+          </Stack>
+
+          {bulk && (
+            <Stack
+              direction="row"
+              alignItems="center"
+              spacing={1}
+              sx={{
+                mb: 2,
+                px: 1.5,
+                py: 1,
+                borderRadius: "10px",
+                bgcolor: "action.hover",
+              }}
+            >
+              <Typography variant="body2" color="text.secondary">
+                已选 {selectedIds.size} 项
+              </Typography>
+              <Box sx={{ flex: 1 }} />
+              <Button
+                size="small"
+                disabled={selectedIds.size === 0}
+                onClick={() => applyBulk(SKILL_OVERRIDE_ON)}
+                sx={{ textTransform: "none" }}
+              >
+                启用所选
+              </Button>
+              <Button
+                size="small"
+                disabled={selectedIds.size === 0}
+                onClick={() => applyBulk(SKILL_OVERRIDE_OFF)}
+                sx={{ textTransform: "none" }}
+              >
+                停用所选
+              </Button>
+            </Stack>
+          )}
+
+          <Box sx={skillGridSx}>
+            {filteredInstalled.map((s) => (
+              <SkillInstalledCard
+                key={s.id}
+                skill={s}
+                selectable={bulk}
+                selected={selectedIds.has(s.id)}
+                onSelect={toggleSelected}
+                onSetOverride={setSkillOverride}
+                onUninstall={setToDelete}
+                onOpenDetail={(sk) => setDetailId(sk.id)}
+              />
+            ))}
+          </Box>
+
+          {filteredInstalled.length === 0 && (
+            <Box sx={{ textAlign: "center", py: 8, color: "text.secondary" }}>
+              <Typography>
+                {installedQuery.trim()
+                  ? `未找到匹配「${installedQuery.trim()}」的已安装技能`
+                  : "还没有安装任何技能"}
+              </Typography>
+            </Box>
+          )}
+        </>
       ) : (
         <>
-      {/*
-       * 标题行：技能市场 + spacer + 搜索 / 我安装的 / 添加技能
-       * 三个工具按钮内联到同一行最右侧，省去独立工具栏 Box；
-       * flexWrap 在窄屏（< ~700px）下优雅换行，避免挤压。
-       */}
-      <Box
-        sx={{
-          display: "flex",
-          alignItems: "center",
-          gap: 2,
-          mb: 2,
-          flexWrap: "wrap",
-        }}
-      >
-        <Typography variant="h5" fontWeight={700}>
-          技能市场
-        </Typography>
-        <Box sx={{ flex: 1 }} />
-        <TextField
-          size="small"
-          placeholder="搜索技能"
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          sx={{ width: 180 }}
-          InputProps={{
-            startAdornment: (
-              <InputAdornment position="start">
-                <SearchIcon fontSize="small" />
-              </InputAdornment>
-            ),
-          }}
-        />
-        <Button
-          variant="outlined"
-          size="small"
-          startIcon={<Inventory2OutlinedIcon />}
-          onClick={() => setView("installed")}
-          sx={{ textTransform: "none" }}
-        >
-          我安装的 {installedCount}
-        </Button>
-        <Button
-          variant="contained"
-          size="small"
-          startIcon={<AddCircleOutlineIcon />}
-          onClick={() => fileInputRef.current?.click()}
-          sx={{ textTransform: "none" }}
-        >
-          添加技能
-        </Button>
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept=".md"
-          style={{ display: "none" }}
-          onChange={handleFileSelect}
-        />
-      </Box>
+          {/*
+           * 标题行：技能市场 + spacer + 搜索 / 我安装的 / 添加技能。
+           * flexWrap 在窄屏（< ~700px）下优雅换行，避免挤压。
+           */}
+          <Stack
+            direction="row"
+            alignItems="center"
+            spacing={2}
+            sx={{ mb: 2, flexWrap: "wrap" }}
+          >
+            <Typography variant="h6" fontWeight={700}>
+              技能市场
+            </Typography>
+            <Box sx={{ flex: 1 }} />
+            <TextField
+              size="small"
+              placeholder="搜索技能"
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              sx={skillSearchSx}
+              InputProps={{
+                startAdornment: (
+                  <InputAdornment position="start">
+                    <SearchIcon sx={{ fontSize: 18 }} />
+                  </InputAdornment>
+                ),
+              }}
+            />
+            <Button
+              size="small"
+              startIcon={<Inventory2OutlinedIcon sx={{ fontSize: 18 }} />}
+              onClick={enterInstalled}
+              sx={skillTopBarButtonSx}
+            >
+              我安装的 {installedCount}
+            </Button>
+            <Button
+              size="small"
+              variant="contained"
+              startIcon={<AddCircleOutlineIcon sx={{ fontSize: 18 }} />}
+              onClick={() => fileInputRef.current?.click()}
+              sx={{ textTransform: "none" }}
+            >
+              添加技能
+            </Button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".md"
+              style={{ display: "none" }}
+              onChange={handleFileSelect}
+            />
+          </Stack>
 
-      {/* 分类标签 */}
-      <Tabs
-        value={category}
-        onChange={(_, v) => setCategory(v)}
-        variant="scrollable"
-        scrollButtons="auto"
-        sx={{ mb: 2, minHeight: 36 }}
-      >
-        {categories.map((c) => (
-          <Tab
-            key={c}
-            value={c}
-            label={c}
-            sx={{ textTransform: "none", minHeight: 36, fontSize: 13 }}
-          />
-        ))}
-      </Tabs>
+          {/* 分类胶囊：换行平铺而不是横向滚动 —— 分类数量不大，滚动会把末几项藏起来 */}
+          <Stack
+            direction="row"
+            spacing={0.5}
+            sx={{ mb: 2, flexWrap: "wrap", rowGap: 0.5 }}
+          >
+            {categories.map((c) => (
+              <Button key={c} onClick={() => setCategory(c)} sx={skillCategorySx(c === category)}>
+                {c}
+              </Button>
+            ))}
+          </Stack>
 
-      {/* 技能网格 */}
-      <Box
-        sx={{
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))",
-          gap: 2,
-          alignItems: "flex-start",
-        }}
-      >
-        {filteredAll.map((s) => (
-          <SkillCard
-            key={s.id}
-            skill={s}
-            view="market"
-            onToggle={toggleSkill}
-            onDelete={setToDelete}
-            onSetOverride={setSkillOverride}
-            onInstalled={handleInstalled}
-          />
-        ))}
-      </Box>
+          <Box sx={skillGridSx}>
+            {filteredAll.map((s) => (
+              <SkillMarketCard
+                key={s.id}
+                skill={s}
+                installing={installingIds.has(s.id)}
+                onInstall={() => handleInstall(s)}
+                onOpenDetail={(sk) => setDetailId(sk.id)}
+                onSetOverride={setSkillOverride}
+                onUninstall={setToDelete}
+              />
+            ))}
+          </Box>
 
-      {filteredAll.length === 0 && (
-        <Box sx={{ textAlign: "center", py: 8, color: "text.secondary" }}>
-          <Typography>
-            {q.trim()
-              ? "未找到匹配的技能"
-              : category !== "全部"
-                ? `「${category}」分类下暂无可安装的技能`
-                : "已安装全部技能，暂无可安装的技能"}
-          </Typography>
-        </Box>
+          {filteredAll.length === 0 && (
+            <Box sx={{ textAlign: "center", py: 8, color: "text.secondary" }}>
+              <Typography>
+                {q.trim()
+                  ? "未找到匹配的技能"
+                  : category !== "全部"
+                    ? `「${category}」分类下暂无可安装的技能`
+                    : "已安装全部技能，暂无可安装的技能"}
+              </Typography>
+            </Box>
+          )}
+        </>
       )}
 
-      </>
-      )}
+      <SkillDetailDialog
+        skill={detailSkill}
+        open={!!detailSkill}
+        installing={!!detailSkill && installingIds.has(detailSkill.id)}
+        onClose={() => setDetailId(null)}
+        onInstall={handleInstall}
+      />
+
       <ConfirmDialog
         open={!!toDelete}
         title="删除技能"

@@ -233,7 +233,9 @@ export function AgentsPage() {
   };
 
   const isEmpty =
-    tab === "agents" ? filteredAgents.length === 0 : filteredGroups.length === 0;
+    tab === "agents"
+      ? filteredAgents.length === 0
+      : filteredGroups.length === 0;
 
   return (
     <Box sx={{ p: 3, maxWidth: 1100, margin: "0 auto" }}>
@@ -320,7 +322,11 @@ export function AgentsPage() {
                   deleteDisabled={isBuiltinAgentId(a.id)}
                   onSummon={() => summonAgent(a)}
                   summonDisabled={!a.enabled}
-                  summonTooltip={a.enabled ? "召唤该专家到当前会话" : "该专家已停用，无法召唤"}
+                  summonTooltip={
+                    a.enabled
+                      ? "召唤该专家到当前会话"
+                      : "该专家已停用，无法召唤"
+                  }
                 />
               ))
             : filteredGroups.map((g) => {
@@ -358,7 +364,7 @@ export function AgentsPage() {
         maxWidth="sm"
         fullWidth
       >
-        <DialogTitle>{editing ? "编辑 Agent" : "新建 Agent"}</DialogTitle>
+        <DialogTitle>{editing ? "编辑专家" : "新建专家"}</DialogTitle>
         <DialogContent>
           <TextField
             fullWidth
@@ -511,7 +517,9 @@ export function AgentsPage() {
             label="名称"
             placeholder="如：市场分析团"
             value={groupForm.name ?? ""}
-            onChange={(e) => setGroupForm({ ...groupForm, name: e.target.value })}
+            onChange={(e) =>
+              setGroupForm({ ...groupForm, name: e.target.value })
+            }
           />
           <TextField
             fullWidth
@@ -519,7 +527,9 @@ export function AgentsPage() {
             label="副标题（可选）"
             placeholder="如：Marketing"
             value={groupForm.role ?? ""}
-            onChange={(e) => setGroupForm({ ...groupForm, role: e.target.value })}
+            onChange={(e) =>
+              setGroupForm({ ...groupForm, role: e.target.value })
+            }
           />
           <TextField
             fullWidth
@@ -528,7 +538,9 @@ export function AgentsPage() {
             minRows={2}
             label="描述"
             value={groupForm.description ?? ""}
-            onChange={(e) => setGroupForm({ ...groupForm, description: e.target.value })}
+            onChange={(e) =>
+              setGroupForm({ ...groupForm, description: e.target.value })
+            }
           />
           <TextField
             fullWidth
@@ -536,7 +548,9 @@ export function AgentsPage() {
             label="图标（emoji，可选）"
             placeholder="如：🧩"
             value={groupForm.icon ?? ""}
-            onChange={(e) => setGroupForm({ ...groupForm, icon: e.target.value })}
+            onChange={(e) =>
+              setGroupForm({ ...groupForm, icon: e.target.value })
+            }
           />
           <Typography sx={{ fontSize: 13, mt: 1, mb: 0.5 }}>
             协作模式
@@ -545,14 +559,19 @@ export function AgentsPage() {
             fullWidth
             value={groupForm.mode ?? "sequential"}
             onChange={(e) =>
-              setGroupForm({ ...groupForm, mode: e.target.value as ExpertGroupMode })
+              setGroupForm({
+                ...groupForm,
+                mode: e.target.value as ExpertGroupMode,
+              })
             }
           >
-            {(Object.keys(EXPERT_GROUP_MODE_LABEL) as ExpertGroupMode[]).map((m) => (
-              <MenuItem key={m} value={m}>
-                {EXPERT_GROUP_MODE_LABEL[m]}
-              </MenuItem>
-            ))}
+            {(Object.keys(EXPERT_GROUP_MODE_LABEL) as ExpertGroupMode[]).map(
+              (m) => (
+                <MenuItem key={m} value={m}>
+                  {EXPERT_GROUP_MODE_LABEL[m]}
+                </MenuItem>
+              ),
+            )}
           </Select>
           <Typography variant="caption" color="text.secondary">
             {EXPERT_GROUP_MODE_DESC[groupForm.mode ?? "sequential"]}
@@ -566,7 +585,10 @@ export function AgentsPage() {
             multiple
             value={groupForm.memberIds ?? []}
             onChange={(e) =>
-              setGroupForm({ ...groupForm, memberIds: e.target.value as string[] })
+              setGroupForm({
+                ...groupForm,
+                memberIds: e.target.value as string[],
+              })
             }
             renderValue={(sel) =>
               (sel as string[])
@@ -640,12 +662,20 @@ function TabsBlock({
   return (
     <Box sx={{ borderBottom: 1, borderColor: "divider", mb: 2 }}>
       <Box role="tablist" sx={{ display: "flex", gap: 0.5 }}>
-        {(
-          [
-            { key: "agents" as PageTab, label: "专家", icon: <PersonIcon sx={{ fontSize: 16 }} />, count: agentCount },
-            { key: "groups" as PageTab, label: "专家团", icon: <GroupsIcon sx={{ fontSize: 16 }} />, count: groupCount },
-          ]
-        ).map((t) => {
+        {[
+          {
+            key: "agents" as PageTab,
+            label: "专家",
+            icon: <PersonIcon sx={{ fontSize: 16 }} />,
+            count: agentCount,
+          },
+          {
+            key: "groups" as PageTab,
+            label: "专家团",
+            icon: <GroupsIcon sx={{ fontSize: 16 }} />,
+            count: groupCount,
+          },
+        ].map((t) => {
           const active = tab === t.key;
           return (
             <Box
@@ -743,7 +773,8 @@ function AgentCard({
               {agent.imBinding
                 ? `IM·${PLATFORM_LABEL[agent.imBinding.platform]}`
                 : agent.skillIds.length
-                  ? skills.find((s) => s.id === agent.skillIds[0])?.name ?? "专家"
+                  ? (skills.find((s) => s.id === agent.skillIds[0])?.name ??
+                    "专家")
                   : "专家"}
             </Typography>
           </Box>
@@ -815,7 +846,11 @@ function AgentCard({
           <FormControlLabel
             sx={{ m: 0 }}
             control={
-              <Switch size="small" checked={agent.enabled} onChange={onToggle} />
+              <Switch
+                size="small"
+                checked={agent.enabled}
+                onChange={onToggle}
+              />
             }
             label={
               <Typography sx={{ fontSize: 12, color: "text.secondary" }}>
@@ -972,7 +1007,11 @@ function GroupCard({
           <FormControlLabel
             sx={{ m: 0 }}
             control={
-              <Switch size="small" checked={group.enabled} onChange={onToggle} />
+              <Switch
+                size="small"
+                checked={group.enabled}
+                onChange={onToggle}
+              />
             }
             label={
               <Typography sx={{ fontSize: 12, color: "text.secondary" }}>
