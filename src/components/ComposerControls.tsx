@@ -19,15 +19,13 @@ import ChecklistIcon from '@mui/icons-material/Checklist';
 import BuildIcon from '@mui/icons-material/Build';
 import { platform } from '@/platform';
 import { useSessionsStore } from '@/stores/sessionsStore';
+import { useSettingsStore } from '@/stores/settingsStore';
+import {
+  DEFAULT_WORKSPACE_LABEL,
+  resolveWorkspaceLabel,
+} from '@/lib/workspaceLabel';
 import { getRuntime } from '@/ai/runtime';
 import type { ExecutionMode } from '@/types/event';
-
-/** 从路径取末级目录名用于展示（跨平台分隔符兼容） */
-function dirBasename(p: string): string {
-  const cleaned = p.replace(/[\\/]+$/, '');
-  const parts = cleaned.split(/[\\/]/);
-  return parts[parts.length - 1] || p;
-}
 
 /**
  * 执行模式三选项（FR-1.4）。
@@ -84,6 +82,7 @@ export function ComposerControls() {
   const setSessionFullAccess = useSessionsStore((s) => s.setSessionFullAccess);
   const setSessionToolApproval = useSessionsStore((s) => s.setSessionToolApproval);
   const setSessionMode = useSessionsStore((s) => s.setSessionMode);
+  const workspaceAliases = useSettingsStore((s) => s.settings.workspaceAliases);
 
   const [wsMenuAnchor, setWsMenuAnchor] = useState<null | HTMLElement>(null);
   const [permAnchor, setPermAnchor] = useState<null | HTMLElement>(null);
@@ -117,7 +116,7 @@ export function ComposerControls() {
 
   return (
     <>
-      {/* 工作空间按钮：已选目录时显示目录名 */}
+      {/* 工作空间按钮：已选目录显示目录名（别名优先），未选即「默认工作空间」 */}
       <Button
         size="small"
         startIcon={<WorkspacesIcon fontSize="small" />}
@@ -129,7 +128,9 @@ export function ComposerControls() {
           '&:hover': { bgcolor: 'action.hover', color: 'text.primary' },
         }}
       >
-        {activeSession?.workdir ? dirBasename(activeSession.workdir) : '选择工作空间'}
+        {activeSession?.workdir
+          ? resolveWorkspaceLabel(activeSession.workdir, workspaceAliases)
+          : DEFAULT_WORKSPACE_LABEL}
       </Button>
 
       {/* 权限按钮：图标颜色随策略变化（绿=默认沙箱，橙=完全访问） */}

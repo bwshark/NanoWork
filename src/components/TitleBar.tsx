@@ -199,14 +199,13 @@ export function TitleBar() {
 
   /**
    * 新建任务。与侧边栏的「新建任务」保持同一语义：
-   * 继承当前活跃任务的工作空间与权限策略，保持上下文连贯。
+   * 工作空间回到「默认工作空间」（不继承），权限策略继承当前活跃任务。
    * （侧边栏收起时该入口移到这里，否则收起后就没法新建任务了）
    */
   const handleNewTask = () => {
     const st = useSessionsStore.getState();
     const current = st.sessions.find((s) => s.id === st.activeId);
     createSession(undefined, "新任务", {
-      workdir: current?.workdir,
       fullAccess: current?.fullAccess,
       toolApproval: current?.toolApproval,
     });

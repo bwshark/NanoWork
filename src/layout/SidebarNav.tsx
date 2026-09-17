@@ -116,13 +116,18 @@ export function SidebarNav() {
   const [expandOpen, setExpandOpen] = useState(false);
   const [expandHover, setExpandHover] = useState(false);
 
-  /** 新建任务：继承当前活跃任务的工作空间与权限策略，保持上下文连贯 */
+  /**
+   * 新建任务：工作空间一律**回到「默认工作空间」**（不继承当前任务的 workdir）；
+   * 权限策略（完全访问 / 逐条批准）仍继承，否则每建一个任务都要重设一遍。
+   *
+   * 「在某个工作空间下开工」是另一条路径——侧边栏分组头的「新建任务」，
+   * 它按分组带 workdir。两个入口分工明确，别再互相继承。
+   */
   const handleNewSession = () => {
     const current = useSessionsStore
       .getState()
       .sessions.find((s) => s.id === useSessionsStore.getState().activeId);
     createSession(undefined, "新任务", {
-      workdir: current?.workdir,
       fullAccess: current?.fullAccess,
       toolApproval: current?.toolApproval,
     });
