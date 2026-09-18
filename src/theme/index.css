@@ -21,6 +21,15 @@
   --btn-strong-bg: #1f2430;
   --btn-strong-bg-hover: #313a4d;
   --btn-strong-fg: #ffffff;
+  /*
+   * 「提示气泡」（技能开关的悬停说明）的实底配对。
+   * 同样用变量：它在两个主题里也是反色的 —— 深色主题下是**浅底深字**
+   * （取值即参考图的 #c7c7c7），浅色主题下才是深底浅字。
+   * MUI 默认的气泡是 `grey[700]` + 白字，在深色页面里对比度偏低，
+   * 一长句中文提示糊成一团，所以这里按参考图给出显式取值。
+   */
+  --hint-bg: #1f2430;
+  --hint-fg: #ffffff;
 }
 
 /* 深色覆盖（沿用原有深色值，由 themeMode.ts 同步 html.dark） */
@@ -38,6 +47,9 @@ html.dark {
   --btn-strong-bg: #c7c7c7;
   --btn-strong-bg-hover: #dedede;
   --btn-strong-fg: #1a1a1a;
+  /* 深色主题下提示气泡同样反色：浅灰实底 + 深色字 */
+  --hint-bg: #c7c7c7;
+  --hint-fg: #1a1a1a;
 }
 
 html,

@@ -33,6 +33,7 @@ import {
   skillSearchSx,
   skillTopBarButtonSx,
 } from "@/components/skills/skillCardSx";
+import { orderInstalledSkills } from "@/components/skills/skillMeta";
 import { SKILL_OVERRIDE_OFF, SKILL_OVERRIDE_ON } from "@/lib/skillOverrides";
 import type { Skill, SkillOverride } from "@/types";
 
@@ -45,16 +46,21 @@ const INSTALL_FEEDBACK_MS = 800;
  * 两个视图的分工（参考样式把它们的差别做得很明确）：
  * - 「全部技能」是一张**目录**：整卡可点开详情，hover 展开描述，右上角是安装；
  * - 「我安装的」是一份**开关面板**：卡片常驻，右侧开关直接控制自动触发，
- *   hover 才露出 ⋯ 菜单与「仅手动调用」，停用后卡片压暗但不消失。
+ *   hover 才露出 ⋯ 菜单与置顶，停用后卡片压暗但不消失。
  *
  * 后者的关键差别是「停用不等于卸载」：技能还在磁盘上，用户必须能原地再打开它。
  * 因此「我安装的」列表直接取 store 全量，而不是按 `enabled` 过滤 ——
  * 一关开关就从列表里消失，会让「停用」看起来像「卸载」。
+ *
+ * 置顶（列表排序偏好）与三态覆盖（技能属性）分属两个状态：前者只改这里的顺序，
+ * 不推引擎；后者要同步给 nanobot。混在一起会让「置顶」变成一条写给引擎的指令。
  */
 export function SkillsPage() {
   const navigate = useNavigate();
   const skills = useSkillsStore((s) => s.skills);
+  const pinnedIds = useSkillsStore((s) => s.pinnedIds);
   const setSkillOverride = useSkillsStore((s) => s.setSkillOverride);
+  const toggleSkillPin = useSkillsStore((s) => s.toggleSkillPin);
   const removeSkill = useSkillsStore((s) => s.removeSkill);
   const refresh = useSkillsStore((s) => s.refresh);
   const syncError = useSkillsStore((s) => s.syncError);
@@ -216,7 +222,12 @@ export function SkillsPage() {
     return list;
   }, [marketPool, category, q]);
 
-  /** InstalledView 过滤：全部技能 + installedQuery 关键字检索 */
+  /**
+   * InstalledView 过滤：全部技能 + installedQuery 关键字检索，**最后按置顶重排**。
+   *
+   * 顺序在过滤之后确定：置顶说的是「在我看得见的这些里排最前」，
+   * 若先排序再过滤，被搜索词滤掉的置顶项会白占掉一个「第一名」的位置。
+   */
   const filteredInstalled = useMemo(() => {
     let list = skills;
     if (installedQuery.trim()) {
@@ -227,8 +238,8 @@ export function SkillsPage() {
           s.description.toLowerCase().includes(lower),
       );
     }
-    return list;
-  }, [skills, installedQuery]);
+    return orderInstalledSkills(list, pinnedIds);
+  }, [skills, installedQuery, pinnedIds]);
 
   /**
    * 当前分类下已无可安装技能时回退到「全部」，
@@ -416,10 +427,12 @@ export function SkillsPage() {
               <SkillInstalledCard
                 key={s.id}
                 skill={s}
+                pinned={pinnedIds.includes(s.id)}
                 selectable={bulk}
                 selected={selectedIds.has(s.id)}
                 onSelect={toggleSelected}
                 onSetOverride={setSkillOverride}
+                onTogglePin={toggleSkillPin}
                 onUninstall={setToDelete}
                 onOpenDetail={(sk) => setWindowId(sk.id)}
               />

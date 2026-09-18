@@ -21,6 +21,7 @@ import { MarkdownView } from '@/components/MarkdownView';
 import { toast } from '@/components/Toast';
 import { clampLines } from '@/lib/cardSx';
 import {
+  skillHintTooltipSx,
   skillInfoGridRowSx,
   skillInfoGridSx,
   skillInfoGridValueSx,
@@ -39,6 +40,7 @@ import {
   skillWindowPlainIconButtonSx,
 } from './skillCardSx';
 import {
+  autoTriggerHint,
   autoTriggerToast,
   nextAutoTriggerOverride,
   skillInfoRows,
@@ -119,7 +121,12 @@ export function SkillDetailWindow({
     <Dialog
       open={open}
       onClose={onClose}
-      maxWidth="sm"
+      /*
+       * 宽度不写 `maxWidth="sm"`（600）：实际值由 `skillWindowPaperSx` 里的
+       * `&.MuiDialog-paperFullWidth` 封到 760，这里只保留 `fullWidth`
+       * 提供的 `width: calc(100% - 64px)` 让窄屏能自动收窄。
+       */
+      maxWidth={false}
       fullWidth
       PaperProps={{ sx: skillWindowPaperSx, 'aria-label': '技能详情' }}
     >
@@ -164,7 +171,22 @@ export function SkillDetailWindow({
               </Box>
 
               <Stack direction="row" alignItems="center" spacing={0.5}>
-                <Tooltip title={enabled ? '点击停用自动触发' : '点击启用自动触发'}>
+                {/*
+                 * 开关的悬停说明来自 `autoTriggerHint`（与卡片上是同一份文案）：
+                 * 它回答的是「按下去之后这个技能会变成什么样」，而不是重复按钮名。
+                 * 气泡样式走 `slotProps.tooltip`（写 `<Tooltip sx>` 无效，见令牌注释）。
+                 *
+                 * `placement="bottom-end"`：气泡的右缘与开关右缘对齐、向左展开。
+                 * 不能用默认的 `bottom`（居中）—— 开关右边就是「关闭 ×」，
+                 * 居中的 300px 气泡会盖住 ×，还会伸出纸面右缘（实测超出 76px：
+                 * 纸面 x=260..1020、气泡 x=796..1096），看起来像一块飘出窗口的补丁。
+                 * 右对齐后气泡整块落在纸面内，且正好停在 × 左边。
+                 */}
+                <Tooltip
+                  placement="bottom-end"
+                  title={autoTriggerHint(s)}
+                  slotProps={{ tooltip: { sx: skillHintTooltipSx } }}
+                >
                   <Switch
                     size="small"
                     color="success"

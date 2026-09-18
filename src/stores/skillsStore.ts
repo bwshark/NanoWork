@@ -13,6 +13,17 @@ import type { Skill, SkillOverride } from '@/types';
 
 interface SkillsState {
   skills: Skill[];
+  /**
+   * 置顶的技能 id（「我安装的」列表把置顶项排在最前）。
+   *
+   * 刻意**不**放进 `Skill` 对象里，也刻意**不**推给引擎：
+   * - 它不是技能属性，而是**用户对这份列表的排序偏好**。挂进技能对象就要在
+   *   `mergeSkills` 里为它单独写一条「内容取最新、这字段取用户选择」的还原路径
+   *   （`override` 已经占了一条），多一条就多一处会漂移的地方。
+   * - 引擎不关心顺序。混进 `buildOverrideMap` 会让「置顶」变成一条会写进
+   *   nanobot 配置的指令，而它在引擎侧没有任何对应语义。
+   */
+  pinnedIds: string[];
   /** 是否已完成首次本地技能扫描 */
   loaded: boolean;
   /**
@@ -34,6 +45,8 @@ interface SkillsState {
   setSkillEnabled: (id: string, enabled: boolean) => void;
   /** 设置三态覆盖（FR-3.1 的完整入口），并推送给引擎 */
   setSkillOverride: (id: string, override: SkillOverride) => void;
+  /** 置顶 / 取消置顶（只影响「我安装的」列表顺序，不推引擎） */
+  toggleSkillPin: (id: string) => void;
   /** 安装一个技能（Web 端上传或 Electron 端从本地选择） */
   installSkill: (skill: Skill) => void;
   /** 删除本地安装的技能；内置技能不可删除 */
@@ -99,6 +112,7 @@ export const useSkillsStore = create<SkillsState>()(
   persist(
     (set, get) => ({
       skills: mergeSkills([], []),
+      pinnedIds: [],
       loaded: false,
       syncError: null,
 
@@ -131,6 +145,13 @@ export const useSkillsStore = create<SkillsState>()(
         void pushOverrides(skills).then((error) => set({ syncError: error }));
       },
 
+      toggleSkillPin: (id) =>
+        set((s) => ({
+          pinnedIds: s.pinnedIds.includes(id)
+            ? s.pinnedIds.filter((p) => p !== id)
+            : [...s.pinnedIds, id],
+        })),
+
       installSkill: (skill) =>
         set((s) => {
           const next = withEffectiveOverride(skill, 'on');
@@ -142,10 +163,19 @@ export const useSkillsStore = create<SkillsState>()(
           return { skills: [...s.skills, next] };
         }),
 
+      /*
+       * 卸载时顺手把置顶也清掉，否则 `pinnedIds` 会攒下一串指向已卸载技能的
+       * 僵尸 id（技能重新装上时会**莫名其妙自己置顶**）。清理是有条件的：
+       * 内置技能卸不掉，那种情况下不能把它的置顶悄悄抹掉。
+       */
       removeSkill: (id) =>
-        set((s) => ({
-          skills: s.skills.filter((sk) => !(sk.id === id && isUserOwnedSkill(sk))),
-        })),
+        set((s) => {
+          const removed = s.skills.some((sk) => sk.id === id && isUserOwnedSkill(sk));
+          return {
+            skills: s.skills.filter((sk) => !(sk.id === id && isUserOwnedSkill(sk))),
+            pinnedIds: removed ? s.pinnedIds.filter((p) => p !== id) : s.pinnedIds,
+          };
+        }),
     }),
     {
       name: STORAGE_KEYS.skills,
@@ -159,7 +189,12 @@ export const useSkillsStore = create<SkillsState>()(
         // `enabled: false` → `off`，其余 → `on`。不猜中间档。
         return { skills: skills.map((s) => withEffectiveOverride(s)), loaded: false, syncError: null };
       },
-      partialize: (s) => ({ skills: s.skills }),
+      /*
+       * `pinnedIds` 必须一起落盘：置顶是「下次打开还在」的偏好，
+       * 只存在内存里等于每次重启都被清空。不带 version 升级 ——
+       * 老数据没有这个 key，浅合并后自然是初始值 `[]`，不存在迁移分支。
+       */
+      partialize: (s) => ({ skills: s.skills, pinnedIds: s.pinnedIds }),
     },
   ),
 );

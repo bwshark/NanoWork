@@ -66,7 +66,7 @@ export const skillMarketCardSx = {
 export const skillInstalledCardSx = {
   ...skillCardBaseSx,
   cursor: 'pointer',
-  // 80px 足够放下「⋯ + 仅手动调用」两个 28px 按钮，留一点余量避免 hover 瞬时抖动
+  // 80px 足够放下「⋯ + 置顶」两个 28px 按钮，留一点余量避免 hover 瞬时抖动
   '&:hover .skill-card-actions': {
     maxWidth: 80,
     opacity: 1,
@@ -80,7 +80,7 @@ export const skillInstalledCardSx = {
 };
 
 /**
- * 卡片右上角的次级操作区（⋯ / 仅手动调用）：静止态隐形，hover 或键盘聚焦才显形。
+ * 卡片右上角的次级操作区（⋯ / 置顶）：静止态隐形，hover 或键盘聚焦才显形。
  *
  * 静止态必须**真的不占宽**（`maxWidth: 0`），只把 `opacity` 打到 0 是不够的 ——
  * 两个 28px 的按钮会一直吃掉名称那一行的宽度，结果是「没 hover 也显示成
@@ -103,7 +103,7 @@ export const skillCardActionsSx = {
   transition: 'max-width .18s ease, opacity .16s ease',
 };
 
-/** 卡片右上角的小图标按钮（⋯ / 仅手动调用 / 安装 +）：低对比，hover 提亮。 */
+/** 卡片右上角的小图标按钮（⋯ / 置顶 / 安装 +）：低对比，hover 提亮。 */
 export const skillCardIconButtonSx = {
   p: 0.5,
   color: 'text.secondary',
@@ -129,16 +129,29 @@ export const skillInstallButtonSx = {
 };
 
 /**
- * 「仅手动调用」按钮的激活态。
+ * 「置顶」按钮的激活态：置顶后图标变实心 + 语义色 + 浅底。
  *
- * 中间档（模型不可见、用户可挂载）是一个**用开关表达不出来**的状态，
- * 开关只能说明「能不能用」；不给它一个独立且显眼的位置，用户就会以为只有两档。
- * 因此激活时用语义色 + 浅底，和「开关仍开着」形成可区分的组合信号。
+ * 置顶是**列表顺序**上唯一的状态，激活态必须一眼可辨（否则用户不知道
+ * 这张卡为什么排在前面、也就找不到「取消置顶」的入口）。
+ * 与开关的 success 绿刻意不同色：绿色在本页已经被「自动触发开着」占用。
  */
-export const skillManualOnlyActiveSx = {
+export const skillPinnedActiveSx = {
   color: 'secondary.main',
   bgcolor: 'action.selected',
   '&:hover': { color: 'secondary.main', bgcolor: 'action.selected' },
+};
+
+/**
+ * 「⋯」按钮在中间档（`user-invocable-only`）下的提示色。
+ *
+ * 中间档**没有**自己的按钮 —— 它只在 ⋯ 菜单里那一项上。不给一点视觉痕迹的话，
+ * 一张「模型看不见」的卡片看起来和普通卡片完全一样，用户是在事后
+ * （模型答不出某个技能）才发现设置错了。所以让 ⋯ 本身带上颜色：
+ * 它是这档状态唯一常驻的入口。
+ */
+export const skillMenuAttentionSx = {
+  color: 'secondary.main',
+  '&:hover': { color: 'secondary.main', bgcolor: 'action.hover' },
 };
 
 /**
@@ -169,6 +182,32 @@ export const skillSwitchSx = {
     bgcolor: 'success.main',
     opacity: 1,
   },
+};
+
+/**
+ * 自动触发开关的悬停提示气泡。
+ *
+ * 必须挂在 `slotProps.tooltip` 上，**不能**写 `<Tooltip sx={...}>` ——
+ * MUI 的 Tooltip 会把未识别的 props（含 `sx`）透传给**子元素**（锚点），
+ * 写在那里只会与锚点自己的 `sx` 打架，气泡样式一点都不会变。
+ *
+ * 取值走 `--hint-*` 变量（两个主题反色）：深色主题下是浅灰底 + 深色字，
+ * 与参考样式一致；MUI 默认的 `grey[700]` 底 + 白字在深色页面上对比度偏低。
+ * 字号/行高/圆角也一并放大：默认的 11px 是给英文短标签用的，
+ * 一长句中文提示需要 12.5px 才能读，否则整块糊在一起。
+ *
+ * `letterSpacing: 0` 是必需的：MUI 默认带 0.01071em 的字距，中文会显得松散发飘。
+ */
+export const skillHintTooltipSx = {
+  maxWidth: 300,
+  px: 1.5,
+  py: 1,
+  borderRadius: '10px',
+  fontSize: 12.5,
+  lineHeight: 1.65,
+  letterSpacing: 0,
+  bgcolor: 'var(--hint-bg)',
+  color: 'var(--hint-fg)',
 };
 
 /** 描述文本：默认 2 行截断；行高锁死，hover 展开时文字不会上下抖动 */
@@ -299,6 +338,16 @@ export const skillInfoValueSx = {
  * ------------------------------------------------------------------ */
 
 /**
+ * 窗口纸面的最大宽度。
+ *
+ * MUI 的 `sm`（600px）在 1280 视口下正文一行才四十来个字，读 SKILL.md 的
+ * 长段落要频繁换行；760px 是「再宽一点」和「别把窗口撑得像整页」之间的落点。
+ * 窄屏靠 Dialog 自带的 `width: calc(100% - 64px)`（`fullWidth`）自然收窄，
+ * 所以这里只封上限、不给固定宽度。
+ */
+export const SKILL_WINDOW_MAX_WIDTH = 760;
+
+/**
  * 窗口纸面。
  *
  * 与市场详情弹窗（`skillDetailPaperSx`）的区别不在大小，而在**滚动结构**：
@@ -309,6 +358,12 @@ export const skillInfoValueSx = {
  * 高度用 `maxHeight` 而不是写死 `height`：没有正文的技能不该撑出一扇 730px 的空窗。
  * `overflow: hidden` 是让内部那个滚动区**自己**成立，否则纸面会先滚一层、
  * 概述区再滚一层，出现双层滚动条。
+ *
+ * 宽度覆盖写成 `&.MuiDialog-paperFullWidth`（两个类，特异性 0,2,0）而不是光靠
+ * `sx` 里的 `maxWidth`：Dialog 的 `maxWidth="sm"` 会加一个同特异性的
+ * `.MuiDialog-paperWidthSm` 类，谁生效取决于样式表里的先后，不可靠。
+ * 组件那边因此把 `maxWidth` 显式传 `false`，只留 `fullWidth` 提供
+ * `width: calc(100% - 64px)`，再由这条规则封上限。
  *
  * 没有画描边：参考图里窗口与遮罩的亮度差（#1f1f1f vs #040404）已经足够分界，
  * 再加一条亮边会让浮层看起来像个内嵌面板。边界感交给 Dialog 自带的投影。
@@ -321,19 +376,20 @@ export const skillWindowPaperSx = {
   backgroundImage: 'none',
   overflow: 'hidden',
   maxHeight: 'min(730px, 88vh)',
+  '&.MuiDialog-paperFullWidth': { maxWidth: SKILL_WINDOW_MAX_WIDTH },
 };
 
 /** 窗口头部：固定区（不参与滚动），左右内边距与正文对齐 */
 export const skillWindowHeadSx = {
   flexShrink: 0,
-  px: 3,
-  pt: 3,
+  px: 4,
+  pt: 4,
 };
 
 /** 头部正文（描述 + 基本信息 + 概述标题）：同样固定，只有概述正文滚 */
 export const skillWindowBodySx = {
   flexShrink: 0,
-  px: 3,
+  px: 4,
 };
 
 /**
@@ -395,8 +451,8 @@ export const skillInfoGridValueSx = {
 export const skillOverviewBoxSx = {
   flex: 1,
   minHeight: 0,
-  mx: 3,
-  mb: 3,
+  mx: 4,
+  mb: 4,
   mt: 1.5,
   px: 2.5,
   py: 2,

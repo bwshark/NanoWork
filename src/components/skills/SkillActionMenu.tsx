@@ -13,11 +13,11 @@ import {
   SKILL_OVERRIDE_USER_INVOCABLE_ONLY,
   resolveSkillOverride,
 } from '@/lib/skillOverrides';
-import { skillFileTargets, skillUninstallBlockReason } from './skillMeta';
+import { skillFileTargets, skillMenuOrigin, skillUninstallBlockReason } from './skillMeta';
 import type { Skill, SkillOverride } from '@/types';
 
 /**
- * 技能卡右上角「⋯」菜单：卡片上放不下的动作收在这里。
+ * 技能「⋯」菜单：卡片上放不下的动作收在这里。
  *
  * ## 不可用的条目**显示但禁用**，并写出原因
  *
@@ -25,6 +25,15 @@ import type { Skill, SkillOverride } from '@/types';
  * 在 Web 端做不到 —— 直接隐藏这些条目会让用户以为功能不存在，
  * 而 WorkBuddy 的菜单里它们是常驻的。所以保留条目、置灰，
  * 并在右侧给一句**具体**的原因（「内置不可卸载」而不是「不可用」）。
+ *
+ * ## 对齐方向按 context 分两套
+ *
+ * 「⋯」在两个入口离容器右缘的距离完全不同，同一套对齐必然有一边是错的，
+ * 所以对齐参数走 `skillMenuOrigin(context)`（判据、实测数字与理由都在那边，
+ * 并有单测守住「卡片右对齐 / 窗口左对齐」）。这里只负责把结果交给 Menu。
+ *
+ * 竖向都是 `bottom` → `top`（贴着按钮下沿往下展开），窗口里另加 4px 间距，
+ * 避免纸张与按钮贴死。
  */
 export function SkillActionMenu({
   skill,
@@ -38,8 +47,9 @@ export function SkillActionMenu({
   /**
    * 菜单出现在哪里：卡片上 / 详情窗口里。
    *
-   * 差别只有一条「去对话」——窗口头部已经有「去试试」（挂载 + 跳转），
-   * 再留一个不挂载的「去对话」会让两个入口看起来是同一件事却结果不同。
+   * 差别有两条 —— 少一个「去对话」（窗口头部已有「去试试」，挂载 + 跳转，
+   * 再留一个不挂载的「去对话」会让两个入口看起来是同一件事却结果不同），
+   * 以及水平对齐方向（见上方注释）。
    */
   context?: 'card' | 'window';
   anchorEl: HTMLElement | null;
@@ -62,13 +72,19 @@ export function SkillActionMenu({
     if (!result.ok) toast.error(`${label}失败：${result.error ?? '未知原因'}`);
   };
 
+  const inWindow = context === 'window';
+  // 对齐方向由几何决定（卡片右对齐 / 窗口左对齐），判据与理由见 skillMenuOrigin
+  const { anchorOrigin, transformOrigin } = skillMenuOrigin(context);
+
   return (
     <Menu
       anchorEl={anchorEl}
       open={!!anchorEl}
       onClose={close}
-      transformOrigin={{ horizontal: 'right', vertical: 'top' }}
-      anchorOrigin={{ horizontal: 'right', vertical: 'bottom' }}
+      transformOrigin={transformOrigin}
+      anchorOrigin={anchorOrigin}
+      // Paper 是 Popover 的根元素，给它 margin 就是给整张纸留出与按钮的间距
+      PaperProps={inWindow ? { sx: { mt: 0.5 } } : undefined}
       onClick={(e) => e.stopPropagation()}
     >
       {context === 'card' && (

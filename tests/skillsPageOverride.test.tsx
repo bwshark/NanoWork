@@ -20,18 +20,28 @@
  *    生产环境由 `router/index.tsx` 提供，测试里用 `MemoryRouter` 补上。
  * 3. **详情窗口打开时列表仍在背后**（这正是它不做整页接管的原因）——
  *    断言「关窗后卡片还在」与断言「开窗时卡片就在」是两件事，两个都要测。
+ * 4. **「⋯」菜单的对齐方向按入口分两套**（卡片右对齐 / 窗口左对齐）。jsdom 量不到
+ *    Popper 的真实坐标，所以这条几何约束由 `skillMenuOrigin` 的纯函数单测守住，
+ *    实际像素另外用 Playwright 截图对照。
  *
  * ## 关于「三态」的控件形态
  *
- * 界面从「一个下拉框」改成了**开关 + 一个图标按钮**：开关管「能不能用」
- * （`off` ↔ 非 `off`），图标按钮管「模型看不看得见」（`on` ↔ `user-invocable-only`）。
- * 测试也跟着走这两个真实控件的 aria-label，而不是内部的 Select 结构。
+ * 三态**不是**三个并列的按钮：
+ *
+ * - 开关管「能不能用」（`off` ↔ 非 `off`），卡片与详情窗口各有一个，写的是同一份覆盖；
+ * - 中间档（`user-invocable-only`：模型看不见、你还能挂载）只在 ⋯ 菜单里那一项上。
+ *   它没有独立按钮 —— 所以「卡片上找不到中间档入口」是**有意的**，别把它当回归。
+ *
+ * 卡片右上角另一个图标按钮是**置顶**，它和三态无关：一个改技能属性（要推引擎），
+ * 一个只改这份列表的顺序（纯本地偏好）。两者外形相近，断言必须分开，
+ * 否则很容易写出「置顶之后 override 也变了」这种错的双向覆盖。
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react';
 import { MemoryRouter } from 'react-router-dom';
 import { SkillsPage } from '@/pages/skills/SkillsPage';
+import { autoTriggerHint, orderInstalledSkills, skillMenuOrigin } from '@/components/skills/skillMeta';
 import { useSkillsStore } from '@/stores/skillsStore';
 import { useSessionsStore } from '@/stores/sessionsStore';
 import { platform } from '@/platform';
@@ -72,7 +82,7 @@ beforeEach(() => {
   ]);
   vi.spyOn(platform, 'syncNanobotSkills').mockResolvedValue({ ok: true, message: '' });
   vi.spyOn(platform, 'onSkillsChanged').mockReturnValue(() => {});
-  useSkillsStore.setState({ skills: [], loaded: false, syncError: null });
+  useSkillsStore.setState({ skills: [], pinnedIds: [], loaded: false, syncError: null });
   useSessionsStore.setState({ sessions: [], activeId: null });
 });
 
@@ -122,6 +132,31 @@ async function openDetail(host: HTMLElement, name: string): Promise<HTMLElement>
 /** 详情窗口当前是否开着 */
 function detailWindowOpen(): boolean {
   return byAria('技能详情') !== null;
+}
+
+/**
+ * 「我安装的」列表里卡片的**顺序**（按名称）。
+ *
+ * 不能只断言「卡片还在」：置顶这件事的全部意义就是顺序，只查存在性等于没测。
+ */
+function installedOrder(host: HTMLElement): string[] {
+  return Array.from(host.querySelectorAll('.MuiCard-root')).map((card) =>
+    (card.querySelector('.MuiTypography-root')?.textContent ?? '').trim(),
+  );
+}
+
+/**
+ * 菜单项（MUI `MenuItem` 的 `role="menuitem"`）。
+ *
+ * 菜单走 Portal 到 `document.body`，不在 host 里，所以只能全局查；
+ * 按文案找而不是按索引 —— 菜单项是**排列会变**的一列动作。
+ */
+function menuItem(label: string): HTMLElement | null {
+  return (
+    (Array.from(document.querySelectorAll('[role="menuitem"]')).find((el) =>
+      (el.textContent ?? '').includes(label),
+    ) as HTMLElement | undefined) ?? null
+  );
 }
 
 describe('技能页：真实字段展示（已安装技能详情页）', () => {
@@ -360,22 +395,47 @@ describe('技能页：详情页的交互（开关 / 去试试 / 概述）', () =
 });
 
 describe('技能页：三态控制', () => {
-  it('「仅手动调用」按钮写入中间档，并保持 enabled 的派生关系', async () => {
+  it('中间档收在 ⋯ 菜单里（卡片上不再有独立按钮）', async () => {
     const host = await mountInstalled();
 
-    // 中间档（模型不可见、用户可挂载）用开关表达不出来，
-    // 必须有一个能写文案的独立入口，这里就是那个按钮。
-    const btn = byAria('用户级技能 仅手动调用', host);
-    expect(btn, '未找到「仅手动调用」按钮').toBeTruthy();
-    expect(btn!.getAttribute('aria-pressed')).toBe('false');
+    // 卡片右上角只剩「⋯ + 置顶」，中间档没有自己的按钮 —— 这是有意的信息收敛，
+    // 所以这里先反向确认「旧按钮真的没了」，再走菜单这条真实路径。
+    expect(
+      byAria('用户级技能 仅手动调用', host),
+      '卡片上不该再有「仅手动调用」按钮',
+    ).toBeNull();
 
-    click(btn);
+    click(byAria('用户级技能 操作菜单', host));
+    await flush();
+
+    const item = menuItem('仅手动调用');
+    expect(item, '菜单里未找到「仅手动调用」').toBeTruthy();
+    click(item);
     await flush();
 
     const stored = useSkillsStore.getState().skills.find((s) => s.id === 'user-skill');
     expect(stored?.override).toBe('user-invocable-only');
     // 中间档不是「停用」：用户照样能挂载，只是模型看不见
     expect(stored?.enabled).toBe(true);
+    unmount();
+  });
+
+  it('已经处于中间档时，⋯ 菜单给出的是「改回完全启用」', async () => {
+    const host = await mountInstalled();
+    useSkillsStore.setState({
+      skills: useSkillsStore
+        .getState()
+        .skills.map((s) =>
+          s.id === 'user-skill' ? { ...s, override: 'user-invocable-only' } : s,
+        ),
+    });
+    await flush();
+
+    click(byAria('用户级技能 操作菜单', host));
+    await flush();
+    // 菜单必须反映**当前**档位，而不是永远只显示「设为中间档」那一句
+    expect(menuItem('完全启用')).toBeTruthy();
+    expect(menuItem('仅手动调用')).toBeNull();
     unmount();
   });
 
@@ -456,5 +516,141 @@ describe('技能页：引擎同步失败必须可见', () => {
     await flush();
     expect(host.textContent).not.toContain('未能同步到引擎');
     unmount();
+  });
+});
+
+/**
+ * 「⋯」菜单的对齐方向是**几何约束**，不是审美偏好，改错在哪边都会出事：
+ * 卡片左对齐会让最后一列的菜单冲出视口，窗口右对齐会把菜单甩到窗口左缘。
+ * jsdom 量不到 Popper 的实际坐标，所以把判据抽成纯函数在此守死 ——
+ * 真实像素位置由 `tasks/skill/preview/19/21` 那两张 Playwright 实测截图对照。
+ */
+describe('技能「⋯」菜单的对齐方向', () => {
+  it('卡片上右对齐 —— ⋯ 贴卡片右缘，菜单必须向左展开才留在卡片内', () => {
+    const { anchorOrigin, transformOrigin } = skillMenuOrigin('card');
+    expect(anchorOrigin.horizontal).toBe('right');
+    expect(transformOrigin.horizontal).toBe('right');
+  });
+
+  it('窗口里左对齐 —— ⋯ 距窗口右缘还有 300 多 px，右对齐会把菜单甩到窗口左边缘', () => {
+    const { anchorOrigin, transformOrigin } = skillMenuOrigin('window');
+    expect(anchorOrigin.horizontal).toBe('left');
+    expect(transformOrigin.horizontal).toBe('left');
+  });
+
+  it('两个入口都从按钮下沿往下展开', () => {
+    for (const ctx of ['card', 'window'] as const) {
+      const { anchorOrigin, transformOrigin } = skillMenuOrigin(ctx);
+      expect(anchorOrigin.vertical).toBe('bottom');
+      expect(transformOrigin.vertical).toBe('top');
+    }
+  });
+});
+
+describe('技能页：置顶（列表顺序，与三态无关）', () => {
+  it('点置顶把卡片挪到最前，且不动 override', async () => {
+    const host = await mountInstalled();
+    const before = installedOrder(host);
+    expect(before.length).toBeGreaterThan(1);
+    expect(before[0], '前置条件：被测技能一开始不在第一位').not.toContain('用户级技能');
+
+    click(byAria('用户级技能 置顶', host));
+    await flush();
+
+    expect(installedOrder(host)[0]).toContain('用户级技能');
+    expect(useSkillsStore.getState().pinnedIds).toContain('user-skill');
+    // 反向护栏：置顶只改顺序，绝不能顺手改掉覆盖档（那会被推给引擎）
+    expect(
+      useSkillsStore.getState().skills.find((s) => s.id === 'user-skill')?.override,
+    ).toBe('on');
+    // 置顶项之外的原顺序保持不变（稳定排序，而不是随机重排）
+    expect(installedOrder(host).slice(1)).toEqual(before.filter((n) => n !== '用户级技能'));
+
+    // 再点一次是取消：回到原顺序
+    click(byAria('用户级技能 置顶', host));
+    await flush();
+    expect(useSkillsStore.getState().pinnedIds).not.toContain('user-skill');
+    expect(installedOrder(host)).toEqual(before);
+    unmount();
+  });
+
+  it('置顶只留在本地，不会推给引擎', async () => {
+    const host = await mountInstalled();
+    // 置顶是「这份列表怎么排」，引擎侧没有对应语义：推过去只会污染覆盖表
+    const callsBefore = vi.mocked(platform.syncNanobotSkills).mock.calls.length;
+    click(byAria('用户级技能 置顶', host));
+    await flush();
+    expect(vi.mocked(platform.syncNanobotSkills).mock.calls.length).toBe(callsBefore);
+    unmount();
+  });
+
+  it('按钮反映当前置顶态（aria-pressed），置顶项不受停用影响', async () => {
+    const host = await mountInstalled();
+    expect(byAria('用户级技能 置顶', host)?.getAttribute('aria-pressed')).toBe('false');
+
+    click(byAria('用户级技能 置顶', host));
+    await flush();
+    expect(byAria('用户级技能 置顶', host)?.getAttribute('aria-pressed')).toBe('true');
+
+    // 停用后置顶仍在：两件事互不相干（停用只是压暗卡片）
+    click(byAria('用户级技能 自动触发', host));
+    await flush();
+    expect(useSkillsStore.getState().pinnedIds).toContain('user-skill');
+    expect(installedOrder(host)[0]).toContain('用户级技能');
+    unmount();
+  });
+});
+
+describe('技能页：自动触发开关的悬停说明', () => {
+  it('悬停开关给的是「关掉之后会怎样」，不是复述按钮名', async () => {
+    const host = await mountInstalled();
+    const sw = byAria('用户级技能 自动触发', host);
+    expect(sw, '未找到自动触发开关').toBeTruthy();
+
+    act(() => {
+      sw!.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+    });
+    // MUI 的进入延迟 100ms + Grow 过渡，等足够长再断言
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 300));
+    });
+
+    // MUI 的 Tooltip 不带 role，唯一的标识是它的类名
+    const tip = document.querySelector('.MuiTooltip-tooltip');
+    expect(tip, '悬停开关后没有出现提示气泡').toBeTruthy();
+    expect(tip!.textContent).toContain('关闭自动触发后');
+    expect(tip!.textContent).toContain('仅支持手动触发');
+    unmount();
+  });
+
+  it('开关关着时给的是「打开之后会怎样」——两个方向都必须有话说', () => {
+    // 只写一句话的实现会让「已经关着」的技能没有任何解释，用户不敢往回开
+    const on = autoTriggerHint({ override: 'on' } as Skill);
+    const off = autoTriggerHint({ override: 'off' } as Skill);
+    expect(on).toContain('关闭自动触发后');
+    expect(off).toContain('开启自动触发后');
+    expect(on).not.toBe(off);
+  });
+});
+
+describe('技能页：置顶排序的纯函数契约', () => {
+  const mk = (id: string): Skill => ({ id, name: id } as Skill);
+
+  it('置顶项提到最前，其余保持原序', () => {
+    const list = [mk('a'), mk('b'), mk('c')];
+    expect(orderInstalledSkills(list, ['c']).map((s) => s.id)).toEqual(['c', 'a', 'b']);
+    expect(orderInstalledSkills(list, ['b', 'c']).map((s) => s.id)).toEqual(['b', 'c', 'a']);
+  });
+
+  it('不改动入参数组（sort 是原地排序）', () => {
+    const list = [mk('a'), mk('b')];
+    orderInstalledSkills(list, ['b']);
+    // store 里的数组被就地翻面是「界面看着对了、别处悄悄出错」的典型
+    expect(list.map((s) => s.id)).toEqual(['a', 'b']);
+  });
+
+  it('没有置顶项时原样返回', () => {
+    const list = [mk('a'), mk('b')];
+    expect(orderInstalledSkills(list, []).map((s) => s.id)).toEqual(['a', 'b']);
   });
 });
