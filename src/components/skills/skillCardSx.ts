@@ -250,7 +250,12 @@ export const skillCountBadgeSx = {
   lineHeight: 1.6,
 };
 
-/** 小元信息标签（来源层级 / 不可手动调用）：只在市场弹窗用，卡片上是纯文字元信息 */
+/**
+ * 小元信息标签（能力限制，如「不可手动调用」）：只在市场弹窗用。
+ *
+ * 刻意**不**承载来源层级：那是身份字段，市场弹窗的基本信息面板里已经有一行
+ * 「来源」（两者原本共用 `skillSourceLabel`，于是同一事实被渲染两遍）。
+ */
 export const skillMetaChipSx = {
   height: 19,
   fontSize: 10.5,

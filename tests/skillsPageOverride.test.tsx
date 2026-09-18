@@ -255,6 +255,36 @@ describe('技能页：真实字段展示（已安装技能详情页）', () => {
     unmount();
   });
 
+  it('市场弹窗不再重复展示来源层级：来源只在基本信息里出现一次', async () => {
+    const host = await mountInstalled();
+
+    // 市场弹窗只在技能「停用」时出现（已启用的走「我安装的」），停用只从 ⋯ 菜单里可点
+    await setOverrideViaMenu(host, '项目级技能', '停用');
+    click(byAria('返回全部技能', host));
+    await flush();
+    click(byAria('项目级技能 详情', host));
+    await flush();
+
+    const paper = dialogRoot();
+
+    // 来源仍在「基本信息」面板里 —— 面板才是身份字段的落点
+    const panel = byAria('基本信息', paper);
+    expect(panel, '未找到市场弹窗的基本信息面板').toBeTruthy();
+    expect(panel!.textContent).toContain('项目级');
+
+    // 底部标签行只剩**能力标签**：曾经这里还挂着一枚来源层级标签，它和面板里的
+    // 「来源」行读的是同一个 `skillSourceLabel`，于是同一个事实在同一个弹窗里
+    // 出现两遍（用户级 / 项目级技能必中），而已安装的详情窗口里只有一遍。
+    // `项目级技能` 的 user-invocable 是 false，所以这一行必然存在且恰好一项 ——
+    // 用「全等」而不是「不含」：整个标签块被删掉时也要红。
+    const chips = Array.from(paper.querySelectorAll('.MuiChip-root')).map((c) =>
+      (c.textContent ?? '').trim(),
+    );
+    expect(chips, '弹窗底部出现了重复的来源标签').toEqual(['不可手动调用']);
+
+    unmount();
+  });
+
   it('版本号只在真实存在时展示', async () => {
     const host = await mountInstalled();
     const dialog = await openDetail(host, '用户级技能');

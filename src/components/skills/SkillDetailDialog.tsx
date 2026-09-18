@@ -22,7 +22,7 @@ import {
   skillInfoValueSx,
   skillMetaChipSx,
 } from './skillCardSx';
-import { skillInfoRows, skillSourceLabel } from './skillMeta';
+import { skillInfoRows } from './skillMeta';
 import { clampLines } from '@/lib/cardSx';
 import type { Skill } from '@/types';
 
@@ -155,15 +155,24 @@ export function SkillDetailDialog({
               ))}
             </Box>
 
-            {/* 能力标签用卡片同款元信息样式，保持两个视图的词汇一致 */}
-            {(skill.scope || skill.userInvocable === false) && (
+            {/*
+             * 能力标签行：**只放限制类事实**（当前只有「不可手动调用」这一项）。
+             *
+             * 这里曾经还挂着一枚来源层级的标签（`skillSourceLabel(skill)`），
+             * 但它与上方基本信息面板的「来源」行读的是**同一个函数**，
+             * 于是同一个事实在同一个弹窗里出现两遍（用户级 / 项目级技能必中）。
+             * 来源是身份字段，归面板；能力标签行只承担「这个技能被限制了哪一点」。
+             *
+             * 也刻意不把来源标签挪到别处补回：已安装的详情**窗口**里没有这枚标签
+             * （它只有面板），补回来会让两个入口再次出现「一个显示两遍、
+             * 一个显示一遍」的不一致。
+             *
+             * 「可手动调用」不渲染：那是绝大多数技能的常态，一个恒亮的标签
+             * 只会稀释真正需要被看见的那一条。
+             */}
+            {skill.userInvocable === false && (
               <Stack direction="row" spacing={0.75} sx={{ mt: 1.5, flexWrap: 'wrap' }}>
-                {skill.scope && (
-                  <Chip size="small" variant="outlined" label={skillSourceLabel(skill)} sx={skillMetaChipSx} />
-                )}
-                {skill.userInvocable === false && (
-                  <Chip size="small" variant="outlined" label="不可手动调用" sx={skillMetaChipSx} />
-                )}
+                <Chip size="small" variant="outlined" label="不可手动调用" sx={skillMetaChipSx} />
               </Stack>
             )}
           </>
