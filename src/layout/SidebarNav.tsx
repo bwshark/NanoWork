@@ -46,7 +46,7 @@ import FolderOpenIcon from "@mui/icons-material/FolderOpen";
 import FolderCopyIcon from "@mui/icons-material/FolderCopy";
 import ShareIcon from "@mui/icons-material/Share";
 import EditIcon from "@mui/icons-material/Edit";
-import { ROUTES, APP_DISPLAY_NAME, APP_DISPLAY_SUB } from "@/lib/constants";
+import { ROUTES, APP_DISPLAY_NAME, APP_DISPLAY_SUB, UNBOUND_AGENT_LABEL } from "@/lib/constants";
 import { CRON_SESSION_ID_PREFIX } from "@/lib/sessionImport";
 import { filterTasks, isFilterDefault } from "@/lib/taskQuery";
 import {
@@ -119,6 +119,7 @@ export function SidebarNav() {
   /**
    * 新建任务：工作空间一律**回到「默认工作空间」**（不继承当前任务的 workdir）；
    * 权限策略（完全访问 / 逐条批准）仍继承，否则每建一个任务都要重设一遍。
+   * 专家与技能**不继承**（`inheritCapabilities: false`）——新任务的输入框是一张白纸。
    *
    * 「在某个工作空间下开工」是另一条路径——侧边栏分组头的「新建任务」，
    * 它按分组带 workdir。两个入口分工明确，别再互相继承。
@@ -130,6 +131,7 @@ export function SidebarNav() {
     createSession(undefined, "新任务", {
       fullAccess: current?.fullAccess,
       toolApproval: current?.toolApproval,
+      inheritCapabilities: false,
     });
     navigate(ROUTES.chat);
   };
@@ -862,8 +864,12 @@ function SessionList() {
     ].sort(compareWorkspaceGroups);
   }, [filteredSessions, workspaceAliases, tasks]);
 
+  // 会话未绑定专家（「新建任务」的默认态）显示中性名而不是「未知 Agent」：
+  // 那是正常状态，不是缺数据
   const agentName = (id: string) =>
-    agents.find((a) => a.id === id)?.name ?? "未知 Agent";
+    id === ''
+      ? UNBOUND_AGENT_LABEL
+      : (agents.find((a) => a.id === id)?.name ?? "未知 Agent");
 
   const handleSelect = (id: string) => {
     // 行内重命名期间禁止跳转，避免输入框失焦/误触
@@ -960,7 +966,8 @@ function SessionList() {
   };
 
   /**
-   * 在指定工作空间下新建任务：workdir 跟随该分组，fullAccess 继承当前活跃会话。
+   * 在指定工作空间下新建任务：workdir 跟随该分组，fullAccess 继承当前活跃会话，
+   * 专家与技能与顶部入口一致**不继承**（新任务一律从白纸开始）。
    * 自动任务分组是虚拟工作空间（无真实目录），其下新建的任务归入默认工作空间——
    * 这是该按钮唯一有意义的落点，否则会造出一个挂不到任何目录上的分组。
    */
@@ -973,6 +980,7 @@ function SessionList() {
         group.kind === "workdir" && group.fullPath ? group.fullPath : undefined,
       fullAccess: current?.fullAccess,
       toolApproval: current?.toolApproval,
+      inheritCapabilities: false,
     });
     navigate(ROUTES.chat);
   };

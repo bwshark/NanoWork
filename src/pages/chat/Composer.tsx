@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
+  Avatar,
   Box,
   Chip,
   Divider,
@@ -16,6 +17,7 @@ import SendIcon from "@mui/icons-material/Send";
 import StopIcon from "@mui/icons-material/Stop";
 import KeyboardVoiceIcon from "@mui/icons-material/KeyboardVoice";
 import SmartToyIcon from "@mui/icons-material/SmartToy";
+import GroupsIcon from "@mui/icons-material/Groups";
 import AutoAwesomeIcon from "@mui/icons-material/AutoAwesome";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import CloseIcon from "@mui/icons-material/Close";
@@ -23,7 +25,6 @@ import DeleteSweepIcon from "@mui/icons-material/DeleteSweep";
 import CompressIcon from "@mui/icons-material/Compress";
 import TuneIcon from "@mui/icons-material/Tune";
 import NoteAddIcon from "@mui/icons-material/NoteAdd";
-import GroupsIcon from "@mui/icons-material/Groups";
 import {
   useSessionsStore,
   selectSessionStreamStatus,
@@ -53,6 +54,7 @@ import {
   revokeAttachmentPreview,
 } from "@/lib/attachments";
 import { genId } from "@/lib/id";
+import { avatarGlyph, entityAvatarSx } from "@/lib/cardSx";
 // 触发符判定是纯函数，已抽到 lib 便于单测；此处再导出一次，保持旧引用路径可用
 import { detectTrigger, type TriggerState } from "@/lib/composerTrigger";
 import {
@@ -127,6 +129,134 @@ const COMPACT_PROMPT =
   "请压缩并总结以上对话，保留关键结论、待办事项与未决问题：";
 
 /**
+ * 「当前绑定」chip 的统一样式（专家 / 专家团共用）。
+ *
+ * 与设计一致：**× 前置**的胶囊 —— `× 名字`，而不是 MUI 默认的 `名字 ×`。
+ * 做法是把删除图标的 `order` 提到最前，并接管两侧内边距：
+ * label 的 `paddingLeft` 归零（间距由删除图标的 `marginRight` 给），
+ * 否则 MUI 会给 label 留 8px 左内边距，× 反而贴到边框上。
+ *
+ * 前导位是**一个槽、两种形态**：默认显示专家头像（`icon`），鼠标悬停时
+ * 换成 ×（`deleteIcon`）—— 想解除绑定就往名字上悬停，不用记快捷键。
+ * 两者都靠 `order: -1` 占同一个位置，且**尺寸、外边距完全一致**，
+ * 所以切换瞬间 chip 不会抖一下。
+ * 「是专家还是专家团」由悬停提示说明。
+ *
+ * ⚠️ **数值型样式一律写成带单位的字符串**——MUI 的 `sx` 会把裸数字"解释"一遍：
+ * - `padding*` / `margin*` / `gap` 上的数字 → spacing 倍数。写 `paddingRight: 12`
+ *   会渲染成 96px（12 × 8），实测过。
+ * - `borderRadius` 上的数字 → 乘 `theme.shape.borderRadius`（本项目是 10）。
+ *   写 `borderRadius: 999` 会渲染成 9990px，实测过。
+ * 两者都不会报错，只是悄悄变样。写成 `'12px'` / `'999px'` 就没有这层语义。
+ */
+const bindingChipSx = {
+  cursor: "pointer",
+  bgcolor: "action.hover",
+  color: "text.secondary",
+  fontSize: 12,
+  height: 26,
+  borderRadius: "999px",
+  // 前导槽 · 形态 A：专家头像（默认可见）。
+  // 尺寸必须与下面的 × 逐项对齐（尺寸 + 外边距），否则 hover 切换时整枚 chip 会跳。
+  "& .MuiChip-icon": {
+    order: -1,
+    margin: "0 6px 0 8px",
+    width: "18px",
+    height: "18px",
+  },
+  // 前导槽 · 形态 B：×（仅悬停时可见，点它 = 解除绑定）。
+  // MUI 默认给 small 的删除图标留 -4px 左外边距（是给「图标在前、× 在后」用的），
+  // 这里它顶到最前，得改成正向左间距。
+  "& .MuiChip-deleteIcon": {
+    order: -1,
+    display: "none",
+    margin: "0 6px 0 8px",
+    width: "18px",
+    height: "18px",
+    fontSize: 16,
+    color: "inherit",
+    "&:hover": { color: "text.primary" },
+  },
+  // 悬停互换：头像让位给 ×。用 display 而非 opacity —— 不可见时同时不可点，
+  // 避免「看着是头像、点下去却删了绑定」这种意外。
+  "&:hover .MuiChip-icon": { display: "none" },
+  "&:hover .MuiChip-deleteIcon": { display: "block" },
+  "& .MuiChip-label": { paddingLeft: 0, paddingRight: "12px" },
+} as const;
+
+/** 头像值是不是一个图片地址（远端 / dataURL / 本地文件路径）。 */
+function isImageAvatar(avatar?: string): boolean {
+  const v = avatar?.trim();
+  if (!v) return false;
+  return (
+    /^(https?:|data:|file:|blob:)/i.test(v) ||
+    /\.(png|jpe?g|gif|webp|svg|avif)$/i.test(v)
+  );
+}
+
+/**
+ * chip 的前导图标（默认形态）：专家用头像，专家团用图标。
+ *
+ * 头像解析沿用全站同一套 `avatarGlyph` / `entityAvatarSx`（`AssistantMessage`
+ * 的署名头也是这么渲染的），只有「值是图片地址」这一种情况在这里走 `<img>`——
+ * 那是 chip 尺寸小、emoji/首字退化都不好看时的唯一可用解。
+ * 没有头像时回退到类型图标（机器人 / 人群），而不是姓名首字：chip 上首字太像
+ * 头像加载失败，类型图标至少还传达了「这是个什么」。
+ */
+function BindingChipAvatar({
+  avatar,
+  name,
+  type,
+  className,
+}: {
+  avatar?: string;
+  name: string;
+  type: "agent" | "group";
+  /**
+   * MUI `Chip` 用 `cloneElement` 把 `MuiChip-icon` 类名从外部注入到 icon 上，
+   * **必须原样透传到根元素**——丢了它，`bindingChipSx` 里那几条
+   * `& .MuiChip-icon` 规则就全都落空（尺寸、order、悬停互换一起失效），
+   * 而且不会报错。自定义组件当 Chip 的 icon 时这是最容易漏的一步。
+   */
+  className?: string;
+}) {
+  if (isImageAvatar(avatar)) {
+    return (
+      <Avatar
+        className={className}
+        src={avatar}
+        alt={name}
+        sx={{ width: "18px", height: "18px" }}
+      />
+    );
+  }
+  if (!avatar?.trim()) {
+    // 尺寸写成 18px 与 `& .MuiChip-icon` 的 width/height 对齐：SvgIcon 用
+    // `fontSize` 驱动 `1em` 宽高，两边取值一致就不在乎哪条规则赢。
+    const iconSx = { fontSize: "18px" };
+    return type === "group" ? (
+      <GroupsIcon className={className} sx={iconSx} />
+    ) : (
+      <SmartToyIcon className={className} sx={iconSx} />
+    );
+  }
+  const { glyph, isEmoji } = avatarGlyph(avatar, name);
+  return (
+    <Avatar
+      className={className}
+      sx={{
+        ...entityAvatarSx(name, isEmoji),
+        width: "18px",
+        height: "18px",
+        fontSize: isEmoji ? 11 : 9,
+      }}
+    >
+      {glyph}
+    </Avatar>
+  );
+}
+
+/**
  * 输入区：WorkBuddy 风格大圆角输入框 + 加号菜单 + Agent/模型选择 + 发送。
  *
  * 富输入能力：
@@ -198,13 +328,23 @@ export function Composer({
 
   const skills = useSkillsStore((s) => s.skills);
 
-  // 当前生效 Agent：优先取当前会话绑定的 agentId，否则回退全局 activeAgentId
-  const effectiveAgentId = activeSession?.agentId ?? activeAgentId ?? "";
+  // 当前生效 Agent / 专家团：以**会话绑定**为准。
+  //
+  // 会话已存在时一律不回退全局活跃专家（专家团同理）——「新建任务」刻意不绑任何专家
+  // （见 sessionsStore.createSession 的 inheritCapabilities），若这里还回退全局，
+  // 输入框里会立刻冒出「通用助手」chip 与它的技能 chips，与「新任务默认空白」相悖。
+  // 只有**还没有任何会话**的首启空态才回退全局：那时确实没有可绑定的对象，
+  // 而用户发首条消息时正是由 `send()` 按全局活跃专家建会话，两边语义一致。
+  const effectiveAgentId = activeSession
+    ? activeSession.agentId
+    : (activeAgentId ?? "");
   const effectiveAgent = agents.find((a) => a.id === effectiveAgentId);
 
-  // 当前生效专家团：优先取当前会话绑定的 groupId，否则回退全局 activeGroupId
-  //（与召唤专家团逻辑对齐；团已被删除时回退专家模式）
-  const effectiveGroupId = activeSession?.groupId ?? activeGroupId ?? null;
+  // 当前生效专家团：同上，会话存在时不回退全局
+  //（团已被删除时回退专家模式）
+  const effectiveGroupId = activeSession
+    ? (activeSession.groupId ?? null)
+    : (activeGroupId ?? null);
   const effectiveGroup = effectiveGroupId
     ? groups.find((g) => g.id === effectiveGroupId)
     : undefined;
@@ -743,6 +883,31 @@ export function Composer({
     }
   };
 
+  /**
+   * 解除当前绑定（专家 / 专家团），回到「未绑定」态。
+   *
+   * 两处不同：
+   * - **有会话**：只改会话。全局活跃专家是「空态 / 懒建会话」的默认值，属于用户偏好，
+   *   不因为清掉手里这一个绑定就被顺手洗掉。
+   * - **无会话（hero 空态）**：眼前这枚 chip 显示的就是**全局默认**本身，没有会话可清，
+   *   清的是默认值（`activeAgentId` 置 null 是 store 允许的状态，见 removeAgent 的兜底）。
+   *
+   * 技能不受影响：它们是输入区里各自带 × 的独立 chip，各有各的出口。
+   */
+  const handleClearBinding = () => {
+    if (activeSessionId) {
+      updateSession(activeSessionId, (s) => ({
+        ...s,
+        agentId: "",
+        groupId: null,
+        updatedAt: new Date().toISOString(),
+      }));
+      return;
+    }
+    useAgentsStore.setState({ activeAgentId: null });
+    setActiveGroup(null);
+  };
+
   // —— 会话级模型选择（目录来源：nanobot 配置 modelPresets + 隐式 default） ——
   const setSessionModel = useSessionsStore((s) => s.setSessionModel);
   const models = useModelsStore((s) => s.models);
@@ -943,7 +1108,11 @@ export function Composer({
         void refreshModels(true);
         break;
       case "new":
-        useSessionsStore.getState().createSession(undefined, "新会话");
+        // 与顶部 / 侧边栏的「新建任务」同一条语义：新会话是一张白纸，
+        // 不把当前专家与技能带过去（用户想沿用就自己再挂一次）
+        useSessionsStore
+          .getState()
+          .createSession(undefined, "新会话", { inheritCapabilities: false });
         break;
       default:
         // 技能项：挂载到当前会话（与加号菜单里选技能同一条路径）
@@ -1420,51 +1589,59 @@ export function Composer({
           {!isHero && <ComposerControls />}
 
           {effectiveGroup ? (
-            <Chip
-              size="small"
-              icon={<GroupsIcon fontSize="small" />}
-              label={effectiveGroup.name}
-              onClick={() => {
-                // 简单循环切换启用中的专家团；后续可换为下拉选择
-                const enabledGroups = groups.filter((g) => g.enabled);
-                if (enabledGroups.length === 0) return;
-                const idx = enabledGroups.findIndex(
-                  (g) => g.id === effectiveGroup.id,
-                );
-                const next =
-                  enabledGroups[(idx + 1) % enabledGroups.length];
-                handleGroupChange(next.id);
-              }}
-              sx={{
-                cursor: "pointer",
-                bgcolor: "action.hover",
-                color: "text.secondary",
-                fontSize: 12,
-                height: 26,
-                "& .MuiChip-icon": { color: "primary.main", mr: -0.3 },
-              }}
-            />
-          ) : (
-            effectiveAgent && (
+            <Tooltip title="当前专家团 · 悬停出现 ×，点击解除绑定">
               <Chip
                 size="small"
-                icon={<SmartToyIcon fontSize="small" />}
-                label={effectiveAgent.name}
+                icon={
+                  <BindingChipAvatar
+                    avatar={effectiveGroup.icon}
+                    name={effectiveGroup.name}
+                    type="group"
+                  />
+                }
+                label={effectiveGroup.name}
+                deleteIcon={<CloseIcon fontSize="small" />}
+                onDelete={handleClearBinding}
                 onClick={() => {
-                  // 简单循环切换；后续可换为下拉选择
-                  const idx = agents.findIndex((a) => a.id === effectiveAgentId);
-                  const next = agents[(idx + 1) % agents.length];
-                  handleAgentChange(next.id);
+                  // 简单循环切换启用中的专家团；后续可换为下拉选择
+                  const enabledGroups = groups.filter((g) => g.enabled);
+                  if (enabledGroups.length === 0) return;
+                  const idx = enabledGroups.findIndex(
+                    (g) => g.id === effectiveGroup.id,
+                  );
+                  const next =
+                    enabledGroups[(idx + 1) % enabledGroups.length];
+                  handleGroupChange(next.id);
                 }}
-                sx={{
-                  cursor: "pointer",
-                  bgcolor: "action.hover",
-                  color: "text.secondary",
-                  fontSize: 12,
-                  height: 26,
-                  "& .MuiChip-icon": { color: "primary.main", mr: -0.3 },
-                }}
+                sx={bindingChipSx}
               />
+            </Tooltip>
+          ) : (
+            effectiveAgent && (
+              <Tooltip title="当前专家 · 悬停出现 ×，点击解除绑定">
+                <Chip
+                  size="small"
+                  icon={
+                    <BindingChipAvatar
+                      avatar={effectiveAgent.avatar}
+                      name={effectiveAgent.name}
+                      type="agent"
+                    />
+                  }
+                  label={effectiveAgent.name}
+                  deleteIcon={<CloseIcon fontSize="small" />}
+                  onDelete={handleClearBinding}
+                  onClick={() => {
+                    // 简单循环切换；后续可换为下拉选择
+                    const idx = agents.findIndex(
+                      (a) => a.id === effectiveAgentId,
+                    );
+                    const next = agents[(idx + 1) % agents.length];
+                    handleAgentChange(next.id);
+                  }}
+                  sx={bindingChipSx}
+                />
+              </Tooltip>
             )
           )}
 

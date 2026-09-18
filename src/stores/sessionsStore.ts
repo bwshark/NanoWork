@@ -140,6 +140,15 @@ interface SessionsState {
       toolApproval?: boolean;
       /** 执行模式（FR-1.4）；缺省 craft */
       mode?: ExecutionMode;
+      /**
+       * 是否把「当前专家 / 专家团」及其技能继承到新会话。
+       *
+       * 缺省 `true`（保持既有语义：agentId 缺省时按全局活跃专家兜底，与召唤逻辑对齐）。
+       * 「新建任务」入口显式传 `false`：新任务默认是一张白纸——输入框里不该预先冒出
+       * 专家 chip 与技能 chips，挂谁由用户当场用 `+` 菜单 / `/` 指令决定。
+       * 显式传入的 agentId 不受此开关影响（那是调用方的明确指派）。
+       */
+      inheritCapabilities?: boolean;
     },
   ) => Session;
   /**
@@ -968,13 +977,22 @@ export const useSessionsStore = create<SessionsState>()(
       const prevSessionId = get().activeId;
       const agentsState = useAgentsStore.getState();
       /**
+       * 是否继承当前专家 / 专家团（及其技能）。
+       *
+       * 关掉这条继承链时既不解析专家团、也不取全局活跃专家，`agentId` 落成空串：
+       * 请求里省略 `agent_id`（见 nanobotHttp/chat.ts 的 `buildRequest`），
+       * 由网关按自身配置的默认 Agent 应答，同时不注入任何 Agent 人设与技能 prompt。
+       * 这正是「新任务 = 白纸」在协议面的形态，而不是只在 UI 上把 chip 藏起来。
+       */
+      const inheritCapabilities = opts?.inheritCapabilities !== false;
+      /**
        * 兜底优先级与召唤逻辑对齐：显式 agentId > 全局活跃专家团 > 全局活跃专家。
        * 专家团绑定仅在其启用且存在启用成员时生效；
        * agentId 取团内首位启用成员作为执行代表（完整多 Agent 编排依赖 nanobot 运行时，P2）。
        */
       const groupsState = useExpertGroupsStore.getState();
       const candidateGroup =
-        agentId === undefined && groupsState.activeGroupId
+        inheritCapabilities && agentId === undefined && groupsState.activeGroupId
           ? groupsState.groups.find(
               (g) => g.id === groupsState.activeGroupId && g.enabled,
             )
@@ -987,15 +1005,18 @@ export const useSessionsStore = create<SessionsState>()(
       const boundGroup = candidateGroup && groupLeader ? candidateGroup : undefined;
       const aid =
         agentId ??
-        groupLeader?.id ??
-        agentsState.activeAgentId ??
-        agentsState.agents[0]?.id ??
-        '';
+        (inheritCapabilities
+          ? groupLeader?.id ??
+            agentsState.activeAgentId ??
+            agentsState.agents[0]?.id ??
+            ''
+          : '');
       const agent = agentsState.agents.find((a) => a.id === aid);
       const session: Session = {
         id: genId(),
         agentId: aid,
         ...(boundGroup ? { groupId: boundGroup.id } : {}),
+        // aid 为空串时 agent 必然 undefined → 不挂任何技能（新任务的默认态）
         skillIds: agent?.skillIds?.length ? [...agent.skillIds] : undefined,
         workdir: opts?.workdir,
         fullAccess: opts?.fullAccess,

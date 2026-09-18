@@ -23,6 +23,19 @@ export const PLACEHOLDER_TITLES = ['新会话', '新任务'] as const;
 /** 默认连接状态（启动后由 ConnectionManager 探测并更新） */
 export const DEFAULT_STATUS: ConnectionStatus = 'offline';
 
+/**
+ * 会话**未绑定专家 Agent** 时的显示名。
+ *
+ * 「新建任务」按设计不继承全局活跃专家（见 `sessionsStore.createSession` 的
+ * `inheritCapabilities`），这类会话的 `agentId` 是空串：应答交给网关自身配置的
+ * 默认 Agent，而不是某个具体专家。
+ *
+ * 列表 / 产物面板据此展示，避免掉进 `?? '未知 Agent'` 那条「像是数据坏了」的分支
+ * ——未绑定是**正常状态**，不是缺数据。文案与消息署名（AssistantMessage 的
+ * 「助手」）保持一致。
+ */
+export const UNBOUND_AGENT_LABEL = '助手';
+
 /** 路由路径集中管理 */
 export const ROUTES = {
   chat: '/chat',

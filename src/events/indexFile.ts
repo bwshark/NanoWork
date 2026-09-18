@@ -75,6 +75,17 @@ export function serializeSessionIndex(index: SessionIndexFile): string {
 }
 
 /**
+ * 「未绑定任何 Agent」在 **meta / 索引层**的占位取值。
+ *
+ * 会话可以不绑专家（「新建任务」的默认态，见 `sessionsStore.createSession` 的
+ * `inheritCapabilities`），此时 `Session.agentId` 是空串，请求里省略 `agent_id`。
+ * 但 meta / 索引里**空串与「字段缺失」不可区分**，旧数据还可能整个缺这个字段，
+ * 于是这一层统一归一成该占位；回到领域层时由 `metaToSession` 还原成空串，
+ * 让「新建任务」在重启前后保持同一形态（实时视图 ≡ 重放投影）。
+ */
+export const UNBOUND_AGENT_SENTINEL = 'default';
+
+/**
  * 规范化**已解析**的会话元数据对象，**容错**：
  *
  * - 非对象 → `null`（调用方跳过该会话，而不是让整次重建失败）；
@@ -91,7 +102,10 @@ export function normalizeSessionMeta(value: unknown): SessionMeta | null {
   return {
     id,
     title: typeof obj.title === 'string' && obj.title ? obj.title : '新任务',
-    agentId: typeof obj.agentId === 'string' && obj.agentId ? obj.agentId : 'default',
+    agentId:
+      typeof obj.agentId === 'string' && obj.agentId
+        ? obj.agentId
+        : UNBOUND_AGENT_SENTINEL,
     groupId: typeof obj.groupId === 'string' ? obj.groupId : null,
     workdir: typeof obj.workdir === 'string' ? obj.workdir : undefined,
     mode: isExecutionMode(obj.mode) ? obj.mode : 'craft',
@@ -183,12 +197,14 @@ export function deriveMetaFromEvents(
 
   const first = events[0];
   const last = events[events.length - 1];
+  // session-start 里的 agentId 可能是空串（未绑定专家的会话，如「新建任务」的默认态），
+  // 此时**不能用 `??` 兜底**：空串不是 nullish，`??` 会把它原样留在 meta 里，
+  // 于是「空串 / 字段缺失」两种形态同时存在。显式按真值判断后再落到占位。
+  const startAgentId = start?.type === 'session-start' ? start.agentId : undefined;
   return {
     id: sessionId,
     title: title || fallback.title || '新任务',
-    agentId: (start?.type === 'session-start' ? start.agentId : undefined) ??
-      fallback.agentId ??
-      'default',
+    agentId: startAgentId || fallback.agentId || UNBOUND_AGENT_SENTINEL,
     workdir: (start?.type === 'session-start' ? start.workdir : undefined) ?? fallback.workdir,
     mode: (start?.type === 'session-start' ? start.mode : undefined) ?? fallback.mode ?? 'craft',
     permissionMode:

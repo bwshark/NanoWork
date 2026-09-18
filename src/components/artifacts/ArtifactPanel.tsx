@@ -21,6 +21,7 @@ import AccountTreeIcon from '@mui/icons-material/AccountTree';
 import FolderIcon from '@mui/icons-material/Folder';
 import { ArtifactRenderer } from '@/components/ArtifactRenderer';
 import { toast } from '@/components/Toast';
+import { UNBOUND_AGENT_LABEL } from '@/lib/constants';
 import { useSessionsStore } from '@/stores/sessionsStore';
 import { useAgentsStore } from '@/stores/agentsStore';
 import { useArtifactsStore } from '@/stores/artifactsStore';
@@ -94,8 +95,11 @@ export function ArtifactPanel() {
 
   if (!open) return null;
 
+  // 未绑定专家（「新建任务」的默认态）是正常状态，展示中性名而非「未知 Agent」
   const agentName =
-    agents.find((a) => a.id === session?.agentId)?.name ?? '未知 Agent';
+    session?.agentId === ''
+      ? UNBOUND_AGENT_LABEL
+      : (agents.find((a) => a.id === session?.agentId)?.name ?? '未知 Agent');
 
   const overviewRows: Array<{ label: string; value: string }> = [
     { label: '智能体', value: agentName },

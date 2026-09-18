@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { EventFactory } from '@/events/factory';
 import {
+  UNBOUND_AGENT_SENTINEL,
+  deriveMetaFromEvents,
+  parseSessionMeta,
+} from '@/events/indexFile';
+import {
   activePath,
   metaToSession,
   projectMessages,
@@ -357,5 +362,72 @@ describe('projectSession：元数据 + 事件流 → 会话视图', () => {
 
     expect(session.messages.map((m) => m.content)).toEqual(['你好', '在的']);
     expect(session.permissionLog).toEqual([]);
+  });
+});
+
+/**
+ * 「新建任务」刻意不绑专家，此时 `Session.agentId` 是空串，请求里省略 `agent_id`。
+ *
+ * 但 meta / 索引层**区分不了空串与字段缺失**（旧版本写下的 meta 甚至没有这个字段），
+ * 所以那一层统一用占位表达「未绑定」，回到领域层再由 `metaToSession` 还原成空串。
+ * 这组用例守的就是这条往返：不还原的话，白纸会话重启后会变成绑定 `default` 专家，
+ * 输入框里又冒出 chip——实时视图与重放投影从此发散。
+ */
+describe('未绑定专家：meta 层用占位表达，回到领域层还原为空串', () => {
+  it('session-start 的 agentId 是空串 → meta 落占位（不是留空串）', () => {
+    const f = makeFactory();
+    const meta = deriveMetaFromEvents('s1', [
+      f.sessionStart({ agentId: '', mode: 'craft', permissionMode: 'restricted' }),
+    ]);
+
+    expect(meta.agentId).toBe(UNBOUND_AGENT_SENTINEL);
+  });
+
+  it('缺 session-start 且无兜底时也落占位（表单形态唯一）', () => {
+    const f = makeFactory();
+    const meta = deriveMetaFromEvents('s1', [
+      f.message({ messageId: 'u1', role: 'user', content: '你好' }),
+    ]);
+
+    expect(meta.agentId).toBe(UNBOUND_AGENT_SENTINEL);
+  });
+
+  it('占位还原成空串——白纸会话重启后仍是白纸', () => {
+    const session = metaToSession({
+      id: 's1',
+      title: '新任务',
+      agentId: UNBOUND_AGENT_SENTINEL,
+      mode: 'craft',
+      permissionMode: 'restricted',
+      createdAt: 'x',
+      updatedAt: 'y',
+    });
+
+    expect(session.agentId).toBe('');
+  });
+
+  it('真实专家 id 原样保留，不被占位误伤', () => {
+    const session = metaToSession({
+      id: 's1',
+      title: '标题',
+      agentId: 'agent-test',
+      mode: 'craft',
+      permissionMode: 'restricted',
+      createdAt: 'x',
+      updatedAt: 'y',
+    });
+
+    expect(session.agentId).toBe('agent-test');
+  });
+
+  it('索引往返（推导 → 落盘 → 读回 → 还原）之后仍是空串', () => {
+    const f = makeFactory();
+    const meta = deriveMetaFromEvents('s1', [
+      f.sessionStart({ agentId: '', mode: 'craft', permissionMode: 'restricted' }),
+    ]);
+
+    const reread = parseSessionMeta(JSON.stringify(meta));
+    expect(reread).not.toBeNull();
+    expect(metaToSession(reread!).agentId).toBe('');
   });
 });

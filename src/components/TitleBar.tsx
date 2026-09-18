@@ -199,7 +199,9 @@ export function TitleBar() {
 
   /**
    * 新建任务。与侧边栏的「新建任务」保持同一语义：
-   * 工作空间回到「默认工作空间」（不继承），权限策略继承当前活跃任务。
+   * 工作空间回到「默认工作空间」（不继承），权限策略继承当前活跃任务，
+   * 而**专家与技能不继承**（`inheritCapabilities: false`）——新任务的输入框是一张白纸，
+   * 需要哪个专家 / 技能由用户当场挂载。
    * （侧边栏收起时该入口移到这里，否则收起后就没法新建任务了）
    */
   const handleNewTask = () => {
@@ -208,6 +210,7 @@ export function TitleBar() {
     createSession(undefined, "新任务", {
       fullAccess: current?.fullAccess,
       toolApproval: current?.toolApproval,
+      inheritCapabilities: false,
     });
     navigate(ROUTES.chat);
   };

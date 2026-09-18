@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useSessionsStore } from '@/stores/sessionsStore';
 import { useSettingsStore, DEFAULT_TRANSCRIPTION, DEFAULT_DESKTOP } from '@/stores/settingsStore';
 import { useAgentsStore } from '@/stores/agentsStore';
+import { useExpertGroupsStore } from '@/stores/expertGroupsStore';
 import { useArtifactsStore } from '@/stores/artifactsStore';
 import { NanobotClient } from '@/ai/runtime/nanobotHttp/chat';
 import { resetEventStream } from './helpers/eventStream';
@@ -658,5 +659,82 @@ describe('sessionsStore: 记忆快照失效 (2026-09-17 修复)', () => {
     const p = useSessionsStore.getState().send('我擅长什么', s.id);
     expect(useSessionsStore.getState().streams[s.id]).toBeDefined();
     await p;
+  });
+});
+
+/**
+ * 「新建任务」的默认态是一张白纸。
+ *
+ * 顶部（TitleBar）与侧边栏（SidebarNav）的「新建任务」显式传
+ * `inheritCapabilities: false`：既不解析全局活跃专家团，也不取全局活跃专家，
+ * 自然也不带它的技能——输入框里不会预先冒出专家 chip 与技能 chips。
+ *
+ * 这里守的是**协议面**，不是「把 chip 藏起来」：`agentId` 落成空串后
+ * `buildRequest` 会省略 `agent_id`（见 nanobotHttp/chat.ts），由网关用自身配置的
+ * 默认 Agent 应答，且不注入任何专家人设与技能 prompt 段。若只藏 chip 而请求里照旧
+ * 带 `agent_id`，那是一张假白纸——用户以为在跟通用助手说话，实际还挂着上个专家。
+ */
+describe('新建任务：默认不继承专家与技能（白纸语义）', () => {
+  /** 给默认 agent 挂上技能：否则断言「技能不继承」时两边都是空，测不出东西 */
+  function agentWithSkills() {
+    useAgentsStore.setState((s) => ({
+      agents: s.agents.map((a) => ({ ...a, skillIds: ['skill-a'] })),
+    }));
+  }
+
+  // 全局活跃专家团是模块级单例，用例之间会串扰，逐个清干净
+  afterEach(() => useExpertGroupsStore.setState({ activeGroupId: null }));
+
+  it('不继承全局活跃专家，也不带它的技能（agentId 落空串）', () => {
+    agentWithSkills();
+
+    const session = useSessionsStore
+      .getState()
+      .createSession(undefined, '新任务', { inheritCapabilities: false });
+
+    expect(session.agentId).toBe('');
+    expect(session.skillIds ?? []).toEqual([]);
+  });
+
+  it('不继承全局活跃专家团：既不绑团，也不落到团内执行代表', () => {
+    const group = useExpertGroupsStore
+      .getState()
+      .createGroup({ name: '测试专家团', memberIds: ['agent-test'] });
+    useExpertGroupsStore.getState().setActiveGroup(group.id);
+
+    const session = useSessionsStore
+      .getState()
+      .createSession(undefined, '新任务', { inheritCapabilities: false });
+
+    expect(session.agentId).toBe('');
+    expect(session.groupId).toBeUndefined();
+  });
+
+  it('不传开关时仍是旧语义：继承全局活跃专家及其技能', () => {
+    agentWithSkills();
+
+    const session = useSessionsStore.getState().createSession(undefined, '新会话');
+
+    expect(session.agentId).toBe('agent-test');
+    expect(session.skillIds).toEqual(['skill-a']);
+  });
+
+  it('显式传入 agentId 不受开关影响——那是调用方的明确指派', () => {
+    const session = useSessionsStore
+      .getState()
+      .createSession('agent-test', '指派会话', { inheritCapabilities: false });
+
+    expect(session.agentId).toBe('agent-test');
+  });
+
+  it('白纸会话发消息时请求里省略 agent_id（协议层同样是白纸）', async () => {
+    const session = useSessionsStore
+      .getState()
+      .createSession(undefined, '新任务', { inheritCapabilities: false });
+
+    await useSessionsStore.getState().send('你好', session.id);
+
+    const calls = vi.mocked(NanobotClient.prototype.sendMessage).mock.calls;
+    expect(calls.at(-1)?.[0].agentId ?? '').toBe('');
   });
 });

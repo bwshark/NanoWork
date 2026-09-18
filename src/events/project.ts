@@ -38,6 +38,7 @@
 import type { Artifact, ArtifactType } from '@/types/artifact';
 import type { SessionEvent, SessionMeta } from '@/types/event';
 import type { Attachment, AttachmentKind, Message, MessagePlan } from '@/types/message';
+import { UNBOUND_AGENT_SENTINEL } from './indexFile';
 import type { PermissionLog } from '@/types/permission';
 import type { ProcessEvent, ProcessToolRow, ReasoningEvent as ReasoningRow } from '@/types/process';
 import type { Session } from '@/types/session';
@@ -411,7 +412,11 @@ export function project(events: readonly SessionEvent[]): Projection {
 export function metaToSession(meta: SessionMeta): Omit<Session, 'messages' | 'permissionLog'> {
   return {
     id: meta.id,
-    agentId: meta.agentId,
+    // meta / 索引层用 `default` 占位表达「未绑定专家」（见 UNBOUND_AGENT_SENTINEL），
+    // 回到领域层一律还原成空串：请求据此**省略** `agent_id`（由网关用默认 Agent 应答），
+    // 且让「新建任务」在重启前后是同一份形态（实时增量视图 ≡ 批量重放投影）。
+    agentId:
+      meta.agentId === UNBOUND_AGENT_SENTINEL ? '' : meta.agentId,
     ...(meta.groupId !== undefined ? { groupId: meta.groupId } : {}),
     ...(meta.skillIds && meta.skillIds.length > 0 ? { skillIds: [...meta.skillIds] } : {}),
     ...(meta.workdir !== undefined ? { workdir: meta.workdir } : {}),
