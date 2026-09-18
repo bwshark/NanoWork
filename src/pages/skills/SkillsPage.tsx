@@ -113,13 +113,19 @@ export function SkillsPage() {
    */
   const [windowId, setWindowId] = useState<string | null>(null);
   /** 安装反馈中的技能 id（由页面统一调度，卡片不持有定时器） */
-  const [installingIds, setInstallingIds] = useState<ReadonlySet<string>>(() => new Set());
+  const [installingIds, setInstallingIds] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
   /** 批量管理模式：整卡改为勾选 */
   const [bulk, setBulk] = useState(false);
-  const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(() => new Set());
+  const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
 
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const installTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+  const installTimers = useRef(
+    new Map<string, ReturnType<typeof setTimeout>>(),
+  );
 
   // 卸载时清掉未完成的安装定时器，避免对已卸载组件 setState
   useEffect(() => {
@@ -134,9 +140,9 @@ export function SkillsPage() {
    * 本次会话刚安装的技能 id 集合：安装完成后市场页保留展示（⋯ ✓ 态），
    * 离开市场页后组件卸载、state 丢失，再次进入即不再展示已安装技能。
    */
-  const [freshInstalledIds, setFreshInstalledIds] = useState<ReadonlySet<string>>(
-    () => new Set(),
-  );
+  const [freshInstalledIds, setFreshInstalledIds] = useState<
+    ReadonlySet<string>
+  >(() => new Set());
 
   /**
    * 安装 = 把这个技能从 `off` 提到 `on`。
@@ -314,7 +320,7 @@ export function SkillsPage() {
   };
 
   return (
-    <Box sx={{ p: 3, maxWidth: 1100, margin: "0 auto" }}>
+    <Box sx={{ p: 3, maxWidth: "100%", margin: "0 auto" }}>
       {/*
        * 覆盖同步失败必须显式可见：界面显示「已停用」而引擎照旧把它列给模型，
        * 是那种用户永远不会自己发现的不一致（PRD §12.4 的运行时启用状态只有在
@@ -338,7 +344,11 @@ export function SkillsPage() {
            * 用户在列表里做取舍时需要一直看得见还有哪些技能。
            */}
           <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 1.5 }}>
-            <IconButton onClick={() => setView("all")} size="small" aria-label="返回全部技能">
+            <IconButton
+              onClick={() => setView("all")}
+              size="small"
+              aria-label="返回全部技能"
+            >
               <ArrowBackIcon fontSize="small" />
             </IconButton>
             <Typography variant="body2" color="text.secondary">
@@ -512,7 +522,11 @@ export function SkillsPage() {
             sx={{ mb: 2, flexWrap: "wrap", rowGap: 0.5 }}
           >
             {categories.map((c) => (
-              <Button key={c} onClick={() => setCategory(c)} sx={skillCategorySx(c === category)}>
+              <Button
+                key={c}
+                onClick={() => setCategory(c)}
+                sx={skillCategorySx(c === category)}
+              >
                 {c}
               </Button>
             ))}

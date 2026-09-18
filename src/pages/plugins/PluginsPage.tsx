@@ -136,7 +136,15 @@ export function PluginsPage() {
 
   return (
     <Box sx={{ p: 3, maxWidth: 1000, margin: "0 auto" }}>
-      <Box sx={{ display: "flex", alignItems: "center", mb: 2, gap: 2, flexWrap: "wrap" }}>
+      <Box
+        sx={{
+          display: "flex",
+          alignItems: "center",
+          mb: 2,
+          gap: 2,
+          flexWrap: "wrap",
+        }}
+      >
         <Typography variant="h5" fontWeight={700}>
           插件
         </Typography>
@@ -181,8 +189,8 @@ export function PluginsPage() {
 
       {!engine.available && loaded && (
         <Alert severity="warning" sx={{ mb: 2 }}>
-          读不到引擎的激活状态（{engine.error ?? "原因未知"}）。
-          下面显示的是<strong>磁盘上的包</strong>，激活状态一律标为「未知」。
+          读不到引擎的激活状态（{engine.error ?? "原因未知"}）。 下面显示的是
+          <strong>磁盘上的包</strong>，激活状态一律标为「未知」。
         </Alert>
       )}
 
@@ -205,7 +213,9 @@ export function PluginsPage() {
             textAlign: "center",
           }}
         >
-          <ExtensionOutlinedIcon sx={{ fontSize: 36, color: "text.disabled" }} />
+          <ExtensionOutlinedIcon
+            sx={{ fontSize: 36, color: "text.disabled" }}
+          />
           <Typography color="text.secondary">还没有安装任何插件包。</Typography>
           {pluginsRoot && (
             <Typography variant="caption" color="text.disabled">
@@ -228,14 +238,24 @@ export function PluginsPage() {
           const driftNotice = PLUGIN_DRIFT_NOTICE[view.drift];
           const activation = ACTIVATION_CHIP[view.activation];
           const busy = busyName === manifest.name;
-          const totalResources = view.plugin.resources.filter((g) => g.count > 0);
+          const totalResources = view.plugin.resources.filter(
+            (g) => g.count > 0,
+          );
 
           return (
             <Box
               key={manifest.name}
-              sx={{ ...hoverCardSx, p: 2, display: "flex", flexDirection: "column", gap: 1.25 }}
+              sx={{
+                ...hoverCardSx,
+                p: 2,
+                display: "flex",
+                flexDirection: "column",
+                gap: 1.25,
+              }}
             >
-              <Box sx={{ display: "flex", alignItems: "flex-start", gap: 1.25 }}>
+              <Box
+                sx={{ display: "flex", alignItems: "flex-start", gap: 1.25 }}
+              >
                 {manifest.logo ? (
                   <Box
                     component="img"
@@ -268,25 +288,41 @@ export function PluginsPage() {
                     sx={{ ...clampLines(1), wordBreak: "break-all" }}
                   >
                     {manifest.name}
-                    {manifest.versionDeclared ? ` · v${manifest.version}` : " · 未声明版本"}
+                    {manifest.versionDeclared
+                      ? ` · v${manifest.version}`
+                      : " · 未声明版本"}
                   </Typography>
                 </Box>
 
-                <Tooltip title={view.intended ? "停用（关闭引擎侧激活）" : "启用（写入引擎激活标记）"}>
+                <Tooltip
+                  title={
+                    view.intended
+                      ? "停用（关闭引擎侧激活）"
+                      : "启用（写入引擎激活标记）"
+                  }
+                >
                   <span>
                     <Switch
                       size="small"
                       checked={view.intended}
                       disabled={busy || platform.env !== "electron"}
-                      onChange={(e) => void handleToggle(view, e.target.checked)}
-                      inputProps={{ "aria-label": `启用 ${manifest.displayName}` }}
+                      onChange={(e) =>
+                        void handleToggle(view, e.target.checked)
+                      }
+                      inputProps={{
+                        "aria-label": `启用 ${manifest.displayName}`,
+                      }}
                     />
                   </span>
                 </Tooltip>
               </Box>
 
               {manifest.description && (
-                <Typography variant="body2" color="text.secondary" sx={clampLines(2)}>
+                <Typography
+                  variant="body2"
+                  color="text.secondary"
+                  sx={clampLines(2)}
+                >
                   {manifest.description}
                 </Typography>
               )}
@@ -320,19 +356,30 @@ export function PluginsPage() {
               </Stack>
 
               {driftNotice && (
-                <Alert severity="info" sx={{ py: 0.25, "& .MuiAlert-message": { fontSize: 12.5 } }}>
+                <Alert
+                  severity="info"
+                  sx={{ py: 0.25, "& .MuiAlert-message": { fontSize: 12.5 } }}
+                >
                   {driftNotice}
                 </Alert>
               )}
 
               {view.engineIncompatible && (
-                <Alert severity="warning" sx={{ py: 0.25, "& .MuiAlert-message": { fontSize: 12.5 } }}>
+                <Alert
+                  severity="warning"
+                  sx={{ py: 0.25, "& .MuiAlert-message": { fontSize: 12.5 } }}
+                >
                   当前版本不满足该包声明的引擎区间，可能无法正常工作。
                 </Alert>
               )}
 
               {totalResources.length > 0 && (
-                <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
+                <Stack
+                  direction="row"
+                  spacing={0.75}
+                  flexWrap="wrap"
+                  useFlexGap
+                >
                   {totalResources.map((group) => (
                     <Chip
                       key={group.id}

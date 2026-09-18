@@ -543,7 +543,7 @@ export function MyAgentsPage() {
   };
 
   return (
-    <Box sx={{ p: 3, maxWidth: 1100, margin: "0 auto" }}>
+    <Box sx={{ p: 3, maxWidth: "100%", margin: "0 auto" }}>
       <Button
         size="small"
         startIcon={<ChevronLeftIcon sx={{ fontSize: 18 }} />}

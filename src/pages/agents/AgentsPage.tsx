@@ -238,7 +238,7 @@ export function AgentsPage() {
       : filteredGroups.length === 0;
 
   return (
-    <Box sx={{ p: 3, maxWidth: 1100, margin: "0 auto" }}>
+    <Box sx={{ p: 3, maxWidth: "100%", margin: "0 auto" }}>
       {/** 标题行：左标题，右检索 + 我的专家 + 创建 */}
       <Box
         sx={{

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from "react";
 import {
   Alert,
   Box,
@@ -16,19 +16,19 @@ import {
   TextField,
   Tooltip,
   Typography,
-} from '@mui/material';
-import AddIcon from '@mui/icons-material/Add';
-import BoltIcon from '@mui/icons-material/Bolt';
-import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
-import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
-import KeyOutlinedIcon from '@mui/icons-material/KeyOutlined';
-import RefreshIcon from '@mui/icons-material/Refresh';
-import TuneIcon from '@mui/icons-material/Tune';
-import WarningAmberIcon from '@mui/icons-material/WarningAmber';
-import { useMcpStore } from '@/stores/mcpStore';
-import { platform } from '@/platform';
-import { ConfirmDialog } from '@/components/ConfirmDialog';
-import { toast } from '@/components/Toast';
+} from "@mui/material";
+import AddIcon from "@mui/icons-material/Add";
+import BoltIcon from "@mui/icons-material/Bolt";
+import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
+import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
+import KeyOutlinedIcon from "@mui/icons-material/KeyOutlined";
+import RefreshIcon from "@mui/icons-material/Refresh";
+import TuneIcon from "@mui/icons-material/Tune";
+import WarningAmberIcon from "@mui/icons-material/WarningAmber";
+import { useMcpStore } from "@/stores/mcpStore";
+import { platform } from "@/platform";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { toast } from "@/components/Toast";
 import {
   cardGhostActionSx,
   cardGhostDangerSx,
@@ -38,30 +38,38 @@ import {
   clampLines,
   hoverCardSx,
   iconTileSx,
-} from '@/lib/cardSx';
-import { isBuiltinMcpId, type MCPConfig, type MCPStatus, type MCPTransport } from '@/types';
+} from "@/lib/cardSx";
+import {
+  isBuiltinMcpId,
+  type MCPConfig,
+  type MCPStatus,
+  type MCPTransport,
+} from "@/types";
 
 type McpForm = Partial<MCPConfig>;
 
 const EMPTY: McpForm = {
-  name: '',
-  transport: 'url',
-  endpoint: '',
-  command: '',
+  name: "",
+  transport: "url",
+  endpoint: "",
+  command: "",
   auth: {},
 };
 
 const STATUS_LABEL: Record<MCPStatus, string> = {
-  idle: '未连接',
-  syncing: '同步中',
-  connected: '已连接',
-  error: '错误',
+  idle: "未连接",
+  syncing: "同步中",
+  connected: "已连接",
+  error: "错误",
 };
-const STATUS_COLOR: Record<MCPStatus, 'default' | 'warning' | 'success' | 'error'> = {
-  idle: 'default',
-  syncing: 'warning',
-  connected: 'success',
-  error: 'error',
+const STATUS_COLOR: Record<
+  MCPStatus,
+  "default" | "warning" | "success" | "error"
+> = {
+  idle: "default",
+  syncing: "warning",
+  connected: "success",
+  error: "error",
 };
 
 /** MCP 管理页（FR-004 / FR-3.2）：CRUD + 启停 + 真实连接测试 + 工具级授权 + 同步 */
@@ -124,7 +132,7 @@ export function McpPage() {
       const written = await saveSecrets(targetId, { token });
       if (!written.ok) {
         setSaving(false);
-        toast.error(written.error ?? '凭据保存失败');
+        toast.error(written.error ?? "凭据保存失败");
         return;
       }
     }
@@ -147,7 +155,7 @@ export function McpPage() {
         `${c.name} 连接成功：发现 ${result.tools.length} 个工具（${result.latencyMs}ms）`,
       );
     } else {
-      toast.error(`${c.name} 连接失败：${result.error ?? '未知原因'}`);
+      toast.error(`${c.name} 连接失败：${result.error ?? "未知原因"}`);
     }
   };
   /** 切换启用/停用后立即全量同步到 nanobot 运行时（全量提交语义） */
@@ -175,11 +183,11 @@ export function McpPage() {
   const clearSecret = async (c: MCPConfig) => {
     const result = await saveSecrets(c.id, {});
     if (!result.ok) {
-      toast.error(result.error ?? '清除凭据失败');
+      toast.error(result.error ?? "清除凭据失败");
       return;
     }
     const sync = await syncEnabled();
-    if (sync.ok) toast.success('凭据已清除并同步');
+    if (sync.ok) toast.success("凭据已清除并同步");
     else toast.error(sync.message);
   };
 
@@ -211,7 +219,8 @@ export function McpPage() {
     for (const name of (toolCfg.tools ?? []).map((t) => t.name)) {
       const wasDisabled = current.has(name);
       const willDisable = next.has(name);
-      if (wasDisabled !== willDisable) setToolDisabled(toolCfg.id, name, willDisable);
+      if (wasDisabled !== willDisable)
+        setToolDisabled(toolCfg.id, name, willDisable);
     }
     setToolSaving(false);
     setToolTarget(null);
@@ -225,8 +234,16 @@ export function McpPage() {
   const enabledCount = configs.filter((c) => c.enabled !== false).length;
 
   return (
-    <Box sx={{ p: 3, maxWidth: 1000, margin: '0 auto' }}>
-      <Box sx={{ display: 'flex', alignItems: 'center', mb: 2, gap: 2, flexWrap: 'wrap' }}>
+    <Box sx={{ p: 3, maxWidth: "100%", margin: "0 auto" }}>
+      <Box
+        sx={{
+          display: "flex",
+          alignItems: "center",
+          mb: 2,
+          gap: 2,
+          flexWrap: "wrap",
+        }}
+      >
         <Typography variant="h5" fontWeight={700}>
           MCP 服务
         </Typography>
@@ -242,7 +259,7 @@ export function McpPage() {
               onClick={runSyncAll}
               disabled={syncingAll || configs.length === 0}
             >
-              {syncingAll ? '同步中…' : '同步全部已启用'}
+              {syncingAll ? "同步中…" : "同步全部已启用"}
             </Button>
           </span>
         </Tooltip>
@@ -253,7 +270,7 @@ export function McpPage() {
 
       {vaultAvailable === false && (
         <Alert severity="warning" sx={{ mb: 2 }}>
-          {platform.env === 'electron' ? (
+          {platform.env === "electron" ? (
             <>
               本机系统凭据库不可用，凭据<strong>不会被保存</strong>
               （不可用时我们拒绝降级为明文写入）。请先配置系统凭据库后重试。
@@ -268,22 +285,24 @@ export function McpPage() {
       )}
 
       {configs.length === 0 && (
-        <Typography color="text.secondary">暂无 MCP 服务，点击右上角新增。</Typography>
+        <Typography color="text.secondary">
+          暂无 MCP 服务，点击右上角新增。
+        </Typography>
       )}
 
       <Box
         sx={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))',
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))",
           gap: 2,
-          alignItems: 'stretch',
+          alignItems: "stretch",
         }}
       >
         {configs.map((c) => {
           const isBuiltin = isBuiltinMcpId(c.id);
           const enabled = c.enabled !== false;
-          const isCommand = c.transport !== 'url';
-          const target = isCommand ? c.command ?? '—' : c.endpoint ?? '—';
+          const isCommand = c.transport !== "url";
+          const target = isCommand ? (c.command ?? "—") : (c.endpoint ?? "—");
           const disabledCount = (c.disabledTools ?? []).length;
           const hasSecret = (c.authKeyNames ?? []).length > 0;
           const toolCount = (c.tools ?? []).length;
@@ -296,28 +315,28 @@ export function McpPage() {
                 {
                   // 停用态整体降透明度；hover 浮起仍保留（与技能卡一致）
                   opacity: enabled ? 1 : 0.55,
-                  display: 'flex',
-                  flexDirection: 'column',
-                  height: '100%',
+                  display: "flex",
+                  flexDirection: "column",
+                  height: "100%",
                   // 覆盖 hoverCardSx 的 transition，补上 opacity（数组后项同名 key 生效）
                   transition:
-                    'opacity .2s ease, background-color .18s ease, border-color .18s ease, box-shadow .18s ease',
+                    "opacity .2s ease, background-color .18s ease, border-color .18s ease, box-shadow .18s ease",
                 },
               ]}
             >
               <CardContent
                 sx={{
                   p: 2.5,
-                  display: 'flex',
-                  flexDirection: 'column',
+                  display: "flex",
+                  flexDirection: "column",
                   flexGrow: 1,
-                  '&:last-child': { pb: 2 },
+                  "&:last-child": { pb: 2 },
                 }}
               >
                 {/* 标题行：图标底托 / 名称 / 内置·自定义 / 状态 */}
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+                <Box sx={{ display: "flex", alignItems: "center", gap: 1.5 }}>
                   <Box sx={iconTileSx(c.name)} aria-hidden>
-                    {c.icon ?? (isBuiltin ? '🧩' : '🔌')}
+                    {c.icon ?? (isBuiltin ? "🧩" : "🔌")}
                   </Box>
                   <Typography
                     fontWeight={600}
@@ -329,7 +348,7 @@ export function McpPage() {
                   </Typography>
                   <Chip
                     size="small"
-                    label={isBuiltin ? '内置' : '自定义'}
+                    label={isBuiltin ? "内置" : "自定义"}
                     variant="outlined"
                     sx={isBuiltin ? cardChipSx : cardChipOutlinedSx}
                   />
@@ -349,23 +368,33 @@ export function McpPage() {
                         mt: 1.25,
                         px: 1,
                         py: 0.625,
-                        borderRadius: '8px',
-                        bgcolor: 'action.hover',
-                        border: '1px solid',
-                        borderColor: 'divider',
-                        overflow: 'hidden',
+                        borderRadius: "8px",
+                        bgcolor: "action.hover",
+                        border: "1px solid",
+                        borderColor: "divider",
+                        overflow: "hidden",
                       }}
                     >
                       <Typography
                         noWrap
-                        sx={{ fontFamily: 'monospace', fontSize: 12, color: 'text.secondary' }}
+                        sx={{
+                          fontFamily: "monospace",
+                          fontSize: 12,
+                          color: "text.secondary",
+                        }}
                       >
                         {target}
                       </Typography>
                     </Box>
                   ) : (
-                    <Typography noWrap sx={{ mt: 1.25, fontSize: 12.5, color: 'text.secondary' }}>
-                      <Box component="span" sx={{ color: 'text.disabled', mr: 0.5 }}>
+                    <Typography
+                      noWrap
+                      sx={{ mt: 1.25, fontSize: 12.5, color: "text.secondary" }}
+                    >
+                      <Box
+                        component="span"
+                        sx={{ color: "text.disabled", mr: 0.5 }}
+                      >
                         URL
                       </Box>
                       {target}
@@ -374,15 +403,22 @@ export function McpPage() {
                 </Tooltip>
 
                 {/* 运行时事实行：凭据 / 工具数 / 已禁工具数 */}
-                <Box sx={{ display: 'flex', gap: 0.75, mt: 1.25, flexWrap: 'wrap' }}>
+                <Box
+                  sx={{
+                    display: "flex",
+                    gap: 0.75,
+                    mt: 1.25,
+                    flexWrap: "wrap",
+                  }}
+                >
                   {hasSecret && (
                     <Chip
                       size="small"
                       variant="outlined"
                       sx={cardChipOutlinedSx}
                       icon={<KeyOutlinedIcon sx={{ fontSize: 14 }} />}
-                      label={`凭据 ${(c.authKeyNames ?? []).join('/')}`}
-                      aria-label={`${c.name} 凭据 ${(c.authKeyNames ?? []).join('/')}`}
+                      label={`凭据 ${(c.authKeyNames ?? []).join("/")}`}
+                      aria-label={`${c.name} 凭据 ${(c.authKeyNames ?? []).join("/")}`}
                     />
                   )}
                   {toolCount > 0 && (
@@ -410,7 +446,7 @@ export function McpPage() {
                   <Typography
                     sx={{
                       fontSize: 12.5,
-                      color: 'text.secondary',
+                      color: "text.secondary",
                       mt: 1.25,
                       lineHeight: 1.6,
                       minHeight: 40,
@@ -424,27 +460,39 @@ export function McpPage() {
                 {/* 操作行：开关在左、幽灵图标按钮组在右 */}
                 <Box
                   sx={{
-                    mt: 'auto',
+                    mt: "auto",
                     pt: 1.5,
-                    display: 'flex',
-                    alignItems: 'center',
+                    display: "flex",
+                    alignItems: "center",
                     gap: 0.5,
-                    flexWrap: 'nowrap',
+                    flexWrap: "nowrap",
                   }}
                 >
                   <FormControlLabel
                     control={
-                      <Switch size="small" checked={enabled} onChange={() => handleToggle(c)} />
+                      <Switch
+                        size="small"
+                        checked={enabled}
+                        onChange={() => handleToggle(c)}
+                      />
                     }
                     label={
-                      <Typography sx={{ fontSize: 12, color: 'text.secondary' }}>
-                        {enabled ? '启用' : '停用'}
+                      <Typography
+                        sx={{ fontSize: 12, color: "text.secondary" }}
+                      >
+                        {enabled ? "启用" : "停用"}
                       </Typography>
                     }
                     sx={{ m: 0 }}
                   />
                   <Box sx={{ flex: 1 }} />
-                  <Tooltip title={enabled ? '连接测试（真实握手）' : '已停用的 MCP 无法测试连接'}>
+                  <Tooltip
+                    title={
+                      enabled
+                        ? "连接测试（真实握手）"
+                        : "已停用的 MCP 无法测试连接"
+                    }
+                  >
                     <span>
                       <IconButton
                         size="small"
@@ -460,8 +508,8 @@ export function McpPage() {
                   <Tooltip
                     title={
                       toolCount === 0
-                        ? '工具授权：先做一次连接测试以获取工具清单'
-                        : `工具授权（${toolCount} 个工具${disabledCount > 0 ? `，已禁用 ${disabledCount}` : ''}）`
+                        ? "工具授权：先做一次连接测试以获取工具清单"
+                        : `工具授权（${toolCount} 个工具${disabledCount > 0 ? `，已禁用 ${disabledCount}` : ""}）`
                     }
                   >
                     <span>
@@ -476,7 +524,7 @@ export function McpPage() {
                       </IconButton>
                     </span>
                   </Tooltip>
-                  <Tooltip title={isBuiltin ? '内置预设不可编辑' : '编辑'}>
+                  <Tooltip title={isBuiltin ? "内置预设不可编辑" : "编辑"}>
                     <span>
                       <IconButton
                         size="small"
@@ -489,7 +537,11 @@ export function McpPage() {
                       </IconButton>
                     </span>
                   </Tooltip>
-                  <Tooltip title={isBuiltin ? '内置预设不可删除，可通过开关启停' : '删除'}>
+                  <Tooltip
+                    title={
+                      isBuiltin ? "内置预设不可删除，可通过开关启停" : "删除"
+                    }
+                  >
                     <span>
                       <IconButton
                         size="small"
@@ -510,14 +562,19 @@ export function McpPage() {
       </Box>
 
       {/* —————— 新增 / 编辑 —————— */}
-      <Dialog open={open} onClose={() => setOpen(false)} maxWidth="sm" fullWidth>
-        <DialogTitle>{editing ? '编辑 MCP' : '新增 MCP'}</DialogTitle>
+      <Dialog
+        open={open}
+        onClose={() => setOpen(false)}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle>{editing ? "编辑 MCP" : "新增 MCP"}</DialogTitle>
         <DialogContent>
           <TextField
             fullWidth
             margin="dense"
             label="名称"
-            value={form.name ?? ''}
+            value={form.name ?? ""}
             onChange={(e) => setForm({ ...form, name: e.target.value })}
           />
           <TextField
@@ -525,19 +582,21 @@ export function McpPage() {
             fullWidth
             margin="dense"
             label="传输类型"
-            value={form.transport ?? 'url'}
-            onChange={(e) => setForm({ ...form, transport: e.target.value as MCPTransport })}
+            value={form.transport ?? "url"}
+            onChange={(e) =>
+              setForm({ ...form, transport: e.target.value as MCPTransport })
+            }
             SelectProps={{ native: true }}
           >
             <option value="url">URL</option>
             <option value="command">Command</option>
           </TextField>
-          {form.transport === 'url' ? (
+          {form.transport === "url" ? (
             <TextField
               fullWidth
               margin="dense"
               label="地址 (URL)"
-              value={form.endpoint ?? ''}
+              value={form.endpoint ?? ""}
               onChange={(e) => setForm({ ...form, endpoint: e.target.value })}
             />
           ) : (
@@ -545,7 +604,7 @@ export function McpPage() {
               fullWidth
               margin="dense"
               label="启动命令"
-              value={form.command ?? ''}
+              value={form.command ?? ""}
               onChange={(e) => setForm({ ...form, command: e.target.value })}
             />
           )}
@@ -555,19 +614,36 @@ export function McpPage() {
             type="password"
             autoComplete="off"
             label="认证 Token（可选；留空 = 保持原凭据）"
-            value={form.auth?.token ?? ''}
-            onChange={(e) => setForm({ ...form, auth: { ...form.auth, token: e.target.value } })}
+            value={form.auth?.token ?? ""}
+            onChange={(e) =>
+              setForm({
+                ...form,
+                auth: { ...form.auth, token: e.target.value },
+              })
+            }
           />
           {editing && (
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.5 }}>
-              <Typography variant="caption" color="text.secondary" sx={{ flex: 1 }}>
+            <Box
+              sx={{ display: "flex", alignItems: "center", gap: 1, mt: 0.5 }}
+            >
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                sx={{ flex: 1 }}
+              >
                 {(editing.authKeyNames ?? []).length > 0
-                  ? `已设置凭据：${(editing.authKeyNames ?? []).join(' / ')}（值不在界面回显）`
-                  : '当前未设置凭据'}
-                {vaultAvailable === false ? ' · 本机凭据库不可用，将不会保存' : ''}
+                  ? `已设置凭据：${(editing.authKeyNames ?? []).join(" / ")}（值不在界面回显）`
+                  : "当前未设置凭据"}
+                {vaultAvailable === false
+                  ? " · 本机凭据库不可用，将不会保存"
+                  : ""}
               </Typography>
               {(editing.authKeyNames ?? []).length > 0 && (
-                <Button size="small" color="error" onClick={() => clearSecret(editing)}>
+                <Button
+                  size="small"
+                  color="error"
+                  onClick={() => clearSecret(editing)}
+                >
                   清除凭据
                 </Button>
               )}
@@ -583,7 +659,7 @@ export function McpPage() {
             onClick={save}
             disabled={!form.name?.trim() || saving}
           >
-            {saving ? '保存中…' : '保存'}
+            {saving ? "保存中…" : "保存"}
           </Button>
         </DialogActions>
       </Dialog>
@@ -598,31 +674,40 @@ export function McpPage() {
         <DialogTitle>工具授权 · {toolCfg?.name}</DialogTitle>
         <DialogContent>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
-            关掉的工具<strong>不会注册进引擎</strong>（模型看不到、也调不到）；其余工具照常可用。
+            关掉的工具<strong>不会注册进引擎</strong>
+            （模型看不到、也调不到）；其余工具照常可用。
           </Typography>
           {staleDisabled.length > 0 && (
-            <Alert severity="warning" icon={<WarningAmberIcon />} sx={{ mb: 1.5 }}>
+            <Alert
+              severity="warning"
+              icon={<WarningAmberIcon />}
+              sx={{ mb: 1.5 }}
+            >
               以下已禁用的工具不在本次探测到的清单里（可能已改名或下线）：
-              {staleDisabled.join('、')}
+              {staleDisabled.join("、")}
               。它们仍会随配置下发，但不会命中任何工具。
             </Alert>
           )}
-          <Box sx={{ maxHeight: 360, overflow: 'auto', pr: 0.5 }}>
+          <Box sx={{ maxHeight: 360, overflow: "auto", pr: 0.5 }}>
             {(toolCfg?.tools ?? []).map((tool) => (
               <Box
                 key={tool.name}
                 sx={{
-                  display: 'flex',
-                  alignItems: 'flex-start',
+                  display: "flex",
+                  alignItems: "flex-start",
                   gap: 1,
                   py: 0.75,
-                  borderBottom: '1px solid',
-                  borderColor: 'divider',
+                  borderBottom: "1px solid",
+                  borderColor: "divider",
                 }}
               >
                 <Box sx={{ flex: 1, minWidth: 0 }}>
                   <Typography
-                    sx={{ fontFamily: 'monospace', fontSize: 13, wordBreak: 'break-all' }}
+                    sx={{
+                      fontFamily: "monospace",
+                      fontSize: 13,
+                      wordBreak: "break-all",
+                    }}
                   >
                     {tool.name}
                   </Typography>
@@ -639,21 +724,26 @@ export function McpPage() {
                       size="small"
                       checked={toolDraft[tool.name] ?? true}
                       onChange={(e) =>
-                        setToolDraft((d) => ({ ...d, [tool.name]: e.target.checked }))
+                        setToolDraft((d) => ({
+                          ...d,
+                          [tool.name]: e.target.checked,
+                        }))
                       }
-                      inputProps={{ 'aria-label': `允许工具 ${tool.name}` }}
+                      inputProps={{ "aria-label": `允许工具 ${tool.name}` }}
                     />
                   }
                   label={
-                    <Typography sx={{ fontSize: 12, color: 'text.secondary' }}>
-                      {(toolDraft[tool.name] ?? true) ? '允许' : '禁用'}
+                    <Typography sx={{ fontSize: 12, color: "text.secondary" }}>
+                      {(toolDraft[tool.name] ?? true) ? "允许" : "禁用"}
                     </Typography>
                   }
                 />
               </Box>
             ))}
             {(toolCfg?.tools ?? []).length === 0 && (
-              <Typography color="text.secondary">尚未探测到工具清单。</Typography>
+              <Typography color="text.secondary">
+                尚未探测到工具清单。
+              </Typography>
             )}
           </Box>
         </DialogContent>
@@ -661,8 +751,12 @@ export function McpPage() {
           <Button onClick={() => setToolTarget(null)} disabled={toolSaving}>
             取消
           </Button>
-          <Button variant="contained" onClick={runToolSave} disabled={toolSaving}>
-            {toolSaving ? '保存中…' : '保存并同步'}
+          <Button
+            variant="contained"
+            onClick={runToolSave}
+            disabled={toolSaving}
+          >
+            {toolSaving ? "保存中…" : "保存并同步"}
           </Button>
         </DialogActions>
       </Dialog>
