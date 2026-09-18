@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   Alert,
   Box,
@@ -20,9 +21,11 @@ import { toast } from "@/components/Toast";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { parseSkillFromMarkdown } from "@/lib/skillParser";
 import { platform } from "@/platform";
+import { ROUTES } from "@/lib/constants";
 import { SkillMarketCard } from "@/components/skills/SkillMarketCard";
 import { SkillInstalledCard } from "@/components/skills/SkillInstalledCard";
 import { SkillDetailDialog } from "@/components/skills/SkillDetailDialog";
+import { SkillDetailWindow } from "@/components/skills/SkillDetailWindow";
 import {
   skillCategorySx,
   skillCountBadgeSx,
@@ -49,6 +52,7 @@ const INSTALL_FEEDBACK_MS = 800;
  * 一关开关就从列表里消失，会让「停用」看起来像「卸载」。
  */
 export function SkillsPage() {
+  const navigate = useNavigate();
   const skills = useSkillsStore((s) => s.skills);
   const setSkillOverride = useSkillsStore((s) => s.setSkillOverride);
   const removeSkill = useSkillsStore((s) => s.removeSkill);
@@ -89,8 +93,19 @@ export function SkillsPage() {
   /** 「我安装的」视图内的检索关键字（与 AllView 的 q 独立，互不影响） */
   const [installedQuery, setInstalledQuery] = useState("");
   const [toDelete, setToDelete] = useState<Skill | null>(null);
-  /** 详情弹窗只记 id：技能状态在弹窗打开期间会被安装/停用改动，直接存对象会显示旧状态 */
+  /**
+   * 市场卡的详情**弹窗** id。
+   * 只记 id：技能状态在弹窗打开期间会被安装/停用改动，直接存对象会显示旧状态。
+   */
   const [detailId, setDetailId] = useState<string | null>(null);
+  /**
+   * 已安装卡的详情**窗口** id。
+   *
+   * 与 `detailId` 分成两个状态、而不是共用一个：两个入口的归属池不同
+   * （市场池是「未启用」，已安装池是全量），共用会让「市场里点开的技能
+   * 在停用后变成一个已安装详情窗口」这种串台成为可能。
+   */
+  const [windowId, setWindowId] = useState<string | null>(null);
   /** 安装反馈中的技能 id（由页面统一调度，卡片不持有定时器） */
   const [installingIds, setInstallingIds] = useState<ReadonlySet<string>>(() => new Set());
   /** 批量管理模式：整卡改为勾选 */
@@ -231,6 +246,39 @@ export function SkillsPage() {
     return skills.find((s) => s.id === detailId) ?? null;
   }, [detailId, skills]);
 
+  /**
+   * 详情窗口同理取实时对象。取不到（技能刚被卸载 / 删除）时自动回落到列表 ——
+   * 不需要额外的关闭逻辑，`removeSkill` 之后窗口自己就没了。
+   */
+  const windowSkill = useMemo(() => {
+    if (!windowId) return null;
+    return skills.find((s) => s.id === windowId) ?? null;
+  }, [windowId, skills]);
+
+  /**
+   * 「去试试」：把技能挂到当前会话，然后跳到对话页。
+   *
+   * 直接写 store 而不是复用 Composer 的 `handleAddSkill`：技能页不在 Composer
+   * 的组件树里，拿不到它的局部状态。而挂载的落点只有 `session.skillIds` 一处，
+   * 从这里写与 Composer 写是同一条路径（`updateSession`），不存在第二个真实来源。
+   *
+   * 停用态不在这里兜底：窗口上那个按钮已经禁用了（挂载只在 `enabled` 时才会被
+   * 注入，点了等于没反应），再做一次静默启用会把用户的设置悄悄改掉。
+   */
+  const handleTryIt = (skill: Skill) => {
+    const store = useSessionsStore.getState();
+    const sid = store.activeId ?? store.createSession(undefined, "新会话").id;
+    useSessionsStore.getState().updateSession(sid, (s) => ({
+      ...s,
+      skillIds: (s.skillIds ?? []).includes(skill.id)
+        ? s.skillIds
+        : [...(s.skillIds ?? []), skill.id],
+      updatedAt: new Date().toISOString(),
+    }));
+    toast.success(`已在会话中挂载技能：${skill.name}`);
+    void navigate(ROUTES.chat);
+  };
+
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
@@ -274,6 +322,9 @@ export function SkillsPage() {
           {/*
            * 「我安装的」视图：面包屑返回 + 大标题 + 工具栏 + 卡片网格。
            * 与「全部技能」共用图标与描述排版，差别在右侧是开关而不是安装按钮。
+           *
+           * 详情是**浮层**（`SkillDetailWindow`，渲染在页面末尾）而不是接管整页：
+           * 用户在列表里做取舍时需要一直看得见还有哪些技能。
            */}
           <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 1.5 }}>
             <IconButton onClick={() => setView("all")} size="small" aria-label="返回全部技能">
@@ -370,7 +421,7 @@ export function SkillsPage() {
                 onSelect={toggleSelected}
                 onSetOverride={setSkillOverride}
                 onUninstall={setToDelete}
-                onOpenDetail={(sk) => setDetailId(sk.id)}
+                onOpenDetail={(sk) => setWindowId(sk.id)}
               />
             ))}
           </Box>
@@ -488,6 +539,19 @@ export function SkillsPage() {
         installing={!!detailSkill && installingIds.has(detailSkill.id)}
         onClose={() => setDetailId(null)}
         onInstall={handleInstall}
+      />
+
+      {/*
+       * 详情窗口挂在页面末尾（Dialog 自己 Portal 到 body）：
+       * 放在网格里会让每张卡都持有自己的浮层实例，也没法在技能被卸载后收口。
+       */}
+      <SkillDetailWindow
+        skill={windowSkill}
+        open={!!windowSkill}
+        onClose={() => setWindowId(null)}
+        onSetOverride={setSkillOverride}
+        onUninstall={setToDelete}
+        onTryIt={handleTryIt}
       />
 
       <ConfirmDialog

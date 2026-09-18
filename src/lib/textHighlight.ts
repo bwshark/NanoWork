@@ -138,10 +138,12 @@ export function scrollRangeIntoView(
   const collapsed = rect.width === 0 && rect.height === 0;
 
   if (!scroller || collapsed) {
-    range.startContainer.parentElement?.scrollIntoView({
-      block: 'center',
-      behavior: 'smooth',
-    });
+    const target = range.startContainer.parentElement;
+    // `scrollIntoView` 并非处处可用（jsdom 就没有）：缺了就放弃定位，
+    // 让「命中计数」这类不依赖布局的部分照常工作，不因为滚动失败抛断整条链路。
+    if (typeof target?.scrollIntoView === 'function') {
+      target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    }
     return;
   }
 

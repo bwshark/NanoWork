@@ -144,14 +144,27 @@ export const skillManualOnlyActiveSx = {
 /**
  * 自动触发开关。
  *
- * 尺寸收到 40×24（`size="small"`）以匹配卡片右上角的 28px 图标按钮；
- * checked 态把滑块改成白色、轨道改成实心 success —— MUI 默认的
- * 轨道半透明会让「开着」在深色卡片上糊成一团浅绿，看不出是个开关。
+ * 尺寸按参考图**实测**反推：参考截图里开关轨道是 51×30 物理像素，
+ * 同一张图里的 64px 图标量到 102 物理像素（缩放 1.6），换算下来约 32×19。
+ * MUI `size="small"` 的 40×24 比它大一圈，在卡片右上角会显得笨重，
+ * 所以这里连尺寸一起覆盖（滑块 16px、内边距 2px、checked 位移 14px）。
+ *
+ * checked 态把滑块改成白色、轨道改成实心 success —— MUI 默认的轨道半透明会让
+ * 「开着」在深色卡片上糊成一团浅绿，看不出是个开关。
  */
 export const skillSwitchSx = {
   mr: -0.25,
-  '& .MuiSwitch-switchBase': { py: 0.5 },
-  '& .MuiSwitch-switchBase.Mui-checked': { color: '#fff' },
+  width: 34,
+  height: 20,
+  p: 0,
+  // 显式盖掉 `MuiSwitch-sizeSmall` 的宽高（同权重选择器谁在后面谁赢，不能靠运气）
+  '&.MuiSwitch-sizeSmall': { width: 34, height: 20, p: 0 },
+  '& .MuiSwitch-switchBase': {
+    p: '2px',
+    '&.Mui-checked': { transform: 'translateX(14px)', color: '#fff' },
+  },
+  '& .MuiSwitch-thumb': { width: 16, height: 16, boxShadow: 'none' },
+  '& .MuiSwitch-track': { borderRadius: 10, opacity: 1 },
   '& .MuiSwitch-switchBase.Mui-checked + .MuiSwitch-track': {
     bgcolor: 'success.main',
     opacity: 1,
@@ -198,7 +211,7 @@ export const skillCountBadgeSx = {
   lineHeight: 1.6,
 };
 
-/** 卡片内的小元信息标签（来源层级 / 工具白名单 / 调用方式） */
+/** 小元信息标签（来源层级 / 不可手动调用）：只在市场弹窗用，卡片上是纯文字元信息 */
 export const skillMetaChipSx = {
   height: 19,
   fontSize: 10.5,
@@ -280,3 +293,194 @@ export const skillInfoValueSx = {
   lineHeight: 1.7,
   wordBreak: 'break-word' as const,
 };
+
+/* ------------------------------------------------------------------ *
+ * 已安装技能的详情**窗口**（参考样式：居中浮层 + 固定头部 + 概述区独立滚动）
+ * ------------------------------------------------------------------ */
+
+/**
+ * 窗口纸面。
+ *
+ * 与市场详情弹窗（`skillDetailPaperSx`）的区别不在大小，而在**滚动结构**：
+ * 市场弹窗内容短，整张纸跟着滚就行；这个窗口里装的是 SKILL.md 全文，
+ * 头部（图标 / 去试试 / 开关 / 关闭）与基本信息必须钉住不动，只有概述区自己滚 ——
+ * 否则用户滚到代码块中段时，关窗和开关都找不到了。
+ *
+ * 高度用 `maxHeight` 而不是写死 `height`：没有正文的技能不该撑出一扇 730px 的空窗。
+ * `overflow: hidden` 是让内部那个滚动区**自己**成立，否则纸面会先滚一层、
+ * 概述区再滚一层，出现双层滚动条。
+ *
+ * 没有画描边：参考图里窗口与遮罩的亮度差（#1f1f1f vs #040404）已经足够分界，
+ * 再加一条亮边会让浮层看起来像个内嵌面板。边界感交给 Dialog 自带的投影。
+ */
+export const skillWindowPaperSx = {
+  display: 'flex',
+  flexDirection: 'column' as const,
+  p: 0,
+  borderRadius: '16px',
+  backgroundImage: 'none',
+  overflow: 'hidden',
+  maxHeight: 'min(730px, 88vh)',
+};
+
+/** 窗口头部：固定区（不参与滚动），左右内边距与正文对齐 */
+export const skillWindowHeadSx = {
+  flexShrink: 0,
+  px: 3,
+  pt: 3,
+};
+
+/** 头部正文（描述 + 基本信息 + 概述标题）：同样固定，只有概述正文滚 */
+export const skillWindowBodySx = {
+  flexShrink: 0,
+  px: 3,
+};
+
+/**
+ * 头部的次操作按钮（⋯）：常驻浅底圆角方块。
+ *
+ * 与卡片上的「⋯」刻意不同 —— 卡片是 hover 才显形（静止态要保持干净），
+ * 这里常驻：窗口里它是**唯一**能进「编辑 / 打开文件夹 / 卸载」的入口，
+ * 藏起来会让用户以为窗口里没有这些操作。
+ */
+export const skillWindowIconButtonSx = {
+  width: 28,
+  height: 28,
+  borderRadius: '8px',
+  color: 'text.secondary',
+  bgcolor: 'action.hover',
+  transition: 'color .18s ease, background-color .18s ease',
+  '&:hover': { color: 'text.primary', bgcolor: 'action.selected' },
+};
+
+/** 头部的「关闭 ×」：无底色。关窗是「离开」，不该跟 ⋯ 一样有个实心块抢注意力 */
+export const skillWindowPlainIconButtonSx = {
+  width: 28,
+  height: 28,
+  borderRadius: '8px',
+  color: 'text.secondary',
+  transition: 'color .18s ease, background-color .18s ease',
+  '&:hover': { color: 'text.primary', bgcolor: 'action.hover' },
+};
+
+/**
+ * 窗口里的描述：默认 2 行截断。
+ *
+ * 描述是摘要，正文在下面的概述里；不截断会让「基本信息 / 概述」被一段长描述推到
+ * 窗口底部之外。超长时才出现「展开」，短描述不会多出一个可点区域。
+ */
+export const skillWindowDescSx = {
+  mt: 2.5,
+  fontSize: 13.5,
+  lineHeight: 1.75,
+  whiteSpace: 'pre-wrap' as const,
+};
+
+/** 基本信息网格里的取值列：加粗。参考样式里取值比标签更醒目（标签是问句，取值才是答案） */
+export const skillInfoGridValueSx = {
+  flex: 1,
+  minWidth: 0,
+  fontSize: 12.5,
+  lineHeight: 1.7,
+  fontWeight: 600,
+  wordBreak: 'break-word' as const,
+};
+
+/**
+ * 概述滚动区。
+ *
+ * 与窗口同宽的浅底面板，是窗口里**唯一**会滚的地方（`flex: 1` + `minHeight: 0`
+ * 让它在内容超高时收下剩余空间，内容短时按自身高度收住，不会把窗口撑满）。
+ */
+export const skillOverviewBoxSx = {
+  flex: 1,
+  minHeight: 0,
+  mx: 3,
+  mb: 3,
+  mt: 1.5,
+  px: 2.5,
+  py: 2,
+  borderRadius: '12px',
+  border: '1px solid',
+  borderColor: 'divider',
+  bgcolor: 'action.hover',
+  overflowY: 'auto' as const,
+};
+
+/** 概述标题行里的搜索条（展开态）：与头部搜索同款的胶囊输入 + 计数 + 上下箭头 */
+export const skillOverviewSearchSx = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 0.25,
+  height: 28,
+  width: 200,
+  pl: 1,
+  pr: 0.5,
+  borderRadius: '8px',
+  border: '1px solid',
+  borderColor: 'divider',
+  bgcolor: 'action.hover',
+};
+
+/** 窗口里的区块标题（「基本信息」「概述」）：图标 + 文字，与市场弹窗内同款 */
+export const skillSectionTitleSx = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 0.75,
+  mt: 3,
+  mb: 1.25,
+};
+
+/**
+ * 基本信息的两列网格。
+ *
+ * 一列一项太浪费横向空间（窗口宽 600，参考样式也是一行两个字段）；
+ * 窄屏塌成一列。字段已收窄成版本 / 来源 / 分类三项（都是短值），
+ * 所以 sm 断点下必定是「版本|来源」+「分类|（空）」两行。
+ *
+ * 不沿用 `skillInfoRowSx` 的分隔线：那条 `& + &` 是为了纵向堆叠时画中间横线，
+ * 放进网格会给每行第二列也画一条，看起来像少了一格。
+ */
+export const skillInfoGridSx = {
+  display: 'grid',
+  gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' },
+  columnGap: 4,
+};
+
+/** 网格里的一行：沿用弹窗的定宽标签，去掉分隔线 */
+export const skillInfoGridRowSx = {
+  display: 'flex',
+  alignItems: 'flex-start',
+  gap: 2,
+  py: 0.5,
+};
+
+/** 概述正文排版：首末元素去掉外边距，避免滚动区上下多出一截空白 */
+export const skillOverviewSx = {
+  fontSize: 13,
+  lineHeight: 1.75,
+  color: 'text.primary',
+  '& > :first-of-type': { mt: 0 },
+  '& > :last-child': { mb: 0 },
+};
+
+/**
+ * 详情页头部的主操作（去试试）：**浅色实底**，窗口里唯一的实心按钮。
+ *
+ * 参考样式里它是浅底深字，不是描边 —— 描边按钮在深色纸面上会被读成"和背景分离的
+ * 一块"，而实底把它明确标成主操作。取色走 `--btn-strong-*` 变量（深色主题下反色）。
+ */
+export const skillTryButtonSx = {
+  textTransform: 'none' as const,
+  height: 28,
+  px: 1.5,
+  borderRadius: '8px',
+  fontSize: 13,
+  fontWeight: 600,
+  color: 'var(--btn-strong-fg)',
+  bgcolor: 'var(--btn-strong-bg)',
+  '&:hover': { bgcolor: 'var(--btn-strong-bg-hover)' },
+  // 停用态必须可辨：`去试试` 禁用是「技能停用了」的信号，不能只是淡淡地暗一点
+  '&.Mui-disabled': { color: 'text.disabled', bgcolor: 'action.disabledBackground' },
+};
+

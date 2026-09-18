@@ -22,7 +22,7 @@ import {
   skillInfoValueSx,
   skillMetaChipSx,
 } from './skillCardSx';
-import { skillSourceLabel } from './skillMeta';
+import { skillInfoRows, skillSourceLabel } from './skillMeta';
 import { clampLines } from '@/lib/cardSx';
 import type { Skill } from '@/types';
 
@@ -32,9 +32,9 @@ const EXPAND_THRESHOLD = 120;
 /**
  * 技能详情弹窗（参考样式：大图标 + 名称 + 安装 + 描述 + 基本信息）。
  *
- * 「基本信息」只列**真实存在的字段**：版本 / 来源 / 分类 / 工具白名单 /
- * 本地路径都取自解析或扫描结果，缺哪项就不渲染哪行。这里补一个
- * 「v1.0.0」之类的兜底值比不写更糟 —— 用户会拿它做版本判断。
+ * 「基本信息」的字段列表**必须**走 `skillInfoRows`（与已安装的详情窗口共用），
+ * 不能在这里再拼一份 —— 两个入口的字段一旦各写一遍，迟早会出现
+ * 「市场弹窗有工具白名单、已安装窗口没有」这种没法解释的不一致。
  */
 export function SkillDetailDialog({
   skill,
@@ -60,20 +60,7 @@ export function SkillDetailDialog({
   const description = skill?.description ?? '';
   const expandable = description.length > EXPAND_THRESHOLD;
 
-  const rows: { label: string; value: string }[] = [];
-  if (skill) {
-    if (skill.version) rows.push({ label: '版本', value: skill.version });
-    rows.push({ label: '来源', value: skillSourceLabel(skill) });
-    if (skill.category) rows.push({ label: '分类', value: skill.category });
-    if (skill.allowedTools && skill.allowedTools.length > 0) {
-      rows.push({ label: '工具白名单', value: skill.allowedTools.join('、') });
-    }
-    rows.push({
-      label: '手动调用',
-      value: skill.userInvocable === false ? '不可手动调用（仅模型可用）' : '可手动调用',
-    });
-    if (skill.path) rows.push({ label: '本地路径', value: skill.path });
-  }
+  const rows = skill ? skillInfoRows(skill) : [];
 
   const installed = !!skill?.enabled;
 
@@ -159,7 +146,7 @@ export function SkillDetailDialog({
               </Typography>
             </Stack>
 
-            <Box sx={skillInfoPanelSx}>
+            <Box sx={skillInfoPanelSx} role="group" aria-label="基本信息">
               {rows.map((row) => (
                 <Box key={row.label} sx={skillInfoRowSx}>
                   <Typography sx={skillInfoLabelSx}>{row.label}</Typography>

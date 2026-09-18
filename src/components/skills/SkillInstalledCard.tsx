@@ -18,6 +18,7 @@ import {
   SKILL_OVERRIDE_USER_INVOCABLE_ONLY,
   resolveSkillOverride,
 } from '@/lib/skillOverrides';
+import { autoTriggerToast, nextAutoTriggerOverride } from './skillMeta';
 import { toast } from '@/components/Toast';
 import type { Skill, SkillOverride } from '@/types';
 
@@ -65,13 +66,10 @@ export function SkillInstalledCard({
   const manualOnly = override === SKILL_OVERRIDE_USER_INVOCABLE_ONLY;
 
   const handleSwitch = () => {
-    const next: SkillOverride = enabled ? SKILL_OVERRIDE_OFF : SKILL_OVERRIDE_ON;
-    onSetOverride(skill.id, next);
-    // 开关是二元的，反馈必须点名「关掉的是什么」：同样一个开关，
-    // 「已停用」和「已关闭自动触发」对用户的理解完全不同，后者才是真实语义。
-    toast.success(
-      enabled ? `${skill.name} 已关闭自动触发` : `${skill.name} 已开启自动触发`,
-    );
+    // 下一档与反馈文案都取自 skillMeta：详情页有同一个开关的另一个入口，
+    // 两处各写一遍必然漂移（且「已停用」与「已关闭自动触发」是两种语义）
+    onSetOverride(skill.id, nextAutoTriggerOverride(skill));
+    toast.success(autoTriggerToast(skill));
   };
 
   const handleManualOnly = () => {

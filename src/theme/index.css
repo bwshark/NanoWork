@@ -13,6 +13,14 @@
   --hover-surface: #ffffff;
   --hover-border: rgba(15, 23, 42, 0.3);
   --hover-shadow: 0 8px 20px rgba(15, 23, 42, 0.12);
+  /*
+   * 「强按钮」（浅底深字 / 深底浅字）的实底配对。
+   * 用变量而不是调色板 token：它在两个主题里是**反色**的（深色主题下是浅底深字），
+   * MUI 的 palette 里没有一个语义色能同时表达这两种取值。
+   */
+  --btn-strong-bg: #1f2430;
+  --btn-strong-bg-hover: #313a4d;
+  --btn-strong-fg: #ffffff;
 }
 
 /* 深色覆盖（沿用原有深色值，由 themeMode.ts 同步 html.dark） */
@@ -26,6 +34,10 @@ html.dark {
   --hover-surface: #1f232c;
   --hover-border: rgba(255, 255, 255, 0.26);
   --hover-shadow: 0 10px 24px rgba(0, 0, 0, 0.45);
+  /* 深色主题下强按钮反过来：浅灰实底 + 深色字（取值来自参考图 #c7c7c7） */
+  --btn-strong-bg: #c7c7c7;
+  --btn-strong-bg-hover: #dedede;
+  --btn-strong-fg: #1a1a1a;
 }
 
 html,

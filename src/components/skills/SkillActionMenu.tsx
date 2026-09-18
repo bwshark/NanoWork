@@ -28,12 +28,20 @@ import type { Skill, SkillOverride } from '@/types';
  */
 export function SkillActionMenu({
   skill,
+  context = 'card',
   anchorEl,
   onClose,
   onSetOverride,
   onUninstall,
 }: {
   skill: Skill;
+  /**
+   * 菜单出现在哪里：卡片上 / 详情窗口里。
+   *
+   * 差别只有一条「去对话」——窗口头部已经有「去试试」（挂载 + 跳转），
+   * 再留一个不挂载的「去对话」会让两个入口看起来是同一件事却结果不同。
+   */
+  context?: 'card' | 'window';
   anchorEl: HTMLElement | null;
   onClose: () => void;
   onSetOverride: (id: string, override: SkillOverride) => void;
@@ -63,14 +71,16 @@ export function SkillActionMenu({
       anchorOrigin={{ horizontal: 'right', vertical: 'bottom' }}
       onClick={(e) => e.stopPropagation()}
     >
-      <MenuRow
-        icon={<ChatBubbleOutlineIcon sx={{ fontSize: 16 }} />}
-        label="去对话"
-        onClick={() => {
-          close();
-          void navigate(ROUTES.chat);
-        }}
-      />
+      {context === 'card' && (
+        <MenuRow
+          icon={<ChatBubbleOutlineIcon sx={{ fontSize: 16 }} />}
+          label="去对话"
+          onClick={() => {
+            close();
+            void navigate(ROUTES.chat);
+          }}
+        />
+      )}
       <MenuRow
         icon={<EditOutlinedIcon sx={{ fontSize: 16 }} />}
         label="编辑"
