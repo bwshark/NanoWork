@@ -9,15 +9,30 @@ import { platform } from '@/platform';
 import { toast } from '@/components/Toast';
 import { ROUTES } from '@/lib/constants';
 import {
-  SKILL_OVERRIDE_ON,
-  SKILL_OVERRIDE_USER_INVOCABLE_ONLY,
+  SKILL_OVERRIDES,
   resolveSkillOverride,
 } from '@/lib/skillOverrides';
-import { skillFileTargets, skillMenuOrigin, skillUninstallBlockReason } from './skillMeta';
+import {
+  SKILL_OVERRIDE_MENU_LABEL,
+  overrideToast,
+  skillFileTargets,
+  skillMenuOrigin,
+  skillUninstallBlockReason,
+} from './skillMeta';
 import type { Skill, SkillOverride } from '@/types';
 
 /**
  * 技能「⋯」菜单：卡片上放不下的动作收在这里。
+ *
+ * ## 底部三行是**同一个字段的单选**（不是三行各管一档的动作）
+ *
+ * `override` 有三档，而界面上那个开关只有两个位置 —— 它管「自动触发」（`on` ⇄
+ * `user-invocable-only`）。所以菜单是唯一能选到 `off`（停用：模型和你都用不了）的
+ * 入口，三档必须**成组出现**：文案固定写档位名，对勾只落在当前那一档上。
+ *
+ * 这三行与开关、以及卡片上的开关，读的都是同一个 `override`，判据分别来自
+ * `skillMeta.isAutoTriggerOn`（开关位置）与 `resolveSkillOverride`（对勾位置），
+ * 不允许任何一处另写一套判断 —— 一旦分叉，用户就会看到「开关开着、菜单说仅手动调用」。
  *
  * ## 不可用的条目**显示但禁用**，并写出原因
  *
@@ -59,7 +74,6 @@ export function SkillActionMenu({
 }) {
   const navigate = useNavigate();
   const override = resolveSkillOverride(skill);
-  const inMiddleState = override === SKILL_OVERRIDE_USER_INVOCABLE_ONLY;
   const uninstallBlock = skillUninstallBlockReason(skill);
   const { dir, md } = skillFileTargets(skill);
   const localDisabled = platform.env !== 'electron' || !skill.path;
@@ -129,25 +143,36 @@ export function SkillActionMenu({
       />
       <Divider sx={{ my: 0.5 }} />
       {/*
-       * 三态覆盖的中间档（FR-3.1）在这里落脚。
-       * 卡片上的开关只能表达「能不能用」，而 `user-invocable-only`
-       * （用户能唤起、模型看不见）用开关表达不出来 —— 塞进开关会让用户
-       * 以为只有两种状态，所以它必须有一个能写文案的入口。
+       * 三档覆盖（FR-3.1）成组出现 —— 这是唯一能选到全部三档的地方（见文件头注释）。
+       * 每行固定写**档位名**、对勾只落在当前档上：文案与对勾必须说同一件事。
+       * 旧实现是一行兼两用（文案＝「点了会变成什么」、对勾＝「现在在哪一档」），
+       * 于是中间档下会渲染成 `✓ 完全启用（模型可见）`，而模型其实看不见这个技能。
        */}
-      <MenuRow
-        icon={
-          inMiddleState ? (
-            <CheckIcon sx={{ fontSize: 16 }} />
-          ) : (
-            <Box sx={{ width: 16, height: 16 }} />
-          )
-        }
-        label={inMiddleState ? '完全启用（模型可见）' : '仅手动调用（模型不可见）'}
-        onClick={() => {
-          close();
-          onSetOverride(skill.id, inMiddleState ? SKILL_OVERRIDE_ON : SKILL_OVERRIDE_USER_INVOCABLE_ONLY);
-        }}
-      />
+      {SKILL_OVERRIDES.map((value) => {
+        const current = value === override;
+        return (
+          <MenuRow
+            key={value}
+            radio
+            checked={current}
+            icon={
+              current ? (
+                <CheckIcon sx={{ fontSize: 16 }} />
+              ) : (
+                <Box sx={{ width: 16, height: 16 }} />
+              )
+            }
+            label={SKILL_OVERRIDE_MENU_LABEL[value]}
+            onClick={() => {
+              close();
+              // 点当前档是空操作：不改状态，也不该弹一条「已停用」的假提示
+              if (current) return;
+              onSetOverride(skill.id, value);
+              toast.success(overrideToast(skill.name, value));
+            }}
+          />
+        );
+      })}
     </Menu>
   );
 }
@@ -158,17 +183,29 @@ function MenuRow({
   label,
   hint,
   disabled,
+  radio,
+  checked,
   onClick,
 }: {
   icon: React.ReactNode;
   label: string;
   hint?: string;
   disabled?: boolean;
+  /**
+   * 三档那种「单选行」用 `menuitemradio` + `aria-checked`。
+   *
+   * 不用普通 `menuitem` + 视觉对勾：屏幕阅读器只能念出「完全启用」，念不出
+   * 「这一档是当前档」，而「当前在哪一档」正是这组行唯一要表达的信息。
+   */
+  radio?: boolean;
+  checked?: boolean;
   onClick: () => void;
 }) {
   return (
     <MenuItem
       disabled={disabled}
+      role={radio ? 'menuitemradio' : undefined}
+      aria-checked={radio ? !!checked : undefined}
       onClick={onClick}
       sx={{ fontSize: 13, minWidth: 220, display: 'flex', alignItems: 'center', gap: 1 }}
     >

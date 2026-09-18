@@ -20,22 +20,29 @@ import {
   SKILL_OVERRIDE_USER_INVOCABLE_ONLY,
   resolveSkillOverride,
 } from '@/lib/skillOverrides';
-import { autoTriggerHint, autoTriggerToast, nextAutoTriggerOverride } from './skillMeta';
+import {
+  autoTriggerHint,
+  isAutoTriggerOn,
+  nextAutoTriggerOverride,
+  overrideToast,
+} from './skillMeta';
 import { toast } from '@/components/Toast';
 import type { Skill, SkillOverride } from '@/types';
 
 /**
  * 「我安装的」技能卡（参考样式：图标 + 名称 + 右侧开关，描述两行）。
  *
- * ## 右上角是两个不同的东西，别把它们揉在一起
+ * ## 右上角是三个不同的东西，别把它们揉在一起
  *
- * - **开关**（常驻）：能不能用。`off` ↔ 非 `off`。
- * - **⋯ 菜单 + 置顶**（hover / 键盘聚焦才显形）：一个是动作收纳，一个是列表排序。
+ * - **开关**（常驻）：自动触发是否开启 ⇔ `override === 'on'`（模型可见）。
+ *   关掉它落到**中间档**（模型看不到、你自己还能挂载），**不是** `off` ——
+ *   开关自己的悬停文案就是这么承诺的（「关闭自动触发后…仅支持手动触发」）。
+ *   判据是 `isAutoTriggerOn`，与 ⋯ 菜单里那一档的对勾**同源**，所以两边不会各说各话。
+ * - **⋯ 菜单**（hover / 键盘聚焦才显形）：动作收纳，底部的三行是完整的档位单选 ——
+ *   `off`（停用：模型和你都用不了）只有那里能选到，开关上没有这个位置。
+ * - **置顶**：只改这份列表的顺序（纯本地偏好，不推引擎）。
  *
- * 三态里的中间档（`user-invocable-only`：模型看不到、你自己还能挂载）
- * **没有**自己的按钮 —— 它是一个「和默认值不一样的设置」，归 ⋯ 菜单里那一项管；
- * 给它单独一个按钮会占掉卡片上最贵的位置，而它恰恰是三个动作里最不常用的。
- * 但要付出可发现性代价，所以 `user-invocable-only` 时 ⋯ 会变色
+ * 三态里的中间档没有独立按钮，所以 `user-invocable-only` 时 ⋯ 会变色
  * （`skillMenuAttentionSx`）：卡片上必须留一处痕迹，否则「模型看不见」这件事
  * 只有事后（模型答不出某个技能）才会被发现。
  *
@@ -82,12 +89,16 @@ export function SkillInstalledCard({
   const override = resolveSkillOverride(skill);
   const enabled = override !== SKILL_OVERRIDE_OFF;
   const manualOnly = override === SKILL_OVERRIDE_USER_INVOCABLE_ONLY;
+  /** 开关位置：与 ⋯ 菜单里那一档的对勾同源（`override === 'on'`），不允许各算一套 */
+  const autoTrigger = isAutoTriggerOn(skill);
 
   const handleSwitch = () => {
-    // 下一档与反馈文案都取自 skillMeta：详情窗口有同一个开关的另一个入口，
-    // 两处各写一遍必然漂移（且「已停用」与「已关闭自动触发」是两种语义）
-    onSetOverride(skill.id, nextAutoTriggerOverride(skill));
-    toast.success(autoTriggerToast(skill));
+    // 下一个档位与反馈文案都取自 skillMeta：详情窗口有同一个开关的另一个入口，
+    // 两处各写一遍必然漂移。文案按**落点**说话 —— 关掉开关落到的是中间档
+    // （仍可手动调用），不是停用，这两件事说混了用户就不敢关
+    const next = nextAutoTriggerOverride(skill);
+    onSetOverride(skill.id, next);
+    toast.success(overrideToast(skill.name, next));
   };
 
   const handleCardClick = () => {
@@ -187,7 +198,7 @@ export function SkillInstalledCard({
               <Switch
                 size="small"
                 color="success"
-                checked={enabled}
+                checked={autoTrigger}
                 inputProps={{ 'aria-label': `${skill.name} 自动触发` }}
                 onClick={(e) => e.stopPropagation()}
                 onChange={handleSwitch}

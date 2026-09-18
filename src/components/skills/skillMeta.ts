@@ -3,6 +3,8 @@ import { APP_DISPLAY_NAME } from '@/lib/constants';
 import {
   SKILL_OVERRIDE_OFF,
   SKILL_OVERRIDE_ON,
+  SKILL_OVERRIDE_USER_INVOCABLE_ONLY,
+  isSkillListedToModel,
   resolveSkillOverride,
 } from '@/lib/skillOverrides';
 
@@ -137,29 +139,78 @@ export function skillMenuOrigin(context: 'card' | 'window'): {
 }
 
 /**
- * 自动触发开关的下一档取值。
+ * ⋯ 菜单里三档的**行文案**（顺序即 `SKILL_OVERRIDES`：完全启用 → 仅手动 → 停用）。
  *
- * 开关是**二元**的（`off` ↔ `on`），刻意不经过中间档：中间档
- * （模型不可见、用户可挂载）表达不出「能不能用」，只能由菜单里
- * 那一项独立承担，塞进开关会让用户以为状态只有两种。
+ * 与 `@/lib/skillOverrides` 的 `SKILL_OVERRIDE_META` 分工不同：那一份是
+ * 「档位名 + 一句解释」，给任何提到档位的地方用；这一份只服务菜单行 ——
+ * 括号里补上该档的**实际后果**（模型可见 / 模型不可见 / 都不可用），
+ * 因为「完全启用」和「仅手动调用」这两个词本身差在哪并不自解释。
+ *
+ * 行文案必须是**状态的名称**，绝不能写成「点了会变成什么」。菜单行同时挂着
+ * 一个对勾表示「当前就在这一档」，文案若写动作，对勾与文字就会互相打架：
+ * 曾经出现过中间档下渲染成 `✓ 完全启用（模型可见）` —— 对勾说「你已经是完全启用」，
+ * 而模型其实根本看不见这个技能，且卡片开关此时还是「开着」。
+ *
+ * 键写成字面量而不是 `[SKILL_OVERRIDE_ON]`：常量声明成联合类型
+ * （`const SKILL_OVERRIDE_ON: SkillOverride = 'on'`）时，TS 不会把计算键
+ * 展开成三个具体键，对象会被推成 `{ [x: string]: string }` 而对不上 `Record`。
+ * 字面量在这里同样安全 —— `Record<SkillOverride, string>` 会强制三档齐全，
+ * 写错一个键名是「多出一个属性」的编译错误。
  */
-export function nextAutoTriggerOverride(skill: Skill): SkillOverride {
-  return resolveSkillOverride(skill) === SKILL_OVERRIDE_OFF
-    ? SKILL_OVERRIDE_ON
-    : SKILL_OVERRIDE_OFF;
+export const SKILL_OVERRIDE_MENU_LABEL: Record<SkillOverride, string> = {
+  on: '完全启用（模型可见）',
+  'user-invocable-only': '仅手动调用（模型不可见）',
+  off: '停用（都不可用）',
+};
+
+/**
+ * 开关的「开」位置 = **模型可见**（`override === 'on'`）。
+ *
+ * 判据直接用引擎同构的 `isSkillListedToModel`：开关管的就是「模型能不能自主
+ * 发现并加载它」，而这一档恰好也是唯一会真的被自动触发的那一档。
+ *
+ * 刻意**不用** `override !== 'off'`：那样中间档也会显示成「开着」，于是同一个
+ * 开关在中间档与完全启用档下长得一模一样，而 ⋯ 菜单里的对勾却在两者之间跳 ——
+ * 用户看到的「开关和菜单不同步」就是这么来的。
+ */
+export function isAutoTriggerOn(skill: Skill): boolean {
+  return isSkillListedToModel(resolveSkillOverride(skill));
 }
 
 /**
- * 开关切换后的反馈文案。
+ * 开关的下一位：`on` ⇄ `user-invocable-only`（二元，**不经过 `off`**）。
  *
- * 措辞统一放这里：卡片与详情页是**同一个开关的两个入口**，说成
- * 「已停用」vs「已关闭自动触发」会让用户以为是两件事 —— 后者才是真实语义
- * （技能还在磁盘上、描述还能看，只是模型不再自动触发它）。
+ * 关掉开关**不等于停用**：关掉的是「自动触发」，技能还在磁盘上，你随时能手动
+ * 挂载或 `$调用` —— 这正是开关自己的悬停文案所承诺的
+ * （「关闭自动触发后…仅支持手动触发」）。真正的「停用」（模型和你都用不了）
+ * 是另一档，只在 ⋯ 菜单那三行里选。
+ *
+ * 从 `off` 打开时落到 `on`、而不是回到中间档：用户点的是「打开自动触发」，
+ * 落在一个仍然自动触发不了的状态，看起来就像没生效。
  */
-export function autoTriggerToast(skill: Skill): string {
-  return resolveSkillOverride(skill) === SKILL_OVERRIDE_OFF
-    ? `${skill.name} 已开启自动触发`
-    : `${skill.name} 已关闭自动触发`;
+export function nextAutoTriggerOverride(skill: Skill): SkillOverride {
+  return isAutoTriggerOn(skill) ? SKILL_OVERRIDE_USER_INVOCABLE_ONLY : SKILL_OVERRIDE_ON;
+}
+
+/**
+ * 档位变更后的反馈文案：**按变更后的结果说话**。
+ *
+ * 参数是 `next`（落点）而不是当前值。早期实现是从当前值反推结果
+ * （「当前是关着的 ⇒ 说已开启」），三档之后这种反推不再成立：当前处于中间档时
+ * 既可能变成 `on`、也可能变成 `off`，一句反推文案必然说错一半。
+ *
+ * 措辞统一放这里：卡片开关、详情窗口开关、⋯ 菜单里的三档读的是**同一个字段**，
+ * 各写一份文案必然漂移（「已停用」vs「已关闭自动触发」会被当成两件事）。
+ *
+ * 「关闭自动触发」后面补一句「仅支持手动调用」：这句正是悬停说明里的承诺，
+ * 用户看完气泡再操作，得到的反馈要和气泡里说的一致。
+ */
+export function overrideToast(name: string, next: SkillOverride): string {
+  if (next === SKILL_OVERRIDE_ON) return `${name} 已开启自动触发`;
+  if (next === SKILL_OVERRIDE_USER_INVOCABLE_ONLY) {
+    return `${name} 已关闭自动触发，仅支持手动调用`;
+  }
+  return `${name} 已停用（模型和你都用不了）`;
 }
 
 /**
@@ -172,13 +223,24 @@ export function autoTriggerToast(skill: Skill): string {
  * 开关是二元的，两句话必须**成对**存在：只写「关掉会怎样」的话，
  * 已经关着的技能（开关在左边）就没有任何解释，用户不敢往回开。
  *
+ * 两句话与开关的两个位置**逐字对应**：开着（`isAutoTriggerOn`）⇒ 说关掉会变成
+ * 「仅手动调用」；关着（中间档或停用）⇒ 说打开会变成完全启用。所以这段文案同时是
+ * `nextAutoTriggerOverride` 的说明书，两者必须一起改 ——
+ * 承诺「关掉后仍能手动触发」而实际落进 `off`（连挂载都挂不上），就是欺骗。
+ *
+ * 分支判据必须是 `isAutoTriggerOn(skill)`，**不能**再写 `override === 'off'`：
+ * 那是同一条规则的第二份实现，中间档下会算出差一档的答案（开关明明在左边，
+ * 气泡却说「关闭自动触发后…」）。这类「同一个问题两处各算一遍」正是本次要根除的。
+ *
  * 文案里带应用名（`APP_DISPLAY_NAME`）而不是写死「WorkBuddy」：这是本应用的
  * 行为说明，用户在自己的客户端里看到别的产品名会直接不信这条提示。
  */
 export function autoTriggerHint(skill: Skill): string {
-  return resolveSkillOverride(skill) === SKILL_OVERRIDE_OFF
-    ? `开启自动触发后，${APP_DISPLAY_NAME} 将在对话中按需自动触发此技能`
-    : `关闭自动触发后，${APP_DISPLAY_NAME} 将不在对话中自动触发此技能，仅支持手动触发`;
+  // 开着 ⇒ 说「关掉会怎样」；关着 ⇒ 说「打开会怎样」。判据与开关位置同源，
+  // 分支方向必须跟着它走：反过来写就会「按钮在右边、气泡讲怎么打开」
+  return isAutoTriggerOn(skill)
+    ? `关闭自动触发后，${APP_DISPLAY_NAME} 将不在对话中自动触发此技能，仅支持手动触发`
+    : `开启自动触发后，${APP_DISPLAY_NAME} 将在对话中按需自动触发此技能`;
 }
 
 /**

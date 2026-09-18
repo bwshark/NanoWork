@@ -41,8 +41,9 @@ import {
 } from './skillCardSx';
 import {
   autoTriggerHint,
-  autoTriggerToast,
+  isAutoTriggerOn,
   nextAutoTriggerOverride,
+  overrideToast,
   skillInfoRows,
 } from './skillMeta';
 import { SKILL_OVERRIDE_OFF, resolveSkillOverride } from '@/lib/skillOverrides';
@@ -105,16 +106,24 @@ export function SkillDetailWindow({
   }, [s?.id]);
 
   const enabled = s ? resolveSkillOverride(s) !== SKILL_OVERRIDE_OFF : false;
+  /**
+   * 开关的「开」位置：模型可见（`override === 'on'`）。
+   *
+   * 与卡片上那个开关、以及 ⋯ 菜单里的对勾**读同一个字段、用同一份判据**
+   * （`isAutoTriggerOn`）—— 三个入口不同步时，用户会以为它们是三个设置。
+   */
+  const autoTrigger = s ? isAutoTriggerOn(s) : false;
   const overview = s?.prompt?.trim() ?? '';
   const description = s?.description ?? '';
   const expandable = description.length > EXPAND_THRESHOLD;
 
   const handleSwitch = () => {
     if (!s) return;
-    onSetOverride(s.id, nextAutoTriggerOverride(s));
-    // 开关是二元的，反馈必须点名「关掉的是什么」：同样一个开关，
-    // 「已停用」和「已关闭自动触发」对用户的理解完全不同，后者才是真实语义。
-    toast.success(autoTriggerToast(s));
+    // 反馈按**落点**说话：关掉开关落到中间档（仍可手动调用），不是停用 ——
+    // 说得含糊用户就不敢关（以为等于把这个技能扔掉）
+    const next = nextAutoTriggerOverride(s);
+    onSetOverride(s.id, next);
+    toast.success(overrideToast(s.name, next));
   };
 
   return (
@@ -190,7 +199,7 @@ export function SkillDetailWindow({
                   <Switch
                     size="small"
                     color="success"
-                    checked={enabled}
+                    checked={autoTrigger}
                     inputProps={{ 'aria-label': `${s.name} 自动触发` }}
                     onChange={handleSwitch}
                     sx={skillSwitchSx}

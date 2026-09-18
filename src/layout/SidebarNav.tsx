@@ -514,7 +514,7 @@ function TasksChannelsTabs() {
         }}
       >
         <Tab value="tasks" label="任务" />
-        <Tab value="channels" label="频道" />
+        <Tab value="channels" label="助理" />
       </Tabs>
       <Box
         sx={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}

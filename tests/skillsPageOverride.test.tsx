@@ -24,13 +24,20 @@
  *    Popper 的真实坐标，所以这条几何约束由 `skillMenuOrigin` 的纯函数单测守住，
  *    实际像素另外用 Playwright 截图对照。
  *
- * ## 关于「三态」的控件形态
+ * ## 关于「三态」的控件形态（**三个入口必须同步**，这是本节的主要契约）
  *
- * 三态**不是**三个并列的按钮：
+ * 一个 `override` 字段，三个入口，任何时刻都要说同一件事：
  *
- * - 开关管「能不能用」（`off` ↔ 非 `off`），卡片与详情窗口各有一个，写的是同一份覆盖；
- * - 中间档（`user-invocable-only`：模型看不见、你还能挂载）只在 ⋯ 菜单里那一项上。
- *   它没有独立按钮 —— 所以「卡片上找不到中间档入口」是**有意的**，别把它当回归。
+ * - **卡片开关 / 详情窗口开关**（常驻）：自动触发开 ⇄ 关 ⇔ `override === 'on'`。
+ *   关掉落到**中间档**（模型看不见、你还能手动挂载），**不是** `off` ——
+ *   判据走 `isAutoTriggerOn`（与引擎同构的 `isSkillListedToModel` 同源）。
+ * - **⋯ 菜单底部三行**：完整的档位单选，`aria-checked` 落在当前档上。
+ *   `off`（停用：模型和你都用不了）只有这里能选到，开关上没有这个位置。
+ *
+ * 这里要防的回归很具体：菜单曾经是「一行兼两用」——文案写**动作**、对勾写**当前档**，
+ * 于是中间档下渲染成 `✓ 完全启用（模型可见）`（而模型其实看不见它），
+ * 同时开关因用 `override !== 'off'` 仍是「开着」，两处彻底对不上。
+ * 所以**跨控件**的断言（菜单选完 → 开关跟着动）必须有，只测单点测不出来。
  *
  * 卡片右上角另一个图标按钮是**置顶**，它和三态无关：一个改技能属性（要推引擎），
  * 一个只改这份列表的顺序（纯本地偏好）。两者外形相近，断言必须分开，
@@ -41,7 +48,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react';
 import { MemoryRouter } from 'react-router-dom';
 import { SkillsPage } from '@/pages/skills/SkillsPage';
-import { autoTriggerHint, orderInstalledSkills, skillMenuOrigin } from '@/components/skills/skillMeta';
+import {
+  autoTriggerHint,
+  isAutoTriggerOn,
+  nextAutoTriggerOverride,
+  orderInstalledSkills,
+  overrideToast,
+  skillMenuOrigin,
+} from '@/components/skills/skillMeta';
 import { useSkillsStore } from '@/stores/skillsStore';
 import { useSessionsStore } from '@/stores/sessionsStore';
 import { platform } from '@/platform';
@@ -146,17 +160,44 @@ function installedOrder(host: HTMLElement): string[] {
 }
 
 /**
- * 菜单项（MUI `MenuItem` 的 `role="menuitem"`）。
+ * 菜单项（MUI `MenuItem`）。
+ *
+ * `[role^="menuitem"]` 同时覆盖两类：普通动作是 `menuitem`，底部的三档是
+ * `menuitemradio`（单选行，靠 `aria-checked` 表达当前档）。
  *
  * 菜单走 Portal 到 `document.body`，不在 host 里，所以只能全局查；
  * 按文案找而不是按索引 —— 菜单项是**排列会变**的一列动作。
+ *
+ * 同名取**最后一个**：MUI 的 Menu 退场动画约 200ms，这期间上一份菜单还留在
+ * DOM 里，先查到的是那份已经作废的旧菜单（对勾位置是旧状态）——
+ * 结果是「断言看着过了，其实读的是已关闭的菜单」。
  */
 function menuItem(label: string): HTMLElement | null {
-  return (
-    (Array.from(document.querySelectorAll('[role="menuitem"]')).find((el) =>
-      (el.textContent ?? '').includes(label),
-    ) as HTMLElement | undefined) ?? null
-  );
+  const hits = Array.from(document.querySelectorAll('[role^="menuitem"]')).filter((el) =>
+    (el.textContent ?? '').includes(label),
+  ) as HTMLElement[];
+  return hits.length ? hits[hits.length - 1] : null;
+}
+
+/**
+ * 走真实路径改档位：打开卡片的 ⋯ 菜单 → 点某一档。
+ *
+ * 停用（`off`）只在菜单里 —— 卡片开关的两个位置是「自动触发」的开/关，
+ * 关掉落到中间档。所以凡是要造一个 `off` 的前置条件，都必须走这里，
+ * 顺便把「三档在菜单里真的点得到」也测了。
+ */
+async function setOverrideViaMenu(host: HTMLElement, name: string, label: string): Promise<void> {
+  click(byAria(`${name} 操作菜单`, host));
+  await flush();
+  const item = menuItem(label);
+  expect(item, `菜单里未找到「${label}」`).toBeTruthy();
+  click(item);
+  await flush();
+}
+
+/** 卡片上那个开关的选中态（`aria-label` 落在真正的 checkbox input 上） */
+function switchChecked(host: HTMLElement, name: string): boolean {
+  return (byAria(`${name} 自动触发`, host) as HTMLInputElement | null)?.checked ?? false;
 }
 
 describe('技能页：真实字段展示（已安装技能详情页）', () => {
@@ -195,9 +236,9 @@ describe('技能页：真实字段展示（已安装技能详情页）', () => {
     await flush();
 
     // 市场弹窗复用同一份 `skillInfoRows`，也必须同样干净 —— 两个入口各写一份
-    // 字段列表正是这次要根除的问题。市场卡只在技能未启用时出现，先停用它。
-    click(byAria('用户级技能 自动触发', host));
-    await flush();
+    // 字段列表正是要根除的那个问题。市场卡只在技能「停用」时出现，
+    // 而停用只从 ⋯ 菜单里可点（开关关掉的是自动触发，技能仍在已安装池里）。
+    await setOverrideViaMenu(host, '用户级技能', '停用');
     click(byAria('返回全部技能', host));
     await flush();
     click(byAria('用户级技能 详情', host));
@@ -228,7 +269,7 @@ describe('技能页：真实字段展示（已安装技能详情页）', () => {
 });
 
 describe('技能页：详情页的交互（开关 / 去试试 / 概述）', () => {
-  it('详情页的开关与卡片上的开关是同一个（写入同一份 override）', async () => {
+  it('详情窗口的开关与卡片上的开关是同一个：关掉它，两处一起变成「关」', async () => {
     const host = await mountInstalled();
     const panel = await openDetail(host, '用户级技能');
 
@@ -236,21 +277,58 @@ describe('技能页：详情页的交互（开关 / 去试试 / 概述）', () =
     click(byAria('用户级技能 自动触发', panel));
     await flush();
 
+    // 关掉的是「自动触发」→ 落到中间档（模型看不见、你还能手动挂载），不是停用
     const stored = useSkillsStore.getState().skills.find((s) => s.id === 'user-skill');
-    expect(stored?.override).toBe('off');
-    expect(stored?.enabled).toBe(false);
-    // 停用后窗口留在原地（不是被关掉），开关自己变灰 —— 用户能原地再打开
+    expect(stored?.override).toBe('user-invocable-only');
+    expect(stored?.enabled).toBe(true);
+    // 窗口留在原地（不是被关掉），背后那张卡上的同一个开关也必须跟着回到「关」
     expect(detailWindowOpen()).toBe(true);
+    expect(switchChecked(host, '用户级技能')).toBe(false);
     unmount();
   });
 
-  it('停用时「去试试」禁用 —— 挂载后不会被注入，点了等于没反应', async () => {
+  it('窗口内的 ⋯ 菜单改档，窗口里那个开关立刻跟上（同一个字段的两个入口）', async () => {
     const host = await mountInstalled();
-    click(byAria('用户级技能 自动触发', host));
+    const panel = await openDetail(host, '用户级技能');
+    expect((byAria('用户级技能 自动触发', panel) as HTMLInputElement).checked).toBe(true);
+
+    // 在窗口里选「仅手动调用」：开关必须同时弹回左边 ——
+    // 这一条正是用户报的「算不算同一个功能」：菜单说仅手动、开关还开着就是不对
+    click(byAria('用户级技能 操作菜单', panel));
     await flush();
+    click(menuItem('仅手动调用'));
+    await flush();
+
+    expect((byAria('用户级技能 自动触发', panel) as HTMLInputElement).checked).toBe(false);
+    // 反向：再打开一次开关，菜单的对勾要回到「完全启用」上。
+    // 等上一份菜单退场（约 200ms）再开新的，否则读到的是还在淡出的旧菜单
+    click(byAria('用户级技能 自动触发', panel));
+    await flush();
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 400));
+    });
+    click(byAria('用户级技能 操作菜单', panel));
+    await flush();
+    expect(menuItem('完全启用')?.getAttribute('aria-checked')).toBe('true');
+    expect(menuItem('仅手动调用')?.getAttribute('aria-checked')).toBe('false');
+    unmount();
+  });
+
+  it('停用时「去试试」禁用；仅手动调用时仍可用（两档的差别就在这里）', async () => {
+    const host = await mountInstalled();
+    // 停用（off）只从 ⋯ 菜单里点得到：开关关掉的是自动触发，落到的是中间档
+    await setOverrideViaMenu(host, '用户级技能', '停用');
 
     const panel = await openDetail(host, '用户级技能');
     expect(buttonByText(panel, '去试试')?.disabled).toBe(true);
+    unmount();
+
+    // 反向护栏：中间档只是「模型看不见」，用户照样挂得上，
+    // 把它的「去试试」也禁用会让「仅手动调用」变得毫无意义
+    const host2 = await mountInstalled();
+    await setOverrideViaMenu(host2, '用户级技能', '仅手动调用');
+    const panel2 = await openDetail(host2, '用户级技能');
+    expect(buttonByText(panel2, '去试试')?.disabled).toBe(false);
     unmount();
   });
 
@@ -376,8 +454,7 @@ describe('技能页：详情页的交互（开关 / 去试试 / 概述）', () =
   it('市场卡点开的是「预览弹窗」，与已安装的「详情窗口」是两种形态', async () => {
     const host = await mountInstalled();
     // 停用后该技能回到市场池，此时市场卡才存在
-    click(byAria('用户级技能 自动触发', host));
-    await flush();
+    await setOverrideViaMenu(host, '用户级技能', '停用');
     click(byAria('返回全部技能', host));
     await flush();
 
@@ -420,7 +497,22 @@ describe('技能页：三态控制', () => {
     unmount();
   });
 
-  it('已经处于中间档时，⋯ 菜单给出的是「改回完全启用」', async () => {
+  it('⋯ 菜单把三档列全，对勾只落在当前档上（行文案 = 状态名，不是动作名）', async () => {
+    const host = await mountInstalled();
+    click(byAria('用户级技能 操作菜单', host));
+    await flush();
+
+    // 三行必须同时在：少一行就等于有一档从界面上消失了
+    for (const label of ['完全启用', '仅手动调用', '停用']) {
+      expect(menuItem(label), `菜单缺少「${label}」这一档`).toBeTruthy();
+    }
+    expect(menuItem('完全启用')?.getAttribute('aria-checked')).toBe('true');
+    expect(menuItem('仅手动调用')?.getAttribute('aria-checked')).toBe('false');
+    expect(menuItem('停用')?.getAttribute('aria-checked')).toBe('false');
+    unmount();
+  });
+
+  it('处于中间档时，对勾落在中间档那一行', async () => {
     const host = await mountInstalled();
     useSkillsStore.setState({
       skills: useSkillsStore
@@ -433,13 +525,28 @@ describe('技能页：三态控制', () => {
 
     click(byAria('用户级技能 操作菜单', host));
     await flush();
-    // 菜单必须反映**当前**档位，而不是永远只显示「设为中间档」那一句
-    expect(menuItem('完全启用')).toBeTruthy();
-    expect(menuItem('仅手动调用')).toBeNull();
+    // 曾经这里渲染成 `✓ 完全启用（模型可见）`：文案跟着状态翻转、对勾表示的是
+    // 「当前在中间档」，两处都在撒谎。现在行文案固定，只有对勾说明位置。
+    expect(menuItem('仅手动调用')?.getAttribute('aria-checked')).toBe('true');
+    expect(menuItem('完全启用')?.getAttribute('aria-checked')).toBe('false');
     unmount();
   });
 
-  it('自动触发开关切到 off，卡片留在列表里（原地可再启用）', async () => {
+  it('菜单里选「仅手动调用」后，卡片开关跟着弹回左边（同一个字段）', async () => {
+    const host = await mountInstalled();
+    expect(switchChecked(host, '用户级技能')).toBe(true);
+
+    await setOverrideViaMenu(host, '用户级技能', '仅手动调用');
+
+    expect(
+      useSkillsStore.getState().skills.find((s) => s.id === 'user-skill')?.override,
+    ).toBe('user-invocable-only');
+    // 这就是用户报的「不同步」：菜单说仅手动调用，开关必须同时变成「关」
+    expect(switchChecked(host, '用户级技能')).toBe(false);
+    unmount();
+  });
+
+  it('开关关掉落到中间档（不是停用），卡片留在列表里可原地再打开', async () => {
     const host = await mountInstalled();
 
     // 开关的 aria-label 落在真正的 checkbox input 上：点它才会走 MUI 的 onChange，
@@ -450,18 +557,47 @@ describe('技能页：三态控制', () => {
     await flush();
 
     const stored = useSkillsStore.getState().skills.find((s) => s.id === 'user-skill');
-    expect(stored?.override).toBe('off');
-    expect(stored?.enabled).toBe(false);
+    // 关掉的是自动触发：模型不再自主加载，但技能仍可用（用户还能手动挂载）
+    expect(stored?.override).toBe('user-invocable-only');
+    expect(stored?.enabled).toBe(true);
+    expect(switchChecked(host, '用户级技能')).toBe(false);
 
     // 停用 ≠ 卸载：卡片仍留在「我安装的」里，用户能直接再打开它
     expect(cardOf(host, '用户级技能')).toBeTruthy();
+
+    // 再点回来 = 打开自动触发 → 落到完全启用（停在触发不了的状态会像没生效）
+    click(byAria('用户级技能 自动触发', host));
+    await flush();
+    expect(
+      useSkillsStore.getState().skills.find((s) => s.id === 'user-skill')?.override,
+    ).toBe('on');
+    expect(switchChecked(host, '用户级技能')).toBe(true);
+    unmount();
+  });
+
+  it('菜单里选「停用」是独立的一档：开关仍为「关」，卡片留在列表里', async () => {
+    const host = await mountInstalled();
+    await setOverrideViaMenu(host, '用户级技能', '停用');
+
+    const stored = useSkillsStore.getState().skills.find((s) => s.id === 'user-skill');
+    expect(stored?.override).toBe('off');
+    expect(stored?.enabled).toBe(false);
+    // 中间档与停用在开关上长得一样（都是「关」），区分它们的只有菜单对勾与卡片的表现
+    expect(switchChecked(host, '用户级技能')).toBe(false);
+    expect(cardOf(host, '用户级技能')).toBeTruthy();
+
+    // 从停用点开关 = 「打开自动触发」→ 直接回到完全启用
+    click(byAria('用户级技能 自动触发', host));
+    await flush();
+    expect(
+      useSkillsStore.getState().skills.find((s) => s.id === 'user-skill')?.override,
+    ).toBe('on');
     unmount();
   });
 
   it('停用后该技能回到市场视图，可再次安装', async () => {
     const host = await mountInstalled();
-    click(byAria('用户级技能 自动触发', host));
-    await flush();
+    await setOverrideViaMenu(host, '用户级技能', '停用');
 
     // 返回按钮是图标按钮（无文字），只能按 aria-label 找。
     click(byAria('返回全部技能', host));
@@ -592,9 +728,8 @@ describe('技能页：置顶（列表顺序，与三态无关）', () => {
     await flush();
     expect(byAria('用户级技能 置顶', host)?.getAttribute('aria-pressed')).toBe('true');
 
-    // 停用后置顶仍在：两件事互不相干（停用只是压暗卡片）
-    click(byAria('用户级技能 自动触发', host));
-    await flush();
+    // 停用后置顶仍在：两件事互不相干（停用只是压暗卡片，不改排序偏好）
+    await setOverrideViaMenu(host, '用户级技能', '停用');
     expect(useSkillsStore.getState().pinnedIds).toContain('user-skill');
     expect(installedOrder(host)[0]).toContain('用户级技能');
     unmount();
@@ -624,12 +759,47 @@ describe('技能页：自动触发开关的悬停说明', () => {
   });
 
   it('开关关着时给的是「打开之后会怎样」——两个方向都必须有话说', () => {
-    // 只写一句话的实现会让「已经关着」的技能没有任何解释，用户不敢往回开
+    // 只写一句话的实现会让「已经关着」（中间档或停用）的技能没有任何解释，
+    // 用户不敢往回开
     const on = autoTriggerHint({ override: 'on' } as Skill);
+    const mid = autoTriggerHint({ override: 'user-invocable-only' } as Skill);
     const off = autoTriggerHint({ override: 'off' } as Skill);
     expect(on).toContain('关闭自动触发后');
+    expect(mid).toContain('开启自动触发后');
     expect(off).toContain('开启自动触发后');
-    expect(on).not.toBe(off);
+    expect(on).not.toBe(mid);
+  });
+});
+
+/**
+ * 开关只有两个位置，字段有三档 —— 这个映射是纯逻辑，jsdom 量不到、也不依赖布局，
+ * 所以在这里把契约钉死。文案与映射**必须成对**：气泡承诺「关掉后仅支持手动触发」，
+ * 落点就必须是中间档，落进 `off`（连挂载都挂不上）等于欺骗用户。
+ */
+describe('技能页：开关位置 ⇄ 三档的映射契约', () => {
+  const mk = (override: Skill['override']): Skill => ({ id: 'x', name: 'x', override } as Skill);
+
+  it('开 = 模型可见（完全启用），不是「非停用」', () => {
+    expect(isAutoTriggerOn(mk('on'))).toBe(true);
+    expect(isAutoTriggerOn(mk('user-invocable-only'))).toBe(false);
+    expect(isAutoTriggerOn(mk('off'))).toBe(false);
+  });
+
+  it('关掉开关落到中间档；从中间档或停用打开都落到完全启用', () => {
+    expect(nextAutoTriggerOverride(mk('on'))).toBe('user-invocable-only');
+    expect(nextAutoTriggerOverride(mk('user-invocable-only'))).toBe('on');
+    expect(nextAutoTriggerOverride(mk('off'))).toBe('on');
+  });
+
+  it('反馈文案按落点说话：三档各一句，且互不相同', () => {
+    const [on, mid, off] = (['on', 'user-invocable-only', 'off'] as const).map((v) =>
+      overrideToast('技能', v),
+    );
+    expect(new Set([on, mid, off]).size).toBe(3);
+    expect(on).toContain('已开启');
+    // 关掉自动触发 ≠ 停用：文案必须点名「还能手动调用」，否则用户不敢关
+    expect(mid).toContain('仅支持手动调用');
+    expect(off).toContain('停用');
   });
 });
 
