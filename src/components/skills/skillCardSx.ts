@@ -20,7 +20,7 @@
  */
 export const skillGridSx = {
   display: 'grid',
-  gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
+  gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))',
   gap: 2,
   // 市场卡 hover 会展开描述而变高：顶对齐，避免同排其他卡片被一起拉长
   alignItems: 'flex-start' as const,
