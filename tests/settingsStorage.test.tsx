@@ -42,7 +42,6 @@ const INFO: StorageInfo = {
     usedBytes: 262 * 1024 ** 3,
     freeBytes: 38 * 1024 ** 3,
   },
-  assetsDir: 'C:\\Users\\tester\\.nanowork',
   defaultWorkspaceDir: 'C:\\Users\\tester\\NanoWork',
 };
 
@@ -98,14 +97,46 @@ describe('存储卡片 · 系统缓存目录', () => {
 
     expect(host.textContent).toContain(INFO.cacheDir);
     expect(host.textContent).toContain('存放对话记录、运行缓存与临时文件');
-    // 用户资产在另一个根下：占用条只统计缓存目录，这里必须把另一半说清楚
-    expect(host.textContent).toContain(INFO.assetsDir);
-    expect(host.textContent).toContain('用户资产');
 
     click(buttonByText(host, '打开目录'));
     await flush();
 
     expect(openPath).toHaveBeenCalledWith(INFO.cacheDir);
+  });
+
+  it('路径行是标题下方唯一的一行，不额外挂说明（对齐 WorkBuddy 存储卡片）', async () => {
+    vi.spyOn(platform, 'storageInfo').mockResolvedValue(INFO);
+
+    const host = mount(<StorageCard />);
+    await flush();
+
+    // 参考图这一栏只有「路径 · 用途」一行。之前为交代「用户资产另存于 …」
+    // 在下面加过一行，卡片整体比参考图胖一圈，且那份说明在「数据管理 → 数据落点」
+    // 里已经完整存在（还带真实路径），属于重复。这里锁住它不再长回来。
+    const pathLine = Array.from(host.querySelectorAll('p')).find((p) =>
+      p.textContent?.includes(INFO.cacheDir),
+    );
+    expect(pathLine).toBeTruthy();
+    expect(pathLine?.nextElementSibling).toBeNull();
+  });
+
+  it('右上角「打开目录」被夹在与标题行等高的盒子里，不会掉到路径那一行', async () => {
+    vi.spyOn(platform, 'storageInfo').mockResolvedValue(INFO);
+
+    const host = mount(<StorageCard />);
+    await flush();
+
+    // jsdom 不做布局，量不到真实中心点；能锁住的是「按钮外面套了一个与标题行
+    // 等高的垂直居中盒子」这个前提——它成立时两者的中心必然重合。MUI 的 small
+    // Button 比标题行高约 10px，直接顶部对齐会让按钮明显下沉到路径那一行去。
+    const button = buttonByText(host, '打开目录');
+    expect(button).toBeTruthy();
+    const aligner = button!.parentElement;
+    expect(aligner).toBeTruthy();
+    const style = getComputedStyle(aligner!);
+    expect(style.height).toBe('21px');
+    expect(style.display).toBe('flex');
+    expect(style.alignItems).toBe('center');
   });
 
   it('占用条按「缓存 / 已用（扣掉缓存）/ 可用」三段划分，且文案同源', async () => {

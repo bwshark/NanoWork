@@ -41,6 +41,10 @@ const SEGMENT_COLOR = {
   free: 'action.disabledBackground',
 } as const;
 
+/** 区块标题的字号与行高。行高另外被右上角操作按钮的对齐盒复用，所以抽成常量。 */
+const TITLE_FONT_SIZE = 14;
+const TITLE_LINE_HEIGHT = TITLE_FONT_SIZE * 1.5;
+
 /** 图例项：圆点 + 文案，值放 tooltip（参考图右侧只留「已用 / 共」一处数字） */
 function LegendItem({
   color,
@@ -148,7 +152,9 @@ export function StorageCard() {
       <Box sx={{ py: 2 }}>
         <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 2 }}>
           <Box sx={{ minWidth: 0, flex: 1 }}>
-            <Typography sx={{ fontSize: 14, fontWeight: 600, lineHeight: 1.5 }}>
+            <Typography
+              sx={{ fontSize: TITLE_FONT_SIZE, fontWeight: 600, lineHeight: `${TITLE_LINE_HEIGHT}px` }}
+            >
               系统缓存目录
             </Typography>
             <Typography
@@ -163,40 +169,34 @@ export function StorageCard() {
               {info ? info.cacheDir : '正在读取…'}
               {info && ' · 存放对话记录、运行缓存与临时文件'}
             </Typography>
-            {/* 本项目的应用数据刻意分成两个根（见「数据管理 → 数据落点」）。
-                占用条与「打开目录」都以缓存目录为准，那用户资产那半边就永远
-                看不见了——补一行说明，比让人以为「记忆和技能不存在磁盘上」好。 */}
-            {info && (
-              <Typography
-                sx={{
-                  fontSize: 12,
-                  color: 'text.secondary',
-                  opacity: 0.85,
-                  mt: 0.25,
-                  lineHeight: 1.65,
-                  wordBreak: 'break-all',
-                }}
-              >
-                用户资产（设置、记忆、技能、插件）另存于 {info.assetsDir}
-              </Typography>
-            )}
           </Box>
-          <Button
-            size="small"
-            startIcon={<FolderOpenOutlinedIcon fontSize="small" />}
-            disabled={!info}
-            onClick={() => void openCacheDir()}
+          {/* MUI 的 small Button 比标题行高（约 31px vs 14px/1.5 = 21px）。
+              直接 `alignItems: 'flex-start'` 会让按钮整体下沉一截，看着像掉到
+              路径那一行去了；用 `mt` 去凑又会随 MUI 的按钮内边距变化而失准。
+              夹进一个与标题行等高的盒子再垂直居中，两个中心必然重合。 */}
+          <Box
             sx={{
+              height: TITLE_LINE_HEIGHT,
+              display: 'flex',
+              alignItems: 'center',
               flexShrink: 0,
-              textTransform: 'none',
-              color: 'text.secondary',
-              fontSize: 12.5,
-              mt: -0.25,
-              '&:hover': { color: 'text.primary', bgcolor: 'action.hover' },
             }}
           >
-            打开目录
-          </Button>
+            <Button
+              size="small"
+              startIcon={<FolderOpenOutlinedIcon fontSize="small" />}
+              disabled={!info}
+              onClick={() => void openCacheDir()}
+              sx={{
+                textTransform: 'none',
+                color: 'text.secondary',
+                fontSize: 12.5,
+                '&:hover': { color: 'text.primary', bgcolor: 'action.hover' },
+              }}
+            >
+              打开目录
+            </Button>
+          </Box>
         </Box>
 
         {/* 占用条：只画「缓存」与「已用」两段，剩下的容器底色天然就是「可用」——
@@ -249,7 +249,9 @@ export function StorageCard() {
 
       {/* —— 默认工作空间存储路径 —— */}
       <Box sx={{ py: 2 }}>
-        <Typography sx={{ fontSize: 14, fontWeight: 600, lineHeight: 1.5 }}>
+        <Typography
+          sx={{ fontSize: TITLE_FONT_SIZE, fontWeight: 600, lineHeight: `${TITLE_LINE_HEIGHT}px` }}
+        >
           NanoWork 默认工作空间存储路径
         </Typography>
         <Typography

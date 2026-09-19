@@ -2161,7 +2161,6 @@ ipcMain.handle(
      * 指向 `~/.nanowork` 会变成「标签写着几 GB、点开只有几 MB」。
      */
     const cacheDir = STORAGE_ROOTS.electronUserData;
-    const assetsDir = productDir(STORAGE_ROOTS);
     const defaultWorkspaceDir = join(STORAGE_ROOTS.home, DEFAULT_WORKSPACE_DIR_NAME);
 
     // 目录按需建出：卡片上的「打开目录」需要一个真实目标，目录不存在时
@@ -2187,7 +2186,7 @@ ipcMain.handle(
       directorySize(cacheDir),
       diskUsage(cacheDir),
     ]);
-    return { cacheDir, cacheBytes, disk, assetsDir, defaultWorkspaceDir };
+    return { cacheDir, cacheBytes, disk, defaultWorkspaceDir };
   },
 );
 

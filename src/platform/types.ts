@@ -567,11 +567,6 @@ export interface StorageInfo {
   /** 缓存目录所在卷的容量 */
   disk: DiskUsage;
   /**
-   * 用户资产目录（产品主目录 `~/.nanowork`）。
-   * 不在占用条里单独统计，只在卡片上作一行说明——否则同一份说明要维护两遍。
-   */
-  assetsDir: string;
-  /**
    * 内置默认工作空间目录（`<home>/NanoWork`）。
    * 用户未在设置里指定 `defaultWorkspacePath` 时，新建任务落在它下面。
    */
