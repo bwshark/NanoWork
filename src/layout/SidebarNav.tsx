@@ -47,12 +47,14 @@ import { CRON_SESSION_ID_PREFIX } from "@/lib/sessionImport";
 import { filterTasks, isFilterDefault } from "@/lib/taskQuery";
 import {
   DEFAULT_WORKSPACE_LABEL,
+  isSameWorkspacePath,
   resolveWorkspaceLabel,
 } from "@/lib/workspaceLabel";
 import { useSessionsStore } from "@/stores/sessionsStore";
 import { useChannelSessionsStore } from "@/stores/channelSessionsStore";
 import { useAgentsStore } from "@/stores/agentsStore";
 import { useSettingsStore } from "@/stores/settingsStore";
+import { useDefaultWorkspacePath } from "@/stores/storageInfoStore";
 import { useSettingsUiStore } from "@/stores/settingsUiStore";
 import { useTaskQueryStore } from "@/stores/taskQueryStore";
 import { useTasksStore } from "@/stores/tasksStore";
@@ -373,14 +375,25 @@ function compareWorkspaceGroups(a: WorkspaceGroup, b: WorkspaceGroup): number {
   return bt - at;
 }
 
-/** 按工作空间分组：置顶任务优先排在组内最前，其余按 updatedAt 倒序；分组按最近活跃排序，默认组置底 */
-function groupSessionsByWorkdir(
+/**
+ * 按工作空间分组：置顶任务优先排在组内最前，其余按 updatedAt 倒序；分组按最近活跃排序，默认组置底。
+ *
+ * 「落在默认工作空间上」的会话与「没绑工作空间」的会话合并成**同一个组**（key `""`）：
+ * 这两者本来就是同一个语义——任务的实际落点都是设置里那个默认工作空间（旧会话没写
+ * `workdir`，发消息时兜底补上；新会话在建的时候就直接写进去了）。不合并的话侧边栏会
+ * 并排出现两个组：一个叫「默认工作空间」、一个叫默认目录的名字（如 `NanoWork`），
+ * 指向的却是同一个地方，用户无从判断该去哪个组里找自己的任务。
+ */
+export function groupSessionsByWorkdir(
   sessions: Session[],
   aliases: Record<string, string> | undefined,
+  defaultWorkspacePath?: string,
 ): WorkspaceGroup[] {
   const map = new Map<string, Session[]>();
   for (const s of sessions) {
-    const key = s.workdir ?? "";
+    const key = isSameWorkspacePath(s.workdir, defaultWorkspacePath)
+      ? ""
+      : s.workdir ?? "";
     const list = map.get(key);
     if (list) list.push(s);
     else map.set(key, [s]);
@@ -396,7 +409,10 @@ function groupSessionsByWorkdir(
         key === ""
           ? DEFAULT_WORKSPACE_LABEL
           : resolveWorkspaceLabel(key, undefined),
-      fullPath: key,
+      // 默认组的 `fullPath` 填它**当前的真实落点**（设置里的默认工作空间路径），
+      // 悬停分组标题时就能看到任务到底存在哪儿。它没有「更多操作」菜单（不做重命名、
+      // 删除、打开文件夹），所以别处把它当「可操作的真实目录」的代码路径进不来。
+      fullPath: key === "" ? defaultWorkspacePath ?? "" : key,
       kind: "workdir",
       // 组内排序：置顶任务永远在最前（按 updatedAt 倒序作为稳定次序），
       // 其余按 updatedAt 倒序，保证重复置顶/取消时视觉次序稳定
@@ -732,6 +748,9 @@ function SessionList() {
   // 只读不写，写入由 Dialog 提交时通过 settingsStore.setWorkspaceAlias 走，
   // **绝不**回写到任何 session.workdir
   const workspaceAliases = useSettingsStore((s) => s.settings.workspaceAliases);
+  // 「默认工作空间」当前的真实落点（设置 → 通用 → 存储）。分组时要靠它把落在默认
+  // 路径上的会话并进默认组，否则同一个地方会出现两个组。
+  const defaultWorkspacePath = useDefaultWorkspacePath();
   const setWorkspaceAlias = useSettingsStore((s) => s.setWorkspaceAlias);
   // 已「从列表中移除」的会话 id：只影响侧边栏展示，不删任何会话数据。
   // 注：该表自「移除即真删」后不再有新写入，仅用于兼容历史数据（旧版本隐藏过的会话）；
@@ -845,10 +864,14 @@ function SessionList() {
       (s) => !s.id.startsWith(CRON_SESSION_ID_PREFIX),
     );
     return [
-      ...groupSessionsByWorkdir(normalSessions, workspaceAliases),
+      ...groupSessionsByWorkdir(
+        normalSessions,
+        workspaceAliases,
+        defaultWorkspacePath,
+      ),
       ...groupCronSessions(cronSessions, tasks, workspaceAliases),
     ].sort(compareWorkspaceGroups);
-  }, [filteredSessions, workspaceAliases, tasks]);
+  }, [filteredSessions, workspaceAliases, tasks, defaultWorkspacePath]);
 
   // 会话未绑定专家（「新建任务」的默认态）显示中性名而不是「未知 Agent」：
   // 那是正常状态，不是缺数据

@@ -69,7 +69,34 @@ export const useStorageInfoStore = create<StorageInfoState>((set, get) => ({
  * 为了一个几十毫秒的窗口去搬目录，风险远大于收益。
  */
 export function resolveDefaultWorkspacePath(): string | undefined {
-  const custom = useSettingsStore.getState().settings.defaultWorkspacePath?.trim();
-  if (custom) return custom;
-  return useStorageInfoStore.getState().info?.defaultWorkspaceDir;
+  return pickDefaultWorkspacePath(
+    useSettingsStore.getState().settings.defaultWorkspacePath,
+    useStorageInfoStore.getState().info?.defaultWorkspaceDir,
+  );
+}
+
+/**
+ * 有效默认工作空间的判定式本身：用户设置 > 内置默认。
+ *
+ * 抽出来是因为它有两个消费者（响应式 hook 与非响应式的 `resolveDefaultWorkspacePath`），
+ * 两处各写一遍必然出现「按了设置没生效」这种只在某一个入口复现的怪毛病。
+ */
+function pickDefaultWorkspacePath(
+  custom: string | undefined,
+  builtin: string | undefined,
+): string | undefined {
+  return custom?.trim() || builtin;
+}
+
+/**
+ * 「默认工作空间」有效路径的响应式订阅。
+ *
+ * 展示层靠它判断「这个会话是不是落在默认工作空间上」（侧边栏分组、工作空间按钮）。
+ * 这类判断必须在**订阅**里读：用 `resolveDefaultWorkspacePath()` 在渲染期现读是
+ * 拿不到重渲染的——用户改了默认路径或存储信息刚到，界面上还是旧名字。
+ */
+export function useDefaultWorkspacePath(): string | undefined {
+  const custom = useSettingsStore((s) => s.settings.defaultWorkspacePath);
+  const builtin = useStorageInfoStore((s) => s.info?.defaultWorkspaceDir);
+  return pickDefaultWorkspacePath(custom, builtin);
 }

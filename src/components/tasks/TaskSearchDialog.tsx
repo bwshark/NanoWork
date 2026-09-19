@@ -21,6 +21,7 @@ import { DEFAULT_WORKSPACE_LABEL, resolveWorkspaceLabel } from '@/lib/workspaceL
 import { ROUTES } from '@/lib/constants';
 import { useTaskQueryStore } from '@/stores/taskQueryStore';
 import { useSessionsStore } from '@/stores/sessionsStore';
+import { useDefaultWorkspacePath } from '@/stores/storageInfoStore';
 import { useSettingsStore } from '@/stores/settingsStore';
 import type { Session } from '@/types';
 
@@ -39,6 +40,9 @@ export function TaskSearchDialog() {
   const streams = useSessionsStore((s) => s.streams);
   const selectSession = useSessionsStore((s) => s.selectSession);
   const workspaceAliases = useSettingsStore((s) => s.settings.workspaceAliases);
+  // 搜索结果里的工作空间名与侧边栏分组标题必须同名：同一份解析逻辑，同一份
+  // 「默认工作空间」判定（见 `lib/workspaceLabel`）
+  const defaultWorkspacePath = useDefaultWorkspacePath();
 
   /** 当前高亮行下标（键盘导航用） */
   const [activeIndex, setActiveIndex] = useState(0);

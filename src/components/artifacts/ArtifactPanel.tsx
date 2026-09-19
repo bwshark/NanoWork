@@ -26,6 +26,7 @@ import { useSessionsStore } from '@/stores/sessionsStore';
 import { useAgentsStore } from '@/stores/agentsStore';
 import { useArtifactsStore } from '@/stores/artifactsStore';
 import { useSessionUiStore } from '@/stores/sessionUiStore';
+import { useDefaultWorkspacePath } from '@/stores/storageInfoStore';
 import { platform } from '@/platform';
 import type { Artifact, ArtifactType } from '@/types';
 
@@ -86,6 +87,13 @@ export function ArtifactPanel() {
     () => (sessionId ? (bySession[sessionId] ?? []) : []),
     [bySession, sessionId],
   );
+  /**
+   * 「默认工作空间」当前的真实落点。早期会话没有 `workdir`（那时还没有这个设置项），
+   * 但它们发消息时同样会落到这个目录上——面板要显示真实落点，否则会出现
+   * 「概览写着默认工作空间、文件却存在 <home>/NanoWork」的错位，且右上角
+   * 「在资源管理器打开」会以「该会话未设置工作空间」拒绝。
+   */
+  const defaultWorkspacePath = useDefaultWorkspacePath();
 
   /** 分组展开状态（默认全展开，对齐截图里的「概览 ⌄ / 产物 ⌄」） */
   const [overviewOpen, setOverviewOpen] = useState(true);
@@ -106,7 +114,10 @@ export function ArtifactPanel() {
     { label: '模型', value: session?.model?.trim() || '跟随全局默认' },
     { label: '消息数', value: `${session?.messages.length ?? 0} 条` },
     { label: '产物数', value: `${artifacts.length} 个` },
-    { label: '工作空间', value: session?.workdir?.trim() || DEFAULT_WORKSPACE_LABEL },
+    {
+      label: '工作空间',
+      value: session?.workdir?.trim() || defaultWorkspacePath || DEFAULT_WORKSPACE_LABEL,
+    },
     { label: '创建于', value: session ? shortTime(session.createdAt) : '—' },
     { label: '更新于', value: session ? shortTime(session.updatedAt) : '—' },
   ];

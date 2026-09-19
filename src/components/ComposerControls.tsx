@@ -22,8 +22,10 @@ import { useSessionsStore } from '@/stores/sessionsStore';
 import { useSettingsStore } from '@/stores/settingsStore';
 import {
   DEFAULT_WORKSPACE_LABEL,
+  isSameWorkspacePath,
   resolveWorkspaceLabel,
 } from '@/lib/workspaceLabel';
+import { useDefaultWorkspacePath } from '@/stores/storageInfoStore';
 import { getRuntime } from '@/ai/runtime';
 import type { ExecutionMode } from '@/types/event';
 
@@ -83,6 +85,9 @@ export function ComposerControls() {
   const setSessionToolApproval = useSessionsStore((s) => s.setSessionToolApproval);
   const setSessionMode = useSessionsStore((s) => s.setSessionMode);
   const workspaceAliases = useSettingsStore((s) => s.settings.workspaceAliases);
+  // 「默认工作空间」当前的真实落点（设置 → 通用 → 存储）：落在它上面的会话显示
+  // 「默认工作空间」这个语义名，而不是默认目录的末级目录名。
+  const defaultWorkspacePath = useDefaultWorkspacePath();
 
   const [wsMenuAnchor, setWsMenuAnchor] = useState<null | HTMLElement>(null);
   const [permAnchor, setPermAnchor] = useState<null | HTMLElement>(null);
@@ -116,7 +121,8 @@ export function ComposerControls() {
 
   return (
     <>
-      {/* 工作空间按钮：已选目录显示目录名（别名优先），未选即「默认工作空间」 */}
+      {/* 工作空间按钮：未选目录（以及就落在默认工作空间上）一律显示「默认工作空间」，
+          其余显示目录名（别名优先）——名字跟着设置里的默认路径走，不写死目录名 */}
       <Button
         size="small"
         startIcon={<WorkspacesIcon fontSize="small" />}
@@ -129,7 +135,11 @@ export function ComposerControls() {
         }}
       >
         {activeSession?.workdir
-          ? resolveWorkspaceLabel(activeSession.workdir, workspaceAliases)
+          ? resolveWorkspaceLabel(
+              activeSession.workdir,
+              workspaceAliases,
+              defaultWorkspacePath,
+            )
           : DEFAULT_WORKSPACE_LABEL}
       </Button>
 
@@ -216,14 +226,19 @@ export function ComposerControls() {
             <Typography variant="body2">选择工作空间…</Typography>
           </Box>
         </MenuItem>
-        {activeSession?.workdir && (
-          <MenuItem onClick={handleClearWorkdir}>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <ClearIcon fontSize="small" sx={{ color: 'text.secondary' }} />
-              <Typography variant="body2">清除（回到默认工作空间）</Typography>
-            </Box>
-          </MenuItem>
-        )}
+        {/* 「清除」只在**确实离开了默认工作空间**时才出现：会话本来就在默认路径上时
+            点它不会改变任何东西（store 会把 undefined 落回默认路径），留一个点了没反应
+            的菜单项只会让人怀疑是不是没生效。注意判等是对**当前**默认路径，所以用户
+            改了设置之后，留在旧默认路径上的会话仍然可以一键迁过去。 */}
+        {activeSession?.workdir &&
+          !isSameWorkspacePath(activeSession.workdir, defaultWorkspacePath) && (
+            <MenuItem onClick={handleClearWorkdir}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <ClearIcon fontSize="small" sx={{ color: 'text.secondary' }} />
+                <Typography variant="body2">清除（回到默认工作空间）</Typography>
+              </Box>
+            </MenuItem>
+          )}
       </Menu>
 
       {/* 权限设定弹层 */}
