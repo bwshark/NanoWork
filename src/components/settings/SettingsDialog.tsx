@@ -53,6 +53,12 @@ export function SettingsDialog() {
           borderRadius: 3,
           overflow: 'hidden',
           display: 'flex',
+          // ⚠️ 必须显式声明方向。MUI 的 `MuiDialog-paper`（`scroll="paper"`，即默认值）
+          // 自带 `display:flex; flex-direction:column`，而本组 sx 只覆盖 `display` ——
+          // 剩下的 column 会留下来，于是左右两栏变成**上下堆叠**：左侧菜单 height:100%
+          // 吃掉 640px 全部高度，右侧内容区被 flex:1 压成 0 高，再被 overflow:hidden 裁掉。
+          // 现象就是「左边灰条通高、右边只剩一片背景色」。
+          flexDirection: 'row',
         },
       }}
       aria-label="设置"
@@ -183,7 +189,13 @@ export function SettingsDialog() {
           </Tooltip>
         </Box>
 
-        <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto', px: 2.5, py: 2.5 }}>
+        {/* key={section}：切分区时重挂载滚动容器，让每次进入新分区都从顶部开始。
+            不这么做的话滚动位置会跨分区继承——在「连接与模型」拉到一半再切到「关于」，
+            会直接落在半空中。 */}
+        <Box
+          key={section}
+          sx={{ flex: 1, minHeight: 0, overflowY: 'auto', px: 2.5, py: 2.5 }}
+        >
           <SectionBody section={section} />
         </Box>
       </Box>
@@ -210,7 +222,13 @@ function SectionBody({ section }: { section: SettingsSectionId }) {
       return <DataSection />;
     case 'about':
       return <AboutSection />;
-    default:
+    default: {
+      // 穷尽性检查：`section` 是联合类型，走到这里类型为 never。
+      // 将来给 SettingsSectionId 加成员却忘了挂组件时，编译期就会报错，
+      // 而不是运行期安静地渲染一片空白（这正是「左侧有菜单、右侧全空」最难查的形态）。
+      const unhandled: never = section;
+      void unhandled;
       return null;
+    }
   }
 }
