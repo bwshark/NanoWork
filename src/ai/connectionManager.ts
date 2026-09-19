@@ -16,8 +16,16 @@ const DEFAULT_READY_TIMEOUT_MS = 30_000;
 const READY_RETRY_BASE_MS = 300;
 const READY_RETRY_MAX_MS = 2000;
 
-/** 稳态心跳间隔：网关中途重启 / 用户手动拉起后可自动恢复「已连接」 */
-const DEFAULT_HEARTBEAT_MS = 8000;
+/**
+ * 稳态心跳间隔：网关中途重启 / 用户手动拉起后可自动恢复「已连接」。
+ *
+ * 取 15s 是「空转流量」与「自愈延迟」的折中。心跳是应用空闲时**唯一的稳态
+ * HTTP 流量**（其余周期性任务都走 Electron IPC），8s 意味着每小时 450 次纯空转；
+ * 放到 15s 降到 240 次。不再继续放长的理由：网关冷启动本身约 9s，用户点
+ * 「启动 Gateway」后已习惯等这个量级，15s 与它同阶、感知不到；到 30s 才会
+ * 变成「点了半天不变绿」。
+ */
+const DEFAULT_HEARTBEAT_MS = 15000;
 
 /** 可替换的等待实现，便于测试压缩退避时间 */
 let sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));

@@ -245,7 +245,7 @@ export function McpPage() {
         }}
       >
         <Typography variant="h5" fontWeight={700}>
-          MCP 服务
+          连接器
         </Typography>
         <Typography variant="body2" color="text.secondary">
           内置 {builtinCount} · 自定义 {userCount} · 已启用 {enabledCount}
@@ -264,7 +264,7 @@ export function McpPage() {
           </span>
         </Tooltip>
         <Button variant="contained" startIcon={<AddIcon />} onClick={openNew}>
-          新增 MCP
+          新增连接器
         </Button>
       </Box>
 
