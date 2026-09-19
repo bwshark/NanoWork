@@ -36,8 +36,12 @@ import type { MemoryScope, MemoryScopeSummary } from '@/types';
  *    比报错难查得多。
  * 2. **导出文件名按作用域区分**。两者都叫 `MEMORY.md`，若导出同名会让用户在
  *    下载目录里覆盖掉另一个作用域的备份；工作区级因此带上 workspace key。
+ *
+ * 这一页现在有两种宿主：设置弹窗（`embedded`）与独立路由页。嵌入态去掉外层页面
+ * 内边距、`maxWidth` 与那个大标题——弹窗自己的标题栏已经写了「记忆」，再顶一个 h5
+ * 就是同一句话说两遍，还会把正文挤下去。
  */
-export function MemoryPage() {
+export function MemoryPage({ embedded = false }: { embedded?: boolean }) {
   const [scope, setScope] = useState<MemoryScope>('workspace');
   const [text, setText] = useState('');
   const [loading, setLoading] = useState(true);
@@ -120,10 +124,12 @@ export function MemoryPage() {
   const current = summaries.find((s) => s.scope === scope);
 
   return (
-    <Box sx={{ p: 3, maxWidth: 900, margin: '0 auto' }}>
-      <Typography variant="h5" fontWeight={700} gutterBottom>
-        记忆
-      </Typography>
+    <Box sx={embedded ? undefined : { p: 3, maxWidth: 900, margin: '0 auto' }}>
+      {!embedded && (
+        <Typography variant="h5" fontWeight={700} gutterBottom>
+          记忆
+        </Typography>
+      )}
       <Typography sx={{ fontSize: 13, color: 'text.secondary', mb: 2 }}>
         长期记忆分两层注入。开启注入后，内容会在每次会话以标签块追加到 system
         提示末尾，不会污染 Agent 自身的提示词模板；会话结束时自动沉淀，身份类事实

@@ -6,15 +6,17 @@ import { AgentsPage } from '@/pages/agents/AgentsPage';
 import { MyAgentsPage } from '@/pages/agents/MyAgentsPage';
 import { SkillsPage } from '@/pages/skills/SkillsPage';
 import { McpPage } from '@/pages/mcp/McpPage';
-import { PluginsPage } from '@/pages/plugins/PluginsPage';
 import { TasksPage } from '@/pages/tasks/TasksPage';
-import { SettingsPage } from '@/pages/settings/SettingsPage';
+import { SettingsRoute } from '@/pages/settings/SettingsRoute';
 import { ArtifactsPage } from '@/pages/artifacts/ArtifactsPage';
-import { MemoryPage } from '@/pages/memory/MemoryPage';
-import { PersonaPage } from '@/pages/persona/PersonaPage';
-import { ImChannelsPage } from '@/pages/im/ImChannelsPage';
 
-/** React Router 7 路由表（/artifacts 为 P2 占位/基础；/memory 为记忆页；/persona 为人格页；/im 为 IM 频道页） */
+/**
+ * React Router 7 路由表。
+ *
+ * ⚠️ 这里**只有页面级路由**。记忆 / 人格 / 助理 / 插件在收进设置弹窗后不再是独立
+ * 页面（弹窗挂在 `AppLayout`，不属于路由），因此对应的四条路由已删。
+ * `/settings` 保留但语义变了：打开弹窗 + 重定向，见 `SettingsRoute`。
+ */
 export const router = createBrowserRouter([
   {
     path: '/',
@@ -26,13 +28,9 @@ export const router = createBrowserRouter([
       { path: ROUTES.myAgents, element: <MyAgentsPage /> },
       { path: ROUTES.skills, element: <SkillsPage /> },
       { path: ROUTES.mcp, element: <McpPage /> },
-      { path: ROUTES.plugins, element: <PluginsPage /> },
       { path: ROUTES.tasks, element: <TasksPage /> },
-      { path: ROUTES.settings, element: <SettingsPage /> },
+      { path: ROUTES.settings, element: <SettingsRoute /> },
       { path: ROUTES.artifacts, element: <ArtifactsPage /> },
-      { path: ROUTES.memory, element: <MemoryPage /> },
-      { path: ROUTES.persona, element: <PersonaPage /> },
-      { path: ROUTES.im, element: <ImChannelsPage /> },
       { path: '*', element: <Navigate to={ROUTES.chat} replace /> },
     ],
   },

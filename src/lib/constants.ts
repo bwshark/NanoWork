@@ -11,6 +11,16 @@ export const APP_DISPLAY_SUB = 'Workbench';
 /** 完整应用名（「关于」弹窗标题与复制信息用，与侧边栏品牌名保持一致） */
 export const APP_NAME = `${APP_DISPLAY_NAME} ${APP_DISPLAY_SUB}`;
 
+/**
+ * 渲染层可见的应用版本。
+ *
+ * ⚠️ **与 `package.json` 的 `version` 是同一份事实的两处镜像**——渲染层跑在浏览器
+ * 沙箱里读不到 `package.json`，而 vite 未配置版本注入，故只能在此声明。改版本号时
+ * 两处一起改。桌面端以主进程 `app.getVersion()` 为准（见设置弹窗的「关于」分区），
+ * 这个常量只作 Web 端与主进程不可用时的兜底。
+ */
+export const APP_VERSION = '0.1.0';
+
 /** 默认 nanobot 网关（OpenAI 兼容 API 前缀，与 nanobot serve 默认端口 8900 对齐） */
 export const DEFAULT_GATEWAY = 'http://127.0.0.1:8900/v1';
 
@@ -36,22 +46,30 @@ export const DEFAULT_STATUS: ConnectionStatus = 'offline';
  */
 export const UNBOUND_AGENT_LABEL = '助手';
 
-/** 路由路径集中管理 */
+/**
+ * 路由路径集中管理。
+ *
+ * ⚠️ **这里只有「页面级」路由**：打开一个整页、`location.pathname` 随之变化的入口。
+ * 设置在 2026-09 从整页改成弹窗后，`plugins` / `memory` / `persona` / `im` 四条路由
+ * **已下线**——它们的内容现在是设置弹窗里的分区（见 `stores/settingsUiStore.ts` 的
+ * `SettingsSectionId`）。分区状态刻意不进 URL：那是「弹窗翻到第几页」，不是「用户在哪」。
+ *
+ * `settings` 保留，因为主进程（托盘菜单 / 单实例唤起）会 `navigate('/settings')`；
+ * 该路由现在的职责是「打开设置弹窗」，见 `pages/settings/SettingsRoute.tsx`。
+ */
 export const ROUTES = {
   chat: '/chat',
   agents: '/agents',
   myAgents: '/agents/mine',
   skills: '/skills',
   mcp: '/mcp',
-  /** 插件包页（FR-3.4）：装了什么 / 引擎激活没有 / 是否想启用 */
-  plugins: '/plugins',
   tasks: '/tasks',
+  /**
+   * 设置入口路由。**不是设置页**——渲染时立即打开设置弹窗并重定向到聊天页，
+   * 只为兼容「从主进程按路径跳转」这一条既有调用链。
+   */
   settings: '/settings',
   artifacts: '/artifacts',
-  memory: '/memory',
-  /** 人格页：身份文件（SOUL/IDENTITY/USER）+ 提示词模板外置编辑 */
-  persona: '/persona',
-  im: '/im',
 } as const;
 
 /** 持久化存储 key 前缀集中管理 */

@@ -5,6 +5,7 @@ import { SidebarNav } from './SidebarNav';
 import { ConnectionBanner } from './ConnectionBanner';
 import { TitleBar } from '@/components/TitleBar';
 import { ArtifactPanel } from '@/components/artifacts/ArtifactPanel';
+import { SettingsDialog } from '@/components/settings/SettingsDialog';
 import { platform } from '@/platform';
 
 /** 应用主框架：顶部全宽自绘标题栏 + 左导航 + 连接条 + 右侧主内容区 + 可展开的右侧产物面板 */
@@ -34,6 +35,9 @@ export function AppLayout() {
           </Box>
         </Box>
       </Box>
+      {/* 设置弹窗挂在布局层而非路由：任何时候（含任意会话页）都能被侧边栏 / 托盘唤起，
+          且开关它不会导致主内容区卸载重建 */}
+      <SettingsDialog />
     </Box>
   );
 }

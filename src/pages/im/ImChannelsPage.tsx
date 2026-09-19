@@ -26,13 +26,6 @@ import { toast } from "@/components/Toast";
 import { platform } from "@/platform";
 import type { ChannelKind, ChannelSyncStatus } from "@/types";
 
-/**
- * IM 频道页（FR-010）。
- * 渠道卡片列表（钉钉/飞书/Lark/微信/企业微信）+ 配置弹窗 + 启停；
- * 配置保存 / 启停后自动同步进 nanobot（合并 config.json 并重启网关），
- * 无需手动点击同步。频道会话（任务）列表已移至侧边栏「任务 / 频道」Tab。
- */
-
 /** 同步状态 → 展示标签 */
 const SYNC_LABEL: Record<ChannelSyncStatus, string> = {
   idle: "未同步",
@@ -41,12 +34,22 @@ const SYNC_LABEL: Record<ChannelSyncStatus, string> = {
   error: "同步失败",
 };
 
-export function ImChannelsPage() {
+/**
+ * IM 频道页（FR-010）。
+ * 渠道卡片列表（钉钉/飞书/Lark/微信/企业微信）+ 配置弹窗 + 启停；
+ * 配置保存 / 启停后自动同步进 nanobot（合并 config.json 并重启网关），
+ * 无需手动点击同步。频道会话（任务）列表已移至侧边栏「任务 / 频道」Tab。
+ *
+ * @param embedded 嵌入设置弹窗时传 true：去掉外层滚动容器（弹窗右侧自带滚动）、
+ *   内边距与 `maxWidth`，并把装饰用的 Hero 换成一段说明文字——Hero 是整页的
+ *   「落地页」式开场（大插画 + 22px 标题），塞进设置分区会占掉半屏而只传达一句话。
+ */
+export function ImChannelsPage({ embedded = false }: { embedded?: boolean }) {
   const [configKind, setConfigKind] = useState<ChannelKind | null>(null);
 
   return (
-    <Box sx={{ height: "100%", overflowY: "auto", pb: 4 }}>
-      <ChannelsContent onConfigure={setConfigKind} />
+    <Box sx={embedded ? undefined : { height: "100%", overflowY: "auto", pb: 4 }}>
+      <ChannelsContent embedded={embedded} onConfigure={setConfigKind} />
 
       <ChannelConfigDialog
         open={configKind !== null}
@@ -59,8 +62,10 @@ export function ImChannelsPage() {
 
 /** 频道内容：hero 装饰 + 渠道卡片列表（配置变更后自动同步到 nanobot） */
 function ChannelsContent({
+  embedded = false,
   onConfigure,
 }: {
+  embedded?: boolean;
   onConfigure: (k: ChannelKind) => void;
 }) {
   const configs = useChannelsStore((s) => s.configs);
@@ -117,8 +122,18 @@ function ChannelsContent({
   }, [lastSync]);
 
   return (
-    <Box sx={{ maxWidth: 900, margin: "0 auto", px: 3 }}>
-      <Hero />
+    <Box sx={embedded ? undefined : { maxWidth: 900, margin: "0 auto", px: 3 }}>
+      {embedded ? (
+        <Typography
+          variant="body2"
+          color="text.secondary"
+          sx={{ mb: 2, lineHeight: 1.9 }}
+        >
+          配置 IM 频道，让智能体接收来自钉钉、飞书等平台的消息。频道配置信息仅存储在本地，不会上传到云端。
+        </Typography>
+      ) : (
+        <Hero />
+      )}
 
       {syncing && (
         <Typography

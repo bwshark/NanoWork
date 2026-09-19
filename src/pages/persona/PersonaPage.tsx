@@ -54,7 +54,12 @@ import type {
  */
 type PersonaTab = 'identity' | 'prompts';
 
-export function PersonaPage() {
+/**
+ * @param embedded 嵌入设置弹窗时传 true：去掉外层页面内边距、`maxWidth` 与大标题——
+ *   弹窗标题栏已经写了分区名，正文再顶一个 h5 等于同一句话说两遍。引导横幅、
+ *   Tab、编辑弹窗等业务内容在两种宿主下完全一致。
+ */
+export function PersonaPage({ embedded = false }: { embedded?: boolean }) {
   const [tab, setTab] = useState<PersonaTab>('identity');
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -192,10 +197,12 @@ export function PersonaPage() {
   const customizedCount = promptStates.filter((s) => s.override !== null).length;
 
   return (
-    <Box sx={{ p: 3, maxWidth: 900, margin: '0 auto' }}>
-      <Typography variant="h5" fontWeight={700} gutterBottom>
-        人格
-      </Typography>
+    <Box sx={embedded ? undefined : { p: 3, maxWidth: 900, margin: '0 auto' }}>
+      {!embedded && (
+        <Typography variant="h5" fontWeight={700} gutterBottom>
+          人格
+        </Typography>
+      )}
       <Typography sx={{ fontSize: 13, color: 'text.secondary', mb: 2 }}>
         身份文件与提示词模板都在这里外置维护：改完即生效，不需要重新编译前端，也不会被
         Agent 自身的系统提示词覆盖。

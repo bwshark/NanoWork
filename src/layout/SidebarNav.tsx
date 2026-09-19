@@ -30,12 +30,8 @@ import PsychologyIcon from "@mui/icons-material/Psychology";
 import GridViewIcon from "@mui/icons-material/GridView";
 import AutoFixHighIcon from "@mui/icons-material/AutoFixHigh";
 import HubIcon from "@mui/icons-material/Hub";
-import ExtensionIcon from "@mui/icons-material/Extension";
-import BookmarksOutlinedIcon from "@mui/icons-material/BookmarksOutlined";
-import TuneIcon from "@mui/icons-material/Tune";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import SettingsIcon from "@mui/icons-material/Settings";
-import SmartphoneIcon from "@mui/icons-material/Smartphone";
 import FolderIcon from "@mui/icons-material/Folder";
 import ExpandLessIcon from "@mui/icons-material/ExpandLess";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
@@ -57,6 +53,7 @@ import { useSessionsStore } from "@/stores/sessionsStore";
 import { useChannelSessionsStore } from "@/stores/channelSessionsStore";
 import { useAgentsStore } from "@/stores/agentsStore";
 import { useSettingsStore } from "@/stores/settingsStore";
+import { useSettingsUiStore } from "@/stores/settingsUiStore";
 import { useTaskQueryStore } from "@/stores/taskQueryStore";
 import { useTasksStore } from "@/stores/tasksStore";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
@@ -68,35 +65,37 @@ import { toast } from "@/components/Toast";
 import type { NanobotChannelSessionSummary } from "@/platform/types";
 import type { ChannelKind, Session, TaskConfig } from "@/types";
 
+/** 侧边栏行的最小形态：只要有图标和标题就能渲染 */
 interface NavLinkItem {
   label: string;
   icon: ReactNode;
+}
+
+/**
+ * 带路由目标的行。
+ *
+ * 与 `NavLinkItem` 分开，是因为「设置」这一行**没有路由**——它打开的是设置弹窗。
+ * 把 `to` 设成可选再到处写 `?? 某个兜底路由`，就会让「少了目标」这种编码错误
+ * 表现成一次静默跳转（跳到聊天页），比类型报错难查得多。
+ */
+interface NavRouteItem extends NavLinkItem {
   to: string;
 }
 
-const TOP_ACTION_ITEMS: NavLinkItem[] = [
+const TOP_ACTION_ITEMS: NavRouteItem[] = [
   { label: "定时任务", icon: <AccessAlarmIcon />, to: ROUTES.tasks },
 ];
 
-const LIBRARY_ITEMS: NavLinkItem[] = [
+/**
+ * 扩展分组：装的是**能力**（专家 / 技能 / 连接器）。
+ *
+ * 「插件」已从这里移出到设置弹窗——插件是「把能力打包分发」的单位，装完基本不再动，
+ * 留在日常操作区会让人以为它和技能 / 连接器是同一使用频率的东西。
+ */
+const LIBRARY_ITEMS: NavRouteItem[] = [
   { label: "专家", icon: <PsychologyIcon />, to: ROUTES.agents },
   { label: "技能", icon: <AutoFixHighIcon />, to: ROUTES.skills },
   { label: "连接器", icon: <HubIcon />, to: ROUTES.mcp },
-  // 插件排在最后：它是「把上面几样打包在一起」的更高一层单位，
-  // 放在连接器之前会让人以为它和技能 / 连接器是同一档的东西。
-  { label: "插件", icon: <ExtensionIcon />, to: ROUTES.plugins },
-];
-
-/**
- * 个人化配置入口：记忆（L2 用户级 / L3 工作区级）与人格（身份文件 + 提示词外置）。
- *
- * 单列成组而不是塞进「扩展」：扩展装的是**能力**（专家 / 技能 / 连接器），
- * 这两项改的是**助手本身是谁、记得什么**，性质不同，混在一起会让人以为
- * 改人格是在装插件。
- */
-const PERSONA_ITEMS: NavLinkItem[] = [
-  { label: "记忆", icon: <BookmarksOutlinedIcon />, to: ROUTES.memory },
-  { label: "人格", icon: <TuneIcon />, to: ROUTES.persona },
 ];
 
 /** 侧边栏主组件 */
@@ -111,6 +110,10 @@ export function SidebarNav() {
   const sidebarCollapsed = useSettingsStore(
     (s) => s.settings.sidebarCollapsed ?? false,
   );
+
+  /** 设置入口：打开弹窗而非跳路由，选中态跟随弹窗开合（弹窗开着 = 这一项是当前所在） */
+  const settingsOpen = useSettingsUiStore((s) => s.open);
+  const openSettings = useSettingsUiStore((s) => s.openSettings);
 
   /** 扩展分组折叠状态（默认收起） */
   const [expandOpen, setExpandOpen] = useState(false);
@@ -293,23 +296,6 @@ export function SidebarNav() {
             ))}
           </List>
         </Collapse>
-        {PERSONA_ITEMS.map((item) => (
-          <NavRow
-            key={item.label}
-            item={item}
-            active={currentPath === item.to}
-            onClick={() => navigate(item.to)}
-          />
-        ))}
-        <NavRow
-          item={{
-            label: "助理",
-            icon: <SmartphoneIcon />,
-            to: ROUTES.im,
-          }}
-          active={currentPath === ROUTES.im}
-          onClick={() => navigate(ROUTES.im)}
-        />
       </List>
 
       {/* 任务 / 频道 切换列表 */}
@@ -325,19 +311,15 @@ export function SidebarNav() {
         <TasksChannelsTabs />
       </Box>
 
-      {/* 底部：设置 */}
+      {/* 底部：设置（打开设置弹窗，不做路由跳转） */}
       <Box
         sx={{ px: 1, pt: 1, borderTop: "1px solid", borderColor: "divider" }}
       >
         <List dense disablePadding>
           <NavRow
-            item={{
-              label: "设置",
-              icon: <SettingsIcon />,
-              to: ROUTES.settings,
-            }}
-            active={currentPath === ROUTES.settings}
-            onClick={() => navigate(ROUTES.settings)}
+            item={{ label: "设置", icon: <SettingsIcon /> }}
+            active={settingsOpen}
+            onClick={openSettings}
           />
         </List>
       </Box>

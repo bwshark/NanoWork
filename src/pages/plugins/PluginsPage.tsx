@@ -58,7 +58,12 @@ const ACTIVATION_CHIP: Record<
   unknown: { label: "状态未知", color: "warning" },
 };
 
-export function PluginsPage() {
+/**
+ * @param embedded 嵌入设置弹窗时传 true：去掉外层页面内边距、`maxWidth` 与大标题。
+ *   页头的统计数字与「重新扫描 / 安装插件」按钮**两种宿主下都保留**——它们是这一块
+ *   的操作入口，不是页面装饰。
+ */
+export function PluginsPage({ embedded = false }: { embedded?: boolean }) {
   const installed = usePluginsStore((s) => s.installed);
   const skipped = usePluginsStore((s) => s.skipped);
   const pluginsRoot = usePluginsStore((s) => s.pluginsRoot);
@@ -135,7 +140,7 @@ export function PluginsPage() {
   };
 
   return (
-    <Box sx={{ p: 3, maxWidth: 1000, margin: "0 auto" }}>
+    <Box sx={embedded ? undefined : { p: 3, maxWidth: 1000, margin: "0 auto" }}>
       <Box
         sx={{
           display: "flex",
@@ -145,9 +150,11 @@ export function PluginsPage() {
           flexWrap: "wrap",
         }}
       >
-        <Typography variant="h5" fontWeight={700}>
-          插件
-        </Typography>
+        {!embedded && (
+          <Typography variant="h5" fontWeight={700}>
+            插件
+          </Typography>
+        )}
         <Typography variant="body2" color="text.secondary">
           已安装 {counts.total} · 引擎已激活 {counts.active}
           {counts.drifted > 0 ? ` · ${counts.drifted} 项状态不一致` : ""}
