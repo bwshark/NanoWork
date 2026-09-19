@@ -135,6 +135,15 @@ describe('MemoryService: wrapForInjection / extractFromInjection (T27)', () => {
     expect(MemoryService.extractFromInjection(wrapped)).toBe(original);
   });
 
+  it('护栏句要把记忆里的路径降级为历史（工作目录以系统提示为准）', () => {
+    const wrapped = MemoryService.wrapForInjection('> 在 D:\\test 创建了 lala.txt');
+
+    expect(wrapped).toContain('不代表当前工作目录');
+    expect(wrapped).toContain('以系统提示里的工作目录为准');
+    // 裁决规则必须排在正文**之前**，否则模型先读到断言、后读到裁决，顺序错位
+    expect(wrapped.indexOf('不代表当前工作目录')).toBeLessThan(wrapped.indexOf('lala.txt'));
+  });
+
   it('extractFromInjection 无标签时返回空串', () => {
     expect(MemoryService.extractFromInjection('没有任何记忆标签的文本')).toBe('');
   });
@@ -628,6 +637,14 @@ describe('summarize：knownFacts 让归纳模型看得到已有记忆', () => {
 
     expect(box.current).not.toContain('已经存在于长期记忆中');
     expect(box.current).toContain('会话记忆归纳助手');
+  });
+
+  it('归纳规则禁止把「当前工作目录」写进长期记忆', async () => {
+    const box = captureSystem();
+    await MemoryService.summarize(history);
+
+    // 工作目录是每轮会变的运行时值：一旦落盘，后续每个会话都会拿它当默认目录
+    expect(box.current).toContain('不要记录当前工作目录');
   });
 });
 
