@@ -11,9 +11,9 @@ import { useSettingsStore } from '@/stores/settingsStore';
  * 记忆分区：**开关**与**正文**分开。
  *
  * 上面的卡片改的是「记忆怎么被用」（注入与否、要不要自动沉淀），落点是
- * `settings.json`；下面的编辑器改的是「记忆里写了什么」，落点是 `~/.nanowork/`
- * 下的 markdown 文件。两者是不同性质的状态，混在一屏里不给分组会让人以为
- * 关掉开关就把记忆清空了。
+ * `settings.json`；下面的编辑器改的是「记忆里写了什么」，落点是记忆文件
+ * （用户级 `~/.nanowork/MEMORY.md`、工作区级 `<工作目录>/.nanowork/memory/`）。
+ * 两者是不同性质的状态，混在一屏里不给分组会让人以为关掉开关就把记忆清空了。
  */
 export function MemorySection() {
   const settings = useSettingsStore((s) => s.settings);
@@ -47,7 +47,7 @@ export function MemorySection() {
         />
       </SettingsCard>
 
-      <SettingsBlockLabel description="直接编辑长期记忆正文。两个作用域是两份独立文件，切换时会重新读盘。">
+      <SettingsBlockLabel description="直接编辑长期记忆正文。用户级是一份文件；工作区级是一个目录（精炼记忆 MEMORY.md + 每天的日志），先选文件再编辑，切换时会重新读盘。">
         记忆内容
       </SettingsBlockLabel>
       <MemoryPage embedded />

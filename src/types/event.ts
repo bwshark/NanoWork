@@ -377,10 +377,23 @@ export interface SessionMeta {
   agentId: string;
   groupId?: string | null;
   /**
-   * 会话级工作空间。**同时是事件流的落点作用域**（`projects/<slug>/`）——
-   * 改动它会触发该会话事件文件的搬迁，见 `sessionsStore.setSessionWorkdir`。
+   * **事件流落盘分片**：本 meta 与同目录的 `.jsonl` 所对应的路径
+   * （`projects/<cwdSlug(workdir)>/`）。
+   *
+   * 不变式：meta 文件永远位于 `cwdSlug(this.workdir)` 那个目录里——路径解析
+   * （`electron/eventStore.ts` 的 `writeMeta` / `rebuildIndex`）直接由它推出目录，
+   * 所以它取的是「文件当前所在分片」，而不是「会话现在绑定的工作空间」。
+   *
+   * 两者只在一种情况下不同：会话已有消息又被切换了工作空间——此时记录留在原处
+   * （`workdir` 不变），新的工作空间写进 `workspace`。见 `Session.streamWorkdir`。
    */
   workdir?: string;
+  /**
+   * 会话**当前绑定**的工作空间（语义值）：侧边栏分组、注入引擎的 cwd、记忆目录
+   * 都看它。缺省表示与 `workdir` 相同（从未切换过工作空间的会话都是这个形态，
+   * 于是老数据不需要迁移）。
+   */
+  workspace?: string;
   mode: ExecutionMode;
   model?: string;
   permissionMode: PermissionMode;
@@ -427,6 +440,21 @@ export interface SessionIndexEntry {
   eventCount: number;
   /** 最大 seq（读取游标） */
   lastSeq: number;
+  /**
+   * **有对话记录**的判据：用户 / 助手 `message` 事件的数量。
+   *
+   * 它必须落在索引里，不能靠「读一遍 JSONL 看有没有 message 事件」现算：
+   * 列表（侧边栏任务列表）在启动时**只读索引**，会话消息要等用户点进去才水合
+   * （见 `sessionsStore.loadSessions`）。此前列表用 `session.messages.length > 0`
+   * 判断「这条任务有没有内容」，于是重启之后未点开的会话消息是留白的，全被判成
+   * 「空会话」而消失——侧边栏于是只剩下当前打开的那一条，其余工作空间看起来
+   * 「一个任务都没有」。
+   *
+   * 与 `messages.length` 的细微差别：索引计数含**全部** message 事件，投影只算
+   * 活跃时间线（编辑后重发会废弃旧分支）。列表只关心「有没有内容」，这点差异
+   * 无意义；界面上以水合后的条数为准，见 `conversationCount`。
+   */
+  messageCount: number;
   createdAt: string;
   updatedAt: string;
   rev?: number;

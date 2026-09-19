@@ -7,6 +7,9 @@ __pycache__/
 .pytest_cache/
 nanobot/
 .nanowork-workspace/
+# 工作区记忆/身份等产品数据的落点（`<工作目录>/.nanowork/`）。2026-09-19 起应用会把
+# 工作区级记忆写到**用户的工作目录**下，本仓自己也会被写入——别把记忆文件提交上来。
+.nanowork/
 
 # Node / frontend build
 node_modules/

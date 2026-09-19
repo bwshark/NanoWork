@@ -4,6 +4,7 @@ import { parseMemoryDirectives, stripMemoryDirectives } from '@/lib/memoryDirect
 import { useSettingsStore, DEFAULT_TRANSCRIPTION, DEFAULT_DESKTOP } from '@/stores/settingsStore';
 import { NanobotClient } from '@/ai/runtime/nanobotHttp/chat';
 import { MEMORY_KEY_PREFIX } from '@/lib/constants';
+import { WORKSPACE_MEMORY_STORAGE_PREFIX } from '@/platform/storage.web';
 import { platform } from '@/platform';
 
 /** 重置 settings 到初始态，避免跨用例串扰 */
@@ -380,17 +381,23 @@ describe('memoryDiskPath: 展示用落点', () => {
     platform.env = originalEnv;
   });
 
-  it('Electron 下给出两条真实文件路径', () => {
+  it('Electron 下给出真实落点：用户级是文件、工作区级是目录', () => {
     platform.env = 'electron';
-    expect(memoryDiskPath('user', 'ignored')).toBe('~/.nanowork/MEMORY.md');
-    expect(memoryDiskPath('workspace', 'nanowork-1a2b3c4d')).toBe(
-      '~/.nanowork/memory/nanowork-1a2b3c4d.md',
-    );
+    expect(memoryDiskPath('user', null)).toBe('~/.nanowork/MEMORY.md');
+    // 工作区级是一个目录（`MEMORY.md` + 若干 `YYYY-MM-DD.md`），故末尾带分隔符；
+    // 分隔符按传入路径自己带的那一种推断（Windows 的反斜杠）。
+    expect(memoryDiskPath('workspace', 'D:\\test')).toBe('D:\\test\\.nanowork\\memory\\');
+    expect(memoryDiskPath('workspace', 'D:/test')).toBe('D:/test/.nanowork/memory/');
+  });
+
+  it('没有工作目录时给产品目录下的兜底目录', () => {
+    platform.env = 'electron';
+    expect(memoryDiskPath('workspace', null)).toBe('~/.nanowork/memory/default/');
   });
 
   it('Web 下给一句人话，而不是编一个假路径', () => {
     platform.env = 'web';
-    expect(memoryDiskPath('workspace', 'nanowork-1a2b3c4d')).toBe(
+    expect(memoryDiskPath('workspace', 'D:\\test')).toBe(
       '浏览器本地存储（Web 端无文件落点）',
     );
   });
@@ -444,16 +451,31 @@ describe('memoryDirective: Agent 记忆写入协议', () => {
   });
 });
 
-describe('MemoryService: 工作区 key 解析 (T22)', () => {
-  it('resolveWorkspaceKey 当前统一返回 default', () => {
-    expect(MemoryService.resolveWorkspaceKey()).toBe('default');
+describe('MemoryService: 工作区解析与落盘位置 (T22)', () => {
+  it('从未切换过工作区时，当前工作目录为 null（落产品目录下的兜底位置）', () => {
+    expect(MemoryService.resolveWorkspaceDir()).toBeNull();
   });
 
-  it('load 读取的 storage key 为 nanowork.memory.default', async () => {
+  it('useWorkspace 之后 resolveWorkspaceDir 返回该目录', () => {
+    MemoryService.useWorkspace('D:\\ws\\demo');
+    expect(MemoryService.resolveWorkspaceDir()).toBe('D:\\ws\\demo');
+    // 空串 / 全空白一律折成「没有工作目录」，不是「一个叫空串的目录」
+    MemoryService.useWorkspace('   ');
+    expect(MemoryService.resolveWorkspaceDir()).toBeNull();
+  });
+
+  it('工作区记忆写进「目录」后端，而不是旧的单文件 key', async () => {
     await MemoryService.save('hello');
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    expect(raw).not.toBeNull();
-    expect(JSON.parse(raw as string)).toBe('hello');
+    expect(await MemoryService.load()).toBe('hello');
+
+    // 旧前缀是历史数据的位置，新代码不再往它下面写
+    expect(window.localStorage.getItem(STORAGE_KEY)).toBeNull();
+    // 新落点：一个 key 装整个「目录」（`{ 文件名: 正文 }`）
+    expect(
+      Object.keys(window.localStorage).some((k) =>
+        k.startsWith(WORKSPACE_MEMORY_STORAGE_PREFIX),
+      ),
+    ).toBe(true);
   });
 });
 
@@ -501,8 +523,8 @@ describe('MemoryService: 多工作区隔离 (增强)', () => {
     await MemoryService.useWorkspace('ws-c');
     await MemoryService.save('C 的内容');
     const list = await MemoryService.listWorkspaces();
-    expect(list.some((w) => w.key === 'ws-c' && w.chars > 0)).toBe(true);
-    expect(list.some((w) => w.key === 'default')).toBe(true);
+    expect(list.some((w) => w.path === 'ws-c' && w.chars > 0)).toBe(true);
+    expect(list.some((w) => w.path === null)).toBe(true);
   });
 });
 

@@ -25,6 +25,7 @@ import {
   isSameWorkspacePath,
   resolveWorkspaceLabel,
 } from '@/lib/workspaceLabel';
+import { hasConversation } from '@/lib/conversation';
 import { useDefaultWorkspacePath } from '@/stores/storageInfoStore';
 import { getRuntime } from '@/ai/runtime';
 import type { ExecutionMode } from '@/types/event';
@@ -65,7 +66,8 @@ const MODE_OPTIONS: ReadonlyArray<{
 /**
  * 输入框工具条的「会话级上下文」控件：工作空间选择 + 权限设定。
  * - 工作空间：Electron 弹原生目录选择；Web 降级 File System Access API。
- *   未选择目录的会话归入「默认工作空间」。
+ *   未选择目录的会话归入「默认工作空间」。**只在会话还没有对话记录时出现**
+ *   （有记录 = 任务已经开工，工作空间是建时决定，见 `showWorkspacePicker`）。
  * - 权限：两个正交开关——「逐条批准」（细：改动环境的操作执行前先问）与
  *   「允许完全访问」（粗：直接放开，等于不再逐条询问）。
  * - 执行模式（FR-1.4）：Ask / Plan / Craft，决定「能不能改东西」这一层。
@@ -118,30 +120,78 @@ export function ComposerControls() {
   const currentMode = MODE_OPTIONS.find((o) => o.value === mode) ?? MODE_OPTIONS[2];
   // 能力门控：同步取当前实现即可（单例惰性构造，不含 IO）
   const modesSupported = getRuntime().capabilities.executionModes === true;
+  /**
+   * 是否显示工作空间选择（对齐 WorkBuddy：有对话的会话里没有这个入口）。
+   *
+   * 工作空间是「这条任务在哪儿干活、记录落在哪儿」的**建时决定**：一旦有了对话
+   * 记录，再改它就只可能半生效——已落盘的记录不会跟着换目录（搬迁是「读旧 → 删旧
+   * → 写新」，中途挂掉就是整段对话消失，代价与「点一下」完全不成比例），而它又
+   * 直接决定这条任务归到哪个工作空间分组。留一个改了不生效（或只生效一半）的入口，
+   * 比没有入口更糟：用户会以为自己换了地方，实际记录还在原处。
+   *
+   * 判据用 `hasConversation`（缺消息时兜底到索引里的持久条数）而不是
+   * `messages.length`：重启后未点开的任务消息是留白的，只看消息会让这个按钮在
+   * 「明明有对话记录的任务」上闪现一下。入口只在「还没开工的新任务」上出现，
+   * 那正是需要选工作空间的时刻。
+   */
+  const showWorkspacePicker = !activeSession || !hasConversation(activeSession);
 
   return (
     <>
-      {/* 工作空间按钮：未选目录（以及就落在默认工作空间上）一律显示「默认工作空间」，
-          其余显示目录名（别名优先）——名字跟着设置里的默认路径走，不写死目录名 */}
-      <Button
-        size="small"
-        startIcon={<WorkspacesIcon fontSize="small" />}
-        onClick={(e) => setWsMenuAnchor(e.currentTarget)}
-        sx={{
-          textTransform: 'none',
-          color: 'text.secondary',
-          fontSize: 12,
-          '&:hover': { bgcolor: 'action.hover', color: 'text.primary' },
-        }}
-      >
-        {activeSession?.workdir
-          ? resolveWorkspaceLabel(
-              activeSession.workdir,
-              workspaceAliases,
-              defaultWorkspacePath,
-            )
-          : DEFAULT_WORKSPACE_LABEL}
-      </Button>
+      {/* 工作空间按钮 + 菜单：只在**还没产生对话记录**的任务上出现（见
+          `showWorkspacePicker`）。未选目录（以及就落在默认工作空间上）一律显示
+          「默认工作空间」，其余显示目录名（别名优先）——名字跟着设置里的默认路径走，
+          不写死目录名 */}
+      {showWorkspacePicker && (
+        <>
+          <Button
+            size="small"
+            startIcon={<WorkspacesIcon fontSize="small" />}
+            onClick={(e) => setWsMenuAnchor(e.currentTarget)}
+            sx={{
+              textTransform: 'none',
+              color: 'text.secondary',
+              fontSize: 12,
+              '&:hover': { bgcolor: 'action.hover', color: 'text.primary' },
+            }}
+          >
+            {activeSession?.workdir
+              ? resolveWorkspaceLabel(
+                  activeSession.workdir,
+                  workspaceAliases,
+                  defaultWorkspacePath,
+                )
+              : DEFAULT_WORKSPACE_LABEL}
+          </Button>
+
+          <Menu
+            anchorEl={wsMenuAnchor}
+            open={!!wsMenuAnchor}
+            onClose={() => setWsMenuAnchor(null)}
+            slotProps={{ paper: { sx: { minWidth: 180 } } }}
+          >
+            <MenuItem onClick={() => void handlePickWorkdir()}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <FolderOpenIcon fontSize="small" sx={{ color: 'text.secondary' }} />
+                <Typography variant="body2">选择工作空间…</Typography>
+              </Box>
+            </MenuItem>
+            {/* 「清除」只在**确实离开了默认工作空间**时才出现：会话本来就在默认路径上时
+                点它不会改变任何东西（store 会把 undefined 落回默认路径），留一个点了没反应
+                的菜单项只会让人怀疑是不是没生效。注意判等是对**当前**默认路径，所以用户
+                改了设置之后，留在旧默认路径上的会话仍然可以一键迁过去。 */}
+            {activeSession?.workdir &&
+              !isSameWorkspacePath(activeSession.workdir, defaultWorkspacePath) && (
+                <MenuItem onClick={handleClearWorkdir}>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    <ClearIcon fontSize="small" sx={{ color: 'text.secondary' }} />
+                    <Typography variant="body2">清除（回到默认工作空间）</Typography>
+                  </Box>
+                </MenuItem>
+              )}
+          </Menu>
+        </>
+      )}
 
       {/* 权限按钮：图标颜色随策略变化（绿=默认沙箱，橙=完全访问） */}
       <Button
@@ -213,33 +263,7 @@ export function ComposerControls() {
         ))}
       </Menu>
 
-      {/* 工作空间选择菜单 */}
-      <Menu
-        anchorEl={wsMenuAnchor}
-        open={!!wsMenuAnchor}
-        onClose={() => setWsMenuAnchor(null)}
-        slotProps={{ paper: { sx: { minWidth: 180 } } }}
-      >
-        <MenuItem onClick={() => void handlePickWorkdir()}>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-            <FolderOpenIcon fontSize="small" sx={{ color: 'text.secondary' }} />
-            <Typography variant="body2">选择工作空间…</Typography>
-          </Box>
-        </MenuItem>
-        {/* 「清除」只在**确实离开了默认工作空间**时才出现：会话本来就在默认路径上时
-            点它不会改变任何东西（store 会把 undefined 落回默认路径），留一个点了没反应
-            的菜单项只会让人怀疑是不是没生效。注意判等是对**当前**默认路径，所以用户
-            改了设置之后，留在旧默认路径上的会话仍然可以一键迁过去。 */}
-        {activeSession?.workdir &&
-          !isSameWorkspacePath(activeSession.workdir, defaultWorkspacePath) && (
-            <MenuItem onClick={handleClearWorkdir}>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                <ClearIcon fontSize="small" sx={{ color: 'text.secondary' }} />
-                <Typography variant="body2">清除（回到默认工作空间）</Typography>
-              </Box>
-            </MenuItem>
-          )}
-      </Menu>
+      {/* 工作空间选择菜单随按钮一起条件渲染，见上方的 `showWorkspacePicker` */}
 
       {/* 权限设定弹层 */}
       <Popover

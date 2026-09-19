@@ -367,7 +367,7 @@ describe('自动沉淀：触发点与作用域分流', () => {
     return { summarize, append };
   }
 
-  it('createSession 对上一条会话补触发：身份写用户级、任务写工作区级(workdir key)', async () => {
+  it('createSession 对上一条会话补触发：身份写用户级、任务写工作区级(会话 workdir)', async () => {
     const prev = useSessionsStore
       .getState()
       .createSession('agent-test', '上一条', { workdir: 'D:/ws/proj' });
@@ -380,11 +380,13 @@ describe('自动沉淀：触发点与作用域分流', () => {
     await waitFor(() => append.mock.calls.length >= 2);
 
     expect(append).toHaveBeenCalledWith('明明，中医药背景', expect.anything(), 'user');
+    // 第 4 参是**工作目录本身**，不是它的哈希：工作区记忆的落点由目录表达隔离
+    // （`<workdir>/.nanowork/memory/`），判据里再算一次哈希只会多一层推导。
     expect(append).toHaveBeenCalledWith(
       '决定先修 P0',
       expect.anything(),
       'workspace',
-      expect.stringContaining('proj-'),
+      'D:/ws/proj',
     );
   });
 
@@ -404,7 +406,7 @@ describe('自动沉淀：触发点与作用域分流', () => {
       '决定先修 P0',
       expect.anything(),
       'workspace',
-      expect.stringContaining('other-'),
+      'D:/ws/other',
     );
   });
 

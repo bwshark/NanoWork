@@ -14,6 +14,27 @@ export interface Session {
   /** 会话级工作空间（工作目录）；未设置时归入「默认工作空间」分组 */
   workdir?: string;
   /**
+   * **事件流落盘分片**：该会话的 `.jsonl` / `.meta.json` 所在目录对应的路径
+   * （`projects/<cwdSlug(streamWorkdir)>/`）。
+   *
+   * 它与 `workdir` 在绝大多数情况下相同，只在一种情况下分叉：会话**已经有消息**
+   * 又被切换了工作空间。此时工作空间（语义、注入给引擎的 cwd、侧边栏归属、记忆
+   * 目录）跟着变，但**磁盘上的记录不搬家**——`workdir` 改成新路径、
+   * `streamWorkdir` 冻在它当时所在的目录。
+   *
+   * 为什么不搬：
+   * - 搬迁是「读旧 → 删旧 → 写新」，中间进程挂掉就是整段对话消失；而这个动作
+   *   的触发非常轻量（点一下输入框里的工作空间），代价与触发完全不成比例；
+   * - 记录属于「这个会话从哪来」，切换工作空间是「以后去哪儿」，后者不该改写前者。
+   *
+   * 只在「确知一条消息都没有」时才允许随工作空间归位（见 `setSessionWorkdir`），
+   * 所以分片一旦非空就等价于「冻结」，此后不再变化。
+   *
+   * `undefined` 表示「仍跟随 `workdir`」——新建会话、以及从未发过消息的会话都是
+   * 这个状态；水合时由 `SessionMeta.workdir` 补上。
+   */
+  streamWorkdir?: string;
+  /**
    * 会话级权限策略：true = 允许完全访问（工具可在工作空间外执行）。
    * 默认 false（默认权限：操作在安全沙箱约束内进行）。
    */
@@ -48,6 +69,20 @@ export interface Session {
   /** 会话标题（首条消息摘要） */
   title: string;
   messages: Message[];
+  /**
+   * 该会话的**对话记录条数**（用户 / 助手消息事件数），来自索引投影
+   * （`SessionIndexEntry.messageCount`）。
+   *
+   * 它存在的唯一理由是：**「有没有对话记录」必须能在水合之前回答**。启动时列表
+   * 只读索引，会话消息要等点进去才从 JSONL 重建（见 `sessionsStore.loadSessions`），
+   * 所以未点开的会话 `messages` 是留白的——只看 `messages.length` 会把它们全判成
+   * 空会话，于是侧边栏「只剩下当前打开的那一条」、其余工作空间看起来一个任务都没有。
+   *
+   * `undefined` = **未知**（不是从索引来的会话：`openExternal` 注入的外部会话、
+   * 新建但没落过盘的会话），此时退回 `messages.length`。判定一律走
+   * `@/lib/conversation` 的 `hasConversation` / `conversationCount`，别在各处自己拼。
+   */
+  messageCount?: number;
   /** 敏感操作权限决策记录（FR-009） */
   permissionLog: PermissionLog[];
   /**
@@ -69,10 +104,13 @@ export interface Session {
    */
   memoryVersion?: number;
   /**
-   * 生成快照时使用的记忆工作区键（由 `workdir` 推导）。
-   * 用户改了会话的工作目录后，同一份快照指向的就是另一个文件了，必须一并失效。
+   * 生成快照时使用的**工作目录**（原样保存当时的 `workdir`）。
+   * 用户改了会话的工作目录后，同一份快照指向的就是另一个记忆目录了，必须一并失效。
+   *
+   * 存的是路径本身而不是它的哈希：工作区记忆的落点已经由目录表达隔离
+   * （`<workdir>/.nanowork/memory/`），判据里再算一次哈希只会多一层可能不同步的推导。
    */
-  memoryWorkspaceKey?: string;
+  memoryWorkspace?: string;
   createdAt: string;
   updatedAt: string;
 }

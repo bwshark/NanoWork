@@ -12,12 +12,14 @@ import {
   enqueueSessionTask,
   getEventStore,
   hasRecorder,
+  hasSessionMessages,
   listSessionEntries,
   messageEventIdOf,
   metaToSession,
   primeRecorder,
   project,
   recordEvents,
+  recorderWorkdir,
   setRecordErrorSink,
   setRecorderWorkdir,
   toEventAttachment,
@@ -28,7 +30,8 @@ import {
   attachmentsToUploadFiles,
   toPersistableAttachment,
 } from '@/lib/attachments';
-import { MemoryService, isEmptySummary, workspaceKeyFor } from '@/lib/memory';
+import { MemoryService, isEmptySummary } from '@/lib/memory';
+import { isSameMemoryWorkspace } from '@/lib/workspaceMemory';
 import {
   MEMORY_WRITE_INSTRUCTION,
   parseMemoryDirectives,
@@ -362,14 +365,31 @@ function reportStreamError(sessionId: string, error: unknown): void {
 // 记录器的写盘失败走同一出口（模块初始化时注册一次）
 setRecordErrorSink(reportStreamError);
 
+/**
+ * 会话的**事件流落盘分片**（`.`jsonl` / `.meta.json` 所在目录对应的路径）。
+ *
+ * 未冻结（`streamWorkdir` 为空）时即等于工作空间——新建会话与从未发过消息的会话
+ * 都是这个形态，此时记录随工作空间走；一旦冻结就不再变化。所有按目录取文件的
+ * 读写（读事件、写 meta、删会话）都必须走它，而不是 `session.workdir`。
+ */
+function streamShardOf(s: Pick<Session, 'workdir' | 'streamWorkdir'>): string | undefined {
+  return s.streamWorkdir ?? s.workdir;
+}
+
 /** 会话视图 → 元数据（`SessionMeta` 是事件流的权威元数据，见 `@/types/event`） */
 function toMeta(s: Session): SessionMeta {
+  const shard = streamShardOf(s);
   return {
     id: s.id,
     title: s.title,
     agentId: s.agentId,
     groupId: s.groupId ?? null,
-    workdir: s.workdir,
+    // `workdir` 写**分片**（meta 与 jsonl 必须同目录，主进程按它推目录），
+    // 语义工作空间写进 `workspace`——两者相同则省略，省得每份 meta 都多一个字段
+    workdir: shard,
+    ...(s.workdir !== undefined && s.workdir !== shard
+      ? { workspace: s.workdir }
+      : {}),
     // 执行模式（ask / plan / craft，FR-1.4）：缺省 craft——事件化之前的会话
     // 一律按「可直接执行」记账，缺失值不是「未知模式」
     mode: s.mode ?? 'craft',
@@ -433,9 +453,12 @@ function persistMetaOf(sessionId: string): void {
 function dropSessionStream(s: Session): void {
   hydratedSessions.delete(s.id);
   if (!isEventStreamSession(s)) return;
-  const { id, workdir } = s;
+  const id = s.id;
+  // 删的是**分片**里的文件：切过工作空间的会话，记录仍留在原分片，
+  // 按 `s.workdir` 去删会什么也删不到（还留下一个删不掉的孤儿文件）
+  const shard = streamShardOf(s);
   void enqueueSessionTask(id, async () => {
-    await getEventStore().removeSession(id, workdir);
+    await getEventStore().removeSession(id, shard);
   }).then(
     () => dropRecorder(id),
     (e: unknown) => reportStreamError(id, e),
@@ -791,18 +814,16 @@ async function streamAssistantReply(
     if (directives.length > 0) {
       const s = useSettingsStore.getState().settings;
       if (s.memoryEnabled && s.autoSummarize) {
-        const workspaceKey = workspaceKeyFor(
-          useSessionsStore.getState().sessions.find((x) => x.id === sessionId)?.workdir,
-        );
+        // 记忆按**会话的工作目录**隔离（工作区记忆落在 `<workdir>/.nanowork/memory/`）。
+        // `?? null` 不能省：`Session.workdir` 是 `string | undefined`，而 `undefined`
+        // 在 MemoryService 里表示「按当前工作区」——一个本来没有工作目录的会话会去读
+        // **上一个会话**的记忆。
+        const workdir =
+          useSessionsStore.getState().sessions.find((x) => x.id === sessionId)?.workdir ?? null;
         void (async () => {
           for (const d of directives) {
             try {
-              await MemoryService.append(
-                d.content,
-                { source: 'agent' },
-                d.scope,
-                workspaceKey,
-              );
+              await MemoryService.append(d.content, { source: 'agent' }, d.scope, workdir);
             } catch {
               /* 记忆写入失败不影响本轮回答 */
             }
@@ -944,7 +965,7 @@ function sedimentSession(target: Session): void {
   if (history.length === 0) return;
 
   const source = `auto:${target.title}`;
-  const workspaceKey = workspaceKeyFor(target.workdir);
+  const workdir = target.workdir ?? null;
 
   // fire-and-forget：归纳要调一次模型，绝不能阻塞删除/新建这些交互动作
   void (async () => {
@@ -952,14 +973,14 @@ function sedimentSession(target: Session): void {
       // 把**已有的长期记忆**一并交给归纳模型。这是对抗「同一事实换种措辞反复写入」
       // 的主要手段：模型看不到已记内容时，「用户叫明明」会被每个会话重新归纳一遍，
       // 而字符级的近似判定救不了改写式重复（见 memory.ts 的 isSameStatement 实测表）。
-      const { text: knownFacts } = await MemoryService.loadForInjection(workspaceKey);
+      const { text: knownFacts } = await MemoryService.loadForInjection(workdir);
       const summary = await MemoryService.summarize(history, { knownFacts });
       if (isEmptySummary(summary)) return;
       if (summary.identity !== '') {
         await MemoryService.append(summary.identity, { source }, 'user');
       }
       if (summary.task !== '') {
-        await MemoryService.append(summary.task, { source }, 'workspace', workspaceKey);
+        await MemoryService.append(summary.task, { source }, 'workspace', workdir);
       }
     } catch {
       /* 自动沉淀为附加能力，失败静默 */
@@ -1052,6 +1073,10 @@ export const useSessionsStore = create<SessionsState>()(
         memoryLoaded: INITIAL_MEMORY_STATE,
       }));
       rememberActiveSession(session.id);
+      // 登记为「用过的目录」留痕（该表当前没有读取方，见 settings.knownWorkspaces）
+      if (session.workdir) {
+        useSettingsStore.getState().rememberWorkspace(session.workdir);
+      }
 
       // 自动沉淀触发点之二（新建会话）：对上一个会话补触发一次归纳。
       // 用户「告诉它我是谁 → 直接新建会话」时不会经过删除路径，若只挂 deleteSession，
@@ -1097,12 +1122,15 @@ export const useSessionsStore = create<SessionsState>()(
     },
 
     loadMemoryInto: async (sessionId, opts) => {
-      // 工作区隔离键由**会话的 workdir** 决定（P1-A）。
-      // 先切 currentKey 再判开关：currentKey 影响的是「记忆页与手动保存落到哪个
-      // 文件」，属于落点归属，不该被「是否注入记忆」这个开关影响。
-      const workdir = get().sessions.find((s) => s.id === sessionId)?.workdir;
-      const workspaceKey = workspaceKeyFor(workdir);
-      MemoryService.useWorkspace(workspaceKey);
+      // 工作区由**会话的 workdir** 决定（P1-A），它同时是落点（`<workdir>/.nanowork/memory/`）
+      // 与隔离单位。先切当前工作区再判开关：当前工作区影响的是「记忆页与手动保存
+      // 落到哪个目录」，属于落点归属，不该被「是否注入记忆」这个开关影响。
+      //
+      // `?? null` 不能省：`Session.workdir` 是 `string | undefined`，而 `undefined`
+      // 表示「按当前工作区」——漏掉它会让没有工作目录的会话读到上一个会话的记忆。
+      const workdir =
+        get().sessions.find((s) => s.id === sessionId)?.workdir ?? null;
+      MemoryService.useWorkspace(workdir);
 
       if (!useSettingsStore.getState().settings.memoryEnabled) return;
       // 版本在**读取之前**采样：若读取期间恰好有写入落盘，这次的正文可能不含它，
@@ -1113,19 +1141,19 @@ export const useSessionsStore = create<SessionsState>()(
         // 注入**两层**（L2 用户级 + L3 工作区级）：写入侧从 P1-B 起就按内容性质分流，
         // 这里只读工作区级等于把身份类事实写进一份没人读的文件——「在 A 工作区
         // 告诉过它我叫什么，换到 B 工作区就问不出来」正是这么来的。
-        loaded = await MemoryService.loadForInjection(workspaceKey);
+        loaded = await MemoryService.loadForInjection(workdir);
       } catch {
         return;
       }
       // 会话可能已在读取期间被删除
       if (!get().sessions.some((s) => s.id === sessionId)) return;
       // 空记忆也落一个空串：让「`memory === undefined` = 尚未加载」这一约定成立。
-      // 同时记下产出依据（版本 + 工作区键），供 isMemorySnapshotStale 判断过期。
+      // 同时记下产出依据（版本 + 工作目录），供 isMemorySnapshotStale 判断过期。
       get().updateSession(sessionId, (s) => ({
         ...s,
         memory: loaded.text,
         memoryVersion: version,
-        memoryWorkspaceKey: workspaceKey,
+        memoryWorkspace: workdir ?? undefined,
       }));
       // 空记忆不弹提示条
       if (loaded.text === '') return;
@@ -1148,8 +1176,12 @@ export const useSessionsStore = create<SessionsState>()(
       // 同步进入流式态」是可测性质（tests/sessionsStore.test.ts 的并发用例）。
       if (!session || session.memoryVersion === undefined) return false;
       if (session.memoryVersion !== MemoryService.writeVersion()) return true;
-      // workdir 变了 → 同一份快照已经指向另一个记忆文件
-      return session.memoryWorkspaceKey !== workspaceKeyFor(session.workdir);
+      // workdir 变了 → 同一份快照已经指向另一个工作区的记忆目录。
+      // 用 `isSameMemoryWorkspace` 而不是 `!==`：同一个目录会有多种字面量
+      // （大小写、尾分隔符、正反斜杠），字符串比较会把「还是同一个目录」判成过期，
+      // 于是每一轮发送都白白重读一次盘。两侧都为空视为相同（`isSameWorkspacePath`
+      // 的契约是「任一侧为空一律 false」，那是给侧边栏分组用的，口径不同）。
+      return !isSameMemoryWorkspace(session.memoryWorkspace, session.workdir);
     },
 
     dismissMemoryBar: () =>
@@ -1168,6 +1200,9 @@ export const useSessionsStore = create<SessionsState>()(
         workdir: next,
         updatedAt: nowIso(),
       }));
+      // 登记为「用过的目录」留痕（该表当前没有读取方，见 settings.knownWorkspaces）。
+      // `next` 可能为空——默认工作空间路径在设置就绪前算不出来，那种情况不登记
+      if (next) useSettingsStore.getState().rememberWorkspace(next);
       const after = get().sessions.find((x) => x.id === id);
       if (!after || !isEventStreamSession(after)) return;
       const from = before?.workdir;
@@ -1175,8 +1210,38 @@ export const useSessionsStore = create<SessionsState>()(
         persistMeta(after);
         return;
       }
-      // 工作空间**同时是事件流的落点作用域**（`projects/<slug>/`）：变更即搬迁。
-      // 记录器的作用域先切（后续写入落新目录），搬迁任务排进同一队列——
+
+      /**
+       * 记录搬不搬。
+       *
+       * 只在「确知一条消息都没有」或「此前根本没绑过工作空间」时才搬：
+       *
+       * - **搬是危险动作**：读旧 → 删旧 → 写新，中间挂掉就是整段对话没了；
+       *   而它的触发只是「点一下输入框里的工作空间」，代价与触发极不成比例。
+       * - **搬也不符合语义**：记录是「这个会话从哪来」，切换工作空间是「以后
+       *   去哪儿」——后者不该改写前者。更直观的后果是：把一个任务从 bbb 切到
+       *   aaa，本该只是它换了个工作空间，却让 bbb 工作空间连人带记录一锅端走。
+       *
+       * 空会话（只有 `session-start`，或压根没写过消息）搬迁代价为零，仍照旧
+       * 归位——这样「新建任务 → 选工作空间 → 开始干活」这一常见路径下，记录
+       * 落在用户真正干活的那个工作空间分片里，`projects/` 的目录名不会说谎。
+       *
+       * 判据用 `hasSessionMessages`（记录器侧，与水合无关），`null`（无从判断）
+       * 归入「有内容」——搬错方向的代价不可逆，宁可少搬。
+       */
+      const knownEmpty = hasSessionMessages(id) === false;
+      const neverBound = from === undefined;
+      if (!knownEmpty && !neverBound) {
+        // 冻结分片：记录留在原目录，此后所有读写都按它走。记录器也**不**改作用域
+        // ——它是后续追加的落点，与 `streamWorkdir` 必须一致，否则新事件会被写到
+        // 另一个目录，会话的正文被拆成两个文件（读回时只剩后半段）。
+        const shard = recorderWorkdir(id) ?? before?.streamWorkdir ?? from;
+        get().updateSession(id, (s) => ({ ...s, streamWorkdir: shard }));
+        persistMetaOf(id);
+        return;
+      }
+
+      // 空会话：记录器的作用域先切（后续写入落新目录），搬迁任务排进同一队列——
       // 队列保证「先把旧目录里已排队的追加写完，再读旧目录搬迁」，不会丢事件。
       setRecorderWorkdir(id, next);
       const scope = next;
@@ -1276,7 +1341,38 @@ export const useSessionsStore = create<SessionsState>()(
         const meta = await store.readMeta(entry.id, entry.workdir);
         if (!meta) continue;
         if (!isEventStreamSession(meta)) continue;
-        sessions.push({ ...metaToSession(meta), messages: [], permissionLog: [] });
+        // `messageCount` 来自索引：它是**水合之前**唯一能回答「这条任务有没有
+        // 对话记录」的数据（消息要等点进去才读盘，见 `@/lib/conversation`）。
+        // 漏掉它，重启后侧边栏会把所有没点开过的任务当成空会话。
+        sessions.push({
+          ...metaToSession(meta),
+          messages: [],
+          permissionLog: [],
+          messageCount: entry.messageCount,
+        });
+      }
+
+      /**
+       * 补登记工作空间：老用户（本字段之前）没有这张表，而它记录了「用户用过哪些
+       * 目录」。现有的会话就是最可靠的补登记来源。
+       *
+       * 放在这里而不是每条会话各自的创建路径：老数据不会重走创建路径。
+       *
+       * 注意这张表**当前没有读取方**——侧边栏从「没有对话记录的工作空间不显示」
+       * 之后不再据此补空分组（见 `settings.knownWorkspaces`）。保留写入是为了让
+       * 「用过的目录」这条留痕不至于断档，供后续的工作空间选择器使用。
+       */
+      const settingsState = useSettingsStore.getState();
+      const known = settingsState.settings.knownWorkspaces ?? [];
+      const used = new Set<string>();
+      for (const s of sessions) {
+        if (s.workdir) used.add(s.workdir);
+        // 分片目录也是用户真实用过的工作空间（会话切走之后它就成了「用过的目录」）
+        if (s.streamWorkdir) used.add(s.streamWorkdir);
+      }
+      // 只补表里没有的：登记动作会触发一次持久化写入，启动路径上不该反复写
+      for (const path of used) {
+        if (!known.includes(path)) settingsState.rememberWorkspace(path);
       }
 
       let activeId: string | null = null;
@@ -1312,11 +1408,14 @@ export const useSessionsStore = create<SessionsState>()(
           return;
         }
 
-        const events = await getEventStore().readEvents(id, target.workdir);
+        // 按**分片**读，而不是会话当前的工作空间：切过工作空间的会话，记录仍在
+        // 原分片目录里（见 `Session.streamWorkdir`），按新工作空间去读会什么都读不到
+        const events = await getEventStore().readEvents(id, streamShardOf(target));
         // 读盘期间会话可能已被删除
         const current = get().sessions.find((x) => x.id === id);
         if (!current) return;
-        primeRecorder(id, current.workdir, events);
+        // 记录器的作用域同样是分片：它决定后续写入落哪个目录，必须与读的是同一个
+        primeRecorder(id, streamShardOf(current), events);
         const { messages, permissionLog } = project(events);
         set((s) => ({
           sessions: s.sessions.map((x) =>

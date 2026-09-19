@@ -65,8 +65,9 @@ export const useStorageInfoStore = create<StorageInfoState>((set, get) => ({
  *
  * 那这个窗口怎么补？**在发消息时兜底**（`sendMessage` 里的
  * `session.workdir ?? resolveDefaultWorkspacePath()`）。会话的 `workdir` 一旦落盘
- * 就不再回填——回填会触发事件流目录搬迁（`setSessionWorkdir` 的副作用），
- * 为了一个几十毫秒的窗口去搬目录，风险远大于收益。
+ * 就不再回填——回填走的是「切换工作空间」那条路（`setSessionWorkdir` 的副作用：
+ * 改语义工作空间、可能连记录一起归位、并登记工作空间），为了一个几十毫秒的窗口
+ * 去改一个已经开始的会话的归属，风险远大于收益。
  */
 export function resolveDefaultWorkspacePath(): string | undefined {
   return pickDefaultWorkspacePath(

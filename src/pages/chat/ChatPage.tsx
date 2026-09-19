@@ -22,6 +22,7 @@ import {
 } from "./heroPresets";
 import { ChannelIcon } from "@/components/im/ChannelIcon";
 import { toast } from "@/components/Toast";
+import { hasConversation } from "@/lib/conversation";
 import { platform } from "@/platform";
 import { useSessionsStore } from "@/stores/sessionsStore";
 import { useChannelSessionsStore } from "@/stores/channelSessionsStore";
@@ -47,7 +48,10 @@ export function ChatPage() {
   const session = useSessionsStore((s) =>
     s.sessions.find((x) => x.id === activeId),
   );
-  const hasMessages = (session?.messages.length ?? 0) > 0;
+  // 空态判据走 `hasConversation` 而不是只看消息：消息是按需水合的（启动只读索引），
+  // 点开一条有记录的老任务时，`messages` 会先留白一瞬——只看消息会让大标题空态
+  // 闪现一下再被消息流顶掉。索引里的持久条数能立刻回答「这条任务开过工没有」。
+  const hasMessages = session ? hasConversation(session) : false;
 
   const mode = HERO_MODES.find((m) => m.id === activeMode) ?? HERO_MODES[0];
   const activeSkill = mode.skills.find((s) => s.id === activeSkillId) ?? null;

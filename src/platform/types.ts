@@ -285,10 +285,51 @@ export interface StorageAdapter {
   clear(): Promise<void>;
 }
 
+/**
+ * 工作区记忆的**目录后端**（`<workdir>/.nanowork/memory/`）。
+ *
+ * ## 为什么不复用 `storage`
+ *
+ * `storage` 的契约是「一个 key 一个文件，值原样存取」，而工作区记忆是
+ * **一个目录、若干按天分片的文件**：需要枚举（记忆页的文件切换器、读取时合并）、
+ * 需要按名字粒度的删除（清空整个工作区）。硬塞进 `storage` 只能靠约定
+ * `nanowork.memory.<key>.<file>` 这类复合 key 来表达目录结构，而主进程的
+ * 路由表是按前缀做字符串拼接的——那会把「目录」这个语义散到三处。
+ *
+ * ## 契约
+ *
+ * - `workdir` 为 `null` 表示「会话没有绑定工作目录」，落产品目录下的兜底目录；
+ * - 所有名字都是**单段文件名**，不得含分隔符；非法名字一律拒绝（抛错 / 返回空）；
+ * - 读取比写入宽松：`list` / `read` 收下目录里所有 `.md`（用户手写的不该被忽略），
+ *   写入只接受 `MEMORY.md` 与 `YYYY-MM-DD.md`；
+ * - 不存在的目录 / 文件在 `list` / `read` 上是**正常状态**（空数组 / null），
+ *   不是错误；能力边界被越过时（非法文件名）才抛错。
+ */
+export interface WorkspaceMemoryFiles {
+  /** 列出该工作区全部记忆文件名（已按注入顺序排序） */
+  list(workdir: string | null): Promise<string[]>;
+  /** 读取单个记忆文件；不存在返回 null */
+  read(workdir: string | null, name: string): Promise<string | null>;
+  /** 覆盖写入单个记忆文件（自动创建目录） */
+  write(workdir: string | null, name: string, content: string): Promise<void>;
+  /** 删除单个记忆文件（幂等） */
+  remove(workdir: string | null, name: string): Promise<void>;
+  /** 删除该工作区全部记忆文件（不可撤销）；返回删除个数 */
+  removeAll(workdir: string | null): Promise<number>;
+  /**
+   * 旧单文件落点的懒迁移（幂等）。
+   * 目录里已有记忆时直接返回空数组，不会覆盖用户在新目录里的编辑。
+   * @returns 本次新写入的文件名
+   */
+  migrateLegacy(workdir: string | null): Promise<string[]>;
+}
+
 /** 平台适配实现（web / electron） */
 export interface PlatformAdapter {
   env: 'web' | 'electron';
   storage: StorageAdapter;
+  /** 工作区记忆的目录后端（落点见 `WorkspaceMemoryFiles`） */
+  memoryFiles: WorkspaceMemoryFiles;
   notify(title: string, body: string): void;
   /**
    * 写入文本文件（用于导出记忆、nanobot 配置片段等）。
@@ -678,6 +719,22 @@ export interface ElectronAPI {
   notify(title: string, body: string): void;
   /** 写入文本文件；相对路径解析到 `~/.nanowork/`，绝对路径须在允许的根内 */
   writeTextFile(path: string, content: string): Promise<void>;
+  // —— 工作区记忆目录（`<workdir>/.nanowork/memory/`）——
+  // **刻意独立于 writeTextFile**：后者只放行 home / userData / ~/.nanowork 三个根，
+  // 而记忆落在用户的工作目录里。放宽它的白名单等于让「导出文件」获得往任意位置
+  // 写文件的能力，所以另开一条能力面更窄的通道：只能写 MEMORY.md 与日期文件。
+  /** 列出工作区记忆目录下的记忆文件名（已排序） */
+  memoryListFiles(workdir: string | null): Promise<string[]>;
+  /** 读取单个记忆文件；不存在返回 null */
+  memoryReadFile(workdir: string | null, name: string): Promise<string | null>;
+  /** 覆盖写入单个记忆文件（只接受 MEMORY.md / YYYY-MM-DD.md） */
+  memoryWriteFile(workdir: string | null, name: string, content: string): Promise<void>;
+  /** 删除单个记忆文件（幂等） */
+  memoryRemoveFile(workdir: string | null, name: string): Promise<void>;
+  /** 删除该工作区全部记忆文件；返回删除个数 */
+  memoryRemoveAll(workdir: string | null): Promise<number>;
+  /** 旧单文件落点的懒迁移（幂等）；返回本次新写入的文件名 */
+  memoryMigrateLegacy(workdir: string | null): Promise<string[]>;
   /** 启动 nanobot 网关子进程（桌面端自动拉起） */
   nanobotStart(): Promise<boolean>;
   /** 停止 nanobot 网关子进程 */

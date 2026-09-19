@@ -50,7 +50,12 @@ export function setRecordErrorSink(sink: RecordErrorSink | null): void {
 interface RecorderState {
   /** 事件工厂：持有 seq 与链尖 */
   factory: EventFactory;
-  /** 当前落点作用域（= 会话的 `workdir`）；决定 `projects/<slug>/` */
+  /**
+   * 当前落点作用域（会话的**落盘分片**）；决定 `projects/<slug>/`。
+   *
+   * 与 `session.workdir` 在「会话已有消息又切了工作空间」时分叉：那时分片冻结，
+   * 记录器不再改作用域，后续追加继续落原目录（见 `Session.streamWorkdir`）。
+   */
   workdir?: string;
   /** `messageId` → 活跃链上该消息 `message` 事件 id */
   messageEventIds: Map<string, string>;
@@ -117,10 +122,32 @@ export function hasRecorder(sessionId: string): boolean {
 }
 
 /**
+ * 该会话是否已经有过消息事件（= 有真实内容）。
+ *
+ * 用途：`sessionsStore.setSessionWorkdir` 据此决定「换工作空间时要不要把记录搬过去」
+ * ——**确知为空才搬**，其余一律不搬（见 `Session.streamWorkdir`）。
+ *
+ * 判据取自记录器的 `messageEventIds`：它由 `recordEvents`（新事件）与
+ * `primeRecorder`（磁盘历史）两侧共同填充，因此**不依赖会话是否已水合**——
+ * 用 `session.messages.length` 判断会误判：列表里的会话在点进去之前消息是留白的。
+ *
+ * 返回 `null` = 无从判断（记录器未就绪）：调用方必须按「有内容」处理，
+ * 因为搬错方向的代价不对称——把该留的记录搬走是不可逆的。
+ */
+export function hasSessionMessages(sessionId: string): boolean | null {
+  const state = recorders.get(sessionId);
+  if (!state) return null;
+  return state.messageEventIds.size > 0;
+}
+
+/**
  * 更新落点作用域（会话工作空间变更时调用）。
  *
- * 只改「后续写入落哪里」，**不搬迁既有文件**——搬迁由
+ * 只改「后续写入落哪里」，**不搬迁既有文件**——搬迁（仅在会话尚无消息时发生）由
  * `sessionsStore.setSessionWorkdir` 排进同一队列完成（顺序：先搬后写）。
+ *
+ * 反向的约束：**会话已有消息时不许调用它**。分片一旦冻结，记录器的作用域就必须
+ * 保持不动，否则后续事件会追加到 `streamWorkdir` 之外的目录里，读回时只剩后半段。
  */
 export function setRecorderWorkdir(sessionId: string, workdir?: string): void {
   const state = recorders.get(sessionId);

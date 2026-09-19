@@ -1,13 +1,16 @@
 /**
- * 记忆页的作用域切换（FR-4.2 / FR-4.5）。
+ * 记忆页的作用域与文件切换（FR-4.2 / FR-4.5）。
  *
- * 这组用例锁的是**最危险的一条**：两个作用域各是一份独立文件，任何「把 A 层内容
- * 存进 B 层」的串台都是静默数据损坏——不报错、不崩溃，只是某天用户发现跨项目
- * 的记忆里混进了某个项目的细节。所以断言都围绕「切层读盘」与「保存落点」：
+ * 这组用例锁的是**最危险的一条**：每个可编辑的目标都是一份独立内容，任何
+ * 「把 A 的内容存进 B」的串台都是静默数据损坏——不报错、不崩溃，只是某天用户
+ * 发现跨项目的记忆里混进了某个项目的细节。所以断言都围绕「切换后真的重新读盘」
+ * 与「保存只落当前目标」：
  *
- * 1. 默认进工作区级，切换到用户级要**真的重新读盘**；
- * 2. 保存 / 清空只作用于当前作用域，另一层一个字节都不动；
- * 3. 切层瞬间先清空编辑框，避免「加载中」时被手快点保存把上一层写过去。
+ * 1. 默认进工作区级（且默认编辑 `MEMORY.md`），切到用户级要**真的重新读盘**；
+ * 2. 保存 / 清空只作用于当前目标，其它目标一个字节都不动；
+ * 3. 切层 / 切文件瞬间先清空编辑框，避免「加载中」时被手快点保存写过去；
+ * 4. 工作区级是**目录**（`MEMORY.md` + 日期文件），写今天的日志不得波及精炼记忆
+ *    ——旧实现把合并视图整体写回 `MEMORY.md`，会让同一句话在磁盘上存两份。
  *
  * 种子数据一律走 `MemoryService.save` 而不是直接写 localStorage：Web 存储适配器
  * 会把值做 JSON 序列化，裸写字符串在下一次 `get` 时 `JSON.parse` 失败会被吞成
@@ -17,9 +20,11 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { MemoryPage } from '@/pages/memory/MemoryPage';
 import { MemoryService } from '@/lib/memory';
+import { CURATED_MEMORY_FILE, dailyMemoryFileName } from '@/lib/workspaceMemory';
 import {
   buttonByText,
   click,
+  dialogRoot,
   flush,
   mount,
   setInputValue,
@@ -74,11 +79,16 @@ describe('MemoryPage 作用域切换', () => {
     expect(await MemoryService.load('workspace')).toBe(WS_TEXT);
   });
 
-  it('清空只清当前作用域', async () => {
+  it('清空只清当前作用域（需二次确认）', async () => {
     const host = mount(<MemoryPage />);
     await flush();
 
+    // 工作区级清空会删掉该工作目录下的整批记忆文件，因此必须先过一次确认对话框
     click(buttonByText(host, '清空'));
+    await flush();
+    expect(await MemoryService.load('workspace')).toBe(WS_TEXT);
+
+    click(buttonByText(dialogRoot(), '清空'));
     await flush();
 
     expect(await MemoryService.load('workspace')).toBe('');
@@ -112,5 +122,45 @@ describe('MemoryPage 作用域切换', () => {
     // 切换器上的字符数来自真实读盘结果（两层长度不同，因此这条断言有区分力）
     expect(host.textContent).toContain(`${USER_TEXT.length} 字符`);
     expect(host.textContent).toContain(`${WS_TEXT.length} 字符`);
+  });
+});
+
+describe('MemoryPage 工作区文件切换', () => {
+  it('写今天的日志不会覆盖精炼记忆', async () => {
+    const host = mount(<MemoryPage />);
+    await flush();
+    expect(editor(host).value).toBe(WS_TEXT);
+
+    const today = dailyMemoryFileName();
+    click(buttonByText(host, '今天'));
+    await flush();
+    // 今天的日志还没写过 → 编辑器是空的（「不存在」，而不是「有一份空的」）
+    expect(editor(host).value).toBe('');
+
+    setInputValue(editor(host), '今天沉淀的一句话');
+    click(buttonByText(host, '保存'));
+    await flush();
+
+    // 落进当天的日期文件……
+    expect(await MemoryService.readFile(undefined, today)).toBe('今天沉淀的一句话');
+    // ……而精炼记忆一个字节都没动（旧实现会把合并视图整体写回，两份就串了）
+    expect(await MemoryService.readFile(undefined, CURATED_MEMORY_FILE)).toBe(WS_TEXT);
+    // 合并视图里两份都在：注入时读到的正是这一份
+    const merged = await MemoryService.load('workspace');
+    expect(merged).toContain(WS_TEXT);
+    expect(merged).toContain('今天沉淀的一句话');
+  });
+
+  it('切到另一份文件会重新读盘，而不是沿用上一份的正文', async () => {
+    const today = dailyMemoryFileName();
+    await MemoryService.writeFile(undefined, today, '今天已经记过的内容');
+
+    const host = mount(<MemoryPage />);
+    await flush();
+    expect(editor(host).value).toBe(WS_TEXT);
+
+    click(buttonByText(host, '今天'));
+    await flush();
+    expect(editor(host).value).toBe('今天已经记过的内容');
   });
 });

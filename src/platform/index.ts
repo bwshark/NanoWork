@@ -1,7 +1,12 @@
 import { createJSONStorage, type StateStorage } from 'zustand/middleware';
 import { isElectron } from './env';
-import { WebStorageAdapter, webPickDirectory, webWriteTextFile } from './storage.web';
-import { ElectronStorageAdapter } from './storage.electron';
+import {
+  WebStorageAdapter,
+  WebWorkspaceMemoryFiles,
+  webPickDirectory,
+  webWriteTextFile,
+} from './storage.web';
+import { ElectronStorageAdapter, ElectronWorkspaceMemoryFiles } from './storage.electron';
 import { notify } from './notification';
 import type {
   AppInfo,
@@ -31,6 +36,11 @@ const storage = isElectron() ? new ElectronStorageAdapter() : new WebStorageAdap
 export const platform: PlatformAdapter = {
   env: isElectron() ? 'electron' : 'web',
   storage,
+  // 工作区记忆目录：与 storage 并列的另一条通道（一个 key 一个文件的契约表达不了
+  // 「一个目录、若干日期文件」，见 types.ts 的 WorkspaceMemoryFiles 注释）。
+  memoryFiles: isElectron()
+    ? new ElectronWorkspaceMemoryFiles()
+    : new WebWorkspaceMemoryFiles(),
   notify,
   writeTextFile: (path: string, content: string) => {
     if (isElectron() && storage instanceof ElectronStorageAdapter) {

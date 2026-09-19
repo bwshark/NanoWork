@@ -419,7 +419,15 @@ export function metaToSession(meta: SessionMeta): Omit<Session, 'messages' | 'pe
       meta.agentId === UNBOUND_AGENT_SENTINEL ? '' : meta.agentId,
     ...(meta.groupId !== undefined ? { groupId: meta.groupId } : {}),
     ...(meta.skillIds && meta.skillIds.length > 0 ? { skillIds: [...meta.skillIds] } : {}),
-    ...(meta.workdir !== undefined ? { workdir: meta.workdir } : {}),
+    // `meta.workdir` 是**落盘分片**（meta 与 jsonl 所在的目录），会话真正绑定的
+    // 工作空间在 `meta.workspace`——只有「已有消息又切过工作空间」的会话才有它，
+    // 其余情况两者相同，所以老数据（无该字段）读出来语义不变。
+    ...(meta.workspace !== undefined
+      ? { workdir: meta.workspace }
+      : meta.workdir !== undefined
+        ? { workdir: meta.workdir }
+        : {}),
+    ...(meta.workdir !== undefined ? { streamWorkdir: meta.workdir } : {}),
     ...(meta.permissionMode === 'full' ? { fullAccess: true } : {}),
     ...(meta.toolApproval !== undefined ? { toolApproval: meta.toolApproval } : {}),
     // 执行模式在 meta 里是**必填**的（缺省也已由写入方归一为 craft），

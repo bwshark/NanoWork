@@ -1,5 +1,5 @@
 import type { Skill } from '@/types';
-import type { ElectronAPI, StorageAdapter } from './types';
+import type { ElectronAPI, StorageAdapter, WorkspaceMemoryFiles } from './types';
 
 /**
  * Electron 存储适配器：通过 window.electronAPI 桥接主进程。
@@ -56,5 +56,46 @@ export class ElectronStorageAdapter implements StorageAdapter {
   /** 经主进程把三态覆盖合并进 nanobot config.json */
   async syncNanobotSkills(overridesJson: string) {
     return this.api().nanobotSyncSkills(overridesJson);
+  }
+}
+
+/**
+ * Electron 的工作区记忆后端：一个方法一次 IPC，主进程负责路径解析与安全校验。
+ *
+ * 适配层**不做任何路径拼接**：`<workdir>/.nanowork/memory/` 的拼法在 Windows 与
+ * POSIX 上不同（分隔符、大小写、UNC），渲染层既拿不到 `path` 模块也不该复刻
+ * 这套规则。所以传的是「工作目录 + 单段文件名」，由主进程现算。
+ */
+export class ElectronWorkspaceMemoryFiles implements WorkspaceMemoryFiles {
+  private api(): ElectronAPI {
+    const api = window.electronAPI;
+    if (!api) {
+      throw new Error('electronAPI 未注入，无法访问工作区记忆目录');
+    }
+    return api;
+  }
+
+  list(workdir: string | null): Promise<string[]> {
+    return this.api().memoryListFiles(workdir);
+  }
+
+  read(workdir: string | null, name: string): Promise<string | null> {
+    return this.api().memoryReadFile(workdir, name);
+  }
+
+  write(workdir: string | null, name: string, content: string): Promise<void> {
+    return this.api().memoryWriteFile(workdir, name, content);
+  }
+
+  remove(workdir: string | null, name: string): Promise<void> {
+    return this.api().memoryRemoveFile(workdir, name);
+  }
+
+  removeAll(workdir: string | null): Promise<number> {
+    return this.api().memoryRemoveAll(workdir);
+  }
+
+  migrateLegacy(workdir: string | null): Promise<string[]> {
+    return this.api().memoryMigrateLegacy(workdir);
   }
 }

@@ -319,7 +319,10 @@ describe('会话装配：用户自定义指令与记忆', () => {
    */
   it('用户级与工作区级记忆一并注入，用户级在前（P0 修复）', async () => {
     await MemoryService.save('用户叫明明，跨项目成立', 'user');
-    await MemoryService.save('本项目决定先修 P0', 'workspace', 'default');
+    // 会话没有绑定工作目录（`createSession` 未传 opts）→ 工作区级记忆落产品目录
+    // 下的兜底位置。这里的 `null` 不能写成字符串 `'default'`：那会被当成一个名为
+    // 「default」的**工作目录**，于是写进去的内容与装配时读取的位置不是同一处。
+    await MemoryService.save('本项目决定先修 P0', 'workspace', null);
 
     await sendOnce();
 

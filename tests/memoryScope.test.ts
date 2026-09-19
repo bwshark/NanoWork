@@ -5,8 +5,13 @@
  *
  * 1. **缺省作用域是 `workspace`**——既有 40 余处调用点拿到的行为不能变，
  *    否则「会话结束自动沉淀」会静默写进用户级长期记忆。
- * 2. **两层互不串台**：`user` 落 `~/.nanowork/MEMORY.md`，`workspace` 落
- *    `~/.nanowork/memory/<key>.md`。串台的症状是「清空工作区记忆把用户级也清了」。
+ * 2. **两层互不串台**：`user` 落 `~/.nanowork/MEMORY.md`（单文件），`workspace`
+ *    落 `<工作目录>/.nanowork/memory/`（目录：`MEMORY.md` + 日期文件）。
+ *    串台的症状是「清空工作区记忆把用户级也清了」。
+ *
+ * 本文件里的 `'default'` / `'ws-a'` 只是**工作目录的替身**（一个不透明的字符串），
+ * 断言的是一致性而不是路径拼法——真实路径解析由 `electron/memoryRoutes.ts`
+ * 与其单测负责。
  */
 
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -21,9 +26,12 @@ beforeEach(() => {
 describe('MemoryService：作用域隔离', () => {
   it('缺省作用域是工作区（既有调用点行为不变）', async () => {
     await MemoryService.save('工作区内容');
-    expect(await window.localStorage.getItem(`${MEMORY_KEY_PREFIX}default`)).toBe(
-      JSON.stringify('工作区内容'),
-    );
+
+    expect(await MemoryService.load()).toBe('工作区内容');
+    // 工作区级现在落「目录」后端（`<workdir>/.nanowork/memory/`），不再写旧的
+    // 单文件 key；写进去了就说明缺省作用域串到用户级去了。
+    expect(window.localStorage.getItem(`${MEMORY_KEY_PREFIX}default`)).toBeNull();
+    expect(window.localStorage.getItem(USER_MEMORY_KEY)).toBeNull();
   });
 
   it('user 作用域落到独立的 storage key', async () => {
@@ -62,7 +70,7 @@ describe('MemoryService：作用域隔离', () => {
     expect(await MemoryService.load('workspace')).toBe('');
   });
 
-  it('工作区作用域仍然按 currentKey 隔离', async () => {
+  it('工作区作用域按当前工作目录隔离', async () => {
     await MemoryService.save('默认区');
     MemoryService.useWorkspace('ws-a');
     await MemoryService.save('A 区');

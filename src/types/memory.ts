@@ -31,7 +31,9 @@ export interface MemoryState {
  *   写入方有三处：用户在记忆页亲手编辑、自动沉淀识别出的**身份类**事实
  *   （称呼/职业/稳定偏好），以及 Agent 在用户明确要求下写的
  *   `<memory-save scope="user">`。
- * - `workspace`：工作区长期记忆，落 `~/.nanowork/memory/<workspaceKey>.md`（L3），
+ * - `workspace`：工作区长期记忆，落 `<工作目录>/.nanowork/memory/`（L3）——
+ *   一个目录，里面是 `MEMORY.md`（精炼记忆）+ 若干 `YYYY-MM-DD.md`（每日日志），
+ *   读取时合并注入。没有绑定工作目录的会话落 `~/.nanowork/memory/default/`。
  *   按会话的工作目录隔离。
  */
 export type MemoryScope = 'user' | 'workspace';

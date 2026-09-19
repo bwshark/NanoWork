@@ -7,8 +7,47 @@ import type {
   SessionMeta,
 } from '@/types/event';
 
-/** 会话索引的 schema 版本（与 `SessionIndexFile.version` 对齐） */
-export const SESSION_INDEX_VERSION = 1;
+/**
+ * 会话索引的 schema 版本（与 `SessionIndexFile.version` 对齐）。
+ *
+ * v2：条目新增 `messageCount`（有对话记录的判据，见 `SessionIndexEntry`）。
+ * 版本不符时 `normalizeSessionIndex` 直接丢弃旧索引，由上层 `rebuildIndex`
+ * 重扫 JSONL 重建——索引是**可再生派生物**，这正是它设计好的升级路径
+ * （v1 的条目没有这个字段，不重建的话列表会把所有会话都当成空会话）。
+ */
+export const SESSION_INDEX_VERSION = 2;
+
+/**
+ * 索引里的三个计数。
+ *
+ * 集中成一个结构，是因为它要一路穿过 `applyAppend` / `rebuildSessionIndex`
+ * 与三个存储实现（内存参照、Electron、Web）；散成三个平行参数迟早会有一处漏传。
+ */
+export interface SessionCounters {
+  /** 事件总数（含全部类型） */
+  eventCount: number;
+  /** 最大 seq */
+  lastSeq: number;
+  /** 用户 / 助手消息事件数（有对话记录的判据） */
+  messageCount: number;
+}
+
+/**
+ * 从一段事件流算出计数（三个存储实现的重建路径共用）。
+ *
+ * `base` 用于**续算**：`applyAppend` 只看到本次追加的那几条，计数要在既有值上累加。
+ */
+export function countEvents(
+  events: readonly SessionEvent[],
+  base: SessionCounters = { eventCount: 0, lastSeq: 0, messageCount: 0 },
+): SessionCounters {
+  let { lastSeq, messageCount } = base;
+  for (const ev of events) {
+    if (ev.seq > lastSeq) lastSeq = ev.seq;
+    if (ev.type === 'message') messageCount += 1;
+  }
+  return { eventCount: base.eventCount + events.length, lastSeq, messageCount };
+}
 
 /**
  * 会话索引的纯逻辑（D2，设计文档 9.4 的 JSON 落地）。
@@ -42,8 +81,9 @@ export function emptySessionIndex(): SessionIndexFile {
 /**
  * 规范化**已解析**的索引对象，**容错**：
  *
- * 结构不符或 schema 版本不符一律返回空索引——索引可再生，丢弃后由上层重建即可，
- * 比「尽力抢救」更不容易出错。字符串入参走 `parseSessionIndex`。
+ * 结构不符、schema 版本不符、或条目缺计数（旧版残留 / 混合版本写入）一律返回
+ * 空索引——索引可再生，丢弃后由上层重建即可，比「尽力抢救」更不容易出错。
+ * 字符串入参走 `parseSessionIndex`。
  */
 export function normalizeSessionIndex(value: unknown): SessionIndexFile {
   if (!value || typeof value !== 'object') return emptySessionIndex();
@@ -53,7 +93,18 @@ export function normalizeSessionIndex(value: unknown): SessionIndexFile {
   const entries: Record<string, SessionIndexEntry> = {};
   for (const [id, entry] of Object.entries(obj.entries as Record<string, unknown>)) {
     if (entry && typeof entry === 'object') {
-      entries[id] = entry as SessionIndexEntry;
+      const e = entry as Partial<SessionIndexEntry>;
+      // 三个计数缺一不可：`messageCount` 缺失时这条会话会被列表判成空会话
+      // （见 `SessionIndexEntry.messageCount`），与其静默藏起用户的任务，
+      // 不如整份丢弃触发重建——索引本来就是可再生派生物。
+      if (
+        typeof e.eventCount !== 'number' ||
+        typeof e.lastSeq !== 'number' ||
+        typeof e.messageCount !== 'number'
+      ) {
+        return emptySessionIndex();
+      }
+      entries[id] = e as SessionIndexEntry;
     }
   }
   return { version: SESSION_INDEX_VERSION, entries };
@@ -108,6 +159,8 @@ export function normalizeSessionMeta(value: unknown): SessionMeta | null {
         : UNBOUND_AGENT_SENTINEL,
     groupId: typeof obj.groupId === 'string' ? obj.groupId : null,
     workdir: typeof obj.workdir === 'string' ? obj.workdir : undefined,
+    // 语义工作空间（缺省 = 同 workdir）：切换过工作空间的会话才有这个字段
+    workspace: typeof obj.workspace === 'string' ? obj.workspace : undefined,
     mode: isExecutionMode(obj.mode) ? obj.mode : 'craft',
     model: typeof obj.model === 'string' ? obj.model : undefined,
     permissionMode: isPermissionMode(obj.permissionMode) ? obj.permissionMode : 'restricted',
@@ -218,10 +271,7 @@ export function deriveMetaFromEvents(
 }
 
 /** 由元数据 + 计数构造索引条目 */
-export function entryFromMeta(
-  meta: SessionMeta,
-  counters: { eventCount: number; lastSeq: number },
-): SessionIndexEntry {
+export function entryFromMeta(meta: SessionMeta, counters: SessionCounters): SessionIndexEntry {
   return {
     id: meta.id,
     title: meta.title,
@@ -236,6 +286,7 @@ export function entryFromMeta(
     pinned: meta.pinned,
     eventCount: counters.eventCount,
     lastSeq: counters.lastSeq,
+    messageCount: counters.messageCount,
     createdAt: meta.createdAt,
     updatedAt: meta.updatedAt,
     rev: meta.rev,
@@ -269,7 +320,7 @@ export function removeSessionEntry(
  * 把一次追加投影进索引。
  *
  * 语义要点：
- * - **事件数与 lastSeq 只增不减**（append-only 流，无需回退）；
+ * - **事件数、lastSeq 与对话记录条数只增不减**（append-only 流，无需回退）；
  * - **标题**：本次追加若含 `ai-title` 则以其为准（自动命名晚于首条消息），
  *   否则沿用既有条目 / 元数据里的标题；
  * - **updatedAt** 取「既有、元数据、本次事件时间戳」的最大值，保证列表按
@@ -285,21 +336,25 @@ export function applyAppend(
 ): SessionIndexFile {
   const prev = index.entries[sessionId];
 
-  let maxSeq = prev?.lastSeq ?? 0;
   let maxTs = 0;
   let titleFromAppend: string | undefined;
   for (const ev of appended) {
-    if (ev.seq > maxSeq) maxSeq = ev.seq;
     if (ev.timestamp > maxTs) maxTs = ev.timestamp;
     if (ev.type === 'ai-title') titleFromAppend = ev.title;
   }
+  // 三个计数都从既有条目续算：这里只看到本次追加的那几条
+  const counters = countEvents(appended, {
+    eventCount: prev?.eventCount ?? 0,
+    lastSeq: prev?.lastSeq ?? 0,
+    messageCount: prev?.messageCount ?? 0,
+  });
 
   if (appended.length === 0 && !meta && !prev) return index;
 
   const base: SessionIndexEntry | undefined = prev
     ? prev
     : meta
-      ? entryFromMeta(meta, { eventCount: 0, lastSeq: 0 })
+      ? entryFromMeta(meta, { eventCount: 0, lastSeq: 0, messageCount: 0 })
       : undefined;
   if (!base) return index;
 
@@ -324,8 +379,7 @@ export function applyAppend(
         }
       : {}),
     ...(titleFromAppend ? { title: titleFromAppend } : {}),
-    eventCount: (prev?.eventCount ?? 0) + appended.length,
-    lastSeq: maxSeq,
+    ...counters,
     updatedAt: maxIso(base.updatedAt, meta?.updatedAt, maxTs ? toIso(maxTs) : undefined),
   };
 
@@ -335,18 +389,20 @@ export function applyAppend(
 /**
  * 按元数据整体重建索引（索引损坏、schema 升级或首次迁移时使用）。
  *
- * `countersById` 提供每个会话的事件数与 lastSeq（由调用方读 JSONL 得到）；
- * 缺省时计数为 0——列表仍可用，只是 `eventCount`/`lastSeq` 待下次追加时补齐。
+ * `countersById` 提供每个会话的事件计数（由调用方读 JSONL 得到，见 `countEvents`）；
+ * 缺省时计数为 0——列表仍可用，只是 `eventCount` / `lastSeq` / `messageCount`
+ * 待下次追加时补齐。**注意**计数为 0 的会话会被列表当成空会话，所以重建路径
+ * 一定要把 `countersById` 传全（三个存储实现都从 JSONL 现算）。
  */
 export function rebuildSessionIndex(
   metas: readonly SessionMeta[],
-  countersById: Record<string, { eventCount: number; lastSeq: number }> = {},
+  countersById: Record<string, SessionCounters> = {},
 ): SessionIndexFile {
   const entries: Record<string, SessionIndexEntry> = {};
   for (const meta of metas) {
     entries[meta.id] = entryFromMeta(
       meta,
-      countersById[meta.id] ?? { eventCount: 0, lastSeq: 0 },
+      countersById[meta.id] ?? { eventCount: 0, lastSeq: 0, messageCount: 0 },
     );
   }
   return { version: SESSION_INDEX_VERSION, entries };

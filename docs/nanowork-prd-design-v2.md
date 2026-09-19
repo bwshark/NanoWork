@@ -1134,7 +1134,7 @@ D2 分五阶段推进，**A 事件模型 / B 存储抽象 / C 双写 / D 切读 
 | 回合结束（done / error / abort） | `message`(assistant 终值，带 `createdAt`/`durationMs`/`aborted`) + `session-end` |
 | `rename` / `pin` / `setModel` / `setFullAccess` / `setToolApproval` | 只落 meta（非事件型变更） |
 | `deleteSession(s)` | `removeSession`（排进该会话写队列，避免删后又被追加复活） |
-| `setSessionWorkdir` | 事件文件**随作用域搬迁**（读旧 → 删旧 → 写新 → 写 meta，同一队列保序） |
+| `setSessionWorkdir` | 改 `meta.workspace`（语义工作空间）+ 登记工作空间；**记录只在会话尚无消息时随作用域归位**（读旧 → 删旧 → 写新 → 写 meta，同一队列保序），一旦有过消息则冻结落盘分片（`meta.workdir` 不变），磁盘上不动任何文件 |
 
 **哪些会话不写**：IM 频道会话（`channel`）、只读留痕（`readonly`）、定时任务执行
 （`cron:` 前缀）——它们的真值在引擎侧，本地落盘只会制造两份互相打架的数据。

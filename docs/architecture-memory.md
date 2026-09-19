@@ -1,7 +1,28 @@
 # 增量架构设计：工作区文件记忆（MEMORY.md 机制）
 
+> ⚠️ **落点已变更（2026-09-19）**：工作区记忆**不再落 `~/.nanowork/memory/<key>.md`
+> 单文件**，改为落**用户工作目录下的目录** `<工作目录>/.nanowork/memory/`，
+> 里面是 `MEMORY.md`（精炼记忆）+ 若干 `YYYY-MM-DD.md`（每日日志），读取时合并注入。
+> 与 WorkBuddy 的 `.workbuddy/memory/` 同构。
+>
+> 本文下面各节的路径示例（`~/.nanowork/memory/<key>.md`）是**变更当时的历史记录**，
+> 保留下来便于对照演进过程；描述现状请看这几处：
+>
+> | 关注点 | 现状所在 |
+> |---|---|
+> | 目录与文件名约定、排序、合并 | `src/lib/workspaceMemory.ts` |
+> | 主进程路径解析与越界校验 | `electron/memoryRoutes.ts` |
+> | 主进程 fs 读写与旧数据懒迁移 | `electron/workspaceMemoryStore.ts` |
+> | 渲染层目录后端（Web 为 localStorage 模拟） | `src/platform/types.ts` 的 `WorkspaceMemoryFiles` |
+> | 记忆服务 | `src/lib/memory.ts` 的 `MemoryServiceImpl` |
+> | 工作目录 → 旧落点 key（仅迁移用） | `src/lib/workspaceKey.ts` |
+>
+> 没有绑定工作目录的会话（IM 会话、存储设置之前建的旧会话）仍落产品目录下的
+> `~/.nanowork/memory/default/`——没有工作目录就没有「跟着走」的载体。
+
 > 本文档为 `docs/prd-memory.md` 的配套架构设计，**仅描述变更部分**，不重写既有架构。
-> 所有跨端读写一律经由 `platform`（`platform.storage` / `platform.writeTextFile`），禁止直接依赖 `electron`。
+> 所有跨端读写一律经由 `platform`（`platform.memoryFiles` / `platform.storage` /
+> `platform.writeTextFile`），禁止直接依赖 `electron`。
 
 ---
 
@@ -13,10 +34,15 @@
 
 **落盘（与初版的差异）**：不再由渲染层调 `platform.writeTextFile` 写 `MEMORY.md`——
 那条路径传的是纯文件名，被主进程安全校验拒绝后又吞掉异常，于是「写真实 MEMORY.md」
-从未生效且无人察觉。现在**统一走 `platform.storage`**，Electron 由主进程把
-`nanowork.memory.<key>` / `nanowork.userMemory` 路由成真实文件
-（`~/.nanowork/memory/<key>.md` / `~/.nanowork/MEMORY.md`），Web 落 localStorage。
+从未生效且无人察觉。此后曾统一走 `platform.storage`（Electron 由主进程把
+`nanowork.memory.<key>` / `nanowork.userMemory` 路由成真实文件），Web 落 localStorage。
 渲染层**没有** electron 分支，也**没有**「优先真实文件回退 storage」的双读路径。
+
+> **2026-09-19 起**：工作区级改为走 `platform.memoryFiles`（目录后端）：Electron 侧
+> 由主进程 `memory:*` IPC 直接读写 `<工作目录>/.nanowork/memory/` 下的文件，**不经过**
+> `platform.storage`（那个契约是「一个 key 一个文件」，表达不了「一个目录、若干日期
+> 文件」）。用户级 `~/.nanowork/MEMORY.md` 仍然走 `platform.storage`。
+> 渲染层依然没有 electron 分支——路径拼接与安全校验全在主进程，见 `electron/memoryRoutes.ts`。
 
 ---
 
@@ -27,7 +53,7 @@
 | `src/lib/memory.ts` | **[新]** | MemoryService：读取/写入/追加/摘要/去重，跨端封装 |
 | `src/types/memory.ts` | **[新]** | MemoryState、MemoryMeta 等类型契约 |
 | `src/types/index.ts` | **[改]** | 再导出 memory 类型 |
-| `src/lib/constants.ts` | **[改]** | 增加 `ROUTES.memory` 与 `MEMORY_KEY_PREFIX`/`MEMORY_FILENAME` 常量 |
+| `src/lib/constants.ts` | **[改]** | 增加 `ROUTES.memory` 与 `MEMORY_KEY_PREFIX` 常量（后者现仅用于定位旧落点，2026-09-19 起） |
 | `src/stores/settingsStore.ts` | **[改]** | `Settings` 增加 `memoryEnabled`、`autoSummarize` 字段及默认值 |
 | `src/stores/sessionsStore.ts` | **[改]** | `createSession`/`send` 注入记忆；新增 `memoryLoaded` 提示状态 |
 | `src/router/index.tsx` | **[改]** | 注册 `/memory` 路由 |

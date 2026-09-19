@@ -2,6 +2,7 @@ import { platform } from '@/platform';
 import type { SessionEvent, SessionIndexFile, SessionMeta } from '@/types/event';
 import {
   applyAppend,
+  countEvents,
   deriveMetaFromEvents,
   listSessionEntries,
   normalizeSessionIndex,
@@ -9,6 +10,7 @@ import {
   rebuildSessionIndex,
   removeSessionEntry,
 } from './indexFile';
+import type { SessionCounters } from './indexFile';
 import type { EventStore, EventStoreCapabilities } from './store';
 
 /**
@@ -132,14 +134,11 @@ export function createWebEventStore(): EventStore {
     async rebuildIndex() {
       const ids = await readIds();
       const metas: SessionMeta[] = [];
-      const counters: Record<string, { eventCount: number; lastSeq: number }> = {};
+      const counters: Record<string, SessionCounters> = {};
       for (const id of ids) {
         const meta = await readMeta(id);
         if (meta) metas.push(meta);
-        const events = await readEvents(id);
-        let lastSeq = 0;
-        for (const ev of events) if (ev.seq > lastSeq) lastSeq = ev.seq;
-        counters[id] = { eventCount: events.length, lastSeq };
+        counters[id] = countEvents(await readEvents(id));
       }
       const index = rebuildSessionIndex(metas, counters);
       await storage.set(KEYS.index, index);

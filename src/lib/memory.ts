@@ -6,6 +6,19 @@ import {
   MEMORY_TAG_OPEN,
   USER_MEMORY_KEY,
 } from '@/lib/constants';
+// 工作区记忆的目录约定与合并规则：渲染层要与主进程、Web 端「看到同一份事实」，
+// 故这三件事集中在 workspaceMemory.ts，不在这里各写一遍。
+import {
+  CURATED_MEMORY_FILE,
+  dailyMemoryFileName,
+  mergeMemoryFiles,
+  workspaceMemoryDirPath,
+} from '@/lib/workspaceMemory';
+import { hashContent } from '@/lib/workspaceKey';
+// `workspaceKeyFor` / `DEFAULT_WORKSPACE_KEY` 已搬去 workspaceKey.ts（主进程做旧数据
+// 懒迁移时要算同一个 key，而主进程 import 不了渲染层的 platform）。这里转出，
+// 让既有 `from '@/lib/memory'` 的引用继续可用。
+export { DEFAULT_WORKSPACE_KEY, workspaceKeyFor } from '@/lib/workspaceKey';
 import type {
   ChatMessageParam,
   MemoryAppendOptions,
@@ -93,7 +106,8 @@ export function isEmptySummary(s: StructuredSummary): boolean {
  * 实测事故：用户提问撞上 provider 配额耗尽，错误原文（`The AI provider rejected
  * the request because the API key is out of quota…`）被 `summarize` 当作模型输出
  * 收下，又因为不含 `[身份]/[任务]` 标签走了 `parseSummary` 的整段降级分支，
- * 最终以「会话摘要」的名义写进 `~/.nanowork/memory/<key>.md`。
+ * 最终以「会话摘要」的名义写进工作区记忆（当时还是 `~/.nanowork/memory/<key>.md`，
+ * 现在的工作区落点是 `<工作目录>/.nanowork/memory/`）。
  * 记忆是长期资产：一条系统报错躺进去，此后每次会话都会把它当事实注入。
  *
  * 判据刻意用「**强特征词** + **语言**」双重条件，宁可漏判也不误杀：
@@ -277,19 +291,6 @@ export function composeMemoryForInjection(
 }
 
 /**
- * 轻量内容哈希（djb2），用于记忆块幂等去重。
- * 渲染层无 node:crypto 依赖，这里用纯函数实现，足够区分不同记忆内容。
- */
-function hashContent(s: string): string {
-  let h = 5381;
-  for (let i = 0; i < s.length; i++) {
-    h = (h * 33) ^ s.charCodeAt(i);
-  }
-  // 转无符号 32 位十六进制
-  return (h >>> 0).toString(16);
-}
-
-/**
  * 归一化文本，用于「这是不是同一句话的另一种写法」的**机械**比对。
  *
  * 只做无信息损失的三件事：去全部空白、去标点与 Markdown 装饰符、统一小写。
@@ -365,62 +366,39 @@ function isSameStatement(a: string, b: string): boolean {
   return na !== '' && na === nb;
 }
 
-/** 工作区索引在 storage 中的 key（记录已知工作区 key 列表，用于多工作区切换） */
+/** 工作区索引在 storage 中的 key（记录已知工作区**目录**列表，供多工作区切换） */
 const WORKSPACE_INDEX_KEY = `${MEMORY_KEY_PREFIX}index`;
 
-/** 兜底工作区 key：无工作目录的会话（空目录 / IM 会话）与历史数据都用它 */
-export const DEFAULT_WORKSPACE_KEY = 'default';
+/** 工作区索引里表示「没有工作目录」的占位（localStorage / JSON 里没有 undefined） */
+const NO_WORKDIR = '';
 
 /**
- * 工作目录 → 工作区记忆 key（L3 隔离键）。
+ * 把外部的 workdir 收敛成 `string | null`。
  *
- * 形态 `<basename>-<hash8>`：`D:\Workspace\study\foo` → `foo-1a2b3c4d`。
- *
- * - **带 basename**：`~/.nanowork/memory/` 下的文件名要能被用户一眼认出来
- *   （纯哈希会让「去哪个文件找记忆」变成猜谜）。
- * - **带 hash**：同名目录（两个项目都有 `src`）不能互相覆盖记忆。
- * - **归一化只做三件事**（反斜杠→斜杠、去尾斜杠、转小写）：Windows 路径大小写
- *   不敏感，`D:\Work` 与 `d:/work/` 必须落同一个 key，否则同一个工作区的记忆会被
- *   劈成两半——这是最难排查的一类「记忆时有时无」。
- * - **无 workdir → `default`**：与 V1 的历史记忆保持连续，升级不会让老记忆失联。
- * - **字符集收敛到 `[a-z0-9._-]`**：主进程 `sanitizeSegment` 会再做一次白名单清洗，
- *   这里先收敛是为了让**渲染层看到的 key 与落盘文件名一致**（否则「导出」的
- *   默认文件名会与磁盘上的真实文件对不上）。
+ * 空串与全空白一律折成 `null`：`session.workdir` 允许是 `''`（历史数据里出现过），
+ * 而 `''` 作为路径会被主进程判成「没有工作目录」。与其在下游每一处都判一次，
+ * 不如在入口就收敛成同一种表示。
  */
-export function workspaceKeyFor(workdir: string | undefined | null): string {
+function normalizeWorkdir(workdir: string | null | undefined): string | null {
   const raw = (workdir ?? '').trim();
-  if (raw === '') return DEFAULT_WORKSPACE_KEY;
-
-  const normalized = raw.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
-  if (normalized === '') return DEFAULT_WORKSPACE_KEY;
-
-  const parts = normalized.split('/').filter((p) => p !== '');
-  const base = (parts[parts.length - 1] ?? '')
-    .replace(/[^a-z0-9._-]+/g, '-')
-    .replace(/^[._-]+/, '')
-    .replace(/-{2,}/g, '-')
-    .replace(/-$/, '')
-    .slice(0, 24);
-
-  const hash = hashContent(normalized).padStart(8, '0');
-  return base === '' ? hash : `${base}-${hash}`;
+  return raw === '' ? null : raw;
 }
 
 /**
  * 记忆在磁盘上的真实落点（仅用于展示）。
  *
- * Electron 下它是**真实文件**（Electron 由主进程 `storageRoutes` 把
- * `nanowork.memory.<key>` / `nanowork.userMemory` 路由成这两条路径）；
+ * 工作区级现在是**一个目录**（`<工作目录>/.nanowork/memory/`，里面是
+ * `MEMORY.md` 与 `YYYY-MM-DD.md`），不再是一个文件——所以末尾带分隔符，
+ * 让「这是个目录、里面还有文件」从字符串本身就能看出来。
+ *
  * Web 端没有文件系统，落 `localStorage`，返回一句人话而不是编一个假路径。
  *
  * 之所以要在界面上写出来：这份记忆此前既不可见也不可查，
  * 「到底记没记住」只能靠模型复述来猜，出了问题无从下手。
  */
-export function memoryDiskPath(scope: MemoryScope, workspaceKey: string): string {
+export function memoryDiskPath(scope: MemoryScope, workdir?: string | null): string {
   if (platform.env !== 'electron') return '浏览器本地存储（Web 端无文件落点）';
-  return scope === 'user'
-    ? '~/.nanowork/MEMORY.md'
-    : `~/.nanowork/memory/${workspaceKey}.md`;
+  return scope === 'user' ? '~/.nanowork/MEMORY.md' : workspaceMemoryDirPath(workdir);
 }
 
 /** 作用域的展示元信息（记忆页切换器用） */
@@ -433,43 +411,67 @@ const SCOPE_DEFS: Record<MemoryScope, { label: string; description: string }> = 
   workspace: {
     label: '工作区级',
     description:
-      '当前工作区的长期记忆（L3）。会话结束的自动摘要与「记住这条」都落在这里；按工作目录隔离，换工作区互不影响。',
+      '当前工作区的长期记忆（L3），落在工作目录下的 .nanowork/memory/。MEMORY.md 是本页维护的精炼记忆，日期文件是每天自动沉淀的日志；两者合并注入，按工作目录隔离。',
   },
 };
 
 /**
  * 工作区文件记忆服务（MemoryService）。
  *
- * 设计约束（docs/architecture-memory.md §7）：
- * - 渲染层永不 import 'electron'，所有 IO 经 platform；
- * - **读写统一走 platform.storage**（Web/Electron 一致）。Electron 下存储层会把
- *   `nanowork.memory.<workspace>` 路由成 `~/.nanowork/memory/<workspace>.md`
- *   真实文件（见 ADR-019），故渲染层不再需要单独的落盘分支；
+ * ## 落点（2026-09 起）
+ *
+ * | 作用域 | 落点 |
+ * |---|---|
+ * | 用户级（L2） | `~/.nanowork/MEMORY.md`——跨项目，单文件 |
+ * | 工作区级（L3） | `<工作目录>/.nanowork/memory/` 目录：`MEMORY.md`（精炼）+ `YYYY-MM-DD.md`（当天日志） |
+ *
+ * 工作区级从「产品目录下的单文件 `<工作区key>.md`」改成「工作目录下的目录」，
+ * 与 WorkBuddy 的 `.workbuddy/memory/` 同构。两个直接收益：项目目录拷到另一台
+ * 机器时记忆跟着走；「我的记忆存在哪」有了一个用户自己能找到的答案，而不必去
+ * 产品目录里按 `nanowork-1a2b3c4d.md` 这种名字猜。
+ *
+ * 没有工作目录的会话（IM 会话、存储设置之前建的旧会话）仍落在产品目录下的
+ * `memory/default/`：没有工作目录就没有「跟着走」的载体，硬折算到默认工作空间
+ * 会让它和真正绑定那个目录的会话**共用一份记忆**。
+ *
+ * ## 设计约束
+ *
+ * - 渲染层永不 import 'electron'，所有 IO 经 `platform.memoryFiles` /
+ *   `platform.storage`（Web/Electron 同一套语义，差异封在 platform 里）；
  * - 记忆永不写入 agentsStore.agent.systemPrompt，只在运行时以标签块注入 history。
  *
- * 增强（本次）：
- * - 幂等去重：每条记忆块内嵌 `<!-- SUMMARY:<hash> -->` 隐藏标记，重复内容不再重复追加；
- * - 多工作区隔离：通过 `useWorkspace(key)` 切换当前工作区，记忆按 key 分别存储/列举。
+ * ## 四个刻意的取舍
  *
- * 增强（M3 / FR-4.2）：
- * - **作用域分层**：新增 `user` 作用域落 `~/.nanowork/MEMORY.md`（跨项目，L2），
- *   与既有的 `workspace` 作用域（`memory/<key>.md`，L3）并列。scope 作为**可选
- *   尾参**接入既有方法，缺省 `'workspace'` —— 既有调用方语义不变。
- *
- * 增强（记忆修复）：
- * - **工作区 key 真正被接线**。此前 `useWorkspace()` 只有定义、生产代码零调用，
- *   `currentKey` 恒为 `'default'`，L3 隔离形同虚设（所有工作区共用一份记忆）。
- *   现在 `loadMemoryInto` 会按**会话的 workdir** 显式传入 key（见 `workspaceKeyFor`）。
- * - **读写方法增加末位 `workspaceKey`**：异步沉淀可能在调用方切换工作区之后才落盘，
- *   依赖全局 `currentKey` 会把 A 工作区的摘要写进 B 工作区。显式传参从根上消灭
- *   这类竞态；不传时仍回落 `currentKey`，老的调用点行为不变。
+ * 1. **读取合并、写入分片**。`load` 把目录下全部记忆文件（`MEMORY.md` 在前、
+ *    日期文件按名升序在后）合并成一份正文——注入与去重都基于合并结果，所以
+ *    「同一句话换个标点的机械重复」跨文件照样挡得住；而 `append` 只写**当天**
+ *    那个日期文件，某天的沉淀写坏了不会波及历史。
+ * 2. **`save` 只覆盖 `MEMORY.md`**。它是记忆页手动编辑的目标。把合并视图整体
+ *    写回会让同样的内容同时存在于 `MEMORY.md` 与日期文件里（一份变两份），
+ *    所以记忆页要编辑哪一份就显式写哪一份（见 `writeFile`）。
+ * 3. **`undefined` 与 `null` 的 workdir 不是一回事**。省略 `workdir`
+ *    （`undefined`）表示「按当前工作区」（记忆页与既有便捷调用点），显式传
+ *    `null` 表示「这个会话没有工作目录」。会话的 `workdir` 类型是
+ *    `string | undefined`，调用方必须先行 `?? null`——否则一个本来没有工作目录
+ *    的会话会去读**上一个会话**的记忆。这是一处真实存在的陷阱，见 `resolveDir`。
+ * 4. **懒迁移**。旧落点 `~/.nanowork/memory/<工作区key>.md` 的内容，在某个工作区
+ *    第一次被读到时就地搬进新目录（按旧文件最后修改日归档成日期文件），旧文件
+ *    改名成 `.migrated` 留档。每个工作区每次进程只尝试一次（见 `ensureMigrated`）。
  */
 class MemoryServiceImpl {
-  /** 当前工作区 key（默认 DEFAULT_WORKSPACE_KEY；由 loadMemoryInto 随活跃会话切换） */
-  private currentKey: string = DEFAULT_WORKSPACE_KEY;
+  /** 当前工作区目录（记忆页与「不传 workdir」的调用方用它；由 loadMemoryInto 切换） */
+  private currentWorkdir: string | null = null;
 
-  /** 多工作区索引（已知工作区 key 列表） */
-  private workspaceIndex: string[] = [DEFAULT_WORKSPACE_KEY];
+  /** 多工作区索引（已知工作区目录；`''` 占位表示「没有工作目录」） */
+  private workspaceIndex: string[] = [NO_WORKDIR];
+
+  /**
+   * 已尝试过懒迁移的工作区集合（`''` 表示无工作目录的那个）。
+   *
+   * 没有它的话，每次 `load` 都要去 stat 一次可能根本不存在的旧文件；
+   * 而 `load` 在会话创建、每轮发送的过期重读、记忆页加载上都会走。
+   */
+  private migrated = new Set<string>();
 
   /**
    * 记忆写入版本号（进程内单调递增）。
@@ -502,8 +504,8 @@ class MemoryServiceImpl {
         const parsed = JSON.parse(raw) as unknown;
         if (Array.isArray(parsed)) {
           this.workspaceIndex = (parsed as string[]).filter((k) => typeof k === 'string');
-          if (!this.workspaceIndex.includes(DEFAULT_WORKSPACE_KEY)) {
-            this.workspaceIndex.unshift(DEFAULT_WORKSPACE_KEY);
+          if (!this.workspaceIndex.includes(NO_WORKDIR)) {
+            this.workspaceIndex.unshift(NO_WORKDIR);
           }
         }
       }
@@ -513,20 +515,24 @@ class MemoryServiceImpl {
   }
 
   /** 切换当前工作区（并登记到索引） */
-  useWorkspace(key: string): void {
-    this.currentKey = key || DEFAULT_WORKSPACE_KEY;
-    if (!this.workspaceIndex.includes(this.currentKey)) {
-      this.workspaceIndex.push(this.currentKey);
+  useWorkspace(workdir: string | null | undefined): void {
+    this.currentWorkdir = normalizeWorkdir(workdir);
+    const slot = this.currentWorkdir ?? NO_WORKDIR;
+    if (!this.workspaceIndex.includes(slot)) {
+      this.workspaceIndex.push(slot);
       void this.persistIndex();
     }
   }
 
   /** 列举已知工作区及其记忆规模（用于多工作区切换 UI） */
-  async listWorkspaces(): Promise<Array<{ key: string; chars: number; entries: number }>> {
-    const result: Array<{ key: string; chars: number; entries: number }> = [];
-    for (const key of this.workspaceIndex) {
-      const text = await this.loadByKey(key);
-      result.push({ key, chars: text.length, entries: this.countEntries(text) });
+  async listWorkspaces(): Promise<
+    Array<{ path: string | null; chars: number; entries: number }>
+  > {
+    const result: Array<{ path: string | null; chars: number; entries: number }> = [];
+    for (const slot of this.workspaceIndex) {
+      const dir = slot === NO_WORKDIR ? null : slot;
+      const text = await this.load('workspace', dir);
+      result.push({ path: dir, chars: text.length, entries: this.countEntries(text) });
     }
     return result;
   }
@@ -540,48 +546,25 @@ class MemoryServiceImpl {
   }
 
   /**
-   * 解析当前工作区 key。
-   * 默认 'default'；多工作区通过 useWorkspace 切换。后续可扩展为读取激活 agent
-   * 的 workdir 做路径哈希，实现「不同工作区互相隔离的 MEMORY.md」。
+   * 当前工作区目录（记忆页的落点展示、以及「不传 workdir」的调用方用）。
+   * 没有绑定工作目录时返回 `null`——**不是一个叫 `default` 的目录**：
+   * 记忆页要如实显示「这份记忆落在产品目录下的兜底位置」。
    */
-  resolveWorkspaceKey(): string {
-    return this.currentKey;
-  }
-
-  /** 指定工作区对应的 storage key */
-  private storageKeyFor(key: string): string {
-    return `${MEMORY_KEY_PREFIX}${key}`;
-  }
-
-  /** 当前工作区对应的 storage key */
-  private storageKey(): string {
-    return this.storageKeyFor(this.currentKey);
+  resolveWorkspaceDir(): string | null {
+    return this.currentWorkdir;
   }
 
   /**
-   * 作用域 → storage key（§14.1 的四层在 V1 落地两层）。
+   * 解析「这次操作针对哪个工作目录」。
    *
-   * - `workspace` → `nanowork.memory.<workspaceKey>` → `~/.nanowork/memory/<key>.md`
-   * - `user` → `nanowork.userMemory` → `~/.nanowork/MEMORY.md`
-   *
-   * 用户级刻意不复用 `MEMORY_KEY_PREFIX`：那个前缀是动态路由，套上去会得到
-   * `memory/user.md`——一个谁都不认的孤儿文件（见 constants.ts 的注释）。
-   *
-   * `workspaceKey` 缺省回落 `currentKey`，让既有调用点语义不变。
+   * `undefined` 与 `null` 在这一层是**两个语义**（见类头注释取舍 3）：
+   * 省略参数表示「按当前工作区」（记忆页、`sessionsPromptAssembly` 这类便捷调用点），
+   * 显式传 `null` 表示「这个会话确实没有工作目录」。会话的 `workdir` 类型是
+   * `string | undefined`，调用方必须先 `?? null` 才能表达后者。
    */
-  private storageKeyForScope(scope: MemoryScope, workspaceKey?: string): string {
-    if (scope === 'user') return USER_MEMORY_KEY;
-    return this.storageKeyFor(workspaceKey ?? this.currentKey);
-  }
-
-  /** 按指定 key 读取记忆全文（不切换 currentKey） */
-  private async loadByKey(key: string): Promise<string> {
-    try {
-      const raw = await platform.storage.get<string>(this.storageKeyFor(key));
-      return typeof raw === 'string' ? raw : '';
-    } catch {
-      return '';
-    }
+  private resolveDir(workdir: string | null | undefined): string | null {
+    if (workdir === undefined) return this.currentWorkdir;
+    return normalizeWorkdir(workdir);
   }
 
   /** 按 storage key 读取（任意 key，含用户级） */
@@ -592,6 +575,48 @@ class MemoryServiceImpl {
     } catch {
       return '';
     }
+  }
+
+  /**
+   * 懒迁移只做一次（每个工作目录每进程一次）。
+   *
+   * 没有这个闸门，每次 `load` 都要去 `lstat` 一个可能根本不存在的旧文件——而
+   * `load` 在会话创建、每轮发送的过期重读、记忆页加载上都会走。
+   *
+   * 先登记再 await：并发调用（`Promise.all` 里的两次读取）不会重复跑一遍迁移。
+   * 迁移失败则不重试——旧数据仍在原处，下个进程启动还会再来一次。
+   */
+  private async ensureMigrated(dir: string | null): Promise<void> {
+    const slot = dir ?? NO_WORKDIR;
+    if (this.migrated.has(slot)) return;
+    this.migrated.add(slot);
+    try {
+      const written = await platform.memoryFiles.migrateLegacy(dir);
+      // 迁移本身也是一次记忆变更：不递增版本号的话，活跃会话的快照判据看不到它，
+      // 迁出来的旧记忆要等会话重建才会被注入（症状是「升级后旧记忆要重启才生效」）。
+      if (written.length > 0) this.writeVersionValue += 1;
+    } catch {
+      /* 迁移失败不影响读取：新目录本就是空的，旧数据还在原处 */
+    }
+  }
+
+  /**
+   * 读取工作区记忆：**合并目录下的全部记忆文件**。
+   *
+   * 注入与去重都基于这份合并视图，所以「同一句话换个标点的机械重复」跨文件照样
+   * 挡得住（`MEMORY.md` 里记过、今天又想写进日期文件时会命中）。各文件的排序
+   * 规则见 `sortMemoryFileNames`。
+   */
+  private async loadWorkspace(dir: string | null): Promise<string> {
+    const names = await platform.memoryFiles.list(dir);
+    if (names.length === 0) return '';
+    const files = await Promise.all(
+      names.map(async (name) => ({
+        name,
+        content: (await platform.memoryFiles.read(dir, name)) ?? '',
+      })),
+    );
+    return mergeMemoryFiles(files);
   }
 
   /**
@@ -608,12 +633,16 @@ class MemoryServiceImpl {
   /**
    * 读取记忆全文。读取失败或从未写入时返回空串（不抛出，避免阻塞会话创建）。
    *
-   * `scope` 缺省为 `'workspace'`——既有调用方拿到的语义与改动前**完全一致**。
-   * `workspaceKey` 同理（缺省 `currentKey`）。
+   * `scope` 缺省为 `'workspace'`；`workdir` 缺省按当前工作区（见 `resolveDir`）。
+   * 工作区级读的是**合并视图**（`MEMORY.md` + 各日期文件，见 `loadWorkspace`），
+   * 而不是磁盘上某一个文件——注入、去重、记忆页的全文预览都用这一份，
+   * 三者看到的才是同一个「这个工作区记住了什么」。
    */
-  async load(scope: MemoryScope = 'workspace', workspaceKey?: string): Promise<string> {
+  async load(scope: MemoryScope = 'workspace', workdir?: string | null): Promise<string> {
     if (scope === 'user') return this.loadRawKey(USER_MEMORY_KEY);
-    return this.loadByKey(workspaceKey ?? this.currentKey);
+    const dir = this.resolveDir(workdir);
+    await this.ensureMigrated(dir);
+    return this.loadWorkspace(dir);
   }
 
   /**
@@ -631,11 +660,11 @@ class MemoryServiceImpl {
    * 两段并行读：这是会话创建路径上的 IO，串行等于把延迟翻倍。
    */
   async loadForInjection(
-    workspaceKey?: string,
+    workdir?: string | null,
   ): Promise<{ text: string; entries: number }> {
     const [userText, workspaceText] = await Promise.all([
       this.load('user'),
-      this.load('workspace', workspaceKey),
+      this.load('workspace', workdir),
     ]);
     return {
       text: composeMemoryForInjection(userText, workspaceText),
@@ -644,43 +673,122 @@ class MemoryServiceImpl {
   }
 
   /**
-   * 覆盖写入记忆全文。
+   * 覆盖写入某一份记忆。
    *
-   * 落盘由 `platform.storage` 统一承担：Electron 下 `nanowork.memory.<workspace>`
-   * 经主进程路由直接写成 `~/.nanowork/memory/<workspace>.md`（见 18.2 目录约定），
-   * 因此**不需要**额外的 `writeTextFile` 二段写入——旧实现在这里多写一次
-   * `MEMORY.md`，但传的是纯文件名，被主进程安全校验拒绝后又吞掉异常，
-   * 于是「写真实 MEMORY.md」从未生效且无人察觉。
+   * - `scope='user'`：写 `~/.nanowork/MEMORY.md`（单文件，跨项目）。
+   * - `scope='workspace'`：写工作目录下的 **`MEMORY.md`**（精炼记忆，记忆页的
+   *   编辑目标）。**不写合并视图**——那会把日期文件里的内容复制进 `MEMORY.md`，
+   *   同一句话遂在磁盘上存在两份。要改某一个日期文件，用 `writeFile` 指名字。
+   *
+   * 空内容等价于「删掉这一份」而不是留一个 0 字节文件：空文件在目录里只会被
+   * `listMemoryFiles` 列出来、被 `mergeMemoryFiles` 跳过，即一个「列表里有它、
+   * 点进去是空的」的幽灵条目。
    *
    * `scope` 刻意放在**末位可选参数**（而非 PRD 14.2 示例的首位）：本服务已有
    * 40 余处 `save(text)` 调用，改成首位会让「改一行实现」变成「改四十个调用点」，
    * 收益为零而回归风险不小。语义与 PRD 一致，只是参数位置不同。
    *
-   * `workspaceKey` 紧随其后：异步沉淀可能在用户切换工作区之后才落盘，依赖全局
-   * `currentKey` 会把 A 的摘要写进 B。显式传参消灭这类竞态；不传则行为不变。
-   *
-   * 写入是**唯一**递增 `writeVersionValue` 的地方（`clear` 与 `append` 都经此），
-   * 所以「版本变了」等价于「某处真的落过盘」，不需要额外的通知机制。
+   * 写入是递增 `writeVersionValue` 的地方之一（`clear` / `append` / `writeFile` /
+   * `removeFile` 同此），所以「版本变了」等价于「某处真的落过盘」。
    */
   async save(
     fullText: string,
     scope: MemoryScope = 'workspace',
-    workspaceKey?: string,
+    workdir?: string | null,
   ): Promise<void> {
-    await platform.storage.set(this.storageKeyForScope(scope, workspaceKey), fullText ?? '');
+    if (scope === 'user') {
+      await platform.storage.set(USER_MEMORY_KEY, fullText ?? '');
+      this.writeVersionValue += 1;
+      return;
+    }
+    // 工作区级 = 写精炼记忆那一份（`MEMORY.md`）。空内容的处理（等于删掉这一份）
+    // 与版本号递增都在 writeFile 里，一条规则一处实现。
+    await this.writeFile(workdir, CURATED_MEMORY_FILE, fullText ?? '');
     // 递增放在写入**完成之后**：先递增会让并发读取拿到「新版本 + 旧内容」的快照，
     // 而那个快照会被后续判定为有效，于是永久停在旧内容上。
-    this.writeVersionValue += 1;
-  }
-
-  /** 清空记忆（等价于 save('')） */
-  async clear(scope: MemoryScope = 'workspace', workspaceKey?: string): Promise<void> {
-    await this.save('', scope, workspaceKey);
   }
 
   /**
-   * 追加一条记忆：读取现有全文 → 去重判定 → 拼接带时间戳与去重标记的
-   * Markdown 引用块 → 覆盖写回。
+   * 清空某个作用域的记忆。
+   *
+   * 工作区级是**删除该工作区记忆目录下的全部记忆文件**（`MEMORY.md` + 所有日期
+   * 文件），与旧的「`save('')` 覆盖成一个空文件」不同：既然工作区记忆已经是
+   * 「一个目录、若干分片」，清空就必须按目录清，否则日期文件会整批留下来，
+   * 用户按了「清空」却还能看到旧记忆。
+   *
+   * 只删记忆文件、**不删目录本身**，也不动用户放在同目录下的其它文件——
+   * 「清空记忆」不该顺带清理别人的目录。
+   */
+  async clear(scope: MemoryScope = 'workspace', workdir?: string | null): Promise<void> {
+    if (scope === 'user') {
+      await platform.storage.set(USER_MEMORY_KEY, '');
+      this.writeVersionValue += 1;
+      return;
+    }
+    const dir = this.resolveDir(workdir);
+    await this.ensureMigrated(dir);
+    await platform.memoryFiles.removeAll(dir);
+    this.writeVersionValue += 1;
+  }
+
+  /** 列出某个工作区的记忆文件名（已按注入顺序排序；记忆页的文件切换器用） */
+  async listFiles(workdir?: string | null): Promise<string[]> {
+    const dir = this.resolveDir(workdir);
+    await this.ensureMigrated(dir);
+    return platform.memoryFiles.list(dir);
+  }
+
+  /**
+   * 读取某个记忆文件；不存在返回 `null`。
+   *
+   * 「不存在」（`null`）与「存在但是空的」（`''`）刻意分开：记忆页要据此区分
+   * 「这份日志还没写过」与「写了但又清空了」，前者给占位提示、后者给空编辑器。
+   */
+  async readFile(workdir: string | null | undefined, name: string): Promise<string | null> {
+    const dir = this.resolveDir(workdir);
+    await this.ensureMigrated(dir);
+    return platform.memoryFiles.read(dir, name);
+  }
+
+  /**
+   * 覆盖写入某个记忆文件（记忆页的编辑器用）。
+   *
+   * 空内容等价于**删除该文件**，与 `save` 同一条规则：留一个 0 字节的文件只会
+   * 变成「列表里有它、点进去是空的」的幽灵条目。
+   *
+   * 名字白名单（`MEMORY.md` / `YYYY-MM-DD.md`）由 platform 层把守——两端同一条
+   * 边界，这里不重复实现，免得「Web 能存、Electron 存不了」这类差异只在某一端复现。
+   */
+  async writeFile(
+    workdir: string | null | undefined,
+    name: string,
+    content: string,
+  ): Promise<void> {
+    const dir = this.resolveDir(workdir);
+    await this.ensureMigrated(dir);
+    const text = content ?? '';
+    if (text.trim() === '') {
+      await platform.memoryFiles.remove(dir, name);
+    } else {
+      await platform.memoryFiles.write(dir, name, text);
+    }
+    this.writeVersionValue += 1;
+  }
+
+  /** 删除某个记忆文件（幂等；记忆页的「删除这一份」用） */
+  async removeFile(workdir: string | null | undefined, name: string): Promise<void> {
+    const dir = this.resolveDir(workdir);
+    await platform.memoryFiles.remove(dir, name);
+    this.writeVersionValue += 1;
+  }
+
+  /**
+   * 追加一条记忆：读取现有**合并视图** → 去重判定 → 拼接带时间戳与去重标记的
+   * Markdown 引用块 → 写进**当天**的日期文件。
+   *
+   * 写入目标是分片的（`YYYY-MM-DD.md`）而读取是合并的，这是刻意的：
+   * 去重必须看到全部历史（否则同一条会在 `MEMORY.md` 与日期文件里各存一份），
+   * 而写入只需要碰今天这一个文件——「今天的沉淀写坏了」不会波及历史。
    *
    * 去重分两层（见 `isSameStatement` 的实测说明）：
    * - **字节级**：内存中即时算出的 djb2 哈希与已有 `<!-- SUMMARY:<hash> -->`
@@ -696,14 +804,14 @@ class MemoryServiceImpl {
    * 缺省的 `workspace` 作用域，只有记忆页在用户级作用域下的编辑才会写 `user`。
    *
    * 本次修正 FR-4.2 的一处过窄解读：自动沉淀**可以**写用户级，但仅限其中的
-   * **身份类**事实（见 P1-B 分流）。这里 `append` 只负责按 scope + workspaceKey
-   * 落盘，分流策略在调用方。
+   * **身份类**事实（见 P1-B 分流）。这里 `append` 只负责按 scope + workdir 落盘，
+   * 分流策略在调用方。
    */
   async append(
     content: string,
     opts: MemoryAppendOptions = {},
     scope: MemoryScope = 'workspace',
-    workspaceKey?: string,
+    workdir?: string | null,
   ): Promise<MemoryAppendOutcome> {
     const trimmed = (content ?? '').trim();
     if (!trimmed) return 'skipped-empty';
@@ -711,7 +819,7 @@ class MemoryServiceImpl {
     const hash = hashContent(trimmed);
     const marker = `${DEDUP_MARKER_OPEN}${hash}${DEDUP_MARKER_CLOSE}`;
 
-    const existing = await this.load(scope, workspaceKey);
+    const existing = await this.load(scope, workdir);
     // 幂等去重（字节级）：同一内容（同 hash）不重复追加
     if (existing.includes(marker)) return 'skipped-duplicate';
 
@@ -724,9 +832,22 @@ class MemoryServiceImpl {
     const source = opts.source?.trim() || '手动保存';
     const block = this.formatBlock(trimmed, source, at, marker);
 
+    if (scope === 'user') {
+      const next =
+        existing.trim() === '' ? block : `${existing.replace(/\s+$/, '')}\n\n${block}`;
+      await this.save(`${next}\n`, 'user');
+      return 'written';
+    }
+
+    // 工作区级：追加进**当天**的日期文件（文件名与引用块取自同一个时刻，
+    // 否则「时间戳写 09-19、文件却叫 09-20」这种错位会在跨零点时出现）。
+    const dir = this.resolveDir(workdir);
+    const name = dailyMemoryFileName(at);
+    const current = (await platform.memoryFiles.read(dir, name)) ?? '';
     const next =
-      existing.trim() === '' ? block : `${existing.replace(/\s+$/, '')}\n\n${block}`;
-    await this.save(`${next}\n`, scope, workspaceKey);
+      current.trim() === '' ? block : `${current.replace(/\s+$/, '')}\n\n${block}`;
+    await platform.memoryFiles.write(dir, name, `${next}\n`);
+    this.writeVersionValue += 1;
     return 'written';
   }
 

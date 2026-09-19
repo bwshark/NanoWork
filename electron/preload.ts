@@ -33,6 +33,20 @@ const api: ElectronAPI = {
   notify: (title: string, body: string) => ipcRenderer.send('app:notify', title, body),
   writeTextFile: (path: string, content: string) =>
     ipcRenderer.invoke('fs:writeTextFile', path, content),
+  // —— 工作区记忆目录（`<workdir>/.nanowork/memory/`）——
+  // 与 `writeTextFile` 是两条**不同能力**的通道：那条只放行 home / userData /
+  // ~/.nanowork，这条落在用户的工作目录里，因此文件名白名单卡得更死
+  // （只有 MEMORY.md 与 YYYY-MM-DD.md，见 src/lib/workspaceMemory.ts）。
+  memoryListFiles: (workdir: string | null) => ipcRenderer.invoke('memory:list', workdir),
+  memoryReadFile: (workdir: string | null, name: string) =>
+    ipcRenderer.invoke('memory:read', workdir, name),
+  memoryWriteFile: (workdir: string | null, name: string, content: string) =>
+    ipcRenderer.invoke('memory:write', workdir, name, content),
+  memoryRemoveFile: (workdir: string | null, name: string) =>
+    ipcRenderer.invoke('memory:remove', workdir, name),
+  memoryRemoveAll: (workdir: string | null) => ipcRenderer.invoke('memory:removeAll', workdir),
+  memoryMigrateLegacy: (workdir: string | null) =>
+    ipcRenderer.invoke('memory:migrate', workdir),
   nanobotStart: () => ipcRenderer.invoke('nanobot:start'),
   nanobotStop: () => ipcRenderer.invoke('nanobot:stop'),
   nanobotStatus: () => ipcRenderer.invoke('nanobot:status'),

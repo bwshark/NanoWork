@@ -44,6 +44,15 @@ import {
   unwrapLegacyValue,
   type StorageRoots,
 } from './storageRoutes';
+import { fallbackMemoryDir } from './memoryRoutes';
+import {
+  clearMemoryFiles,
+  listMemoryFiles,
+  migrateLegacyMemory,
+  readMemoryFile,
+  removeMemoryFile,
+  writeMemoryFile,
+} from './workspaceMemoryStore';
 import { createEventStore } from './eventStore';
 import { CredentialVault, safeStorageCipher } from './credentialVault';
 import { probeMcpServer, type McpProbeRequest } from './mcpProbe';
@@ -1960,11 +1969,20 @@ ipcMain.handle('storage:remove', async (_e, key: string) => {
  * 刻意**不整目录删除**：① 下的 `skills/`、`plugins/`、`connectors/` 是用户资产
  * （技能包、插件、凭据），不属于可一键清空的存储状态；memory 目录也只清
  * `.md` / `.json`，不动用户手工放进去的其它文件。
+ *
+ * ⚠️ **清空范围自 2026-09 起只覆盖产品目录那一份记忆**。工作区记忆已改为落在
+ * `<工作目录>/.nanowork/memory/`，即**用户自己的工程目录里**。把「清空应用数据」
+ * 扩展成「遍历用户所有工作目录删文件」是越界操作——用户按的是「重置 NanoWork」，
+ * 不是「删我项目里的东西」。所以：产品目录下的兜底记忆照清，工作区目录里的
+ * 记忆留在原地（要清它，去记忆页按工作区清）。
  */
 async function clearStorageFiles(): Promise<void> {
   const files = knownRouteFiles(STORAGE_ROOTS);
   await Promise.all(files.map((filePath) => fs.rm(filePath, { force: true })));
   await clearDirFiles(memoryDir(STORAGE_ROOTS), ['.md', '.json']);
+  // 无工作目录会话的兜底记忆（`~/.nanowork/memory/default/`）在产品目录内，
+  // 属于「可清空的存储」，整目录删掉（只删文件的话会留下一个空壳目录）。
+  await fs.rm(fallbackMemoryDir(STORAGE_ROOTS), { recursive: true, force: true });
   await fs.rm(miscDir(STORAGE_ROOTS), { recursive: true, force: true });
   await fs.rm(LEGACY_STORE_FILE, { force: true });
   legacyCache = null; // 旧数据已清，避免回退读取把它复活
@@ -1988,6 +2006,36 @@ async function clearDirFiles(dir: string, extensions: string[]): Promise<void> {
 ipcMain.handle('storage:clear', async () => {
   await clearStorageFiles();
 });
+
+// —— 工作区记忆桥（路径解析见 memoryRoutes.ts，IO 见 workspaceMemoryStore.ts）——
+// 与 `fs:writeTextFile` 是两条**不同能力**的通道：那条只放行 home / userData /
+// `~/.nanowork` 三个根，这条落在用户自己的工作目录里，所以文件名白名单卡得更死
+// （只有 `MEMORY.md` 与 `YYYY-MM-DD.md`，见 src/lib/workspaceMemory.ts）。
+//
+// 渲染层传「工作目录 + 单段文件名」，路径拼接与越界校验全在主进程：
+// `<workdir>/.nanowork/memory/` 的拼法跨平台不同（分隔符、大小写、UNC），
+// 渲染层既没有 path 模块，也不该复刻这套规则。
+ipcMain.handle('memory:list', async (_e, workdir: string | null) =>
+  listMemoryFiles(workdir, STORAGE_ROOTS),
+);
+ipcMain.handle('memory:read', async (_e, workdir: string | null, name: string) =>
+  readMemoryFile(workdir, name, STORAGE_ROOTS),
+);
+ipcMain.handle(
+  'memory:write',
+  async (_e, workdir: string | null, name: string, content: string) => {
+    await writeMemoryFile(workdir, name, content, STORAGE_ROOTS);
+  },
+);
+ipcMain.handle('memory:remove', async (_e, workdir: string | null, name: string) => {
+  await removeMemoryFile(workdir, name, STORAGE_ROOTS);
+});
+ipcMain.handle('memory:removeAll', async (_e, workdir: string | null) =>
+  clearMemoryFiles(workdir, STORAGE_ROOTS),
+);
+ipcMain.handle('memory:migrate', async (_e, workdir: string | null) =>
+  migrateLegacyMemory(workdir, STORAGE_ROOTS),
+);
 
 // —— 事件流桥（D2：渲染层经 window.electronAPI 调用）——
 // 落点规则见 electron/eventRoutes.ts，索引纯逻辑见 electron/eventIndex.ts，

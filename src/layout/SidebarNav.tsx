@@ -43,6 +43,7 @@ import FolderCopyIcon from "@mui/icons-material/FolderCopy";
 import ShareIcon from "@mui/icons-material/Share";
 import EditIcon from "@mui/icons-material/Edit";
 import { ROUTES, APP_DISPLAY_NAME, APP_DISPLAY_SUB, UNBOUND_AGENT_LABEL } from "@/lib/constants";
+import { conversationCount, hasConversation } from "@/lib/conversation";
 import { CRON_SESSION_ID_PREFIX } from "@/lib/sessionImport";
 import { filterTasks, isFilterDefault } from "@/lib/taskQuery";
 import {
@@ -366,10 +367,20 @@ interface WorkspaceGroup {
   taskName?: string;
 }
 
-/** 分组比较器：按最近活跃排序，默认工作空间始终置底 */
+/**
+ * 分组比较器：按最近活跃排序 → 空分组集中在后半段 → 默认工作空间始终置底。
+ *
+ * 空分组只可能来自「会话列表为空」的组（正常情况下一个组至少带一条任务，
+ * 见 `groupSessionsByWorkdir`），这里仍单独处理：空列表没有 `updatedAt` 可取，
+ * `Math.max()` 是 `-Infinity`，两个空分组相减得到 `NaN`，比较器就失去意义。
+ */
 function compareWorkspaceGroups(a: WorkspaceGroup, b: WorkspaceGroup): number {
   if (a.key === "") return 1;
   if (b.key === "") return -1;
+  const aEmpty = a.sessions.length === 0;
+  const bEmpty = b.sessions.length === 0;
+  if (aEmpty !== bEmpty) return aEmpty ? 1 : -1;
+  if (aEmpty) return 0;
   const at = Math.max(...a.sessions.map((s) => Date.parse(s.updatedAt)));
   const bt = Math.max(...b.sessions.map((s) => Date.parse(s.updatedAt)));
   return bt - at;
@@ -377,6 +388,14 @@ function compareWorkspaceGroups(a: WorkspaceGroup, b: WorkspaceGroup): number {
 
 /**
  * 按工作空间分组：置顶任务优先排在组内最前，其余按 updatedAt 倒序；分组按最近活跃排序，默认组置底。
+ *
+ * **一条任务都没有的工作空间不出现在结果里**（用户口径：分组下没有对话记录就不要
+ * 显示这个工作空间）。分组完全由传进来的会话推导，不再参考任何「用过的目录」登记表。
+ *
+ * 判定「有任务」用的是 `visibleSessions` 那套（见 `SessionList`）：只有**有对话
+ * 记录**（`hasConversation`）的会话才进得来。历史上一度额外补过空分组，那是为了让
+ * 「工作空间还在、只是任务被切走」看得见；现在改为不显示——空分组会给用户一个
+ * 点进去什么都没有的入口，比「分组消失」更容易误解成数据丢了。
  *
  * 「落在默认工作空间上」的会话与「没绑工作空间」的会话合并成**同一个组**（key `""`）：
  * 这两者本来就是同一个语义——任务的实际落点都是设置里那个默认工作空间（旧会话没写
@@ -752,6 +771,7 @@ function SessionList() {
   // 路径上的会话并进默认组，否则同一个地方会出现两个组。
   const defaultWorkspacePath = useDefaultWorkspacePath();
   const setWorkspaceAlias = useSettingsStore((s) => s.setWorkspaceAlias);
+  const forgetWorkspace = useSettingsStore((s) => s.forgetWorkspace);
   // 已「从列表中移除」的会话 id：只影响侧边栏展示，不删任何会话数据。
   // 注：该表自「移除即真删」后不再有新写入，仅用于兼容历史数据（旧版本隐藏过的会话）；
   // hideSessions 因此已无生产调用方，保留仅为兼容既有测试与向后回退。
@@ -826,12 +846,17 @@ function SessionList() {
 
   /** 无对话内容的新任务、IM 频道会话、只读会话不进入任务列表
    * （频道会话在「频道」Tab 展示；只读会话经运行记录「查看对话」打开）；
-   * 用户主动「从列表中移除」的会话同样不进入（数据仍在，只是不做展示） */
+   * 用户主动「从列表中移除」的会话同样不进入（数据仍在，只是不做展示）。
+   *
+   * 「有没有对话内容」必须用 `hasConversation`（先看水合后的消息、再看索引里的
+   * 持久条数），**不能只看 `s.messages.length`**：启动时列表只读索引、消息要等点开
+   * 才读盘，只看消息会把所有没点开过的任务判成空任务——侧边栏于是只剩当前那一条，
+   * 其余工作空间看起来「一个任务都没有」。 */
   const visibleSessions = useMemo(
     () =>
       sessions.filter(
         (s) =>
-          s.messages.length > 0 &&
+          hasConversation(s) &&
           !s.channel &&
           !s.readonly &&
           !hiddenSet.has(s.id),
@@ -1039,8 +1064,13 @@ function SessionList() {
         break;
       }
       case "remove": {
+        // 正常进不来：空分组已经不再显示（见 `groupSessionsByWorkdir`），
+        // 这一支是零成本兜底——万一分组规则再变，空分组的「从列表中移除」必须是
+        // 摘掉登记而不是删任务（目录与文件一概不动，也不需要确认框：
+        // 「确认-取消」反而会让人以为自己在删工作空间）。
         if (group.sessions.length === 0) {
-          toast.info("该工作空间下已无任务");
+          if (group.kind === "workdir") forgetWorkspace(group.key);
+          toast.success(`已将「${group.label}」移出列表（文件夹未改动）`);
           return;
         }
         setRemoveGroup({
@@ -1070,7 +1100,8 @@ function SessionList() {
    *   `api:cron-{taskId}` 会话 JSONL），渲染层每 15s 据此重建 → 先让主进程
    *   清盘，再删本地会话并立即刷新，否则下一次轮询/重启就把记录原样拉回来；
    *   任务本身保留，仍按计划执行。
-   * - 目录分组：删掉该分组下的任务会话（此前是改挂到默认工作空间，一条不删）。
+   * - 目录分组：删掉该分组下的任务会话，并撤销该工作空间的登记
+   *   （登记表已不参与侧边栏展示，撤销只是保持留痕与用户操作一致）。
    *
    * 删除为不可撤销操作，两个分支都走 `danger` 确认框。
    */
@@ -1101,21 +1132,30 @@ function SessionList() {
       return;
     }
 
-    // 真实目录分组：任务会话真删
+    // 真实目录分组：任务会话真删。
+    // 顺带撤销工作空间登记（那张表现在没有读取方，见 `settings.knownWorkspaces`；
+    // 撤销是为了让「用过的目录」留痕与用户的显式操作保持一致）。
     deleteSessions(target.sessionIds);
+    forgetWorkspace(target.key);
     toast.success(`已删除「${target.label}」下的 ${target.count} 个任务`);
   };
 
   return (
     <>
       <Box sx={{ flex: 1, overflowY: "auto" }}>
-        {visibleSessions.length === 0 && (
+        {/* 一个分组都没有（全新用户 / 清空过 / 从没聊过）：给一句话兜底。
+            分组现在完全由「有对话记录的任务」推导，没有分组就等于没有任务 */}
+        {groups.length === 0 && (
           <Box sx={{ px: 2, py: 1, color: "text.secondary", fontSize: 12 }}>
             还没有任务，点击顶部「新建任务」开始。
           </Box>
         )}
-        {/* 有任务但被筛选条件全部排除：给出可操作的提示而非一片空白 */}
-        {visibleSessions.length > 0 && groups.length === 0 && (
+        {/* 有任务但被筛选条件全部排除：给出可操作的提示而非一片空白。
+            判据看「有没有任何一个分组还带着任务」而不是 `groups.length`——
+            自动任务分组是另一条来源（虚拟工作空间，不进 `groupSessionsByWorkdir`），
+            用长度判断会让这条提示在筛选时消失 */}
+        {visibleSessions.length > 0 &&
+          !groups.some((g) => g.sessions.length > 0) && (
           <Box sx={{ px: 2, py: 1, color: "text.secondary", fontSize: 12 }}>
             没有符合筛选条件的任务，可在标题栏调整或重置筛选。
           </Box>
@@ -1232,7 +1272,8 @@ function SessionList() {
                 )}
               </ListItemButton>
 
-              {/* 分组内任务（折叠时隐藏） */}
+              {/* 分组内任务（折叠时隐藏）。组里至少有一条任务——空分组不再显示
+                  （见 `groupSessionsByWorkdir`），所以这里没有「暂无任务」占位 */}
               {!isCollapsed &&
                 g.sessions.map((s) => (
                   <Box
@@ -1387,7 +1428,10 @@ function SessionList() {
                       noWrap
                       sx={{ fontSize: 11, color: "text.secondary" }}
                     >
-                      {agentName(s.agentId)} · {s.messages.length} 条
+                      {/* 条数走 `conversationCount`：未点开过的任务还没水合，
+                          只有索引里的持久条数可显示（直接读 messages.length 会
+                          让「有 14 条记录的任务」显示成「0 条」） */}
+                      {agentName(s.agentId)} · {conversationCount(s)} 条
                     </Typography>
                   </Box>
                 ))}

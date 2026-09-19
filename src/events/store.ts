@@ -7,12 +7,14 @@ import type {
 } from '@/types/event';
 import {
   applyAppend,
+  countEvents,
   deriveMetaFromEvents,
   emptySessionIndex,
   listSessionEntries,
   rebuildSessionIndex,
   removeSessionEntry,
 } from './indexFile';
+import type { SessionCounters } from './indexFile';
 
 /**
  * 事件存储契约（D2）。
@@ -135,12 +137,10 @@ export function createMemoryEventStore(): EventStore {
     },
 
     async rebuildIndex() {
-      const counters: Record<string, { eventCount: number; lastSeq: number }> = {};
+      const counters: Record<string, SessionCounters> = {};
       for (const [k, events] of eventsById) {
         const sessionId = k.slice(k.indexOf('\u0000') + 1);
-        let lastSeq = 0;
-        for (const ev of events) if (ev.seq > lastSeq) lastSeq = ev.seq;
-        counters[sessionId] = { eventCount: events.length, lastSeq };
+        counters[sessionId] = countEvents(events);
       }
       index = rebuildSessionIndex([...metasById.values()], counters);
       return index;

@@ -13,7 +13,7 @@ import BookmarkAddIcon from '@mui/icons-material/BookmarkAdd';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import ScheduleIcon from '@mui/icons-material/Schedule';
 import { parseCronJobId } from '@/ai/cronTaskMirror';
-import { MemoryService, workspaceKeyFor } from '@/lib/memory';
+import { MemoryService } from '@/lib/memory';
 import { useSessionsStore, selectSessionStreamStatus } from '@/stores/sessionsStore';
 import { useSessionUiStore } from '@/stores/sessionUiStore';
 import { useAgentsStore } from '@/stores/agentsStore';
@@ -80,8 +80,10 @@ export function AssistantMessage({ message, agentId, sessionId }: AssistantMessa
   const activeTitle = useSessionsStore(
     (s) => s.sessions.find((x) => x.id === sessionId)?.title ?? '会话',
   );
-  const memoryWorkspaceKey = useSessionsStore((s) =>
-    workspaceKeyFor(s.sessions.find((x) => x.id === sessionId)?.workdir),
+  // `?? null` 不能省：`undefined` 在 MemoryService 里表示「按当前工作区」，
+  // 而这里要表达的是「这条消息所属会话的工作目录，没有就是没有」。
+  const memoryWorkspace = useSessionsStore(
+    (s) => s.sessions.find((x) => x.id === sessionId)?.workdir ?? null,
   );
 
   // 署名：会话绑定的专家 / 专家团（找不到时退回「助手」）
@@ -150,7 +152,7 @@ export function AssistantMessage({ message, agentId, sessionId }: AssistantMessa
         message.content,
         { source: activeTitle },
         'workspace',
-        memoryWorkspaceKey,
+        memoryWorkspace,
       );
       toast.success('已保存到记忆');
     } catch (e) {

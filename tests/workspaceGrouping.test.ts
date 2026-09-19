@@ -113,3 +113,33 @@ describe('groupSessionsByWorkdir：默认工作空间是一个语义分组', () 
     expect(old?.fullPath).toBe(DEFAULT_DIR);
   });
 });
+
+/**
+ * 「0 个任务的工作空间」不再成组。
+ *
+ * 这里曾有一条反向规则：把某工作空间下最后一条任务切走/删掉后，用户以为「工作空间
+ * 丢了」，于是引入 `settings.knownWorkspaces` 给空工作空间补分组。产品口径后来改成
+ * 相反的一条：**工作空间下没有对话记录就不显示这个分组**——空分组会给用户一个点进去
+ * 什么都没有的入口，比「分组消失」更容易误解成数据丢了。故补组逻辑连同参数一并移除。
+ *
+ * 「谁算有对话记录」的判据在 `@/lib/conversation`（不能只看 `messages.length`，
+ * 消息是按需水合的），组合行为见 `tests/sessionsStartupList.test.ts`。
+ */
+describe('groupSessionsByWorkdir：没有任务的工作空间不成组', () => {
+  it('没有会话就没有分组（不再补空分组占位）', () => {
+    expect(groupSessionsByWorkdir([], undefined, DEFAULT_DIR)).toHaveLength(0);
+  });
+
+  it('每个分组至少带一条任务，默认组也不例外', () => {
+    const groups = groupSessionsByWorkdir(
+      [session('a', OTHER_DIR), session('b')],
+      undefined,
+      DEFAULT_DIR,
+    );
+
+    expect(groups.map((g) => g.label).sort()).toEqual(
+      [DEFAULT_WORKSPACE_LABEL, 'ranch'].sort(),
+    );
+    for (const g of groups) expect(g.sessions.length).toBeGreaterThan(0);
+  });
+});

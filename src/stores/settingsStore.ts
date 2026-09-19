@@ -35,6 +35,21 @@ interface SettingsState {
    */
   setWorkspaceAlias: (workdir: string, alias: string, fallback?: string) => void;
   /**
+   * 登记一个「用过的工作空间」，让它在 0 个任务时也留在侧边栏分组里。
+   *
+   * 幂等：已在表内不重复写入（也不改变它在表中的位置——新登记追加在末尾）。
+   * 空串忽略；`undefined` 不能传（没有「未指定」的工作空间可登记）。
+   * 判重按**原样字符串**：这里不 import `workspaceLabel` 的路径判等——
+   * 那会引入 settingsStore → workspaceLabel → …的依赖，而调用方
+   * （`sessionsStore`）拿到的路径本来就来自同一个目录选择结果，字面量一致。
+   */
+  rememberWorkspace: (workdir: string) => void;
+  /**
+   * 从侧边栏列表里移除一个工作空间（只删登记，**不删目录、不删会话**）。
+   * 目录与文件还在原处，下次给会话分配这个路径时会重新登记。
+   */
+  forgetWorkspace: (workdir: string) => void;
+  /**
    * 把指定会话从侧边栏列表隐藏（「从列表中移除」用）。
    * 幂等：已在表内的 id 不会重复写入；不改动任何会话数据本身。
    */
@@ -93,6 +108,7 @@ const DEFAULT_SETTINGS: Settings = {
   transcription: DEFAULT_TRANSCRIPTION,
   desktop: DEFAULT_DESKTOP,
   workspaceAliases: {},
+  knownWorkspaces: [],
   sidebarCollapsed: false,
   hiddenSessions: [],
   // 空表 = 全部使用默认键位。刻意不写「默认值全集」：那样任何一次默认键位调整
@@ -124,6 +140,28 @@ export const useSettingsStore = create<SettingsState>()(
           else delete next[workdir];
           return { settings: { ...s.settings, workspaceAliases: next } };
         }),
+      rememberWorkspace: (workdir) =>
+        set((s) => {
+          const path = workdir.trim();
+          if (!path) return s;
+          const current = s.settings.knownWorkspaces ?? [];
+          // 幂等：已在表内直接返回原 state（不然每次启动水合都会白写一遍持久化）
+          if (current.includes(path)) return s;
+          return {
+            settings: { ...s.settings, knownWorkspaces: [...current, path] },
+          };
+        }),
+      forgetWorkspace: (workdir) =>
+        set((s) => {
+          const current = s.settings.knownWorkspaces ?? [];
+          if (!current.includes(workdir)) return s;
+          return {
+            settings: {
+              ...s.settings,
+              knownWorkspaces: current.filter((p) => p !== workdir),
+            },
+          };
+        }),
       hideSessions: (ids) =>
         set((s) => {
           if (ids.length === 0) return s;
@@ -151,7 +189,7 @@ export const useSettingsStore = create<SettingsState>()(
     {
       name: STORAGE_KEYS.settings,
       storage: zustandStorage,
-      version: 10,
+      version: 11,
       migrate: (persistedState) => {
         const state = persistedState as Partial<SettingsState> | undefined;
         if (state?.settings?.gatewayEndpoint?.includes(':8765')) {
@@ -205,6 +243,14 @@ export const useSettingsStore = create<SettingsState>()(
           state.settings.shortcuts = {
             ...(state.settings.shortcuts ?? {}),
           };
+          // v11：已用工作空间登记表。老用户没存过，空表即可——
+          // 真正的补登记发生在 `sessionsStore.loadSessions`：它按现有会话的
+          // workdir 逐个 remember，等于把「有任务的工作空间」全部恢复出来。
+          state.settings.knownWorkspaces = Array.isArray(
+            state.settings.knownWorkspaces,
+          )
+            ? state.settings.knownWorkspaces
+            : [];
         }
         return state ?? { settings: DEFAULT_SETTINGS, status: DEFAULT_STATUS };
       },

@@ -102,10 +102,22 @@ describe('eventIndex: 解析与容错', () => {
   });
 
   it('合法索引可往返序列化', () => {
-    const index = rebuildSessionIndex([meta()], { s1: { eventCount: 3, lastSeq: 3 } });
+    const index = rebuildSessionIndex([meta()], {
+      s1: { eventCount: 3, lastSeq: 3, messageCount: 1 },
+    });
     const round = parseSessionIndex(serializeSessionIndex(index));
     expect(round).toEqual(index);
     expect(round.version).toBe(SESSION_INDEX_VERSION);
+  });
+
+  it('条目缺计数（旧版残留）时整份丢弃，让上层重建', () => {
+    // `messageCount` 缺失的条目会让列表把这条会话当成空会话（用户的任务凭空消失），
+    // 所以宁可整份丢弃触发重建——索引本来就是可再生派生物
+    const raw = JSON.stringify({
+      version: SESSION_INDEX_VERSION,
+      entries: { s1: { id: 's1', title: 't', eventCount: 3, lastSeq: 3 } },
+    });
+    expect(parseSessionIndex(raw)).toEqual(emptySessionIndex());
   });
 });
 
@@ -152,17 +164,31 @@ describe('eventIndex: deriveMetaFromEvents', () => {
 });
 
 describe('eventIndex: applyAppend 投影', () => {
-  it('事件数与 lastSeq 只增不减，updatedAt 取最大活动时间', () => {
+  it('事件数、lastSeq 与对话记录条数只增不减，updatedAt 取最大活动时间', () => {
     let index = applyAppend(emptySessionIndex(), meta(), [startEvent(), messageEvent()], 's1');
     expect(index.entries.s1.eventCount).toBe(2);
     expect(index.entries.s1.lastSeq).toBe(2);
+    // 只数 `message` 事件：`session-start` 不算对话记录
+    expect(index.entries.s1.messageCount).toBe(1);
     expect(index.entries.s1.updatedAt).toBe(iso(10));
 
     const later = messageEvent({ id: 'e9', seq: 9, timestamp: T0 + 5000, content: '后续' });
     index = applyAppend(index, meta({ updatedAt: iso(1000) }), [later], 's1');
     expect(index.entries.s1.eventCount).toBe(3);
     expect(index.entries.s1.lastSeq).toBe(9);
+    expect(index.entries.s1.messageCount).toBe(2);
     expect(index.entries.s1.updatedAt).toBe(iso(5000));
+  });
+
+  it('非 message 事件不涨对话记录条数（模式切换 / 思考 / 用量）', () => {
+    const index = applyAppend(
+      emptySessionIndex(),
+      meta(),
+      [startEvent(), aiTitleEvent('自动标题')],
+      's1',
+    );
+    expect(index.entries.s1.eventCount).toBe(2);
+    expect(index.entries.s1.messageCount).toBe(0);
   });
 
   it('本次追加含 ai-title 时覆盖标题', () => {
@@ -241,7 +267,7 @@ describe('eventIndex: parseSessionMeta 容错', () => {
 describe('eventIndex: 条目维护与列表', () => {
   it('upsert / remove 均返回新对象', () => {
     const index = emptySessionIndex();
-    const entry = entryFromMeta(meta(), { eventCount: 1, lastSeq: 1 });
+    const entry = entryFromMeta(meta(), { eventCount: 1, lastSeq: 1, messageCount: 0 });
     const added = upsertEntry(index, entry);
     expect(added.entries.s1).toEqual(entry);
     expect(index.entries.s1).toBeUndefined();
@@ -255,7 +281,7 @@ describe('eventIndex: 条目维护与列表', () => {
 
   it('列表：置顶优先 → 最近更新优先 → id 稳定，且过滤软删除', () => {
     const mk = (id: string, updatedAt: string, pinned?: boolean, deletedAt?: string) =>
-      ({ ...entryFromMeta(meta({ id }), { eventCount: 0, lastSeq: 0 }), id, updatedAt, pinned, deletedAt }) as SessionIndexEntry;
+      ({ ...entryFromMeta(meta({ id }), { eventCount: 0, lastSeq: 0, messageCount: 0 }), id, updatedAt, pinned, deletedAt }) as SessionIndexEntry;
 
     const index = {
       version: SESSION_INDEX_VERSION,
@@ -270,14 +296,14 @@ describe('eventIndex: 条目维护与列表', () => {
     expect(listSessionEntries(index).map((e) => e.id)).toEqual(['c', 'b', 'a']);
   });
 
-  it('rebuildSessionIndex 用计数补齐 eventCount / lastSeq', () => {
+  it('rebuildSessionIndex 用计数补齐 eventCount / lastSeq / messageCount', () => {
     const rebuilt = rebuildSessionIndex(
       [meta({ id: 's1' }), meta({ id: 's2' })],
-      { s1: { eventCount: 7, lastSeq: 7 } },
+      { s1: { eventCount: 7, lastSeq: 7, messageCount: 3 } },
     );
-    expect(rebuilt.entries.s1).toMatchObject({ eventCount: 7, lastSeq: 7 });
+    expect(rebuilt.entries.s1).toMatchObject({ eventCount: 7, lastSeq: 7, messageCount: 3 });
     // 未提供计数的会话仍可用，计数待下次追加补齐
-    expect(rebuilt.entries.s2).toMatchObject({ eventCount: 0, lastSeq: 0 });
+    expect(rebuilt.entries.s2).toMatchObject({ eventCount: 0, lastSeq: 0, messageCount: 0 });
   });
 
   it('summarizeTitle 折叠空白并在超长时截断', () => {

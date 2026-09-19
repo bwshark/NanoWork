@@ -9,6 +9,7 @@ import {
 } from './eventRoutes';
 import {
   applyAppend,
+  countEvents,
   deriveMetaFromEvents,
   emptySessionIndex,
   parseSessionIndex,
@@ -19,6 +20,7 @@ import {
 } from './eventIndex';
 import type { StorageRoots } from './storageRoutes';
 import type { EventAppendParams, EventAppendResult } from '../src/platform/types';
+import type { SessionCounters } from '../src/events/indexFile';
 import type {
   SessionEvent,
   SessionIndexFile,
@@ -255,14 +257,14 @@ export function createEventStore(roots: StorageRoots): EventStore {
 
     async rebuildIndex() {
       const metas = await listMetas();
-      const counters: Record<string, { eventCount: number; lastSeq: number }> = {};
+      // 计数一律从 JSONL 现算（含 messageCount）：索引丢弃重建时它是唯一来源，
+      // 算漏了就会把有对话记录的任务显示成空会话（见 SessionIndexEntry.messageCount）
+      const counters: Record<string, SessionCounters> = {};
       for (const meta of metas) {
         const events = parseEventJsonl(
           await readTextFileOrNull(sessionJsonlPath(roots, meta.id, meta.workdir)),
         );
-        let lastSeq = 0;
-        for (const ev of events) if (ev.seq > lastSeq) lastSeq = ev.seq;
-        counters[meta.id] = { eventCount: events.length, lastSeq };
+        counters[meta.id] = countEvents(events);
       }
       const index = buildIndexFromMetas(metas, counters);
       const indexPath = sessionIndexPath(roots);

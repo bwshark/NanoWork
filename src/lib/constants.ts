@@ -108,15 +108,18 @@ export const STORAGE_KEYS = {
 
 /**
  * 工作区文件记忆（MEMORY.md）相关常量。
- * 读写统一走 platform.storage（Web/Electron 一致）；Electron 下主进程把
- * `nanowork.memory.<workspaceKey>` 路由成 `~/.nanowork/memory/<workspaceKey>.md`
- * 真实文件（见 electron/storageRoutes.ts）。
+ *
+ * ⚠️ 自 2026-09 起工作区记忆**不再走 `platform.storage`**：落点是
+ * `<工作目录>/.nanowork/memory/` 这个目录（`MEMORY.md` + 若干 `YYYY-MM-DD.md`），
+ * 由 `platform.memoryFiles` 承担，目录约定集中在 `src/lib/workspaceMemory.ts`。
+ *
+ * 下面这条前缀只剩**一个用途**：定位旧落点 `~/.nanowork/memory/<key>.md`，
+ * 供一次性懒迁移读取（Web 端见 `storage.web.ts` 的 `migrateLegacy`，
+ * Electron 端见 `electron/memoryRoutes.ts` 的 `resolveLegacyMemoryFile`）。
+ * 新代码不要再往这个前缀下写东西。
  */
-/** 记忆文本在 storage 中的 key 前缀，完整 key = MEMORY_KEY_PREFIX + workspaceKey */
+/** 旧记忆单文件在 storage 中的 key 前缀，完整 key = MEMORY_KEY_PREFIX + workspaceKey */
 export const MEMORY_KEY_PREFIX = 'nanowork.memory.';
-
-/** 记忆文件名（记忆页「导出」动作使用该名；Electron 下解析到 ~/.nanowork/） */
-export const MEMORY_FILENAME = 'MEMORY.md';
 
 /** 注入 system 段的记忆块起始标签（便于解析与去重） */
 export const MEMORY_TAG_OPEN = '<!-- MEMORY -->';
@@ -147,9 +150,10 @@ export const USER_INSTRUCTIONS_TAG_CLOSE = '</user_custom_instructions>';
 /**
  * 用户级长期记忆（L2）的存储 key：路由到 `~/.nanowork/MEMORY.md`（跨项目生效）。
  *
- * 刻意**不**复用 `MEMORY_KEY_PREFIX`：那个前缀是动态路由（`memory/<workspace>.md`），
- * 用户级记忆落在 ① 根目录下的 `MEMORY.md`，是个静态落点。混用前缀会得到
- * `memory/user.md`——一个看起来像工作区记忆、实际谁都不认的孤儿文件。
+ * 刻意**不**复用 `MEMORY_KEY_PREFIX`：那个前缀指向**旧**工作区记忆的单文件落点
+ * （`memory/<key>.md`，现仅用于懒迁移读取），而用户级记忆落在 ① 根目录下的
+ * `MEMORY.md`，是个静态落点。混用前缀会得到 `memory/user.md`——一个看起来像
+ * 工作区记忆、实际谁都不认的孤儿文件。
  */
 export const USER_MEMORY_KEY = 'nanowork.userMemory';
 
