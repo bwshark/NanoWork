@@ -65,6 +65,26 @@ function toDisplayText(value: unknown): string | undefined {
   return text.length > PROCESS_TEXT_MAX ? `${text.slice(0, PROCESS_TEXT_MAX)}…` : text;
 }
 
+/** 可达性探测的超时。探测要短：心跳是周期任务，单次挂起会堆积下一次。 */
+const PROBE_TIMEOUT_MS = 3000;
+
+/**
+ * 判定「该端点没有 `/health` 路由」的 HTTP 状态。
+ * nanobot 用 aiohttp，未知路径一律 404；405/501 兼容其它实现。
+ */
+const HEALTH_ABSENT_STATUSES = new Set([404, 405, 501]);
+
+/**
+ * 由 `/v1` 基址推同源的健康检查地址。
+ *
+ * `/health` 注册在**根路径**（`nanobot/api/server.py` 的 `add_get("/health", ...)`），
+ * 不在 `/v1` 之下，所以要剥掉末段的版本前缀。
+ * 开发态代理同理：`/api/nanobot/v1` → `/api/nanobot/health`。
+ */
+function healthUrlOf(endpoint: string): string {
+  return `${endpoint.replace(/\/v\d+$/, '')}/health`;
+}
+
 /**
  * nanobot 网关**传输层**：直连 OpenAI 兼容 SSE 流式接口。
  *
@@ -85,6 +105,18 @@ function toDisplayText(value: unknown): string | undefined {
  */
 export class NanobotClient {
   readonly kind = 'nanobot' as const;
+
+  /**
+   * `/health` 可用性结论缓存：endpoint → 是否支持（`false` 表示已确认没有此路由）。
+   *
+   * 缓存是必须的：没有它，第三方端点每次心跳都要先吃一个 404 再回退 `/models`，
+   * 反而比改前多一次往返。
+   *
+   * 不设过期。判定失准只会让某个端点多打一次 `/models`——结果依然正确，只是略费；
+   * 不会把可用网关误判成离线。键是端点字符串，条目数由用户配置过的端点数决定，
+   * 不会无限增长。
+   */
+  private readonly healthSupport = new Map<string, boolean>();
 
   /**
    * 归一化 endpoint 并做开发态代理改写。
@@ -109,19 +141,52 @@ export class NanobotClient {
     return effective ? { Authorization: `Bearer ${effective}` } : {};
   }
 
-  /** 探测网关可达性 */
+  /**
+   * 探测网关可达性。
+   *
+   * 优先打引擎的常量健康检查 `GET /health`（返回 `{"status":"ok"}`），
+   * 而不是 `GET /v1/models`：后者每次都要遍历 modelPresets 组装一遍模型目录
+   * （`nanobot/api/server.py` 的 `handle_models`）。心跳是应用空闲时的**唯一
+   * 稳态 HTTP 流量**，往返次数与单次成本都值得挑最省的。
+   *
+   * `gatewayEndpoint` 用户可配，可能指向没有 `/health` 的第三方 OpenAI 兼容
+   * 服务（vLLM / LM Studio / 官方 API），因此带一次回退：确认无此路由后记入
+   * `healthSupport`，此后固定走 `/models`，不会每跳都先吃一个 404。
+   */
   async probe(): Promise<ConnectionStatus> {
     const { endpoint } = this.getConfig();
+
+    if (this.healthSupport.get(endpoint) !== false) {
+      const res = await this.fetchProbe(healthUrlOf(endpoint));
+      // 连不上 / 超时：网关真的不可达，没必要再拿 `/models` 试第二遍
+      if (!res) return 'offline';
+      if (res.ok) return 'connected';
+      // 只在「路由确实不存在」时永久降级。5xx 属临时故障，不写缓存——
+      // 否则一次抖动就把这个端点永久降级成每跳多打一个请求。
+      if (HEALTH_ABSENT_STATUSES.has(res.status)) this.healthSupport.set(endpoint, false);
+    }
+
+    return this.probeViaModels(endpoint);
+  }
+
+  /** 回退路径：`/health` 不可用时按原语义打 `/v1/models` */
+  private async probeViaModels(endpoint: string): Promise<ConnectionStatus> {
+    const res = await this.fetchProbe(`${endpoint}/models`);
+    return res?.ok ? 'connected' : 'offline';
+  }
+
+  /**
+   * 带超时的探测请求。
+   * 网络层失败（拒连 / 超时 / DNS）返回 `null`，与「有响应但状态码非 2xx」区分开：
+   * 前者说明不可达，后者说明可达但语义不对，两者后续处理不同。
+   */
+  private async fetchProbe(url: string): Promise<Response | null> {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 3000);
+    const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
     try {
-      const res = await fetch(`${endpoint}/models`, {
-        headers: this.authHeaders(),
-        signal: controller.signal,
-      });
-      return res.ok ? 'connected' : 'offline';
+      return await fetch(url, { headers: this.authHeaders(), signal: controller.signal });
     } catch {
-      return 'offline';
+      return null;
     } finally {
       clearTimeout(timer);
     }

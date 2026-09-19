@@ -103,18 +103,82 @@ describe('NanobotClient 网关端到端（OpenAI 兼容 SSE）', () => {
     vi.restoreAllMocks();
   });
 
-  it('probe 命中 /models 返回 connected', async () => {
+  it('probe 优先打 /health（常量接口），命中即 connected 且只发一次请求', async () => {
+    const urls: string[] = [];
     vi.stubGlobal(
       'fetch',
       vi.fn(async (url: string) => {
-        if (String(url).includes('/models')) {
-          return makeResponse('', { json: { data: [{ id: 'nanobot' }] } });
-        }
-        return makeResponse('', { status: 404 });
+        urls.push(String(url));
+        return makeResponse('', { json: { status: 'ok' } });
       }),
     );
-    const status = await client.probe();
-    expect(status).toBe('connected');
+    expect(await client.probe()).toBe('connected');
+    // 根路径的 /health，不是 /v1/health
+    expect(urls).toEqual(['http://127.0.0.1:8765/health']);
+  });
+
+  it('probe 在 /health 缺失（404）时回退 /models，并记住结论不再重试 /health', async () => {
+    const urls: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        urls.push(String(url));
+        if (String(url).endsWith('/health')) return makeResponse('', { status: 404 });
+        return makeResponse('', { json: { data: [{ id: 'nanobot' }] } });
+      }),
+    );
+    expect(await client.probe()).toBe('connected');
+    expect(urls).toEqual([
+      'http://127.0.0.1:8765/health',
+      'http://127.0.0.1:8765/v1/models',
+    ]);
+
+    // 第二次：结论已缓存，不该再吃一个 404——否则第三方端点每次心跳都要多一次往返
+    urls.length = 0;
+    expect(await client.probe()).toBe('connected');
+    expect(urls).toEqual(['http://127.0.0.1:8765/v1/models']);
+  });
+
+  it('probe 在 /health 网络层失败时报 offline，且不回退 /models', async () => {
+    const urls: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        urls.push(String(url));
+        throw new TypeError('Failed to fetch');
+      }),
+    );
+    expect(await client.probe()).toBe('offline');
+    // 网关真的不可达：再打 /models 也是白费一次往返
+    expect(urls).toEqual(['http://127.0.0.1:8765/health']);
+  });
+
+  it('probe 对 /health 的 5xx 回退但不写缓存（临时故障不该永久降级）', async () => {
+    const urls: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        urls.push(String(url));
+        if (String(url).endsWith('/health')) return makeResponse('', { status: 503 });
+        return makeResponse('', { json: { data: [] } });
+      }),
+    );
+    expect(await client.probe()).toBe('connected'); // 回退 /models 拿到 200
+
+    urls.length = 0;
+    expect(await client.probe()).toBe('connected');
+    expect(urls[0]).toBe('http://127.0.0.1:8765/health'); // 下次仍先试 /health
+  });
+
+  it('probe 在 /health 与 /models 都不通时报 offline', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        if (String(url).endsWith('/health')) return makeResponse('', { status: 404 });
+        return makeResponse('', { status: 401 });
+      }),
+    );
+    expect(await client.probe()).toBe('offline');
   });
 
   it('listModels 解析 /models', async () => {
