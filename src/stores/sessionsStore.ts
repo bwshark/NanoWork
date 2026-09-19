@@ -45,6 +45,7 @@ import { useAgentsStore } from './agentsStore';
 import { useArtifactsStore } from './artifactsStore';
 import { useExpertGroupsStore } from './expertGroupsStore';
 import { useSettingsStore } from './settingsStore';
+import { resolveDefaultWorkspacePath } from './storageInfoStore';
 import { useSkillsStore } from './skillsStore';
 import type {
   Artifact,
@@ -1018,7 +1019,16 @@ export const useSessionsStore = create<SessionsState>()(
         ...(boundGroup ? { groupId: boundGroup.id } : {}),
         // aid 为空串时 agent 必然 undefined → 不挂任何技能（新任务的默认态）
         skillIds: agent?.skillIds?.length ? [...agent.skillIds] : undefined,
-        workdir: opts?.workdir,
+        /**
+         * 调用方没当场指定工作空间时，落到「默认工作空间存储路径」
+         * （设置 → 通用 → 存储；用户值 > 内置 `<home>/NanoWork`）。
+         *
+         * 兜底放在**这里**而不是各个「新建任务」入口：入口有六七个
+         * （侧边栏、标题栏、快捷键、各页面的 ensureSession…），逐个传一遍
+         * 必然漏掉一两个，而漏掉的那个只表现为「新任务偶尔不落到默认路径」，
+         * 既不容易发现，也很难定位是哪一次点击出的问题。
+         */
+        workdir: opts?.workdir ?? resolveDefaultWorkspacePath(),
         fullAccess: opts?.fullAccess,
         toolApproval: opts?.toolApproval,
         ...(opts?.mode !== undefined ? { mode: opts.mode } : {}),
@@ -1139,24 +1149,30 @@ export const useSessionsStore = create<SessionsState>()(
       set((s) => ({ memoryLoaded: { ...s.memoryLoaded, dismissed: true } })),
 
     setSessionWorkdir: (id, workdir) => {
+      /**
+       * 「清除」（传 `undefined`）= 回到默认工作空间。配了默认路径时落回它，
+       * 否则才真的置空。不这么做就会出现自相矛盾的形态：设置里明明写着
+       * 默认工作空间是 `~/NanoWork`，用户点一下「清除」反而掉进另一个分组。
+       */
+      const next = workdir ?? resolveDefaultWorkspacePath();
       const before = get().sessions.find((x) => x.id === id);
       get().updateSession(id, (s) => ({
         ...s,
-        workdir,
+        workdir: next,
         updatedAt: nowIso(),
       }));
       const after = get().sessions.find((x) => x.id === id);
       if (!after || !isEventStreamSession(after)) return;
       const from = before?.workdir;
-      if (from === workdir) {
+      if (from === next) {
         persistMeta(after);
         return;
       }
       // 工作空间**同时是事件流的落点作用域**（`projects/<slug>/`）：变更即搬迁。
       // 记录器的作用域先切（后续写入落新目录），搬迁任务排进同一队列——
       // 队列保证「先把旧目录里已排队的追加写完，再读旧目录搬迁」，不会丢事件。
-      setRecorderWorkdir(id, workdir);
-      const scope = workdir;
+      setRecorderWorkdir(id, next);
+      const scope = next;
       void enqueueSessionTask(id, async () => {
         const store = getEventStore();
         if (!store.capabilities.fileBacked) {

@@ -22,6 +22,7 @@ import type {
   ChannelSendResult,
   DesktopConfig,
   DesktopConfigResult,
+  DiskUsage,
   EventAppendParams,
   EventAppendResult,
   NanobotChannelSessionDetail,
@@ -29,6 +30,7 @@ import type {
   NanobotCronHistoryDeleteResult,
   NanobotCronRunRecord,
   NanobotCronSessionDetail,
+  StorageInfo,
 } from '../src/platform/types';
 import {
   DEVICE_ID_STORAGE_KEY,
@@ -2073,6 +2075,121 @@ ipcMain.handle('shell:openPath', async (_e, path: string) => {
   if (errorMessage) return { ok: false, error: errorMessage };
   return { ok: true };
 });
+
+// ——— 本地存储信息（设置「通用 → 存储」卡片）———
+
+/**
+ * 内置默认工作空间目录名。
+ *
+ * 用户未自定义 `settings.defaultWorkspacePath` 时，新建任务的落点。
+ * 与 WorkBuddy 的 `<home>/WorkBuddy` 同构。
+ */
+const DEFAULT_WORKSPACE_DIR_NAME = 'NanoWork';
+
+/**
+ * 缓存目录统计的条目上限。
+ *
+ * 递归统计**必须**有上界：缓存目录里装着会话 JSONL、插件包、文件备份，
+ * 用一段时间后动辄几十万个小文件。真按全量走，一次递归就能把主进程的
+ * 事件循环占住数秒——期间窗口拖不动、所有 IPC 阻塞，用户看到的是「应用卡死」，
+ * 而起因只是在设置里点开了「通用」。
+ *
+ * 到达上限即停止下钻，返回已统计的值：界面上的数字会偏小，但应用是活的。
+ * 这个取舍是刻意的——一个不够精确的容量提示，远好过一个卡死的设置面板。
+ */
+const CACHE_SCAN_MAX_ENTRIES = 200_000;
+
+/** 递归统计目录占用字节数；目录不存在或读取失败一律按 0（不抛） */
+async function directorySize(root: string): Promise<number> {
+  let total = 0;
+  let seen = 0;
+  const stack: string[] = [root];
+  while (stack.length > 0) {
+    const dir = stack.pop() as string;
+    let items: Dirent[];
+    try {
+      items = await fs.readdir(dir, { withFileTypes: true });
+    } catch {
+      // 权限不足 / 统计途中被删：跳过这一层，不让整次统计失败
+      continue;
+    }
+    for (const item of items) {
+      if (++seen > CACHE_SCAN_MAX_ENTRIES) return total;
+      const child = join(dir, item.name);
+      // 不跟随符号链接：跟随会走出缓存目录，遇到环状链接还会无限递归
+      if (item.isDirectory()) stack.push(child);
+      else if (item.isFile()) {
+        try {
+          total += (await fs.stat(child)).size;
+        } catch {
+          // 统计途中文件被删 / 无权限：忽略这一个
+        }
+      }
+    }
+  }
+  return total;
+}
+
+/** 读取路径所在卷的容量；`statfs` 不可用（老运行时 / 特殊挂载）时返回全 0 */
+async function diskUsage(target: string): Promise<DiskUsage> {
+  try {
+    const s = await fs.statfs(target);
+    const totalBytes = s.blocks * s.bsize;
+    // 可用取 `bavail`（当前用户可写）而不是 `bfree`（含 root 保留块）：
+    // 用户关心的是「我还能写多少」，用 bfree 会多报一块他其实用不到的空间。
+    const freeBytes = s.bavail * s.bsize;
+    return {
+      totalBytes,
+      freeBytes,
+      usedBytes: Math.max(0, totalBytes - freeBytes),
+    };
+  } catch {
+    return { totalBytes: 0, usedBytes: 0, freeBytes: 0 };
+  }
+}
+
+ipcMain.handle(
+  'app:getStorageInfo',
+  async (_e, ensureDefaultWorkspace?: boolean): Promise<StorageInfo> => {
+    /**
+     * 缓存目录取**应用数据目录**（`userData`），不是产品主目录 `~/.nanowork`。
+     *
+     * 本项目把数据拆成两个根（见设置「数据管理 → 数据落点」）：`~/.nanowork`
+     * 是**用户资产**（设置、记忆、身份文件、技能、插件），而对话事件流
+     * （`projects/*.jsonl`）、索引、文件备份、Chromium 缓存与临时文件都在
+     * 应用数据目录。卡片上那句「存放对话记录、运行缓存与临时文件」说的是后者，
+     * 指向 `~/.nanowork` 会变成「标签写着几 GB、点开只有几 MB」。
+     */
+    const cacheDir = STORAGE_ROOTS.electronUserData;
+    const assetsDir = productDir(STORAGE_ROOTS);
+    const defaultWorkspaceDir = join(STORAGE_ROOTS.home, DEFAULT_WORKSPACE_DIR_NAME);
+
+    // 目录按需建出：卡片上的「打开目录」需要一个真实目标，目录不存在时
+    // `shell.openPath` 会直接失败，用户看到的是「打不开」而不是「还没有数据」。
+    // 两个 mkdir 都是幂等的（userData 由 Electron 启动时创建，这里只是兜底）。
+    try {
+      await fs.mkdir(cacheDir, { recursive: true });
+    } catch {
+      // 建不出来（只读盘 / 权限不足）不影响展示：下面统计按 0 处理
+    }
+    // 内置默认工作空间只在「用户没有自定义路径」时才建（由渲染层传参决定）。
+    // 用户自定义的路径一律不建：目录选择器返回的目录必然已存在，不需要代劳；
+    // 若用户后来手动删了它，我们也**不该**悄悄重建——那是用户的决定。
+    if (ensureDefaultWorkspace) {
+      try {
+        await fs.mkdir(defaultWorkspaceDir, { recursive: true });
+      } catch {
+        // 同上：建不出只是少个目录，不影响路径回显
+      }
+    }
+
+    const [cacheBytes, disk] = await Promise.all([
+      directorySize(cacheDir),
+      diskUsage(cacheDir),
+    ]);
+    return { cacheDir, cacheBytes, disk, assetsDir, defaultWorkspaceDir };
+  },
+);
 
 // ——— 窗口控制（自绘标题栏）———
 ipcMain.on('window:minimize', () => mainWindow?.minimize());

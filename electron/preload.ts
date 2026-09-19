@@ -98,6 +98,9 @@ const api: ElectronAPI = {
   onWindowMaximizeChange: (cb: (maximized: boolean) => void) =>
     ipcRenderer.on('window:maximize-change', (_e, maximized: boolean) => cb(maximized)),
   appGetInfo: () => ipcRenderer.invoke('app:getInfo'),
+  /** 本地存储信息（缓存目录 / 占用 / 卷容量）；ensureDefaultWorkspace 见 platform/types */
+  appGetStorageInfo: (ensureDefaultWorkspace?: boolean) =>
+    ipcRenderer.invoke('app:getStorageInfo', ensureDefaultWorkspace),
   // —— 桌面端集成：系统托盘 & 全局快捷键 ——
   appGetDesktopConfig: () => ipcRenderer.invoke('app:getDesktopConfig'),
   appSetDesktopConfig: (patch) => ipcRenderer.invoke('app:setDesktopConfig', patch),

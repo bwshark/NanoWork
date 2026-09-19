@@ -1,5 +1,6 @@
 import { Box, Switch, ToggleButton, ToggleButtonGroup, Typography } from '@mui/material';
 import { SettingsCard, SettingsRow } from '@/components/settings/SettingsPrimitives';
+import { StorageCard } from '@/components/settings/StorageCard';
 import { useDesktopConfig } from '@/hooks/useDesktopConfig';
 import { platform } from '@/platform';
 import { normalizeTheme, useSettingsStore } from '@/stores/settingsStore';
@@ -98,6 +99,11 @@ export function GeneralSection() {
           当前运行在 Web 端，托盘常驻、开机自启等桌面端能力不可用。
         </Typography>
       )}
+
+      {/* 存储放在最后：它回答的是「东西存在哪」，属于**看和改落点**，
+          与前面的「长什么样」「怎么被唤起来」不是一类；排在最后也让
+          「主题 → 桌面端行为 → 存储」形成从界面到系统再到数据的层次。 */}
+      <StorageCard />
     </Box>
   );
 }

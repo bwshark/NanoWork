@@ -503,6 +503,18 @@ export interface PlatformAdapter {
    * - web：返回 `null`（浏览器里没有「应用版本」这个概念）。
    */
   appInfo(): Promise<AppInfo | null>;
+  /**
+   * 本地存储信息：缓存目录、缓存占用、所在卷容量、内置默认工作空间目录。
+   *
+   * `ensureDefaultWorkspace=true` 时主进程会顺带把**内置默认工作空间目录**
+   * 建出来（`<home>/NanoWork`）。渲染层只在「用户没有自定义工作空间路径」
+   * 时传 true——那种情况下新建任务确实会落到这个目录，先建出来才不会出现
+   * 「设置里写着这个路径、磁盘上却没有」的错位。用户自定义的路径不建：
+   * 目录选择器返回的目录必然已存在，不需要我们代劳。
+   * - electron：主进程现算；
+   * - web：无文件系统权限，返回 `null`（卡片据此显示不可用）。
+   */
+  storageInfo(ensureDefaultWorkspace?: boolean): Promise<StorageInfo | null>;
 }
 
 /** 本地文件 base64 读取结果 */
@@ -511,6 +523,59 @@ export interface ReadFileBase64Result {
   base64?: string;
   size?: number;
   error?: string;
+}
+
+/**
+ * 卷（磁盘分区）容量。
+ *
+ * 三个值**互不推导**，所以必须一起给：`totalBytes ≠ usedBytes + freeBytes`。
+ * Windows 有保留给系统还原 / 回收站的隐藏空间，Linux 有 root 保留块
+ * （`statfs` 的 `bfree` 与 `bavail` 之差）。用两个值相减去凑第三个，
+ * 「磁盘已用 + 磁盘可用」就会对不上总量，占用条永远差一截。
+ */
+export interface DiskUsage {
+  /** 卷总容量（字节） */
+  totalBytes: number;
+  /** 卷已用（字节） */
+  usedBytes: number;
+  /** 卷可用（字节，以**当前用户**可写为准） */
+  freeBytes: number;
+}
+
+/**
+ * 本地存储信息（设置「存储」卡片用）。
+ *
+ * 全部由主进程现算，渲染层不做路径拼接：`<home>/NanoWork` 的分隔符在
+ * Windows 是 `\`、macOS/Linux 是 `/`，浏览器里既拿不到 home 也没有 path 模块，
+ * 在渲染层用字符串拼路径早晚会在某个平台上错一格。
+ */
+export interface StorageInfo {
+  /**
+   * 系统缓存目录 = 应用数据目录（Electron `userData`）。
+   *
+   * 为什么不是产品主目录 `~/.nanowork`：本项目把数据**刻意拆成两个根**
+   * （见设置「数据管理 → 数据落点」）——`~/.nanowork` 放的是**用户资产**
+   * （设置、记忆、身份文件、技能、插件），而对话事件流（`projects/*.jsonl`）、
+   * 索引、文件备份、Chromium 的各类缓存与临时文件全在应用数据目录里。
+   *
+   * 「存放对话记录、运行缓存与临时文件」描述的正是后者。指向前者会出现
+   * 「标签写着几 GB、点开只有几 MB」的错位——路径与体积必须是同一个东西。
+   */
+  cacheDir: string;
+  /** 缓存目录当前占用字节数（递归统计；目录不存在或读取失败按 0） */
+  cacheBytes: number;
+  /** 缓存目录所在卷的容量 */
+  disk: DiskUsage;
+  /**
+   * 用户资产目录（产品主目录 `~/.nanowork`）。
+   * 不在占用条里单独统计，只在卡片上作一行说明——否则同一份说明要维护两遍。
+   */
+  assetsDir: string;
+  /**
+   * 内置默认工作空间目录（`<home>/NanoWork`）。
+   * 用户未在设置里指定 `defaultWorkspacePath` 时，新建任务落在它下面。
+   */
+  defaultWorkspaceDir: string;
 }
 
 /**
@@ -716,6 +781,8 @@ export interface ElectronAPI {
   onWindowMaximizeChange(cb: (maximized: boolean) => void): void;
   /** 获取应用元信息（名称、版本、各运行时版本、操作系统、持久化设备 ID） */
   appGetInfo(): Promise<AppInfo>;
+  /** 获取本地存储信息（缓存目录 / 缓存占用 / 卷容量 / 内置默认工作空间目录） */
+  appGetStorageInfo(ensureDefaultWorkspace?: boolean): Promise<StorageInfo>;
   // —— 桌面端集成：系统托盘 & 全局快捷键（仅 Electron）——
   /** 读取主进程当前生效的桌面端配置（开机自启取系统真实状态） */
   appGetDesktopConfig(): Promise<DesktopConfig>;

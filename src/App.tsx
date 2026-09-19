@@ -11,6 +11,7 @@ import { useChannelsStore } from '@/stores/channelsStore';
 import { useChannelSessionsStore } from '@/stores/channelSessionsStore';
 import { useMcpStore } from '@/stores/mcpStore';
 import { useSessionsStore } from '@/stores/sessionsStore';
+import { useStorageInfoStore } from '@/stores/storageInfoStore';
 import { PromptLibrary } from '@/lib/promptLibrary';
 import { IdentityService } from '@/lib/identity';
 
@@ -25,6 +26,10 @@ export function App() {
     // 会话水合：列表来自事件流索引（不扫 JSONL），当前会话的消息按需加载。
     // 这是「事件流是事实源」的读入口——取代了旧版整块持久化的自动恢复。
     void useSessionsStore.getState().loadSessions();
+    // 存储信息：缓存目录 / 卷容量 / 内置默认工作空间目录。
+    // **必须在会话创建之前拿到**——新建任务的 workdir 缺省落到默认工作空间，
+    // 而内置默认路径（`<home>/NanoWork`）只有主进程算得出来，渲染层同步取不到。
+    void useStorageInfoStore.getState().refresh();
     // 桌面端主进程与窗口是并行启动的：nanobot 为 Python 进程，spawn 后需数秒
     // 才真正 listen。若此处只探测一次，首探必然 ECONNREFUSED 并永久固化离线。
     void (async () => {

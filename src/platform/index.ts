@@ -314,6 +314,17 @@ export const platform: PlatformAdapter = {
     }
     return Promise.resolve(null);
   },
+  /**
+   * 本地存储信息。Web 端返回 `null` 而不是「全 0 的假数据」：
+   * 浏览器里既没有「应用缓存目录」也没有磁盘容量可读，卡片据此显示不可用，
+   * 比画一根恒为空、恒为满的占用条诚实得多。
+   */
+  storageInfo: (ensureDefaultWorkspace?: boolean) => {
+    if (isElectron() && window.electronAPI) {
+      return window.electronAPI.appGetStorageInfo(ensureDefaultWorkspace);
+    }
+    return Promise.resolve(null);
+  },
 };
 
 /**
