@@ -319,7 +319,11 @@ export function SidebarNav() {
           <NavRow
             item={{ label: "设置", icon: <SettingsIcon /> }}
             active={settingsOpen}
-            onClick={openSettings}
+            // 必须包一层：NavRow 把 onClick 转交给 MUI 的 ListItemButton，后者会带着
+            // MouseEvent 调用它。直接写 onClick={openSettings} 的话事件对象会被当成
+            // 分区 id 传进去（`(section?: X) => void` 可赋值给 `() => void`，编译期不报错），
+            // 结果是弹窗打开但右侧一片空白。
+            onClick={() => openSettings()}
           />
         </List>
       </Box>

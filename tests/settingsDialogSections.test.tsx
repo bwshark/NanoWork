@@ -110,3 +110,62 @@ describe('设置弹窗分区联动', () => {
     expect(getComputedStyle(dialogPaper()).flexDirection).toBe('row');
   });
 });
+
+/**
+ * 第二个「左菜单有、右侧全空」的形态——这次不是布局，是 `section` 落了非法值。
+ *
+ * 失效路径很隐蔽：把 `openSettings` 直接当 `onClick` 传给按钮时，MUI 的
+ * `ListItemButton` 会带着 `MouseEvent` 调用它。`(section?: X) => void` 恰好可以
+ * 赋值给 `() => void`，**编译期完全看不见多出来的那个实参**；运行期 `section`
+ * 变成一个事件对象，于是三处同时坏掉：左侧无高亮（`item.id === section` 恒假）、
+ * 标题取不到 `label`、`SectionBody` 落到 `default` 返回 `null`。
+ *
+ * 断言落在「界面是否可读」而不是「store 里存了什么」——因为真正让用户看见的
+ * 是前者，只查 store 也无法解释截图里为什么连标题都是空的。
+ */
+describe('设置弹窗的默认分区', () => {
+  // 先挪到别的分区，才能证明 openSettings 真的把它改回来了
+  beforeEach(() => {
+    useSettingsUiStore.setState({ open: false, section: 'about' });
+  });
+
+  it('不传分区打开 → 回到「通用」，且右侧渲染出通用内容', async () => {
+    useSettingsUiStore.getState().openSettings();
+    expect(useSettingsUiStore.getState().section).toBe('general');
+    expect(useSettingsUiStore.getState().open).toBe(true);
+
+    mount(<SettingsDialog />);
+    await flush();
+
+    const panel = rightPanel().textContent ?? '';
+    expect(panel, '分区标题没显示「通用」').toContain('通用');
+    expect(panel, '通用分区内容未渲染').toContain(CONTENT_ANCHORS.general);
+  });
+
+  it('被当成 onClick 直传（收到 MouseEvent）也不会打开成空白', async () => {
+    const openSettings = useSettingsUiStore.getState().openSettings;
+    openSettings(new MouseEvent('click') as unknown as SettingsSectionId);
+
+    mount(<SettingsDialog />);
+    await flush();
+
+    expect(
+      useSettingsUiStore.getState().section,
+      '事件对象被当成分区 id 存了下来',
+    ).toBe('general');
+
+    const panel = rightPanel().textContent ?? '';
+    expect(panel, '右侧面板是空白：标题无文案').toContain('通用');
+    expect(panel, '右侧内容区为空').toContain(CONTENT_ANCHORS.general);
+  });
+
+  it('未知 id 折回「通用」，合法 id 照常生效（深链不受影响）', () => {
+    const openSettings = useSettingsUiStore.getState().openSettings;
+
+    openSettings('nope' as unknown as SettingsSectionId);
+    expect(useSettingsUiStore.getState().section).toBe('general');
+
+    openSettings('memory');
+    expect(useSettingsUiStore.getState().section).toBe('memory');
+  });
+});
