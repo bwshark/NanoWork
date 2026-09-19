@@ -35,7 +35,7 @@ import { byAria, buttonByText, click, flush, mount, unmount } from './helpers/re
 
 /** 6.62 GB 缓存 / 300 GB 盘 / 262 GB 已用 / 38 GB 可用（对齐参考图量级） */
 const INFO: StorageInfo = {
-  cacheDir: 'C:\\Users\\tester\\AppData\\Roaming\\nanowork',
+  cacheDir: 'C:\\Users\\tester\\.nanowork',
   cacheBytes: 6.62 * 1024 ** 3,
   disk: {
     totalBytes: 300 * 1024 ** 3,

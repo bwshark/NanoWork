@@ -2152,15 +2152,19 @@ ipcMain.handle(
   'app:getStorageInfo',
   async (_e, ensureDefaultWorkspace?: boolean): Promise<StorageInfo> => {
     /**
-     * 缓存目录取**应用数据目录**（`userData`），不是产品主目录 `~/.nanowork`。
+     * 缓存目录取**产品自有目录** `~/.nanowork/`。
      *
-     * 本项目把数据拆成两个根（见设置「数据管理 → 数据落点」）：`~/.nanowork`
-     * 是**用户资产**（设置、记忆、身份文件、技能、插件），而对话事件流
-     * （`projects/*.jsonl`）、索引、文件备份、Chromium 缓存与临时文件都在
-     * 应用数据目录。卡片上那句「存放对话记录、运行缓存与临时文件」说的是后者，
-     * 指向 `~/.nanowork` 会变成「标签写着几 GB、点开只有几 MB」。
+     * 这里换过一次：早先取的是 Electron `userData`，理由是「对话记录与运行缓存
+     * 都落在 userData，指 `~/.nanowork` 会变成标签写几 GB、点开只有几 MB」。
+     * 但产品对标的 WorkBuddy 标的就是它自己的产品目录 `~/.workbuddy/`——同名同
+     * 位置，只差一个前缀。既然 `~/.nanowork` 就是「这个应用自己的目录」，
+     * 用户在该目录下找东西的直觉是对的，**以路径的可预期性为准**。
+     *
+     * 两个根的分工没变，仍在设置「数据管理 → 数据落点」里写明：用户资产（设置、
+     * 记忆、技能、插件）在 `~/.nanowork/`，会话事件流与索引在应用数据目录。
+     * 因此下面统计的是 `~/.nanowork/` 的体积，不等于「本机全部产品数据」。
      */
-    const cacheDir = STORAGE_ROOTS.electronUserData;
+    const cacheDir = productDir(STORAGE_ROOTS);
     const defaultWorkspaceDir = join(STORAGE_ROOTS.home, DEFAULT_WORKSPACE_DIR_NAME);
 
     // 目录按需建出：卡片上的「打开目录」需要一个真实目标，目录不存在时

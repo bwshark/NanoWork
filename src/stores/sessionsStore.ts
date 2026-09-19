@@ -633,7 +633,14 @@ async function streamAssistantReply(
     ...(files && files.length > 0 ? { files } : {}),
     // 会话级工作空间：引擎按 turn 解析 workspace_scope 生效；
     // 权限仅「完全访问」时显式下发 full，默认权限跟随引擎配置默认
-    workspace: session.workdir,
+    //
+    // `?? resolveDefaultWorkspacePath()` 是**兜底而不是等价改写**：`createSession`
+    // 已经把默认路径写进 `workdir`，正常会话走不到这里。会走到的只有两种——
+    // ① 会话建立在「主进程还没回过存储信息」的那一瞬；② 早于该功能存在的旧会话。
+    // 不给兜底的话，请求里 `workspace` 就是 undefined，引擎退回它**自己**配置里的
+    // 默认工作空间（开发机上是个仓库内路径），模型在提示词里看到的就是那个目录——
+    // 于是「设置里写着 NanoWork、文件却写去了别处」。
+    workspace: session.workdir ?? resolveDefaultWorkspacePath(),
     accessMode: session.fullAccess ? 'full' : undefined,
     // 逐条批准（tool_approval 轴）：两种权限开关是正交的，但「完全访问」更粗——
     // 它已经表达了「别问我」，因此开启时不再叠加逐条审批，避免两个开关互相打架。

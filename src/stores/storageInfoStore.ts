@@ -60,9 +60,13 @@ export const useStorageInfoStore = create<StorageInfoState>((set, get) => ({
  * 解析「默认工作空间」的**有效**路径：用户设置 > 内置默认。
  *
  * 返回 `undefined` 只发生在「用户没配 + 主进程还没回过话」这一个小窗口里
- * （应用刚启动的第一帧）。此时新建任务沿用旧语义——不绑工作空间，归入
- * 「默认工作空间」分组；晚一拍刷新完就对齐了。宁可晚一拍，也不要在这里
- * 编一个猜出来的路径：真写进会话，事后没有任何办法判断它是猜的还是用户选的。
+ * （应用刚启动的第一帧）。宁可在这里返回 undefined，也不要编一个猜出来的路径：
+ * 真写进会话，事后没有任何办法判断它是猜的还是用户选的。
+ *
+ * 那这个窗口怎么补？**在发消息时兜底**（`sendMessage` 里的
+ * `session.workdir ?? resolveDefaultWorkspacePath()`）。会话的 `workdir` 一旦落盘
+ * 就不再回填——回填会触发事件流目录搬迁（`setSessionWorkdir` 的副作用），
+ * 为了一个几十毫秒的窗口去搬目录，风险远大于收益。
  */
 export function resolveDefaultWorkspacePath(): string | undefined {
   const custom = useSettingsStore.getState().settings.defaultWorkspacePath?.trim();
