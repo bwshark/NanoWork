@@ -20,7 +20,7 @@ function DesktopCard() {
   return (
     <SettingsCard
       title="桌面端"
-      description="关闭窗口后应用会常驻系统托盘，像微信/钉钉一样在后台运行；需要结束时请从托盘图标右键菜单选择「退出」。"
+      description="关闭窗口后应用会常驻系统托盘，需要结束时请从托盘图标右键菜单选择「退出」。"
     >
       <SettingsRow
         label="关闭窗口时最小化到托盘"
