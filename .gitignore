@@ -59,4 +59,8 @@ run/
 webui/
 temp/
 media/
-tasks/
+# ⚠️ 必须带前导 `/`：不带斜杠的 `tasks/` 会匹配**任意层级**名为 tasks 的目录，
+# 于是 `src/components/tasks/` 与 `src/pages/tasks/` 也被静默忽略——那两处是**源码**，
+# 一旦没进版本库，误删/换工作区就再也找不回来（2026-09-19 实际发生过一次）。
+# 这里只忽略仓库根目录下存放截图的 tasks/。
+/tasks/
