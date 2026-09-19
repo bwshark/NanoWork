@@ -29,6 +29,8 @@ import { click, dialogRoot, flush, mount, unmount } from './helpers/reactMount';
  */
 const CONTENT_ANCHORS: Record<SettingsSectionId, string> = {
   general: '外观',
+  // 「按键绑定」是快捷键列表的表头，只出现在右侧内容区
+  shortcuts: '按键绑定',
   connection: '网关连接',
   memory: '记忆注入',
   persona: '身份文件与提示词模板都在这里外置维护',

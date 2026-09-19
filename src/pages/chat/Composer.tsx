@@ -81,6 +81,7 @@ import {
 } from "@/lib/editableText";
 import { peekRichPayload, writeRichClipboard } from "@/lib/richClipboard";
 import { registerComposerEdit } from "@/lib/composerEditBridge";
+import { matchBinding, resolveBinding } from "@/lib/shortcuts";
 import {
   createUndoStack,
   pushSnapshot,
@@ -1180,15 +1181,31 @@ export function Composer({
         return;
       }
     }
-    if (e.key === "Enter" && !e.shiftKey) {
+    // —— 可改键的四条命令 ——
+    // 键位从设置里现取（事件回调里 getState，不进依赖数组），因此改键后立即生效，
+    // 不需要等组件重渲染。原先这里是硬编码的 Enter / Shift+Enter。
+    const shortcuts = useSettingsStore.getState().settings.shortcuts;
+
+    if (matchBinding(resolveBinding("chat.newline", shortcuts), e)) {
+      // 换行：手动插入纯文本 \n（pre-wrap 渲染），保持 DOM 结构干净、抽取同构
+      e.preventDefault();
+      insertAtCaret("\n");
+      return;
+    }
+    if (matchBinding(resolveBinding("chat.send", shortcuts), e)) {
       e.preventDefault();
       onSend();
       return;
     }
-    if (e.key === "Enter" && e.shiftKey) {
-      // 换行：手动插入纯文本 \n（pre-wrap 渲染），保持 DOM 结构干净、抽取同构
+    if (matchBinding(resolveBinding("chat.stop", shortcuts), e)) {
       e.preventDefault();
-      insertAtCaret("\n");
+      abort(activeSessionId ?? undefined);
+      return;
+    }
+    if (matchBinding(resolveBinding("voice.toggle", shortcuts), e)) {
+      e.preventDefault();
+      if (voice.recording) voice.stop();
+      else void voice.start();
     }
   };
 

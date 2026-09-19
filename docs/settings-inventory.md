@@ -31,7 +31,7 @@
 
 ## 二、现有配置项全量清单
 
-### 2.1 `settings.json`（`STORAGE_KEYS.settings`，zustand persist，version 9）
+### 2.1 `settings.json`（`STORAGE_KEYS.settings`，zustand persist，version 10）
 
 | 键 | 类型 | 默认值 | 界面位置 | 备注 |
 |---|---|---|---|---|
@@ -41,16 +41,28 @@
 | `memoryEnabled` | boolean | `true` | 记忆 | 是否把记忆块注入 system |
 | `autoSummarize` | boolean | `true` | 记忆 | v9 迁移把旧 `false` 统一抬成 `true` |
 | `transcription` | object | 见 `DEFAULT_TRANSCRIPTION` | 连接与模型 · 语音输入 | 嵌套对象，迁移时需单独补齐内层默认值 |
-| `desktop` | object | 见 `DEFAULT_DESKTOP` | 通用 · 桌面端（仅 Electron） | 与主进程 `DEFAULT_DESKTOP_CONFIG` 必须对齐 |
+| `desktop` | object | 见 `DEFAULT_DESKTOP` | 通用 · 桌面端（仅 Electron） | 与主进程 `DEFAULT_DESKTOP_CONFIG` 必须对齐；`hotkey` 的界面在**快捷键**分区 |
 | `promptDomain` / `promptStyle` | string? | 未设 → 回退内置 | 人格（正文在 `prompts/`） | Agent 级可覆盖 |
 | `userCustomPrompt` | string? | 未设 | 人格 | 每轮注入，边打字边生效故走草稿 |
 | `workspaceAliases` | `Record<string,string>` | `{}` | 侧边栏分组重命名 | 只存别名，绝不回写 `workdir` |
-| `sidebarCollapsed` | boolean | `false` | 标题栏图标 | 属布局偏好 |
+| `sidebarCollapsed` | boolean | `false` | 标题栏图标 / 快捷键 `Ctrl+B` | 属布局偏好 |
 | `hiddenSessions` | `string[]` | `[]` | 会话行「从列表中移除」 | 只隐藏不删数据 |
+| `shortcuts` | `Partial<Record<ShortcutId,string>>` | `{}` | 快捷键 | **只存与默认不同的项**；表里没有 = 用默认，`''` = 显式禁用（两者语义不同，见下） |
 | `enabledPlugins` | `string[]?` | 未设 → 空表 | 插件 | **是「意图」不是「事实」**，激活状态权威在引擎 |
 
-迁移规则集中在 `settingsStore.migrate`（v1→v9）。**每一次加字段都要在迁移里补默认值**，
+迁移规则集中在 `settingsStore.migrate`（v1→v10）。**每一次加字段都要在迁移里补默认值**，
 嵌套对象必须单独深补一层——浅合并拿不到内层默认值，这是已经踩过两次的坑（transcription / desktop）。
+
+`shortcuts` 的三态语义值得单独记一笔：
+
+| 表内取值 | 含义 | 为什么不能合并 |
+|---|---|---|
+| **键不存在** | 用默认键位 | 若用「不存在」表示禁用，就再也无法表达「这条命令我还没动过」——日后调整默认键位将无法惠及老用户 |
+| `''` | 用户显式清除 = 禁用该快捷键 | 这是用户的主动决定，必须与「没设置过」区分开 |
+| 自定义键位串 | 覆盖默认 | 写入与默认**相同**的值会被 `setShortcut` 归一化成删除表项，避免表里留下一条挡住未来默认值的记录 |
+
+键位串的格式、默认值、匹配规则全部收口在 `src/lib/shortcuts.ts`（注册表 + 纯函数），
+界面与派发器都只读它——见 `docs/architecture-shortcuts.md`。
 
 ### 2.2 其它持久化 key（**不是** `settings.json`）
 
@@ -70,7 +82,8 @@
 
 | 弹窗分区 | 承载 | WorkBuddy 对应项 |
 |---|---|---|
-| 通用 | 外观主题、桌面端（托盘常驻 / 开机自启 / Dock / 全局快捷键） | 通用（开机自启、权限、通知）+ 外观 + 快捷键 |
+| 通用 | 外观主题、桌面端（托盘常驻 / 开机自启 / Dock） | 通用（开机自启、权限、通知）+ 外观 |
+| 快捷键 | 命令键位列表（改键 / 恢复默认 / 全部恢复默认 + 搜索）、全局唤起快捷键 | 快捷键 + 通用 · 全局唤起快捷键 |
 | 连接与模型 | 网关 endpoint/token、语音输入（STT） | 模型 + 通用 · 网络代理 |
 | 记忆 | 注入开关、自动沉淀 + 记忆正文编辑 | 记忆与进化 |
 | 人格 | 身份文件 + 提示词模板 | 个性化 |
@@ -82,6 +95,13 @@
 **入口收敛**：原侧边栏一级入口「插件 / 记忆 / 人格 / 助理」已移入本弹窗；
 `ROUTES` 中对应的四条页面路由随之删除，仅保留 `/settings`，其语义改为
 「打开弹窗 + 重定向」（见 `src/pages/settings/SettingsRoute.tsx`）。
+
+**「全局唤起快捷键」的位置**：它原先挂在「通用 · 桌面端」卡片里，现随「快捷键」分区一起
+迁出（那一行删掉了，不是复制一份）。界面在快捷键列表的「唤起/隐藏主窗口」一行，
+但**取值不在 `settings.shortcuts`**，而在 `desktop.hotkey`（Electron accelerator）——
+它是主进程 `globalShortcut` 注册的系统级热键，主进程冷启动时就要读它，
+不可能等渲染层把覆盖表合并完再注册。两套语义（应用内 keydown / 系统级 accelerator）
+对应两个录入器：前者是键盘捕获，后者复用 `components/HotkeyInput.tsx`。
 
 **刻意不做成路由的项**：弹窗内分区（`settingsUiStore.section`）不进 URL。
 它表达的是「弹窗翻到第几页」，不是「用户在哪」；进 URL 会让关弹窗变成路由回退，与侧边栏高亮打架。

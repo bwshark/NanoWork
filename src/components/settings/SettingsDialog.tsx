@@ -9,6 +9,7 @@ import { GeneralSection } from '@/components/settings/sections/GeneralSection';
 import { MemorySection } from '@/components/settings/sections/MemorySection';
 import { PersonaSection } from '@/components/settings/sections/PersonaSection';
 import { PluginsSection } from '@/components/settings/sections/PluginsSection';
+import { ShortcutsSection } from '@/components/settings/sections/ShortcutsSection';
 import {
   useSettingsUiStore,
   type SettingsSectionId,
@@ -208,6 +209,8 @@ function SectionBody({ section }: { section: SettingsSectionId }) {
   switch (section) {
     case 'general':
       return <GeneralSection />;
+    case 'shortcuts':
+      return <ShortcutsSection />;
     case 'connection':
       return <ConnectionSection />;
     case 'memory':

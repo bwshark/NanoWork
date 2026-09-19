@@ -31,6 +31,7 @@ import {
 import { useNavigate } from "react-router-dom";
 import { platform } from "@/platform";
 import { APP_NAME, ROUTES } from "@/lib/constants";
+import { isEditableTarget } from "@/lib/editableTarget";
 import { activeFilterCount } from "@/lib/taskQuery";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useSessionsStore } from "@/stores/sessionsStore";
@@ -165,16 +166,9 @@ export function TitleBar() {
   // 全局快捷键：Alt+E 打开编辑菜单、Alt+H 打开帮助菜单。
   // 排除输入控件聚焦场景，避免在输入时误触发
   useEffect(() => {
-    const isEditable = (el: EventTarget | null) => {
-      if (!(el instanceof HTMLElement)) return false;
-      const tag = el.tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT")
-        return true;
-      return el.isContentEditable;
-    };
     const onKeyDown = (e: KeyboardEvent) => {
       if (!e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
-      if (isEditable(e.target)) return;
+      if (isEditableTarget(e.target)) return;
       const key = e.key.toLowerCase();
       if (key === "e" && editBtnRef.current) {
         e.preventDefault();

@@ -3,6 +3,7 @@ import BookmarksOutlinedIcon from '@mui/icons-material/BookmarksOutlined';
 import ExtensionIcon from '@mui/icons-material/Extension';
 import HubIcon from '@mui/icons-material/Hub';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
+import KeyboardAltOutlinedIcon from '@mui/icons-material/KeyboardAltOutlined';
 import PortraitOutlinedIcon from '@mui/icons-material/PortraitOutlined';
 import SmartphoneIcon from '@mui/icons-material/Smartphone';
 import StorageIcon from '@mui/icons-material/Storage';
@@ -39,6 +40,9 @@ export const SETTINGS_NAV: SettingsNavGroup[] = [
   {
     items: [
       { id: 'general', label: '通用', icon: <TuneIcon /> },
+      // 快捷键紧挨通用：它和主题、托盘一样属于「这台机器上我怎么用」的偏好，
+      // 而不是「助手是谁 / 装了哪些包」那种能力配置，所以不放进下面的「功能」组。
+      { id: 'shortcuts', label: '快捷键', icon: <KeyboardAltOutlinedIcon /> },
       { id: 'connection', label: '连接与模型', icon: <HubIcon /> },
     ],
   },

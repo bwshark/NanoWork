@@ -1,7 +1,13 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { zustandStorage } from '@/platform';
-import { DEFAULT_GATEWAY, DEFAULT_STATUS, STORAGE_KEYS } from '@/lib/constants';
+import {
+  DEFAULT_GATEWAY,
+  DEFAULT_STATUS,
+  STORAGE_KEYS,
+} from '@/lib/constants';
+import { DEFAULT_BINDINGS, DEFAULT_WAKE_ACCELERATOR } from '@/lib/shortcuts';
+import type { ShortcutId } from '@/lib/shortcuts';
 import type {
   ConnectionStatus,
   DesktopConfig,
@@ -33,6 +39,17 @@ interface SettingsState {
    * 幂等：已在表内的 id 不会重复写入；不改动任何会话数据本身。
    */
   hideSessions: (ids: string[]) => void;
+  /**
+   * 改写某条快捷键的键位。
+   *
+   * `binding` 传 `null` = **恢复默认**（把表项删掉，而不是写回默认值——写回默认值会让
+   * 「表里存着一条与默认完全相同的记录」，日后调整默认键位时这条记录会把新默认挡住）；
+   * 传 `''` = **显式禁用**（表项保留，值为空串）；
+   * 传与默认相同的键位串同样按恢复默认处理，理由同上。
+   */
+  setShortcut: (id: ShortcutId, binding: string | null) => void;
+  /** 全部快捷键恢复默认（清空覆盖表） */
+  resetShortcuts: () => void;
 }
 
 /** 语音转录默认配置：默认关闭（需用户显式配置模型后才会启用语音按钮） */
@@ -53,8 +70,9 @@ export const DEFAULT_DESKTOP: DesktopConfig = {
   // 默认关闭窗口 → 隐藏到托盘（微信/钉钉式后台常驻），符合"运行在后台"的预期
   closeToTray: true,
   // 默认唤起快捷键：Ctrl+Alt+S（S = nanowork）。
-  // 不用 Alt+Space：Windows 上该组合被系统窗口菜单占用，注册会失败。
-  hotkey: 'Ctrl+Alt+S',
+  // 字面量取自 `lib/shortcuts` 的 `DEFAULT_WAKE_ACCELERATOR`——注册表里
+  // 「唤起/隐藏主窗口」那一行也用它，两处共用同一份事实才不会改一处漏一处。
+  hotkey: DEFAULT_WAKE_ACCELERATOR,
   openAtLogin: false,
   showInDock: true,
 };
@@ -77,6 +95,9 @@ const DEFAULT_SETTINGS: Settings = {
   workspaceAliases: {},
   sidebarCollapsed: false,
   hiddenSessions: [],
+  // 空表 = 全部使用默认键位。刻意不写「默认值全集」：那样任何一次默认键位调整
+  // 都会被这张表挡住，老用户永远收不到新的默认值。
+  shortcuts: {},
 };
 
 /** 合法主题偏好值；未知值兜底为深色（读取侧归一化，防止存储被手工写入非法值） */
@@ -114,11 +135,23 @@ export const useSettingsStore = create<SettingsState>()(
             settings: { ...s.settings, hiddenSessions: Array.from(merged) },
           };
         }),
+      setShortcut: (id, binding) =>
+        set((s) => {
+          const next: Partial<Record<ShortcutId, string>> = {
+            ...(s.settings.shortcuts ?? {}),
+          };
+          // 与默认相同 = 恢复默认，删掉表项而不是写回默认值（理由见接口注释）
+          if (binding === null || binding === DEFAULT_BINDINGS[id]) delete next[id];
+          else next[id] = binding;
+          return { settings: { ...s.settings, shortcuts: next } };
+        }),
+      resetShortcuts: () =>
+        set((s) => ({ settings: { ...s.settings, shortcuts: {} } })),
     }),
     {
       name: STORAGE_KEYS.settings,
       storage: zustandStorage,
-      version: 9,
+      version: 10,
       migrate: (persistedState) => {
         const state = persistedState as Partial<SettingsState> | undefined;
         if (state?.settings?.gatewayEndpoint?.includes(':8765')) {
@@ -167,6 +200,11 @@ export const useSettingsStore = create<SettingsState>()(
           // 是后者。因此升级时统一提升为 true（migrate 每次版本变更只跑一次，
           // 用户升级后手动关掉不会再被覆盖）。详见 reports/memory-diagnosis-*.md。
           state.settings.autoSummarize = true;
+          // v10：快捷键覆盖表。老用户没有这个字段，空表就是正确语义；
+          // 仍要显式写入——读侧会对它做 `?? {}` 与展开，残留 null 会在展开时抛错。
+          state.settings.shortcuts = {
+            ...(state.settings.shortcuts ?? {}),
+          };
         }
         return state ?? { settings: DEFAULT_SETTINGS, status: DEFAULT_STATUS };
       },

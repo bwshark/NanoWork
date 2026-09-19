@@ -48,6 +48,7 @@
 | `architecture-memory.md` | 增量 | V1 | 记忆机制增量架构：`MemoryService`、`src/types/memory.ts`、跨端读写路径、注入点、13 项文件清单、UI 落点 | 并入 v2 第 14.2 节（注入机制） |
 | `prd-tasks.md` | 增量 | V1 | 对话一键创建定时任务：`FT-01`–`FT-08`、预填规则（提示词/Agent/名称）、hover 交互与对话框草图 | 并入 v2 第 15 章（自动化） |
 | `architecture-tasks.md` | 增量 | V1 | 上述的增量架构：抽取共享 `TaskFormDialog`、新增 `CreateTaskDialog`、`TaskDraft` 与组件接口契约 | 并入 v2 第 15.2 节（数据模型） |
+| `architecture-shortcuts.md` | 增量 | V1 | 快捷键体系：注册表（`lib/shortcuts`）、四种作用域、全局派发器、键位串格式与三态覆盖表、与 Electron 全局热键的分工 | 并入 v2 交互章节 |
 
 ---
 

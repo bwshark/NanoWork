@@ -1,84 +1,21 @@
-import { useCallback, useEffect, useState } from 'react';
 import { Box, Switch, ToggleButton, ToggleButtonGroup, Typography } from '@mui/material';
-import { HotkeyInput } from '@/components/HotkeyInput';
 import { SettingsCard, SettingsRow } from '@/components/settings/SettingsPrimitives';
-import { toast } from '@/components/Toast';
+import { useDesktopConfig } from '@/hooks/useDesktopConfig';
 import { platform } from '@/platform';
-import {
-  DEFAULT_DESKTOP,
-  normalizeTheme,
-  useSettingsStore,
-} from '@/stores/settingsStore';
-import type { DesktopConfig, Settings } from '@/types';
+import { normalizeTheme, useSettingsStore } from '@/stores/settingsStore';
+import type { Settings } from '@/types';
 
 /**
- * 桌面端专有设置：系统托盘 / 全局快捷键 / 开机自启。
- * 仅在 Electron 环境渲染（Web 端无托盘与全局快捷键能力，整块隐藏）。
+ * 桌面端专有设置：系统托盘 / 开机自启 / Dock。
+ * 仅在 Electron 环境渲染（Web 端无托盘能力，整块隐藏）。
  *
- * 状态同步要点：渲染层 store 保存的是"用户期望值"，主进程保存的是"实际生效值"。
- * 两者可能不一致（例如快捷键被系统占用注册失败），因此挂载时以主进程回读为准，
- * 每次修改后也用主进程返回值覆盖本地，避免出现"UI 显示已生效、实际没生效"的假象。
+ * 「全局唤起快捷键」原先也在这里，现已迁到设置弹窗的「快捷键」分区——
+ * 那里才是「键位」的归属地，放在桌面端卡片里会让用户在两处找同一件东西。
+ * 主进程同步语义由 `useDesktopConfig` 统一提供，与本分区共享。
  */
 function DesktopCard() {
-  const settings = useSettingsStore((s) => s.settings);
-  const setSettings = useSettingsStore((s) => s.setSettings);
+  const { desktop, apply } = useDesktopConfig();
   const isMac = window.electronAPI?.getPlatform() === 'darwin';
-
-  const [desktop, setDesktop] = useState<DesktopConfig>(
-    settings.desktop ?? DEFAULT_DESKTOP,
-  );
-  const [hotkeyError, setHotkeyError] = useState('');
-
-  /** 本地状态与 store 同步写入，保证刷新后仍是同一份配置 */
-  const commit = useCallback(
-    (next: DesktopConfig) => {
-      setDesktop(next);
-      setSettings({ desktop: next });
-    },
-    [setSettings],
-  );
-
-  // 挂载时以主进程实际状态为准：开机自启可能被用户在系统设置里改过，
-  // 快捷键也可能因被占用而没注册上
-  useEffect(() => {
-    const api = window.electronAPI;
-    if (!api) return;
-    let alive = true;
-    void api
-      .appGetDesktopConfig()
-      .then((cfg) => {
-        if (alive) commit(cfg);
-      })
-      .catch(() => undefined);
-    return () => {
-      alive = false;
-    };
-  }, [commit]);
-
-  // 托盘菜单里改了开关 → 同步回 UI。
-  // 只更新视图与持久化，绝不回写主进程，否则形成"主进程→渲染层→主进程"回环
-  useEffect(() => {
-    if (!window.electronAPI) return;
-    return window.electronAPI.onDesktopConfigChange(commit);
-  }, [commit]);
-
-  /** 应用补丁：本地先更新保证即时反馈，再让主进程生效并回读实际值 */
-  const apply = async (patch: Partial<DesktopConfig>) => {
-    commit({ ...desktop, ...patch });
-
-    const res = await window.electronAPI
-      ?.appSetDesktopConfig(patch)
-      .catch(() => undefined);
-    if (!res) return;
-    if (res.ok) {
-      setHotkeyError('');
-      return;
-    }
-    // 快捷键注册失败（被系统或其它应用占用）：提示并回退到主进程实际生效值
-    setHotkeyError(res.error ?? '快捷键设置失败');
-    toast.error(res.error ?? '快捷键设置失败');
-    commit(res.config);
-  };
 
   return (
     <SettingsCard
@@ -117,19 +54,6 @@ function DesktopCard() {
           }
         />
       )}
-      <SettingsRow
-        label="全局唤起快捷键"
-        hint="在任意应用里按下即可呼出主窗口；被系统占用时会提示并回退"
-        control={
-          <Box sx={{ width: 220 }}>
-            <HotkeyInput
-              value={desktop.hotkey}
-              onChange={(accelerator) => void apply({ hotkey: accelerator })}
-              error={hotkeyError}
-            />
-          </Box>
-        }
-      />
     </SettingsCard>
   );
 }
@@ -166,12 +90,12 @@ export function GeneralSection() {
         />
       </SettingsCard>
 
-      {/* 桌面端专有：托盘 / 全局快捷键 / 开机自启；Web 端整块隐藏 */}
+      {/* 桌面端专有：托盘 / 开机自启 / Dock；Web 端整块隐藏 */}
       {platform.env === 'electron' ? (
         <DesktopCard />
       ) : (
         <Typography sx={{ fontSize: 12, color: 'text.secondary', px: 0.5 }}>
-          当前运行在 Web 端，托盘常驻、开机自启、全局快捷键等桌面端能力不可用。
+          当前运行在 Web 端，托盘常驻、开机自启等桌面端能力不可用。
         </Typography>
       )}
     </Box>

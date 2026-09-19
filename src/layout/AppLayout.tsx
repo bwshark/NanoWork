@@ -6,11 +6,15 @@ import { ConnectionBanner } from './ConnectionBanner';
 import { TitleBar } from '@/components/TitleBar';
 import { ArtifactPanel } from '@/components/artifacts/ArtifactPanel';
 import { SettingsDialog } from '@/components/settings/SettingsDialog';
+import { useGlobalShortcuts } from '@/hooks/useGlobalShortcuts';
 import { platform } from '@/platform';
 
 /** 应用主框架：顶部全宽自绘标题栏 + 左导航 + 连接条 + 右侧主内容区 + 可展开的右侧产物面板 */
 export function AppLayout() {
   const navigate = useNavigate();
+
+  // 全局快捷键派发器：挂在布局层，整个应用生命周期只挂一次
+  useGlobalShortcuts();
 
   // 托盘菜单「打开设置」等主进程指令 → 执行路由跳转。
   // 窗口只是被隐藏而非卸载，渲染层仍在运行，指令可即时生效。

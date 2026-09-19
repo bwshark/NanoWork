@@ -6,6 +6,10 @@ export type ConnectionStatus = 'connected' | 'offline';
 import type { DesktopConfig } from '../platform/types';
 export type { DesktopConfig };
 
+// 快捷键 id 的联合类型是「有哪些命令」的唯一事实源，定义在 lib/shortcuts；
+// 这里只做类型引用，键位默认值与匹配逻辑都不落在 types 层
+import type { ShortcutId } from '../lib/shortcuts';
+
 /**
  * 语音转录（STT）配置：走 OpenAI 兼容的 `/audio/transcriptions`。
  * 未启用时 Composer 的语音按钮保持禁用（不申请麦克风权限）。
@@ -97,6 +101,21 @@ export interface Settings {
    * 兜底默认 `[]`，老用户迁移见 settingsStore 的 v8 迁移函数。
    */
   hiddenSessions?: string[];
+  // —— 快捷键（设置弹窗「快捷键」分区）——
+  /**
+   * 用户改键覆盖表：`ShortcutId → 键位串`（格式见 `lib/shortcuts` 的文件头注释）。
+   *
+   * **只存与默认值不同的项**，因此「表里没有」= 用默认键位，而 `''` 是另一个语义：
+   * 用户显式清除该绑定（禁用）。两者不能合并——若用「表里没有」表示禁用，
+   * 就再也无法表达「这条命令我还没动过」，日后调整默认键位将无法惠及老用户。
+   *
+   * 兜底默认 `{}`，老用户迁移见 settingsStore 的 v10 迁移函数。
+   *
+   * ⚠️ 全局唤起快捷键（`app.wake`）**不在这张表里**：它由 Electron 主进程
+   * `globalShortcut` 注册，权威值在 `desktop.hotkey`（accelerator 语法），
+   * 主进程启动时就要读它，不可能等渲染层把覆盖表合并完再注册。
+   */
+  shortcuts?: Partial<Record<ShortcutId, string>>;
   // —— 插件（FR-3.4）——
   /**
    * 用户希望启用的插件清单，形如 `<name>@<marketplace>`（本地安装的包没有
