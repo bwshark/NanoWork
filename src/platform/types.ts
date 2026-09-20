@@ -76,7 +76,17 @@ export interface McpProbeRequest {
   endpoint?: string;
   /** command 模式的启动命令（含空格分隔的 args） */
   command?: string;
-  /** url 模式的传输类型（`sse` 才允许降级走老式 GET 握手） */
+  /**
+   * url 模式的传输方式。
+   * - 省略 = **自动检测**：POST 被「该地址不接受 POST」类状态码（405/404/406/415/501）
+   *   拒掉时，补一次老式 GET 握手；实测结果经 `McpProbeResult.transport` 回传。
+   * - `streamableHttp` = 显式声明，**不做降级**（避免对普通 HTTP 端点发起无谓长连接）。
+   * - `sse` = 显式声明老式 HTTP+SSE。
+   *
+   * 之所以缺省是自动而不是「等用户写 sse」：两类端点的 URL 长得一模一样
+   * （都可能就是 `/mcp`），光看地址分不出来；而早期实现要求显式声明，
+   * 那个字段又没有 UI 入口 ⇒ 粘贴一个老式 SSE 地址 100% 失败。
+   */
   urlType?: 'sse' | 'streamableHttp';
   /** 超时（毫秒），缺省由主进程用 8000 */
   timeoutMs?: number;
@@ -100,6 +110,13 @@ export interface McpProbeResult {
   protocolVersion?: string;
   /** `ok=false` 时的可读原因（超时 / HTTP 码 / 子进程 stderr 摘要） */
   error?: string;
+  /**
+   * 本次握手**实测**用上的传输方式（`ok=true` 时才有）。
+   *
+   * 调用方据此把探测结果落进 `MCPConfig.urlType` —— 引擎写出的 `type` 必须
+   * 与实际传输一致，否则会得到「测试通过、聊天时引擎连不上」这种最难查的状态。
+   */
+  transport?: 'sse' | 'streamableHttp';
   /** 从发起握手到得出结论的耗时 */
   latencyMs: number;
 }

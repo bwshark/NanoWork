@@ -41,9 +41,16 @@ export interface MCPConfig {
   /** url 模式下的地址 */
   endpoint?: string;
   /**
-   * url 模式下的 nanobot 传输类型（sse/streamableHttp）。
-   * 仅回读回显时写入，用于写回时保持原类型，避免被 URL 路径推断翻转；
-   * 不影响现有 UI。
+   * url 模式下的传输方式（写进 nanobot 条目的 `type`）。
+   *
+   * - `undefined` ＝ **自动检测**（默认）：连接测试先 POST，被 405/404/406/415/501
+   *   这类「该地址不接受 POST」拒掉时自动改走老式 GET 握手（HTTP+SSE 2024-11-05），
+   *   并把实测结果写回本字段；
+   * - `'streamableHttp'` / `'sse'` ＝ 用户显式指定，不做自动降级。
+   *
+   * 两个刻意的点：① 缺省是自动，因为两类端点的 URL 可能完全一样（都叫 `/mcp`），
+   * 光看地址分不出来，让用户去选等于把问题推给他；② 探测成功后会**回写**本字段，
+   * 因为引擎按它决定用哪个 client —— 写错了就是「测试通过、聊天时连不上」。
    */
   urlType?: 'sse' | 'streamableHttp';
   /** command 模式下的启动命令（含空格分隔的 args） */

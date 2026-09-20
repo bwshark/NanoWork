@@ -17,7 +17,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { McpPage } from '@/pages/mcp/McpPage';
 import { useMcpStore } from '@/stores/mcpStore';
 import { platform } from '@/platform';
-import { byAria, click, dialogRoot, flush, mount, unmount } from './helpers/reactMount';
+import { byAria, buttonByText, click, dialogRoot, fieldByLabel, flush, mount, setInputValue, setSelectValue, unmount } from './helpers/reactMount';
 import type { MCPConfig } from '@/types';
 
 const cfg = (patch: Partial<MCPConfig> = {}): MCPConfig => ({
@@ -216,5 +216,113 @@ describe('McpPage: 凭据状态展示', () => {
   it('未配置凭据时不显示凭据芯片', () => {
     const host = mount(<McpPage />);
     expect(byAria('demo mcp 凭据 token', host)).toBeNull();
+  });
+});
+
+/**
+ * 传输方式（sse / streamableHttp）：从地址上分不出来（老式 SSE 与 Streamable
+ * HTTP 的 URL 可能都是 `/mcp`），所以缺省替用户探一次，并把**实测**结果写进
+ * 下发配置 —— 引擎按它挑 client，写错了就是「这里测试通过、聊天时连不上」。
+ */
+describe('McpPage: 新增时的传输方式', () => {
+  /** 打开新增弹窗并填好名字与地址 */
+  function openNewWithUrl(url: string): void {
+    const host = mount(<McpPage />);
+    click(buttonByText(host, '新增连接器'));
+    setInputValue(fieldByLabel('名称', dialogRoot()) as HTMLInputElement, 'local mcp');
+    setInputValue(fieldByLabel('地址 (URL)', dialogRoot()) as HTMLInputElement, url);
+  }
+
+  function saveDialog(): void {
+    click(buttonByText(dialogRoot(), '保存'));
+  }
+
+  it('未指定时自动探测，把实测的 sse 写进下发配置（引擎才不会用错 client）', async () => {
+    platform.env = 'electron';
+    const probe = vi.spyOn(platform, 'probeMcpServer').mockResolvedValue({
+      ok: true,
+      status: 'connected',
+      tools: [{ name: 'mcp_question' }],
+      transport: 'sse',
+      latencyMs: 72,
+    });
+    const sync = vi.spyOn(platform, 'syncNanobotMcp').mockResolvedValue({
+      ok: true,
+      changed: true,
+      message: '已写入',
+    });
+
+    openNewWithUrl('http://localhost:8001/mcp');
+    saveDialog();
+    await flush();
+
+    // 探测请求里 urlType 是 undefined —— 这正是「自动检测」的线上表示
+    expect(probe).toHaveBeenCalledTimes(1);
+    expect(probe.mock.calls[0][0]).toMatchObject({
+      endpoint: 'http://localhost:8001/mcp',
+      urlType: undefined,
+    });
+
+    const stored = useMcpStore.getState().configs.find((c) => c.name === 'local mcp');
+    expect(stored?.urlType).toBe('sse');
+
+    const payload = JSON.parse((sync.mock.calls[0]?.[0] as string) ?? '{}') as Record<
+      string,
+      { type?: string }
+    >;
+    expect(payload['local mcp'].type).toBe('sse');
+  });
+
+  it('手动选定的传输方式直接生效，且不再多探一次', async () => {
+    platform.env = 'electron';
+    const probe = vi.spyOn(platform, 'probeMcpServer').mockResolvedValue({
+      ok: true,
+      status: 'connected',
+      tools: [],
+      latencyMs: 5,
+    });
+    const sync = vi.spyOn(platform, 'syncNanobotMcp').mockResolvedValue({
+      ok: true,
+      changed: true,
+      message: '已写入',
+    });
+
+    openNewWithUrl('http://localhost:8001/mcp');
+    setSelectValue(fieldByLabel('传输方式', dialogRoot()) as HTMLSelectElement, 'sse');
+    saveDialog();
+    await flush();
+
+    // 用户已经表态，不该再猜（也免得对不支持 POST 的端点白打一发）
+    expect(probe).not.toHaveBeenCalled();
+    const payload = JSON.parse((sync.mock.calls[0]?.[0] as string) ?? '{}') as Record<
+      string,
+      { type?: string }
+    >;
+    expect(payload['local mcp'].type).toBe('sse');
+  });
+
+  it('自动探测失败不阻断保存：按静态推断先写下去', async () => {
+    platform.env = 'electron';
+    vi.spyOn(platform, 'probeMcpServer').mockResolvedValue({
+      ok: false,
+      status: 'error',
+      tools: [],
+      error: '连接超时',
+      latencyMs: 8000,
+    });
+    const sync = vi.spyOn(platform, 'syncNanobotMcp').mockResolvedValue({
+      ok: true,
+      changed: true,
+      message: '已写入',
+    });
+
+    openNewWithUrl('http://localhost:8001/mcp');
+    saveDialog();
+    await flush();
+
+    const stored = useMcpStore.getState().configs.find((c) => c.name === 'local mcp');
+    expect(stored?.urlType).toBeUndefined();
+    // 服务器暂时不可达不该让配置存不下来
+    expect(sync).toHaveBeenCalledTimes(1);
   });
 });

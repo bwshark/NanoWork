@@ -92,6 +92,46 @@ export function byAria(label: string, scope: ParentNode = document): HTMLElement
   return scope.querySelector(`[aria-label="${label}"]`) as HTMLElement | null;
 }
 
+/**
+ * 按可见 label 文案定位受控字段（MUI 的 TextField 用 `<label for=id>` 关联）。
+ *
+ * 比按 DOM 顺序取第 N 个 input 稳：字段增删不会让用例静默指向别的输入框
+ * ——那种失败方式最难查（测试照样绿，断言的是另一个控件）。
+ *
+ * ⚠️ 用 `[id="..."]` 而不是 `#id`：MUI 的 id 形如 `:r3q:`，在 CSS 里是非法
+ * 选择器（jsdom 直接抛 `Invalid selector #:r3q:`），属性选择器则原样按字符串比。
+ */
+export function fieldByLabel(label: string, scope: ParentNode = document): HTMLElement | null {
+  const el = Array.from(scope.querySelectorAll('label')).find(
+    (l) => (l.textContent ?? '').trim() === label,
+  );
+  const id = el?.getAttribute('for');
+  return id ? (scope.querySelector(`[id="${id}"]`) as HTMLElement | null) : null;
+}
+
+/**
+ * 写入受控 `<select>` 的值并触发 React 的 onChange。
+ *
+ * ⚠️ 与 `setInputValue` 的差别不是笔误：React 的 ChangeEventPlugin 对
+ * `select` 监听的是 **change**（`shouldUseChangeEvent`），对 input/textarea 才是
+ * **input**。用错了事件名，赋值会被判定为「没变化」而丢弃——用例看起来过了，
+ * 实际 state 一动没动。
+ */
+export function setSelectValue(
+  el: HTMLSelectElement | null | undefined,
+  value: string,
+): void {
+  expect(el).toBeTruthy();
+  const setter = Object.getOwnPropertyDescriptor(
+    window.HTMLSelectElement.prototype,
+    'value',
+  )?.set;
+  setter?.call(el, value);
+  act(() => {
+    el!.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+}
+
 /** 按可见文案查找按钮（文案变化频繁时优先用 aria-label） */
 export function buttonByText(
   scope: ParentNode,

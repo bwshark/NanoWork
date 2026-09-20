@@ -197,6 +197,36 @@ describe('testConfig: 走真实探针', () => {
     expect(stored.lastProbedAt).toBe(111);
   });
 
+  it('成功且实测出传输方式时回写 urlType（引擎按它挑 client）', async () => {
+    vi.spyOn(platform, 'probeMcpServer').mockResolvedValue({
+      ok: true,
+      status: 'connected',
+      tools: [{ name: 'echo' }],
+      transport: 'sse',
+      latencyMs: 30,
+    });
+
+    useMcpStore.setState({ configs: [cfg()] });
+    await useMcpStore.getState().testConfig('u-1');
+
+    // 不写回的话：这里测试通过、引擎按 streamableHttp 去连 → 「聊天时连不上」
+    expect(useMcpStore.getState().configs[0].urlType).toBe('sse');
+  });
+
+  it('探测未报传输方式时不动 urlType（不拿 undefined 覆盖已有值）', async () => {
+    vi.spyOn(platform, 'probeMcpServer').mockResolvedValue({
+      ok: true,
+      status: 'connected',
+      tools: [],
+      latencyMs: 3,
+    });
+
+    useMcpStore.setState({ configs: [cfg({ urlType: 'sse' })] });
+    await useMcpStore.getState().testConfig('u-1');
+
+    expect(useMcpStore.getState().configs[0].urlType).toBe('sse');
+  });
+
   it('条目不存在时返回失败而不是抛异常', async () => {
     const result = await useMcpStore.getState().testConfig('missing');
     expect(result.ok).toBe(false);

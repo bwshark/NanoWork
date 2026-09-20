@@ -137,6 +137,18 @@ export function McpPage() {
       }
     }
     setOpen(false);
+    // 自动识别传输方式：写进引擎的 `type`（sse / streamableHttp）必须与实际相符，
+    // 否则会得到「这里测试通过、聊天时引擎连不上」——最难自查的一种状态。
+    // 三类端点从地址上分不出来（可能都叫 /mcp），所以缺省替用户探一次；
+    // 也顺带把工具清单取回来（保存即一次真实握手）。
+    // 探测失败**不阻断保存**：服务器可能只是暂时不可达，先按静态推断写下去，
+    // 用户点一次「连接测试」就会自动纠正。
+    if ((form.transport ?? "url") === "url" && !form.urlType && form.endpoint?.trim()) {
+      const probed = await testConfig(targetId);
+      if (!probed.ok) {
+        toast.warning(`未能自动识别传输方式：${probed.error ?? "未知原因"}`);
+      }
+    }
     const result = await syncConfig(targetId);
     setSaving(false);
     if (result.ok) {
@@ -148,14 +160,24 @@ export function McpPage() {
   /** 真实连接测试：走主进程探针，结果与发现的工具条数一起回显 */
   const runTest = async (c: MCPConfig) => {
     setBusy(c.id);
+    const before = c.urlType;
     const result = await testConfig(c.id);
     setBusy(null);
-    if (result.ok) {
-      toast.success(
-        `${c.name} 连接成功：发现 ${result.tools.length} 个工具（${result.latencyMs}ms）`,
-      );
-    } else {
+    if (!result.ok) {
       toast.error(`${c.name} 连接失败：${result.error ?? "未知原因"}`);
+      return;
+    }
+    toast.success(
+      `${c.name} 连接成功：发现 ${result.tools.length} 个工具（${result.latencyMs}ms）`,
+    );
+    // 探测顺手纠正了传输方式（自动检测的产物）：引擎配置里写的还是旧 `type`，
+    // 必须再同步一次——否则就是「这里测试通过、聊天时连不上」。
+    const after = useMcpStore.getState().configs.find((x) => x.id === c.id)?.urlType;
+    if (after && after !== before) {
+      const label = after === "sse" ? "老式 SSE" : "Streamable HTTP";
+      const sync = await syncEnabled();
+      if (sync.ok) toast.info(`已按实测结果改判为${label}并同步到运行时`);
+      else toast.error(sync.message);
     }
   };
   /** 切换启用/停用后立即全量同步到 nanobot 运行时（全量提交语义） */
@@ -430,6 +452,19 @@ export function McpPage() {
                       aria-label={`${c.name} 已发现工具 ${toolCount}`}
                     />
                   )}
+                  {/* 老式 SSE 值得显式标出来：它的 URL 通常与 Streamable HTTP
+                      长得一样（都叫 /mcp），"为什么这个要用 GET" 全靠这一条说明 */}
+                  {!isCommand && c.urlType === "sse" && (
+                    <Tooltip title="老式 HTTP+SSE（2024-11-05）：连接测试实测得出">
+                      <Chip
+                        size="small"
+                        variant="outlined"
+                        sx={cardChipOutlinedSx}
+                        label="SSE"
+                        aria-label={`${c.name} 传输方式 SSE`}
+                      />
+                    </Tooltip>
+                  )}
                   {disabledCount > 0 && (
                     <Chip
                       size="small"
@@ -592,13 +627,43 @@ export function McpPage() {
             <option value="command">Command</option>
           </TextField>
           {form.transport === "url" ? (
-            <TextField
-              fullWidth
-              margin="dense"
-              label="地址 (URL)"
-              value={form.endpoint ?? ""}
-              onChange={(e) => setForm({ ...form, endpoint: e.target.value })}
-            />
+            <>
+              <TextField
+                fullWidth
+                margin="dense"
+                label="地址 (URL)"
+                value={form.endpoint ?? ""}
+                onChange={(e) => setForm({ ...form, endpoint: e.target.value })}
+              />
+              <TextField
+                select
+                fullWidth
+                margin="dense"
+                label="传输方式"
+                value={form.urlType ?? ""}
+                onChange={(e) =>
+                  setForm({
+                    ...form,
+                    // 空串 = 自动检测（`undefined` 才是「没指定」；写空字符串会让
+                    // `toNanobotEntry` 的 `?? ` 兜底落到路径推断上，是另一种语义）
+                    urlType: (e.target.value || undefined) as
+                      | "sse"
+                      | "streamableHttp"
+                      | undefined,
+                  })
+                }
+                SelectProps={{ native: true }}
+                helperText={
+                  form.urlType
+                    ? "已手动指定，连接测试不会自动切换"
+                    : "自动检测：同一地址可能同时是两种传输（都叫 /mcp），先按 Streamable HTTP 试，被拒后再走老式 SSE"
+                }
+              >
+                <option value="">自动检测（推荐）</option>
+                <option value="streamableHttp">Streamable HTTP</option>
+                <option value="sse">老式 SSE（HTTP+SSE）</option>
+              </TextField>
+            </>
           ) : (
             <TextField
               fullWidth

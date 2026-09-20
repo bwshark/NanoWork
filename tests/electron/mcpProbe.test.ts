@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   authHeaders,
+  isTransportMismatchStatus,
   parseSseData,
   parseSseEndpoint,
   probeHttp,
@@ -300,13 +301,28 @@ interface HttpStub {
   url: string;
   server: Server;
   close: () => Promise<void>;
-  seen: { body: { id?: number; method?: string }; headers: IncomingMessage['headers'] }[];
+  seen: {
+    method: string;
+    body: { id?: number; method?: string };
+    headers: IncomingMessage['headers'];
+  }[];
 }
 
-/** 起一个 JSON-RPC over HTTP 的 stub；`asSse` 决定响应用 SSE 还是 JSON */
+/**
+ * 起一个 JSON-RPC over HTTP 的 stub；`asSse` 决定响应用 SSE 还是 JSON。
+ *
+ * 每个请求**先记后判**（含被 `status` 短路掉的）：这样测试才能断言
+ * 「客户端没有多做一次无谓的 GET」（老式 SSE 降级只该在 405 类状态码上发生）。
+ */
 function startHttpStub(options: { asSse?: boolean; status?: number } = {}): Promise<HttpStub> {
   const seen: HttpStub['seen'] = [];
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
+    const entry: HttpStub['seen'][number] = {
+      method: req.method ?? '',
+      body: {},
+      headers: req.headers,
+    };
+    seen.push(entry);
     let raw = '';
     req.on('data', (chunk: Buffer) => {
       raw += chunk.toString('utf-8');
@@ -317,13 +333,12 @@ function startHttpStub(options: { asSse?: boolean; status?: number } = {}): Prom
         res.end(JSON.stringify({ error: 'nope' }));
         return;
       }
-      let body: { id?: number; method?: string } = {};
       try {
-        body = JSON.parse(raw) as { id?: number; method?: string };
+        entry.body = JSON.parse(raw) as { id?: number; method?: string };
       } catch {
         // 忽略非法 JSON：下面的分支会走"未知方法"
       }
-      seen.push({ body, headers: req.headers });
+      const body = entry.body;
 
       const payload =
         body.method === 'initialize'
@@ -409,12 +424,25 @@ describe('probeHttp: 真实 HTTP 握手', () => {
     }
   });
 
-  it('HTTP 4xx → ok:false 且带状态码（非 sse 类型不做降级）', async () => {
+  it('HTTP 405 → 补试一次老式 SSE 仍不通时，ok:false 且保留原状态码', async () => {
     const stub = await startHttpStub({ status: 405 });
     try {
       const result = await probeHttp({ endpoint: stub.url, timeoutMs: 5000 });
       expect(result.ok).toBe(false);
       expect(result.error).toContain('405');
+    } finally {
+      await stub.close();
+    }
+  });
+
+  it('HTTP 401 不做 SSE 降级（鉴权问题与传输类型无关，重试只是白等一个超时）', async () => {
+    const stub = await startHttpStub({ status: 401 });
+    try {
+      const result = await probeHttp({ endpoint: stub.url, timeoutMs: 5000 });
+      expect(result.ok).toBe(false);
+      expect(result.error).toContain('401');
+      // 关键：只有 POST 这一次请求，没有补一发 GET
+      expect(stub.seen.map((s) => s.method)).toEqual(['POST']);
     } finally {
       await stub.close();
     }
@@ -517,12 +545,26 @@ describe('probeHttp: 老式 HTTP+SSE 降级（2024-11-05）', () => {
       expect(result.ok).toBe(true);
       expect(result.serverName).toBe('legacy-stub');
       expect(result.tools.map((t) => t.name)).toEqual(['legacy_tool']);
+      expect(result.transport).toBe('sse');
     } finally {
       await stub.close();
     }
   });
 
-  it('同样的端点若未声明 sse 类型则不降级（避免对普通 HTTP 端点做无谓长连接）', async () => {
+  it('**未声明** urlType 时也自动降级（用户粘一个 /mcp 就该能用，不该逼他选类型）', async () => {
+    const stub = await startLegacyStub();
+    try {
+      const result = await probeHttp({ endpoint: stub.url, timeoutMs: 8000 });
+      expect(result.ok).toBe(true);
+      expect(result.tools.map((t) => t.name)).toEqual(['legacy_tool']);
+      // 实测结论要回传：调用方据此把配置里的 urlType 写对，否则引擎会用错 client
+      expect(result.transport).toBe('sse');
+    } finally {
+      await stub.close();
+    }
+  });
+
+  it('**显式**声明 streamableHttp 则不降级（用户已表态，不再发起无谓长连接）', async () => {
     const stub = await startLegacyStub();
     try {
       const result = await probeHttp({
@@ -534,6 +576,20 @@ describe('probeHttp: 老式 HTTP+SSE 降级（2024-11-05）', () => {
       expect(result.error).toContain('405');
     } finally {
       await stub.close();
+    }
+  });
+});
+
+describe('isTransportMismatchStatus: 哪些状态码才值得补试老式 SSE', () => {
+  it('「地址不接受 POST」类 → true', () => {
+    for (const status of [404, 405, 406, 415, 501]) {
+      expect(isTransportMismatchStatus(status)).toBe(true);
+    }
+  });
+
+  it('鉴权 / 限流 / 参数类 → false（与传输类型无关，重试只会盖掉真实原因）', () => {
+    for (const status of [400, 401, 403, 409, 422, 429, 500, 503]) {
+      expect(isTransportMismatchStatus(status)).toBe(false);
     }
   });
 });

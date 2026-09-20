@@ -16,8 +16,21 @@
  *   也可能是 `text/event-stream`（同一 POST 里边握手边流式返回），两种都解。
  *   服务器若在响应头给出 `mcp-session-id`，后续请求带上它。
  * - 老式 HTTP+SSE（2024-11-05：`GET` 长连接拿 `event: endpoint` 消息地址，再
- *   POST 过去、响应仍走那条长连接）：POST 若明确失败且配置写的是 `sse`，
- *   降级走一次 GET 握手。
+ *   POST 过去、响应仍走那条长连接）：POST 命中「这个地址不接受 POST」类状态码
+ *   （见 `isTransportMismatchStatus`）时，降级走一次 GET 握手。
+ *
+ * ## 为什么降级是自动的（而不是等用户声明 sse）
+ *
+ * 两类端点的 URL 长得一模一样（都可能是 `/mcp`），**光看地址分不出来**：
+ * 老式 SSE 对 POST 回 405 + `allow: GET`，Streamable HTTP 才吃 POST。
+ * 早期实现要求配置里显式写 `sse` 才降级，而那个字段没有任何 UI 入口
+ * （只有从 nanobot config 回读时才可能带上），于是「用户粘一个老式 SSE 地址」
+ * 这条最普通的路径 100% 失败，报错只有一句 405 —— 与地址无关，看起来像服务坏了。
+ * 所以缺省改成**自动检测**：POST 先试（快、覆盖现代传输），只在明确是
+ * 「地址不接受 POST」时才补一次 GET 握手；显式声明 `streamableHttp` 则不做降级
+ * （用户已表态，也避免对普通 HTTP 端点发起无谓长连接）。
+ * 结论通过 `McpProbeResult.transport` 回传，让调用方把探测到的类型落进配置，
+ * 使引擎侧写出的 `type` 也是对的——否则「测试通过、聊天时连不上」。
  *
  * ## 两条纪律
  *
@@ -86,6 +99,8 @@ function success(
     serverName: parts.serverName,
     serverVersion: parts.serverVersion,
     protocolVersion: parts.protocolVersion,
+    // ⚠️ 字段是**逐项列出**的，不是展开：漏掉哪个哪个就静默丢失
+    transport: parts.transport,
     latencyMs: Date.now() - startedAt,
   };
 }
@@ -227,10 +242,21 @@ export function parseSseEndpoint(chunk: string): string | null {
   return null;
 }
 
+/**
+ * 「这个地址不接受 POST」类的状态码 —— 只有它们才值得补一次老式 SSE 握手。
+ *
+ * 405（`allow: GET`，实测 FastMCP/`SseServerTransport` 就是这么答的）、
+ * 404 / 406 / 415 / 501 都是**路由或方法层面**的拒绝，说明 POST 根本不是这里的入口。
+ * 刻意**不含 400 / 401 / 403 / 429**：那些是「端点对、请求不对 / 没权限 / 被限流」，
+ * 与传输类型无关，重试一次只会白等一个超时周期、并把真实原因盖掉。
+ */
+export function isTransportMismatchStatus(status: number): boolean {
+  return status === 404 || status === 405 || status === 406 || status === 415 || status === 501;
+}
+
 // ——————————————————————————————————————————————
 // stdio 传输
 // ——————————————————————————————————————————————
-
 export interface StdioProbeOptions {
   command: string;
   secrets?: Record<string, string>;
@@ -545,17 +571,26 @@ async function probeLegacySse(
   if (toolMessage.error) {
     return failure(startedAt, describeRpcError(toolMessage) ?? 'tools/list 失败');
   }
-  return success(startedAt, { ...readInitialize(init.result), tools: readTools(toolMessage.result) });
+  return success(startedAt, {
+    ...readInitialize(init.result),
+    tools: readTools(toolMessage.result),
+    // 这条路径**就是**老式 SSE 的证据，回传给调用方落进配置
+    transport: 'sse',
+  });
 }
 
 export interface HttpProbeOptions {
   endpoint: string;
+  /**
+   * 传输方式。`undefined` = **自动检测**（POST 被「不接受 POST」类状态码拒掉时
+   * 补一次老式 GET 握手）；`'streamableHttp'` = 用户显式声明，不做降级。
+   */
   urlType?: 'sse' | 'streamableHttp';
   secrets?: Record<string, string>;
   timeoutMs: number;
 }
 
-/** url 传输探针：POST 为主，POST 不可用且类型为 sse 时降级一次 GET 握手 */
+/** url 传输探针：以 POST 为主，必要时补一次老式 GET 握手（见文件头注释） */
 export function probeHttp(options: HttpProbeOptions): Promise<McpProbeResult> {
   const startedAt = Date.now();
   if (!options.endpoint) return Promise.resolve(failure(startedAt, '未配置地址 (URL)'));
@@ -590,18 +625,22 @@ export function probeHttp(options: HttpProbeOptions): Promise<McpProbeResult> {
       );
 
       if (initResponse.status >= 400) {
-        // 老式 HTTP+SSE 端点对 POST 通常回 4xx/405：只有明确声明 sse 才降级
-        if (options.urlType === 'sse') {
-          return finish(await probeLegacySse(options.endpoint, headers, controller, startedAt));
+        const postError = `服务端返回 HTTP ${initResponse.status}${
+          initResponse.text ? `：${initResponse.text.slice(0, 200)}` : ''
+        }`;
+        // 用户显式声明了 streamableHttp：不再降级（避免对普通 HTTP 端点发起
+        // 无谓长连接，也尊重「我已经知道它是什么」这个表态）
+        if (options.urlType === 'streamableHttp') return finish(failure(startedAt, postError));
+        // 其余 4xx 与传输类型无关（鉴权 / 限流 / 参数），直接如实报错
+        if (!isTransportMismatchStatus(initResponse.status)) {
+          return finish(failure(startedAt, postError));
         }
-        return finish(
-          failure(
-            startedAt,
-            `服务端返回 HTTP ${initResponse.status}${
-              initResponse.text ? `：${initResponse.text.slice(0, 200)}` : ''
-            }`,
-          ),
-        );
+        // 自动检测 / 显式 sse：补一次老式 GET 握手。
+        // 失败的**如实报**，且把原 POST 错误留在前面——它是用户看得懂的那个
+        // （405 + `allow: GET` 就是「这地址只吃 GET」的直接证据）。
+        const legacy = await probeLegacySse(options.endpoint, headers, controller, startedAt);
+        if (legacy.ok) return finish(legacy);
+        return finish(failure(startedAt, `${postError}（已按老式 SSE 重试：${legacy.error}）`));
       }
 
       const initPick = pickMessage(initResponse.contentType, initResponse.text, 1);
@@ -630,7 +669,15 @@ export function probeHttp(options: HttpProbeOptions): Promise<McpProbeResult> {
       if (toolPick.message.error) {
         return finish(failure(startedAt, describeRpcError(toolPick.message) ?? 'tools/list 失败'));
       }
-      return finish(success(startedAt, { ...init, tools: readTools(toolPick.message.result) }));
+      return finish(
+        success(startedAt, {
+          ...init,
+          tools: readTools(toolPick.message.result),
+          // POST 通了 ⇒ 这个端点走的就是 streamableHttp（哪怕配置里写着 sse，
+          // 报的也必须是**实测**结果，否则会把配置越改越错）
+          transport: 'streamableHttp',
+        }),
+      );
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
       return finish(

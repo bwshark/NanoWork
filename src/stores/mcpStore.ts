@@ -129,6 +129,9 @@ export const useMcpStore = create<McpState>()(
           name: partial?.name ?? '新 MCP 服务',
           transport: (partial?.transport ?? 'url') as MCPConfig['transport'],
           endpoint: partial?.endpoint,
+          // 传输方式必须一起带上：漏掉它，用户在下拉里选的 SSE 会被静默丢弃，
+          // 表现成「选了还报 405」——最难自查的一类（配置看着对、写出去的是别的值）
+          urlType: partial?.urlType,
           command: partial?.command,
           auth: partial?.auth,
           status: 'idle',
@@ -240,6 +243,12 @@ export const useMcpStore = create<McpState>()(
           // 失败时保留上次清单：一次抖动不该让授权视图变成空白
           tools: result.ok ? result.tools : cfg.tools,
           lastProbedAt: result.ok ? Date.now() : cfg.lastProbedAt,
+          // 实测到的传输方式要落回配置：引擎按它挑 client（sse / streamableHttp），
+          // 与实际不符就是「测试通过、聊天时连不上」。只在探测成功且与当前不同时写，
+          // 避免每次点测试都动一次 state（会白白触发重渲染与持久化）。
+          ...(result.ok && result.transport && result.transport !== cfg.urlType
+            ? { urlType: result.transport }
+            : {}),
         });
         return result;
       },
