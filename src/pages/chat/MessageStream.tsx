@@ -8,6 +8,7 @@ import {
   paintSearchRanges,
   scrollRangeIntoView,
 } from '@/lib/textHighlight';
+import { chatColumnSx } from './chatColumnSx';
 import { UserMessage } from './UserMessage';
 import { AssistantMessage } from './AssistantMessage';
 
@@ -157,8 +158,16 @@ export function MessageStream() {
   }
 
   return (
-    <Box ref={scrollRef} sx={{ flex: 1, overflow: 'auto', p: 2 }}>
-      <Box sx={{ maxWidth: 900, mx: 'auto' }}>
+    // 横向留白交给内容列（chatColumnSx），滚动容器只留纵向：
+    // 外层留白不参与居中计算，窄窗口下内容才不会比输入框多缩进一层。
+    // `scrollbarGutter: stable both-edges` 把滚动条槽位在两侧各留一份：
+    // 只留右边时，内容区是 [0, W-8]，居中后的列会左移 4px，而输入框在滚动容器
+    // 之外、中心仍在 W/2 —— 两者错开，且滚动条一出现/消失就跳一下。
+    <Box
+      ref={scrollRef}
+      sx={{ flex: 1, overflow: 'auto', py: 2, scrollbarGutter: 'stable both-edges' }}
+    >
+      <Box sx={chatColumnSx}>
         {session.messages.map((m) => (
           <Box
             key={m.id}

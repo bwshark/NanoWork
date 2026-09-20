@@ -253,4 +253,24 @@ describe('AssistantMessage', () => {
     expect(html).toContain('已完成');
     expect(html).not.toContain('1m41s');
   });
+
+  /**
+   * 用户气泡靠右对齐（`maxWidth: '75%'` + `justify-content: flex-end`），
+   * 右边界就是消息列的右边界；助手内容一旦被压窄，两者右边界之间就会空出一条
+   * 竖带——这正是曾经的 `maxWidth: '85%'` 造成的（实测差 139px）。
+   * 几何本身由 `tasks/verify-chat-column-align.mjs` 真机量，这里只钉住
+   * 「不许再给这层加宽度上限」这条不变量。
+   */
+  it('助手内容占满整个消息列，不得再加宽度上限', () => {
+    const { css } = mount(
+      <AssistantMessage message={base} agentId="nope" sessionId="s1" />,
+    );
+    const wrapper = host!.firstElementChild as HTMLElement;
+    // emotion 把 sx 编译成类名规则，取该元素命中的那几条拼起来看
+    const rules = Array.from(wrapper.classList)
+      .map((c) => css.match(new RegExp(`\\.${c}\\s*\\{([^}]*)\\}`))?.[1] ?? '')
+      .join(';');
+    expect(rules).toMatch(/width:\s*100%/);
+    expect(rules).not.toMatch(/max-width/);
+  });
 });

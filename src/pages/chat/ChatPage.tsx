@@ -11,6 +11,7 @@ import ChevronRightIcon from "@mui/icons-material/ChevronRight";
 import SouthEastIcon from "@mui/icons-material/SouthEast";
 import SendIcon from "@mui/icons-material/Send";
 import { ChatHeader } from "./ChatHeader";
+import { chatColumnSx } from "./chatColumnSx";
 import { MessageStream } from "./MessageStream";
 import { Composer, type ComposerApi } from "./Composer";
 import {
@@ -273,10 +274,7 @@ function ScrollRow({
     <Box
       sx={{
         position: "relative",
-        width: "100%",
-        maxWidth: 960,
-        mx: "auto",
-        px: 2,
+        ...chatColumnSx,
         ...((sx as object) ?? {}),
       }}
     >

@@ -176,7 +176,11 @@ export function AssistantMessage({ message, agentId, sessionId }: AssistantMessa
         flexDirection: 'column',
         mb: 1.5,
         alignItems: 'flex-start',
-        maxWidth: '85%',
+        // 占满消息列宽度，右边界与用户气泡（靠右对齐，右边界即列右边界）齐平。
+        // 曾用 maxWidth: '85%' 限制行宽，结果整块内容右边空出一条竖带，
+        // 与用户气泡的右边界错开 139px——同一个对话列左右不对齐，非常显眼。
+        // 回归：tasks/verify-chat-column-align.mjs
+        width: '100%',
       }}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}

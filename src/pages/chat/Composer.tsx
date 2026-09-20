@@ -35,6 +35,7 @@ import { useSkillsStore } from "@/stores/skillsStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useModelsStore, describeModelId } from "@/stores/modelsStore";
 import { ComposerMenu } from "./ComposerMenu";
+import { chatColumnSx } from "./chatColumnSx";
 import { ComposerControls } from "@/components/ComposerControls";
 import { InlineAttachmentChip } from "@/components/composer/InlineAttachmentChip";
 import {
@@ -1385,10 +1386,9 @@ export function Composer({
   return (
     <Box
       sx={{
-        width: "100%",
-        maxWidth: 960,
-        mx: "auto",
-        px: isHero ? 2 : 1.5,
+        // 与消息流 / 快捷标签行同一个内容列：输入框左右边界要跟用户气泡对齐。
+        // 浮动态原先用 px: 1.5（比列内边距少 4px），卡片会比气泡宽出 8px。
+        ...chatColumnSx,
         py: 1.5,
       }}
     >
