@@ -429,8 +429,9 @@ export function groupSessionsByWorkdir(
           ? DEFAULT_WORKSPACE_LABEL
           : resolveWorkspaceLabel(key, undefined),
       // 默认组的 `fullPath` 填它**当前的真实落点**（设置里的默认工作空间路径），
-      // 悬停分组标题时就能看到任务到底存在哪儿。它没有「更多操作」菜单（不做重命名、
-      // 删除、打开文件夹），所以别处把它当「可操作的真实目录」的代码路径进不来。
+      // 悬停分组标题时就能看到任务到底存在哪儿；它同样是「更多操作 → 打开文件夹」
+      // 的目标。默认组不提供「重命名」（名字由语义决定，见 `resolveWorkspaceLabel`），
+      // 但可打开文件夹、可清掉组内任务——两者的动作与普通目录分组完全一致。
       fullPath: key === "" ? defaultWorkspacePath ?? "" : key,
       kind: "workdir",
       // 组内排序：置顶任务永远在最前（按 updatedAt 倒序作为稳定次序），
@@ -1037,7 +1038,9 @@ function SessionList() {
   /** 工作空间分组「更多操作」菜单动作：打开文件夹 / 重命名 / 从列表中移除 */
   const handleGroupAction = (action: WorkspaceAction, key: string | null) => {
     setGroupMenu((prev) => ({ ...prev, anchorEl: null }));
-    if (!key) return;
+    // 判空必须用 `=== null`：默认工作空间分组的 key 是**空字符串**，
+    // `!key` 会把它当成「没传 key」直接吃掉所有动作（菜单点了没反应且不报错）。
+    if (key === null) return;
     const group = groups.find((x) => x.key === key);
     if (!group) return;
     switch (action) {
@@ -1054,6 +1057,10 @@ function SessionList() {
         break;
       }
       case "rename": {
+        // 默认工作空间分组的 key 是空串，它不参与重命名（菜单里本就不渲染该项，
+        // 这里再兜一层：别名表里写一条 key="" 的记录不会有任何读取方，
+        // 只会变成「改了没反应」的脏数据）。
+        if (key === "") return;
         // 打开重命名 Dialog：预填当前显示名（别名优先，未设别名即默认名）。
         // 只改 settingsStore.workspaceAliases，绝不动 session.workdir。
         setRenameDialog({
@@ -1087,10 +1094,15 @@ function SessionList() {
     }
   };
 
-  /** 当前打开菜单的分组：用于按类型裁剪菜单项（自动任务分组没有关联文件夹） */
-  const menuGroup = groupMenu.key
-    ? groups.find((g) => g.key === groupMenu.key)
-    : undefined;
+  /**
+   * 当前打开菜单的分组：用于按类型裁剪菜单项（自动任务分组没有关联文件夹）。
+   * 同样不能用 `groupMenu.key ? … : …` 判——默认工作空间分组的 key 是空字符串，
+   * 那样会让它的菜单直接查不到分组，只剩一个空菜单。
+   */
+  const menuGroup =
+    groupMenu.key === null
+      ? undefined
+      : groups.find((g) => g.key === groupMenu.key);
 
   /**
    * 「从列表中移除」确认：**真删**，不是隐藏。
@@ -1220,11 +1232,17 @@ function SessionList() {
                 )}
                 {/* 弹性垫片：标题与箭头靠左成组，行尾留给 hover 才出现的操作图标 */}
                 <Box sx={{ flex: 1, minWidth: 8 }} />
-                {/* 行尾槽：hover 时追加三点菜单与新建任务。
-                    默认工作空间（key=""）没有可操作的目录，故不显示。
+                {/* 行尾槽：hover 时追加三点菜单与新建任务，**所有分组一致**。
+                    默认工作空间（key=""）也展示：它的 `fullPath` 就是设置里那个默认
+                    工作空间路径，是一个**真实可打开的目录**（早期版本不显示，是因为
+                    当时它被当成「没有可操作目录」的虚拟分组）——「打开文件夹」能打开
+                    它，「新建任务」会以它为 workdir 开工。
+                    与其它目录分组唯一的差别是菜单里没有「重命名」：默认分组的名字由
+                    它的语义决定（改设置后名字依然成立），别名会让名字漂移，见
+                    `resolveWorkspaceLabel` 与 `tests/lib/workspaceLabel.test.ts`。
                     自动任务分组同样展示——它可重命名、可从列表移除，
                     仅「打开文件夹」因无真实目录而不进菜单。 */}
-                {hoveredGroup === g.key && g.key !== "" && (
+                {hoveredGroup === g.key && (
                   <Box
                     sx={{
                       display: "flex",
@@ -1236,6 +1254,7 @@ function SessionList() {
                     <Tooltip title="更多操作" placement="top">
                       <IconButton
                         size="small"
+                        aria-label="更多操作"
                         sx={{ p: 0.25 }}
                         onClick={(e) => {
                           e.stopPropagation();
@@ -1259,6 +1278,7 @@ function SessionList() {
                     <Tooltip title="新建任务" placement="top">
                       <IconButton
                         size="small"
+                        aria-label="新建任务"
                         sx={{ p: 0.25 }}
                         onClick={(e) => {
                           e.stopPropagation();
@@ -1517,9 +1537,10 @@ function SessionList() {
         transformOrigin={{ vertical: "top", horizontal: "left" }}
         PaperProps={{ sx: { minWidth: 168 } }}
       >
-        {/* 「打开文件夹」只对真实目录分组有意义：自动任务分组是虚拟工作空间，
-            没有关联文件夹，直接不渲染该项，而不是留一个点了报错的死按钮 */}
-        {menuGroup?.kind === "workdir" && (
+        {/* 「打开文件夹」只对**有真实目录**的分组有意义：自动任务分组是虚拟工作空间，
+            默认工作空间在存储信息尚未就绪时 `fullPath` 也为空——这两种情况直接不渲染
+            该项，而不是留一个点了报错的死按钮 */}
+        {menuGroup?.kind === "workdir" && !!menuGroup.fullPath && (
           <MenuItem onClick={() => handleGroupAction("open", groupMenu.key)}>
             <ListItemIcon>
               <FolderOpenIcon fontSize="small" />
@@ -1527,12 +1548,19 @@ function SessionList() {
             <Typography sx={{ fontSize: 13 }}>打开文件夹</Typography>
           </MenuItem>
         )}
-        <MenuItem onClick={() => handleGroupAction("rename", groupMenu.key)}>
-          <ListItemIcon>
-            <EditIcon fontSize="small" />
-          </ListItemIcon>
-          <Typography sx={{ fontSize: 13 }}>重命名</Typography>
-        </MenuItem>
+        {/* 默认工作空间（key=""）不提供「重命名」：分组的名字由它的语义决定——
+            组内就是设置里那个默认路径下的任务，用户改了设置之后这个名字依然成立。
+            `resolveWorkspaceLabel` 也是刻意让默认名压过别名的，真给了入口只会变成
+            一条「改了没反应」的脏数据（见 `tests/lib/workspaceLabel.test.ts`）。
+            其余分组（含自动任务虚拟分组）都可以重命名。 */}
+        {menuGroup && menuGroup.key !== "" && (
+          <MenuItem onClick={() => handleGroupAction("rename", groupMenu.key)}>
+            <ListItemIcon>
+              <EditIcon fontSize="small" />
+            </ListItemIcon>
+            <Typography sx={{ fontSize: 13 }}>重命名</Typography>
+          </MenuItem>
+        )}
         <MenuItem
           onClick={() => handleGroupAction("remove", groupMenu.key)}
           sx={{ color: "error.main" }}
