@@ -471,7 +471,7 @@ export function SkillsPage() {
             spacing={2}
             sx={{ mb: 2, flexWrap: "wrap" }}
           >
-            <Typography variant="h6" fontWeight={700}>
+            <Typography variant="h5" fontWeight={700}>
               技能市场
             </Typography>
             <Box sx={{ flex: 1 }} />

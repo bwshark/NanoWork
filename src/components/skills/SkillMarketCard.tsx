@@ -1,18 +1,25 @@
-import { useState } from 'react';
-import { Box, Card, CardContent, IconButton, Stack, Typography } from '@mui/material';
-import AddIcon from '@mui/icons-material/Add';
-import CheckIcon from '@mui/icons-material/Check';
-import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
-import CircularProgress from '@mui/material/CircularProgress';
-import { SkillIcon } from './SkillIcon';
-import { SkillActionMenu } from './SkillActionMenu';
+import { useState } from "react";
+import {
+  Box,
+  Card,
+  CardContent,
+  IconButton,
+  Stack,
+  Typography,
+} from "@mui/material";
+import AddIcon from "@mui/icons-material/Add";
+import CheckIcon from "@mui/icons-material/Check";
+import MoreHorizIcon from "@mui/icons-material/MoreHoriz";
+import CircularProgress from "@mui/material/CircularProgress";
+import { SkillIcon } from "./SkillIcon";
+import { SkillActionMenu } from "./SkillActionMenu";
 import {
   skillCardIconButtonSx,
   skillDescSx,
   skillInstallButtonSx,
   skillMarketCardSx,
-} from './skillCardSx';
-import type { Skill, SkillOverride } from '@/types';
+} from "./skillCardSx";
+import type { Skill, SkillOverride } from "@/types";
 
 /**
  * 「全部技能」市场卡（参考样式：图标 + 名称 + 右上角安装按钮，描述两行）。
@@ -57,7 +64,10 @@ export function SkillMarketCard({
           >
             <MoreHorizIcon sx={{ fontSize: 18 }} />
           </IconButton>
-          <CheckIcon sx={{ fontSize: 18, color: 'text.secondary' }} aria-label="已安装" />
+          <CheckIcon
+            sx={{ fontSize: 18, color: "text.secondary" }}
+            aria-label="已安装"
+          />
         </Stack>
       );
     }
@@ -67,9 +77,9 @@ export function SkillMarketCard({
           sx={{
             width: 28,
             height: 28,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
           }}
         >
           <CircularProgress size={16} aria-label="安装中" />
@@ -100,19 +110,24 @@ export function SkillMarketCard({
       onClick={() => onOpenDetail(skill)}
       onKeyDown={(e) => {
         // 整卡可点的代价是得自己补键盘通路：Enter / Space 都要能打开详情
-        if (e.key === 'Enter' || e.key === ' ') {
+        if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
           onOpenDetail(skill);
         }
       }}
     >
-      <CardContent sx={{ p: 1.75, '&:last-child': { pb: 1.75 } }}>
+      <CardContent sx={{ p: 1.75, "&:last-child": { pb: 1.75 } }}>
         <Stack direction="row" alignItems="center" spacing={1.25}>
           <SkillIcon name={skill.name} icon={skill.icon} />
           <Typography
-            fontWeight={600}
             noWrap
-            sx={{ flex: 1, minWidth: 0, fontSize: 14, lineHeight: 1.5 }}
+            sx={{
+              flex: 1,
+              minWidth: 0,
+              fontSize: 15,
+              fontWeight: 600,
+              lineHeight: 1.4,
+            }}
             title={skill.name}
           >
             {skill.name}
