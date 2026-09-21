@@ -42,7 +42,12 @@ import FolderOpenIcon from "@mui/icons-material/FolderOpen";
 import FolderCopyIcon from "@mui/icons-material/FolderCopy";
 import ShareIcon from "@mui/icons-material/Share";
 import EditIcon from "@mui/icons-material/Edit";
-import { ROUTES, APP_DISPLAY_NAME, APP_DISPLAY_SUB, UNBOUND_AGENT_LABEL } from "@/lib/constants";
+import {
+  ROUTES,
+  APP_DISPLAY_NAME,
+  APP_DISPLAY_SUB,
+  UNBOUND_AGENT_LABEL,
+} from "@/lib/constants";
 import { conversationCount, hasConversation } from "@/lib/conversation";
 import { CRON_SESSION_ID_PREFIX } from "@/lib/sessionImport";
 import { filterTasks, isFilterDefault } from "@/lib/taskQuery";
@@ -278,7 +283,7 @@ export function SidebarNav() {
             )}
           </ListItemIcon>
           <ListItemText
-            primary="扩展"
+            primary="能力扩展"
             primaryTypographyProps={{
               fontSize: 12.5,
               fontWeight: 500,
@@ -412,7 +417,7 @@ export function groupSessionsByWorkdir(
   for (const s of sessions) {
     const key = isSameWorkspacePath(s.workdir, defaultWorkspacePath)
       ? ""
-      : s.workdir ?? "";
+      : (s.workdir ?? "");
     const list = map.get(key);
     if (list) list.push(s);
     else map.set(key, [s]);
@@ -432,7 +437,7 @@ export function groupSessionsByWorkdir(
       // 悬停分组标题时就能看到任务到底存在哪儿；它同样是「更多操作 → 打开文件夹」
       // 的目标。默认组不提供「重命名」（名字由语义决定，见 `resolveWorkspaceLabel`），
       // 但可打开文件夹、可清掉组内任务——两者的动作与普通目录分组完全一致。
-      fullPath: key === "" ? defaultWorkspacePath ?? "" : key,
+      fullPath: key === "" ? (defaultWorkspacePath ?? "") : key,
       kind: "workdir",
       // 组内排序：置顶任务永远在最前（按 updatedAt 倒序作为稳定次序），
       // 其余按 updatedAt 倒序，保证重复置顶/取消时视觉次序稳定
@@ -902,7 +907,7 @@ function SessionList() {
   // 会话未绑定专家（「新建任务」的默认态）显示中性名而不是「未知 Agent」：
   // 那是正常状态，不是缺数据
   const agentName = (id: string) =>
-    id === ''
+    id === ""
       ? UNBOUND_AGENT_LABEL
       : (agents.find((a) => a.id === id)?.name ?? "未知 Agent");
 
@@ -1168,10 +1173,10 @@ function SessionList() {
             用长度判断会让这条提示在筛选时消失 */}
         {visibleSessions.length > 0 &&
           !groups.some((g) => g.sessions.length > 0) && (
-          <Box sx={{ px: 2, py: 1, color: "text.secondary", fontSize: 12 }}>
-            没有符合筛选条件的任务，可在标题栏调整或重置筛选。
-          </Box>
-        )}
+            <Box sx={{ px: 2, py: 1, color: "text.secondary", fontSize: 12 }}>
+              没有符合筛选条件的任务，可在标题栏调整或重置筛选。
+            </Box>
+          )}
         {groups.map((g) => {
           const isCollapsed = collapsed.has(g.key);
           return (

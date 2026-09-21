@@ -131,6 +131,22 @@ const COMPACT_PROMPT =
   "请压缩并总结以上对话，保留关键结论、待办事项与未决问题：";
 
 /**
+ * 输入区高度口径：一律以「可见行数」为单位表达，别在 sx 里写裸像素。
+ *
+ * ⚠️ **上下内边距必须额外加上**：`minHeight` / `maxHeight` 走的是 border-box
+ * （CssBaseline 全局 `box-sizing: border-box`），内边距**计入**其中。
+ * 原先浮动态写 `2 * 24`（=48px），扣掉 20px 内边距后正文只有 28px ≈ 1.2 行 ——
+ * 一行长文本加上下方工具栏，整张卡片看着像被压扁的搜索框。
+ *
+ * 空态（hero）与浮动态共用同一套口径：输入框在两种状态下应当是同一种东西。
+ */
+const EDITABLE_LINE_HEIGHT = 24; // 单行像素高：fontSize 15 × lineHeight 1.6
+const EDITABLE_PADDING_Y = 20; // 上下内边距合计（对应 sx 里的 py: 1.25 → 10 × 2）
+const EDITABLE_MIN_LINES = 3; // 最少可见行数
+/** 最多可见行数（超出滚动）：空态给得宽些，它是页面的主角 */
+const EDITABLE_MAX_LINES = { hero: 10, floating: 6 } as const;
+
+/**
  * 「当前绑定」chip 的统一样式（专家 / 专家团共用）。
  *
  * 与设计一致：**× 前置**的胶囊 —— `× 名字`，而不是 MUI 默认的 `名字 ×`。
@@ -1546,8 +1562,12 @@ export function Composer({
             fontSize: 15,
             lineHeight: 1.6,
             color: "text.primary",
-            minHeight: (isHero ? 3 : 2) * 24,
-            maxHeight: (isHero ? 10 : 6) * 24,
+            minHeight:
+              EDITABLE_MIN_LINES * EDITABLE_LINE_HEIGHT + EDITABLE_PADDING_Y,
+            maxHeight:
+              EDITABLE_MAX_LINES[isHero ? "hero" : "floating"] *
+                EDITABLE_LINE_HEIGHT +
+              EDITABLE_PADDING_Y,
             overflowY: "auto",
             whiteSpace: "pre-wrap",
             wordBreak: "break-word",
