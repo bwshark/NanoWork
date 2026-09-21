@@ -43,11 +43,19 @@ const CARD_RADIUS = '12px';
 export function SettingsCard({
   title,
   description,
+  action,
   children,
   sx,
 }: {
   title?: string;
   description?: ReactNode;
+  /**
+   * 卡片右上角的操作（当前只有「添加模型」）。
+   *
+   * 放在卡片内的**首行**而不是行列表末尾：它是这张卡片的动作，不是「最后一行」的控件——
+   * 挂在末尾时，模型一多就会被推到很下面，用户得先滚到底才知道能添加。
+   */
+  action?: ReactNode;
   children: ReactNode;
   sx?: SxProps<Theme>;
 }) {
@@ -91,6 +99,21 @@ export function SettingsCard({
             '& > * + *': { borderTop: '1px solid', borderColor: 'divider' },
           }}
         >
+          {action && (
+            <Box
+              sx={{
+                display: 'flex',
+                // 只放一个按钮时靠右对齐（参考图里它贴着卡片右内边距）；将来若加左侧说明，
+                // 说明自然落在左侧，按钮仍被推到右端。
+                justifyContent: 'flex-end',
+                alignItems: 'center',
+                gap: 2,
+                py: 1.5,
+              }}
+            >
+              {action}
+            </Box>
+          )}
           {children}
         </Box>
       </Paper>

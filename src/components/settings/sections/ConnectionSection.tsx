@@ -7,7 +7,10 @@ import { useModelsStore } from '@/stores/modelsStore';
 import { DEFAULT_TRANSCRIPTION, useSettingsStore } from '@/stores/settingsStore';
 
 /**
- * 连接与模型：网关（OpenAI 兼容）凭据 + 语音输入（STT）。
+ * 连接：网关（OpenAI 兼容）凭据 + 语音输入（STT）。
+ *
+ * 原名「连接与模型」——模型那半边已拆成独立分区（设置 → 功能 → 模型），
+ * 合在这里会让「改网关地址」和「加模型」两个高频操作互相挤占版面。
  *
  * 两块的改动都是**先落本地草稿、点保存才写回 store**。这不是为了省几次
  * localStorage 写入——网关地址每改一个字符都会触发连接探测，语音配置边打字边生效

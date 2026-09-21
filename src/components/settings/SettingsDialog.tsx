@@ -7,6 +7,7 @@ import { ConnectionSection } from '@/components/settings/sections/ConnectionSect
 import { DataSection } from '@/components/settings/sections/DataSection';
 import { GeneralSection } from '@/components/settings/sections/GeneralSection';
 import { MemorySection } from '@/components/settings/sections/MemorySection';
+import { ModelsSection } from '@/components/settings/sections/ModelsSection';
 import { PersonaSection } from '@/components/settings/sections/PersonaSection';
 import { PluginsSection } from '@/components/settings/sections/PluginsSection';
 import { ShortcutsSection } from '@/components/settings/sections/ShortcutsSection';
@@ -191,7 +192,7 @@ export function SettingsDialog() {
         </Box>
 
         {/* key={section}：切分区时重挂载滚动容器，让每次进入新分区都从顶部开始。
-            不这么做的话滚动位置会跨分区继承——在「连接与模型」拉到一半再切到「关于」，
+            不这么做的话滚动位置会跨分区继承——在「连接」拉到一半再切到「关于」，
             会直接落在半空中。 */}
         <Box
           key={section}
@@ -217,6 +218,8 @@ function SectionBody({ section }: { section: SettingsSectionId }) {
       return <MemorySection />;
     case 'persona':
       return <PersonaSection />;
+    case 'models':
+      return <ModelsSection />;
     case 'assistant':
       return <AssistantSection />;
     case 'plugins':

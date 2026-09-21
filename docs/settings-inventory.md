@@ -35,12 +35,12 @@
 
 | 键 | 类型 | 默认值 | 界面位置 | 备注 |
 |---|---|---|---|---|
-| `gatewayEndpoint` | string | `http://127.0.0.1:18900/v1` | 连接与模型 | 变更后重探连接 + 重拉模型目录；**本机地址会被主进程的实际端口自动对齐**（端口可能顺延，见 `nanobot:gatewayInfo`） |
-| `apiToken` | string | `''` | 连接与模型 | 走密码输入框 |
+| `gatewayEndpoint` | string | `http://127.0.0.1:18900/v1` | 连接 | 变更后重探连接 + 重拉模型目录；**本机地址会被主进程的实际端口自动对齐**（端口可能顺延，见 `nanobot:gatewayInfo`） |
+| `apiToken` | string | `''` | 连接 | 走密码输入框 |
 | `theme` | `light/dark/system` | `system` | 通用 · 外观 | 读取侧经 `normalizeTheme` 兜底 |
 | `memoryEnabled` | boolean | `true` | 记忆 | 是否把记忆块注入 system |
 | `autoSummarize` | boolean | `true` | 记忆 | v9 迁移把旧 `false` 统一抬成 `true` |
-| `transcription` | object | 见 `DEFAULT_TRANSCRIPTION` | 连接与模型 · 语音输入 | 嵌套对象，迁移时需单独补齐内层默认值 |
+| `transcription` | object | 见 `DEFAULT_TRANSCRIPTION` | 连接 · 语音输入 | 嵌套对象，迁移时需单独补齐内层默认值 |
 | `desktop` | object | 见 `DEFAULT_DESKTOP` | 通用 · 桌面端（仅 Electron） | 与主进程 `DEFAULT_DESKTOP_CONFIG` 必须对齐；`hotkey` 的界面在**快捷键**分区 |
 | `promptDomain` / `promptStyle` | string? | 未设 → 回退内置 | 人格（正文在 `prompts/`） | Agent 级可覆盖 |
 | `userCustomPrompt` | string? | 未设 | 人格 | 每轮注入，边打字边生效故走草稿 |
@@ -84,9 +84,10 @@
 |---|---|---|
 | 通用 | 外观主题、桌面端（托盘常驻 / 开机自启 / Dock） | 通用（开机自启、权限、通知）+ 外观 |
 | 快捷键 | 命令键位列表（改键 / 恢复默认 / 全部恢复默认 + 搜索）、全局唤起快捷键 | 快捷键 + 通用 · 全局唤起快捷键 |
-| 连接与模型 | 网关 endpoint/token、语音输入（STT） | 模型 + 通用 · 网络代理 |
+| 连接 | 网关 endpoint/token、语音输入（STT） | 通用 · 网络代理 |
 | 记忆 | 注入开关、自动沉淀 + 记忆正文编辑 | 记忆与进化 |
 | 人格 | 身份文件 + 提示词模板 | 个性化 |
+| 模型 | 自定义模型增删改 + 设为默认（写引擎 `modelPresets` / `providers`） | 模型 |
 | 助理设置 | IM 频道（钉钉/飞书/Lark/微信/企业微信） | 助理设置 |
 | 插件 | 插件包安装/卸载/启停与引擎激活状态 | （WorkBuddy 无对应项，本项目特有） |
 | 数据管理 | 数据落点说明 + 清空本地数据 | 数据管理 |

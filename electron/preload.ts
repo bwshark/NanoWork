@@ -3,6 +3,10 @@ import type {
   ChannelConnectAction,
   DesktopConfig,
   ElectronAPI,
+  ModelProbeRequest,
+  ModelProbeResult,
+  ModelsSyncResult,
+  NanobotModelsSnapshot,
   PlatformName,
 } from '../src/platform/types';
 
@@ -59,6 +63,13 @@ const api: ElectronAPI = {
   nanobotGetMcp: () => ipcRenderer.invoke('nanobot:getMcp'),
   /** MCP 连接探针：真实握手拿连接结果与工具清单（凭据由主进程从保险库补齐） */
   mcpProbe: (request) => ipcRenderer.invoke('mcp:probe', request),
+  // —— 模型设置（config.json 的 modelPresets + providers）——
+  nanobotGetModels: (): Promise<NanobotModelsSnapshot | null> =>
+    ipcRenderer.invoke('nanobot:getModels'),
+  nanobotSyncModels: (mutationJson: string): Promise<ModelsSyncResult> =>
+    ipcRenderer.invoke('nanobot:syncModels', mutationJson),
+  probeModel: (request: ModelProbeRequest): Promise<ModelProbeResult> =>
+    ipcRenderer.invoke('model:probe', request),
   /** 凭据保险库：可用性 / key 名清单 / 写入 / 删除（**密钥值不回传**） */
   secretsStatus: () => ipcRenderer.invoke('secrets:status'),
   secretsKeys: () => ipcRenderer.invoke('secrets:keys'),

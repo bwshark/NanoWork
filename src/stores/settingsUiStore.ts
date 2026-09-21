@@ -14,6 +14,7 @@ export const SETTINGS_SECTION_IDS = [
   'connection',
   'memory',
   'persona',
+  'models',
   'assistant',
   'plugins',
   'data',

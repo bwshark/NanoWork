@@ -158,6 +158,113 @@ export interface TaskSyncResult {
   changed?: boolean;
 }
 
+// ——————————————————————————————————————————————
+// 模型设置（config.json 的 modelPresets + providers）
+//
+// 引擎的 HTTP 接口没有「模型设置写入」端点（`webui/settings_models.py` 那套
+// 走 WebSocket），所以模型增删只能由主进程直接改 config.json —— 与 channels /
+// mcpServers / skillOverrides 同一条链路。
+// ——————————————————————————————————————————————
+
+/**
+ * 一个 modelPreset 的字段集（camelCase，与磁盘上的 config.json 同形）。
+ *
+ * ⚠️ **预设没有 `label` 字段**：引擎的 `ModelPresetConfig` 继承的 `Base`
+ * 没有开 `extra="allow"`，多写的键会被静默丢弃。所以 `/v1/models` 里
+ * `label` 恒等于预设名——**预设名就是模型选择器里显示的那行字**，
+ * 改名只能换 key，不能只换展示名。
+ */
+export interface NanobotModelPreset {
+  model: string;
+  provider: string;
+  maxTokens: number;
+  contextWindowTokens: number;
+  temperature: number;
+  reasoningEffort: string | null;
+}
+
+/** 预设引用到的 providers 条目（回显用，含 key 明文——见 NanobotModelsSnapshot） */
+export interface NanobotModelProvider {
+  apiKey: string | null;
+  apiBase: string | null;
+  displayName: string | null;
+}
+
+/**
+ * 模型设置页需要的引擎侧快照。
+ *
+ * `providers` **只回传被某个预设引用到的条目**，不是全量 45 个供应商：
+ * 全量回传会把一堆从未配置过的供应商连同 null 一起灌进渲染层，
+ * 界面要么画出几十行空壳，要么得自己再筛一遍。
+ */
+export interface NanobotModelsSnapshot {
+  /** modelPresets 全量；key = 预设名 = 模型选择器里的 id */
+  presets: Record<string, NanobotModelPreset>;
+  providers: Record<string, NanobotModelProvider>;
+  /** agents.defaults.modelPreset；null = 走隐式 default 预设 */
+  defaultPreset: string | null;
+}
+
+/**
+ * 模型配置的一次变更。
+ *
+ * 刻意做成**变更指令**而不是「整份预设表回传」：与 `tools.mcpServers`
+ * 「nanowork 全权托管、整体替换」不同，`modelPresets` 用户也可能在引擎自己的
+ * WebUI 里维护，整体替换会把那些预设静默删掉。逐条变更只动它点名的那一个 key。
+ */
+export type NanobotModelsMutation =
+  | {
+      op: 'upsert';
+      /** 目标预设名（= 模型名） */
+      preset: string;
+      /** 改名时的旧预设名；缺省表示新增或原地更新 */
+      previousPreset?: string;
+      config: NanobotModelPreset;
+      /** 供应商凭据；内置供应商只写 apiKey（apiBase 留给引擎注册表默认值） */
+      provider?: {
+        /** providers 里的 config key（内置为 camelCase，自定义为 slug） */
+        key: string;
+        apiKey?: string | null;
+        apiBase?: string | null;
+        displayName?: string | null;
+      };
+      /** 是否同时把该预设设为默认 */
+      setDefault?: boolean;
+    }
+  | {
+      op: 'delete';
+      preset: string;
+      /** 随之清理的供应商 key；仅当它是自定义供应商且已无人引用时才真的删 */
+      providerKey?: string;
+    }
+  | { op: 'setDefault'; preset: string };
+
+/** 模型配置同步结果（与 MCP / 技能覆盖同形） */
+export interface ModelsSyncResult {
+  ok: boolean;
+  message: string;
+  changed?: boolean;
+  /** 已写入但 serve 由外部进程托管，需用户自行重启才生效 */
+  needsRestart?: boolean;
+}
+
+/** 供应商连接测试请求（主进程发起，携带 key，不经过渲染层的网络栈） */
+export interface ModelProbeRequest {
+  /** 内置供应商的注册表名，或自定义供应商的 config key */
+  provider: string;
+  /** 自定义供应商必填；内置供应商省略时由主进程查目录取默认地址 */
+  apiBase?: string;
+  apiKey?: string;
+}
+
+export interface ModelProbeResult {
+  ok: boolean;
+  error?: string;
+  /** 探测到的模型 id（按名字排序，最多 200 条，供「模型名称」自动补全） */
+  models?: string[];
+  latencyMs: number;
+}
+
 /**
  * nanobot cron 执行审计记录（主进程扫描 {workspace}/cron/runs/ 返回）。
  * 对应引擎 bound_runner 每次执行写入的一个 JSON 文件。
@@ -406,6 +513,28 @@ export interface PlatformAdapter {
    * - web：无本地进程与系统凭据库，返回 `ok=false` 并说明不支持。
    */
   probeMcpServer(request: McpProbeRequest): Promise<McpProbeResult>;
+  /**
+   * 只读回读 nanobot config.json 的 `modelPresets` / `providers` / 默认预设。
+   * - electron：主进程读取磁盘；
+   * - web：无文件系统权限，返回 null。
+   */
+  getNanobotModels(): Promise<NanobotModelsSnapshot | null>;
+  /**
+   * 把一次模型变更同步进 nanobot 配置并按需重启 serve。
+   * - electron：主进程合并写入 config.json（modelPresets + providers +
+   *   agents.defaults.modelPreset），serve 由本应用托管时立即重启；
+   * - web：无文件系统权限，降级为下载配置片段。
+   */
+  syncNanobotModels(mutationJson: string): Promise<ModelsSyncResult>;
+  /**
+   * 供应商连接测试：真实请求 `GET {apiBase}/models` 验证 key 是否可用。
+   *
+   * 由主进程发起而不是渲染层 `fetch`：浏览器端会被 CORS 挡掉，而失败原因
+   * （跨域）与「key 无效」在界面上长得一模一样，会把人引到错误的排查方向。
+   * - electron：主进程发请求，内置供应商的默认地址查 `modelProviders` 目录；
+   * - web：返回 `ok=false` 并说明不支持。
+   */
+  probeModel(request: ModelProbeRequest): Promise<ModelProbeResult>;
   /**
    * 凭据保险库可用性（加密是否可用，以及保险库落点）。
    * - electron：`safeStorage.isEncryptionAvailable()`；
@@ -790,6 +919,12 @@ export interface ElectronAPI {
   nanobotGetMcp(): Promise<NanobotMcpSnapshot | null>;
   /** MCP 连接探针（真实握手；凭据由主进程从保险库补齐） */
   mcpProbe(request: McpProbeRequest): Promise<McpProbeResult>;
+  /** 只读回读 config.json 的 modelPresets / providers / 默认预设 */
+  nanobotGetModels(): Promise<NanobotModelsSnapshot | null>;
+  /** 提交一次模型变更（upsert / delete / setDefault），主进程落盘并按需重启 serve */
+  nanobotSyncModels(mutationJson: string): Promise<ModelsSyncResult>;
+  /** 供应商连接测试（主进程发起 GET {apiBase}/models） */
+  probeModel(request: ModelProbeRequest): Promise<ModelProbeResult>;
   /** 凭据保险库可用性与落点 */
   secretsStatus(): Promise<CredentialVaultStatus>;
   /** 凭据 key 名清单（不含值） */

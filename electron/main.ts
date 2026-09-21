@@ -31,8 +31,17 @@ import type {
   NanobotCronHistoryDeleteResult,
   NanobotCronRunRecord,
   NanobotCronSessionDetail,
+  NanobotModelPreset,
+  NanobotModelsMutation,
+  NanobotModelsSnapshot,
+  ModelProbeRequest,
+  ModelProbeResult,
+  ModelsSyncResult,
   StorageInfo,
 } from '../src/platform/types';
+// 运行时值（不是 type-only）：供应商目录同时被渲染层（下拉）与这里（连接测试的
+// 默认地址、自定义供应商名冲突检测）消费，必须共用一份，否则两处迟早漂移。
+import { isBuiltinProvider, findModelProvider } from '../src/lib/modelProviders';
 import {
   DEVICE_ID_STORAGE_KEY,
   knownRouteFiles,
@@ -1657,6 +1666,321 @@ async function syncNanobotMcp(mcpJson: string): Promise<{
 }
 
 // ——————————————————————————————————————————————
+// 模型设置（config.json 的 modelPresets / providers / agents.defaults.modelPreset）
+//
+// 引擎只暴露 /v1/models **读**端点（`webui/settings_models.py` 那套写入走
+// WebSocket），所以「添加模型」只能由主进程直接改磁盘上的 config.json，
+// 与 channels / mcpServers / skillOverrides 同一条「合并写盘 + 重启」链路。
+// ——————————————————————————————————————————————
+
+/**
+ * 预设里的 `provider` 值 → `providers.<key>` 的 config key。
+ *
+ * 三种写法都要认，因为引擎自己也在混用：
+ * 1. 内置供应商写的是注册表的 snake 名（`volcengine_coding_plan`），
+ *    而 config 里的键是 camelCase（`volcengineCodingPlan`）；
+ * 2. 自定义供应商写的是 config key 本身；
+ * 3. 大小写可能不一致（引擎匹配时会 `lower()` 两边）。
+ */
+function resolveProviderConfigKey(
+  provider: string,
+  providers: Record<string, unknown>,
+): string | null {
+  if (provider in providers) return provider;
+  const camel = provider.replace(/_([a-z0-9])/g, (_all, ch: string) => ch.toUpperCase());
+  if (camel in providers) return camel;
+  const wanted = provider.replace(/-/g, '_').toLowerCase();
+  for (const key of Object.keys(providers)) {
+    if (key.replace(/-/g, '_').toLowerCase() === wanted) return key;
+  }
+  return null;
+}
+
+/** 只回传被某个预设引用到的 providers 条目（避免把 45 个空壳灌进渲染层） */
+function collectReferencedProviders(
+  presets: Record<string, unknown>,
+  providers: Record<string, unknown>,
+): Record<string, { apiKey: string | null; apiBase: string | null; displayName: string | null }> {
+  const used: Record<string, { apiKey: string | null; apiBase: string | null; displayName: string | null }> = {};
+  const pick = (entry: unknown, field: string): string | null => {
+    const value = (entry as Record<string, unknown> | undefined)?.[field];
+    return typeof value === 'string' ? value : null;
+  };
+  for (const preset of Object.values(presets)) {
+    const name = (preset as Record<string, unknown> | undefined)?.provider;
+    if (typeof name !== 'string' || !name || name === 'auto') continue;
+    const key = resolveProviderConfigKey(name, providers);
+    if (!key || key in used) continue;
+    const entry = providers[key];
+    if (typeof entry !== 'object' || entry === null) continue;
+    used[key] = {
+      apiKey: pick(entry, 'apiKey'),
+      apiBase: pick(entry, 'apiBase'),
+      displayName: pick(entry, 'displayName'),
+    };
+  }
+  return used;
+}
+
+/**
+ * 回读 config.json 的模型设置快照。
+ *
+ * ⚠️ **回传的是 API Key 明文**。这与 MCP 走保险库的做法相反，理由是模型凭据
+ * 的唯一落点就是 config.json 本身（引擎直接读它），界面要支持「改 key」就
+ * 必须能取回旧值——与 channels 的 appSecret 同一条口径。
+ */
+async function getNanobotModels(): Promise<NanobotModelsSnapshot | null> {
+  const configPath = await resolveNanobotConfigPath();
+  if (!configPath || !existsSync(configPath)) return null;
+  try {
+    const raw = await fs.readFile(configPath, 'utf-8');
+    const data = JSON.parse(raw) as Record<string, unknown>;
+    const presets =
+      typeof data.modelPresets === 'object' && data.modelPresets !== null
+        ? (data.modelPresets as Record<string, NanobotModelPreset>)
+        : {};
+    const providers =
+      typeof data.providers === 'object' && data.providers !== null
+        ? (data.providers as Record<string, unknown>)
+        : {};
+    const defaults = (data.agents as Record<string, unknown> | undefined)?.defaults;
+    const modelPreset =
+      typeof defaults === 'object' && defaults !== null
+        ? (defaults as Record<string, unknown>).modelPreset
+        : undefined;
+    return {
+      presets,
+      providers: collectReferencedProviders(presets, providers),
+      defaultPreset: typeof modelPreset === 'string' ? modelPreset : null,
+    };
+  } catch (err) {
+    console.warn(`[nanobot] modelPresets 回读失败：${String(err)}`);
+    return null;
+  }
+}
+
+/**
+ * 把一次模型变更合并进 config.json。
+ *
+ * 与 `tools.mcpServers`「整体替换」不同，这里是**逐 key 变更**：
+ * `modelPresets` 用户也可能在引擎自带的 WebUI 里维护，整体替换会把那些
+ * 预设静默删掉——而删掉一个预设在界面上表现为「模型从选择器里消失了」，
+ * 没有任何提示能说明是谁删的。
+ *
+ * @returns 是否实际发生变更
+ */
+async function mergeModelMutationIntoConfig(
+  configPath: string,
+  mutation: NanobotModelsMutation,
+): Promise<boolean> {
+  const raw = existsSync(configPath) ? await fs.readFile(configPath, 'utf-8') : '{}';
+  const data = JSON.parse(raw) as Record<string, unknown>;
+  const asObject = (value: unknown): Record<string, unknown> =>
+    typeof value === 'object' && value !== null && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : {};
+
+  const presets = asObject(data.modelPresets);
+  const providers = asObject(data.providers);
+  const agents = asObject(data.agents);
+  const defaults = asObject(agents.defaults);
+
+  if (mutation.op === 'upsert') {
+    // 改名：预设名就是模型选择器里显示的那行字（ModelPresetConfig 没有 label
+    // 字段，多写的键会被 pydantic 静默丢弃），所以改名只能换 key；
+    // 默认指针若指向旧名必须跟着搬，否则「默认模型」会指向一个不存在的预设。
+    const previous = mutation.previousPreset;
+    if (previous && previous !== mutation.preset) {
+      delete presets[previous];
+      if (defaults.modelPreset === previous) defaults.modelPreset = mutation.preset;
+    }
+    presets[mutation.preset] = mutation.config;
+
+    const incoming = mutation.provider;
+    if (incoming?.key) {
+      const entry = asObject(providers[incoming.key]);
+      if (incoming.apiKey !== undefined) entry.apiKey = incoming.apiKey;
+      if (incoming.apiBase !== undefined) entry.apiBase = incoming.apiBase;
+      if (incoming.displayName !== undefined) entry.displayName = incoming.displayName;
+      providers[incoming.key] = entry;
+    }
+    if (mutation.setDefault) defaults.modelPreset = mutation.preset;
+  } else if (mutation.op === 'delete') {
+    delete presets[mutation.preset];
+    // 默认指针清空后引擎回落到「隐式 default 预设」（agents.defaults 那套字段），
+    // 这是唯一安全的兜底——指向一个已删除的预设会让每轮请求都炸。
+    if (defaults.modelPreset === mutation.preset) defaults.modelPreset = null;
+
+    // 自定义供应商无人引用时一并清掉：它是为这个模型才建出来的动态条目，
+    // 留着会在 providers 里堆一串没有主人的 apiBase。内置供应商一律不动——
+    // 用户可能为别的用途（语音转录、别的预设）填过 key。
+    const providerKey = mutation.providerKey;
+    if (providerKey && !isBuiltinProvider(providerKey)) {
+      const stillUsed = Object.values(presets).some((preset) => {
+        const name = (preset as Record<string, unknown> | undefined)?.provider;
+        return typeof name === 'string' && resolveProviderConfigKey(name, providers) === providerKey;
+      });
+      if (!stillUsed) delete providers[providerKey];
+    }
+  } else {
+    defaults.modelPreset = mutation.preset;
+  }
+
+  agents.defaults = defaults;
+  data.agents = agents;
+  data.modelPresets = presets;
+  data.providers = providers;
+
+  // 幂等检测只比「模型相关的三段」：config.json 里还有 channels / tools 等
+  // 别人也会写的段，拿整份 data 比对会把无关的差异也算进来。
+  const modelSegments = (source: Record<string, unknown>) => ({
+    modelPresets: asObject(source.modelPresets),
+    providers: asObject(source.providers),
+    defaultPreset: asObject(asObject(source.agents).defaults).modelPreset,
+  });
+  const before = JSON.stringify(modelSegments(JSON.parse(raw) as Record<string, unknown>));
+  const after = JSON.stringify({
+    modelPresets: presets,
+    providers,
+    defaultPreset: defaults.modelPreset,
+  });
+  if (before === after) return false;
+
+  // 唯一后缀避免与并发的读-改-写链路（channels / mcp / skills）共用临时名互覆
+  const tmp = `${configPath}.${process.pid}.${Date.now()}.tmp`;
+  await fs.writeFile(tmp, JSON.stringify(data, null, 2), 'utf-8');
+  await fs.rename(tmp, configPath);
+  return true;
+}
+
+/**
+ * 同步一次模型变更：
+ *   1. 合并写入 config.json 的 modelPresets / providers / agents.defaults.modelPreset；
+ *   2. 若本进程托管着 serve 子进程，重启它以载入新预设（/v1/models 在启动时构建）；
+ *   3. serve 不在本进程托管 → 返回 needsRestart。
+ */
+async function syncNanobotModels(mutationJson: string): Promise<ModelsSyncResult> {
+  try {
+    if (nanobotStartupPromise) await nanobotStartupPromise;
+    const mutation = JSON.parse(mutationJson) as NanobotModelsMutation;
+    if (!mutation || typeof mutation !== 'object' || typeof mutation.op !== 'string') {
+      return { ok: false, message: '模型变更指令格式非法' };
+    }
+    if (mutation.op === 'upsert') {
+      // 预设名是模型选择器里显示的那行字，空名会让这一行在下拉里彻底消失
+      if (!mutation.preset?.trim()) {
+        return { ok: false, message: '模型名称不能为空' };
+      }
+      if (!mutation.config || !mutation.config.model?.trim()) {
+        return { ok: false, message: '模型名称不能为空' };
+      }
+    } else if (!mutation.preset?.trim()) {
+      return { ok: false, message: '缺少模型名称' };
+    }
+
+    const configPath = await resolveNanobotConfigPath();
+    if (!configPath) {
+      return { ok: false, message: '未找到 nanowork config.json，无法同步模型配置' };
+    }
+    const changed = await mergeModelMutationIntoConfig(configPath, mutation);
+    if (!changed) {
+      return { ok: true, changed: false, message: '模型配置与 nanowork 一致，无需变更' };
+    }
+    // /v1/models 的预设目录在 serve 启动时构建 → 改 modelPresets 必须重启 serve
+    if (nanobotProcess) {
+      stopNanobot();
+      await waitForPortFree(nanobotServeHost, nanobotServePort ?? DEFAULT_GATEWAY_PORT, 5000);
+      await startNanobot();
+      if (nanobotProcess) {
+        return { ok: true, message: '模型配置已写入 config.json.modelPresets，serve 已重启生效' };
+      }
+      return { ok: false, message: '模型配置已写入，但 serve 重启失败，请检查 nanowork 日志' };
+    }
+    const portBusy = await isPortInUse(nanobotServeHost, nanobotServePort ?? DEFAULT_GATEWAY_PORT);
+    return {
+      ok: true,
+      message: portBusy
+        ? '模型配置已写入 config.json.modelPresets，serve 由外部进程托管，请重启该网关后生效'
+        : '模型配置已写入 config.json.modelPresets，请启动 nanowork 网关后生效',
+      needsRestart: true,
+    };
+  } catch (err) {
+    return { ok: false, message: `模型同步失败：${String(err)}` };
+  }
+}
+
+/**
+ * 供应商连接测试：真实 `GET {apiBase}/models`。
+ *
+ * 由主进程发起而不是渲染层 fetch：浏览器会被 CORS 挡掉，而「跨域失败」与
+ * 「key 无效」在界面上长得一模一样，会把人引到完全错误的排查方向。
+ * 探针自身绝不抛异常。
+ */
+async function probeModelConnection(
+  request: ModelProbeRequest,
+): Promise<ModelProbeResult> {
+  const started = Date.now();
+  const elapsed = () => Date.now() - started;
+  try {
+    const provider = typeof request?.provider === 'string' ? request.provider : '';
+    const spec = findModelProvider(provider);
+    const explicitBase = typeof request?.apiBase === 'string' ? request.apiBase.trim() : '';
+    const apiBase = explicitBase || spec?.apiBase || '';
+    if (!apiBase) {
+      return {
+        ok: false,
+        error: '该供应商没有默认 API 地址，请填写 API Base',
+        latencyMs: elapsed(),
+      };
+    }
+    // 非 OpenAI 兼容后端（Anthropic Messages / Bedrock / Azure）没有 /models：
+    // 只有在用户**显式**填了地址时才尝试，否则直接说明不支持，别发一个注定
+    // 404 的请求再把 404 当「key 不对」报出来。
+    if (spec && !spec.probe && !explicitBase) {
+      return {
+        ok: false,
+        error: `${spec.label} 不是 OpenAI 兼容接口，无法一键测试（可手动填写 API Base 后重试）`,
+        latencyMs: elapsed(),
+      };
+    }
+
+    const url = `${apiBase.replace(/\/+$/, '')}/models`;
+    const headers: Record<string, string> = { Accept: 'application/json' };
+    const key = typeof request?.apiKey === 'string' ? request.apiKey.trim() : '';
+    if (key) headers.Authorization = `Bearer ${key}`;
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 10_000);
+    try {
+      const res = await fetch(url, { method: 'GET', headers, signal: controller.signal });
+      const text = await res.text();
+      const latencyMs = elapsed();
+      if (!res.ok) {
+        return { ok: false, error: `HTTP ${res.status} ${res.statusText} ${text.slice(0, 200)}`, latencyMs };
+      }
+      const parsed = JSON.parse(text) as { data?: { id?: unknown }[] };
+      const models = Array.isArray(parsed.data)
+        ? parsed.data
+            .map((item) => (typeof item?.id === 'string' ? item.id : ''))
+            .filter(Boolean)
+            .sort()
+            .slice(0, 200)
+        : [];
+      return { ok: true, models, latencyMs };
+    } finally {
+      clearTimeout(timer);
+    }
+  } catch (err) {
+    const aborted = err instanceof Error && err.name === 'AbortError';
+    return {
+      ok: false,
+      error: aborted ? '连接超时（10s）' : `连接失败：${err instanceof Error ? err.message : String(err)}`,
+      latencyMs: elapsed(),
+    };
+  }
+}
+
+// ——————————————————————————————————————————————
 // nanobot 频道会话只读扫描（渲染层「频道」会话列表数据源）
 // gateway 将每条 IM 对话以 {base64url(channel:chat_id)}.jsonl 持久化在
 // {config 目录}/sessions/{workspace_id}/ 下。此处只做只读解析，绝不写入，
@@ -2475,6 +2799,23 @@ ipcMain.handle('nanobot:getMcp', async () => {
     return null;
   }
 });
+// 模型设置只读回读：modelPresets + 被引用的 providers + 默认预设
+ipcMain.handle('nanobot:getModels', async () => {
+  try {
+    return await getNanobotModels();
+  } catch (err) {
+    console.warn(`[nanobot] modelPresets 回读失败：${String(err)}`);
+    return null;
+  }
+});
+// 模型变更同步：合并写入 config.json 并按需重启 serve
+ipcMain.handle('nanobot:syncModels', async (_e, mutationJson: string) =>
+  syncNanobotModels(mutationJson),
+);
+// 供应商连接测试：主进程发请求（渲染层 fetch 会被 CORS 挡掉，且失败原因不可辨）
+ipcMain.handle('model:probe', async (_e, request: ModelProbeRequest) =>
+  probeModelConnection(request),
+);
 // MCP 连接探针：真实握手（initialize + tools/list），凭据由主进程从保险库补齐
 // （渲染层只传 server 名与地址，**不传密钥**）。探针自身绝不抛异常。
 ipcMain.handle('mcp:probe', async (_e, request: McpProbeRequest) => {

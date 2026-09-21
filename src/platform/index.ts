@@ -17,9 +17,13 @@ import type {
   MCPSyncResult,
   McpProbeRequest,
   McpProbeResult,
+  ModelProbeRequest,
+  ModelProbeResult,
+  ModelsSyncResult,
   NanobotCronHistoryDeleteResult,
   NanobotCronRunRecord,
   NanobotMcpSnapshot,
+  NanobotModelsSnapshot,
   PlatformAdapter,
   SecretWriteResult,
   SkillOverrideSyncResult,
@@ -125,6 +129,44 @@ export const platform: PlatformAdapter = {
       status: 'error',
       tools: [],
       error: 'Web 端不支持连接测试（需要本地进程与系统凭据库），请使用桌面端',
+      latencyMs: 0,
+    };
+  },
+  /** 只读回读 config.json 的模型预设与供应商凭据（Web 端无文件系统权限 → null） */
+  getNanobotModels: async (): Promise<NanobotModelsSnapshot | null> => {
+    if (isElectron() && window.electronAPI) {
+      return window.electronAPI.nanobotGetModels();
+    }
+    return null;
+  },
+  /** 提交一次模型变更：合并写入 config.json 并按需重启 serve */
+  syncNanobotModels: async (mutationJson: string): Promise<ModelsSyncResult> => {
+    if (isElectron() && window.electronAPI) {
+      return window.electronAPI.nanobotSyncModels(mutationJson);
+    }
+    // Web 端无文件系统权限：降级为下载片段文件，由用户手动合并进 config.json
+    await webWriteTextFile('nanowork.models.json', mutationJson);
+    return {
+      ok: true,
+      changed: true,
+      message:
+        '已下载模型配置片段，请手动合并进 nanobot config.json 的 modelPresets / providers 并重启网关',
+      needsRestart: true,
+    };
+  },
+  /**
+   * 供应商连接测试。
+   *
+   * Web 端**明确返回不可用**：浏览器发不出去（CORS），而 CORS 失败与
+   * 「key 无效」在界面上长得一样，降级成"看起来连上了"只会误导排查方向。
+   */
+  probeModel: async (request: ModelProbeRequest): Promise<ModelProbeResult> => {
+    if (isElectron() && window.electronAPI) {
+      return window.electronAPI.probeModel(request);
+    }
+    return {
+      ok: false,
+      error: 'Web 端不支持连接测试（浏览器跨域限制），请使用桌面端',
       latencyMs: 0,
     };
   },

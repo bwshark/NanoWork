@@ -34,6 +34,8 @@ const CONTENT_ANCHORS: Record<SettingsSectionId, string> = {
   connection: '网关连接',
   memory: '记忆注入',
   persona: '身份文件与提示词模板都在这里外置维护',
+  // 「自定义模型」是卡片标题；左侧菜单项只有「模型」两个字，不会误命中
+  models: '自定义模型',
   assistant: '配置 IM 频道',
   plugins: '引擎已激活',
   data: '数据落点',
