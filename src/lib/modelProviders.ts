@@ -58,6 +58,22 @@ export interface ModelProviderSpec {
    * 没有默认地址（vLLM）、走 OAuth 登录（未列入目录）。
    */
   probe: boolean;
+  /**
+   * 官方文档地址（「供应商」标签行右侧那个「查看文档」入口）。
+   *
+   * **只填能确认的**：链接点出去是打不开的页面，比没有这个入口更糟（用户会以为
+   * 是本产品的 bug）。没有这一项就不渲染那个入口。
+   */
+  docsUrl?: string;
+  /**
+   * 该供应商的**常用模型**清单，作为「模型名称」下拉的起点。
+   *
+   * ⚠️ 这是**起点不是全集**：上游发版很快，这份清单注定会过时，所以
+   * ①「模型名称」允许自由输入；②「测试连接」拿到的真实清单**优先展示在它前面**
+   * （见 `providerModelOptions` 的 `extra` 参数）。维护原则是「宁短勿错」——
+   * 列一个已经下线的模型名，用户会照着它配出一个必定 404 的预设。
+   */
+  models?: readonly string[];
 }
 
 /**
@@ -69,30 +85,33 @@ export interface ModelProviderSpec {
  * - `azure_openai` / `bedrock`：必须额外填 deployment / region，简化表单表达不了；
  * - `opencode_zen`：注册表里标了 `settings_alias_for=opencode`，是兼容别名；
  * - `assemblyai`：transcription-only，引擎会直接拒绝它承载对话。
+ *
+ * `docsUrl` / `models` 都只填查得准的（见 `ModelProviderSpec` 上的注释）；
+ * 留空的供应商在界面上表现为「没有查看文档入口 + 模型候选靠测试连接拿」。
  */
 export const MODEL_PROVIDERS: ModelProviderSpec[] = [
   // —— 官方直连 ——
-  { name: 'openai', label: 'OpenAI', group: 'official', apiBase: 'https://api.openai.com/v1', probe: true },
-  { name: 'anthropic', label: 'Anthropic', group: 'official', apiBase: '', probe: false },
-  { name: 'gemini', label: 'Google Gemini', group: 'official', apiBase: 'https://generativelanguage.googleapis.com/v1beta/openai/', probe: true },
-  { name: 'deepseek', label: 'DeepSeek 深度求索', group: 'official', apiBase: 'https://api.deepseek.com', probe: true },
-  { name: 'dashscope', label: '阿里云 DashScope（通义）', group: 'official', apiBase: 'https://dashscope.aliyuncs.com/compatible-mode/v1', probe: true },
-  { name: 'zhipu', label: '智谱 AI', group: 'official', apiBase: 'https://open.bigmodel.cn/api/paas/v4', probe: true },
-  { name: 'moonshot', label: 'Moonshot（Kimi）', group: 'official', apiBase: 'https://api.moonshot.ai/v1', probe: true },
+  { name: 'openai', label: 'OpenAI', group: 'official', apiBase: 'https://api.openai.com/v1', probe: true, docsUrl: 'https://platform.openai.com/docs', models: ['gpt-5.6', 'gpt-5.2', 'gpt-5.1', 'gpt-5-mini', 'gpt-4o'] },
+  { name: 'anthropic', label: 'Anthropic', group: 'official', apiBase: '', probe: false, docsUrl: 'https://docs.anthropic.com', models: ['claude-opus-4-5', 'claude-sonnet-4-5'] },
+  { name: 'gemini', label: 'Google Gemini', group: 'official', apiBase: 'https://generativelanguage.googleapis.com/v1beta/openai/', probe: true, docsUrl: 'https://ai.google.dev/gemini-api/docs', models: ['gemini-3.8-flash', 'gemini-3.1-pro-preview', 'gemini-3.7-flash', 'gemini-2.5-pro'] },
+  { name: 'deepseek', label: 'DeepSeek 深度求索', group: 'official', apiBase: 'https://api.deepseek.com', probe: true, docsUrl: 'https://api-docs.deepseek.com', models: ['deepseek-v4-pro', 'deepseek-v4-flash'] },
+  { name: 'dashscope', label: '阿里云 DashScope（通义）', group: 'official', apiBase: 'https://dashscope.aliyuncs.com/compatible-mode/v1', probe: true, models: ['qwen3.8-flash', 'qwen3.6-flash', 'qwen3.6-max-preview'] },
+  { name: 'zhipu', label: '智谱 AI', group: 'official', apiBase: 'https://open.bigmodel.cn/api/paas/v4', probe: true, models: ['glm-5.2', 'glm-5.1', 'glm-5-turbo'] },
+  { name: 'moonshot', label: 'Moonshot（Kimi）', group: 'official', apiBase: 'https://api.moonshot.ai/v1', probe: true, docsUrl: 'https://platform.moonshot.cn/docs', models: ['kimi-k3', 'kimi-k2.7-code', 'kimi-k2.6'] },
   { name: 'minimax', label: 'MiniMax', group: 'official', apiBase: 'https://api.minimax.io/v1', probe: true },
-  { name: 'mistral', label: 'Mistral AI', group: 'official', apiBase: 'https://api.mistral.ai/v1', probe: true },
+  { name: 'mistral', label: 'Mistral AI', group: 'official', apiBase: 'https://api.mistral.ai/v1', probe: true, docsUrl: 'https://docs.mistral.ai' },
   { name: 'stepfun', label: '阶跃星辰 StepFun', group: 'official', apiBase: 'https://api.stepfun.com/v1', probe: true },
-  { name: 'xiaomi_mimo', label: '小米 MIMO', group: 'official', apiBase: 'https://api.xiaomimimo.com/v1', probe: true },
+  { name: 'xiaomi_mimo', label: '小米 MIMO', group: 'official', apiBase: 'https://api.xiaomimimo.com/v1', probe: true, models: ['mimo-v2.5-pro', 'mimo-v2.5'] },
   { name: 'longcat', label: 'LongCat', group: 'official', apiBase: 'https://api.longcat.chat/openai/v1', probe: true },
   { name: 'ant_ling', label: 'Ant Ling', group: 'official', apiBase: 'https://api.ant-ling.com/v1', probe: true },
   { name: 'qianfan', label: '百度千帆', group: 'official', apiBase: 'https://qianfan.baidubce.com/v2', probe: true },
   { name: 'nvidia', label: 'NVIDIA NIM', group: 'official', apiBase: 'https://integrate.api.nvidia.com/v1', probe: true },
-  { name: 'groq', label: 'Groq', group: 'official', apiBase: 'https://api.groq.com/openai/v1', probe: true },
-  { name: 'kimi_coding', label: 'Kimi Coding Plan', group: 'official', apiBase: 'https://api.kimi.com/coding/v1', probe: false },
+  { name: 'groq', label: 'Groq', group: 'official', apiBase: 'https://api.groq.com/openai/v1', probe: true, docsUrl: 'https://console.groq.com/docs' },
+  { name: 'kimi_coding', label: 'Kimi Coding Plan', group: 'official', apiBase: 'https://api.kimi.com/coding/v1', probe: false, docsUrl: 'https://platform.moonshot.cn/docs', models: ['kimi-for-coding'] },
 
   // —— 聚合网关 ——
-  { name: 'openrouter', label: 'OpenRouter', group: 'gateway', apiBase: 'https://openrouter.ai/api/v1', probe: true },
-  { name: 'siliconflow', label: '硅基流动 SiliconFlow', group: 'gateway', apiBase: 'https://api.siliconflow.cn/v1', probe: true },
+  { name: 'openrouter', label: 'OpenRouter', group: 'gateway', apiBase: 'https://openrouter.ai/api/v1', probe: true, docsUrl: 'https://openrouter.ai/docs', models: ['deepseek/deepseek-v4-pro', 'z-ai/glm-5.2', 'moonshotai/kimi-k2.6', 'qwen/qwen3.6-max-preview'] },
+  { name: 'siliconflow', label: '硅基流动 SiliconFlow', group: 'gateway', apiBase: 'https://api.siliconflow.cn/v1', probe: true, docsUrl: 'https://docs.siliconflow.com', models: ['deepseek-ai/DeepSeek-V4-Pro', 'deepseek-ai/DeepSeek-V4-Flash'] },
   { name: 'modelscope', label: '魔搭社区 ModelScope', group: 'gateway', apiBase: 'https://api-inference.modelscope.cn/v1', probe: true },
   { name: 'volcengine', label: '火山引擎 VolcEngine', group: 'gateway', apiBase: 'https://ark.cn-beijing.volces.com/api/v3', probe: true },
   { name: 'volcengine_coding_plan', label: '火山引擎 Coding Plan', group: 'gateway', apiBase: 'https://ark.cn-beijing.volces.com/api/coding/v3', probe: true },
@@ -108,8 +127,8 @@ export const MODEL_PROVIDERS: ModelProviderSpec[] = [
   { name: 'huggingface', label: 'Hugging Face', group: 'gateway', apiBase: 'https://router.huggingface.co/v1', probe: true },
 
   // —— 本地部署 ——
-  { name: 'ollama', label: 'Ollama', group: 'local', apiBase: 'http://localhost:11434/v1', probe: true },
-  { name: 'lm_studio', label: 'LM Studio', group: 'local', apiBase: 'http://localhost:1234/v1', probe: true },
+  { name: 'ollama', label: 'Ollama', group: 'local', apiBase: 'http://localhost:11434/v1', probe: true, docsUrl: 'https://docs.ollama.com', models: ['gpt-oss:20b', 'qwen3:8b', 'qwen3-vl:8b', 'llama3.2'] },
+  { name: 'lm_studio', label: 'LM Studio', group: 'local', apiBase: 'http://localhost:1234/v1', probe: true, docsUrl: 'https://lmstudio.ai/docs' },
   { name: 'vllm', label: 'vLLM', group: 'local', apiBase: '', probe: false },
   { name: 'atomic_chat', label: 'Atomic Chat', group: 'local', apiBase: 'http://localhost:1337/v1', probe: true },
   { name: 'ovms', label: 'OpenVINO Model Server', group: 'local', apiBase: 'http://localhost:8000/v3', probe: true },
@@ -158,6 +177,19 @@ export function modelProviderLabel(name: string): string {
   if (!name) return '';
   if (name === AUTO_PROVIDER_VALUE) return '自动匹配';
   return BUILTIN_BY_NAME.get(name)?.label ?? name;
+}
+
+/**
+ * 「供应商」下拉的显示文案，**回显与菜单项共用这一份口径**。
+ *
+ * 与 `modelProviderLabel` 分开的原因只有一个：自定义供应商的哨兵值
+ * （`__custom__`）在目录里查不到，`modelProviderLabel` 会把它**原样**吐出来
+ * ——早期没有 `renderValue` 时看不出来（框里渲染的是那个 MenuItem 的文案），
+ * 一旦加了字标回显，框里就会显示成 `__custom__ 自定义` 这种双份文案。
+ */
+export function providerOptionLabel(value: string): string {
+  if (value === CUSTOM_PROVIDER_VALUE) return '自定义';
+  return modelProviderLabel(value);
 }
 
 /**
@@ -216,4 +248,58 @@ export function groupedModelProviders(): {
     group,
     items: MODEL_PROVIDERS.filter((p) => p.group === group),
   }));
+}
+
+/**
+ * 供应商的「查看文档」地址；目录里没登记（或没登记文档）时返回 `null`。
+ *
+ * 返回 `null` 时界面**不渲染**那个入口：链接指向一个不存在的页面，用户只会
+ * 记成本产品的 bug，比没有入口更糟。
+ */
+export function providerDocsUrl(provider: string): string | null {
+  return findModelProvider(provider)?.docsUrl ?? null;
+}
+
+/**
+ * 「模型名称」下拉的候选清单。
+ *
+ * 顺序刻意是 **探测到的真实清单在前、内置常用清单在后**：前者来自这个端点此刻
+ * 真的提供了什么（`GET {apiBase}/models`），后者是一份注定会过时的起点。反过来
+ * 排的话，用户会先看到一批可能已经下线的名字。
+ *
+ * @param provider 目录里的供应商名（`auto` / 自定义供应商都查不到 → 只剩 `extra`）
+ * @param extra 探测结果，或编辑模式下当前预设的模型名（保证它一定在候选里）
+ */
+export function providerModelOptions(
+  provider: string,
+  extra: readonly string[] = [],
+): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  const push = (value: string) => {
+    const name = value.trim();
+    if (!name || seen.has(name)) return;
+    seen.add(name);
+    out.push(name);
+  };
+  extra.forEach(push);
+  // ⚠️ 不要用 `models.flatMap(push)`：`push` 会收到 (值, 下标, 数组) 三个参数，
+  // 下标会被当作…… 更糟的是 flatMap 会把 push 的返回值（undefined）收集起来。
+  for (const spec of MODEL_PROVIDERS) {
+    if (spec.name !== provider) continue;
+    (spec.models ?? []).forEach(push);
+  }
+  return out;
+}
+
+/**
+ * 供应商图标的字标（参考图里那个「K」形态）。
+ *
+ * 取展示名的**第一个字母或数字**，而不是画各家 logo：目录里 30 多家供应商，
+ * 逐个维护一套品牌图标既不可能保真、也活不过一次换主题；字标则是从数据本身
+ * 推出来的，永远不会与标签不一致。CJK 标签取第一个汉字（如「阿」）。
+ */
+export function providerMonogram(label: string): string {
+  const match = label.trim().match(/[\p{L}\p{N}]/u);
+  return match ? match[0].toUpperCase() : '?';
 }

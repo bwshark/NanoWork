@@ -317,6 +317,23 @@ export const platform: PlatformAdapter = {
       error: 'Web 端不支持此操作，请使用桌面端',
     });
   },
+  /**
+   * 用系统默认浏览器打开 http(s) 链接。
+   *
+   * Web 端刻意**不用** `window.open`：浏览器会拦下没有用户手势的弹窗，返回值也
+   * 只是一张可能已被拦截的句柄（既不能证实打开成功，也无法报告失败）。开着
+   * `noopener` 新开一个标签页是这里唯一能诚实表达的动作。
+   */
+  openUrl: (url: string) => {
+    if (!/^https?:\/\//i.test(url)) {
+      return Promise.resolve({ ok: false, error: `不支持的链接协议：${url}` });
+    }
+    if (isElectron() && window.electronAPI) {
+      return window.electronAPI.openUrl(url);
+    }
+    window.open(url, '_blank', 'noopener,noreferrer');
+    return Promise.resolve({ ok: true });
+  },
   /** 读取本地文件为 base64（桌面端专属；Web 无文件系统权限） */
   readFileAsBase64: (path: string) => {
     if (isElectron() && window.electronAPI) {

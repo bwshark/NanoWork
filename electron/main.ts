@@ -66,6 +66,7 @@ import {
 import { createEventStore } from './eventStore';
 import { CredentialVault, safeStorageCipher } from './credentialVault';
 import { probeMcpServer, type McpProbeRequest } from './mcpProbe';
+import { probeModelEndpoint } from './modelProbe';
 import {
   installPluginPackage,
   readInstalledPlugins,
@@ -1910,11 +1911,40 @@ async function syncNanobotModels(mutationJson: string): Promise<ModelsSyncResult
 }
 
 /**
- * 供应商连接测试：真实 `GET {apiBase}/models`。
+ * 从引擎 config.json 取某个供应商已配置的密钥（取不到返回 null，绝不抛）。
  *
- * 由主进程发起而不是渲染层 fetch：浏览器会被 CORS 挡掉，而「跨域失败」与
- * 「key 无效」在界面上长得一模一样，会把人引到完全错误的排查方向。
- * 探针自身绝不抛异常。
+ * 存在理由：界面上的说明写着「API Key 选填，留空则沿用引擎侧已配置的密钥」，
+ * 而探测原先只认表单里那个框——于是引擎明明能跑通的模型，一点「测试连接」就报
+ * 401（拿不到凭据的请求被上游正常拒绝），用户看到的是「明明能用，测试说不行」。
+ * 密钥本身**只在本函数与请求头之间流动**，任何返回值都不带它。
+ */
+async function resolveConfiguredProviderKey(provider: string): Promise<string | null> {
+  if (!provider) return null;
+  try {
+    const configPath = await resolveNanobotConfigPath();
+    if (!configPath || !existsSync(configPath)) return null;
+    const raw = await fs.readFile(configPath, 'utf-8');
+    const data = JSON.parse(raw) as Record<string, unknown>;
+    const providers =
+      typeof data.providers === 'object' && data.providers !== null
+        ? (data.providers as Record<string, unknown>)
+        : {};
+    const key = resolveProviderConfigKey(provider, providers);
+    if (!key) return null;
+    const entry = providers[key];
+    const apiKey = (entry as Record<string, unknown> | undefined)?.apiKey;
+    return typeof apiKey === 'string' && apiKey.trim() ? apiKey.trim() : null;
+  } catch (err) {
+    console.warn(`[nanobot] 读取供应商已配置密钥失败：${String(err)}`);
+    return null;
+  }
+}
+
+/**
+ * 供应商连接测试：解析凭据与地址（这一段要读磁盘，见 `resolveConfiguredProviderKey`），
+ * 真正的请求与文案交给 `electron/modelProbe.ts`（纯模块，可单测）。
+ *
+ * 凭据优先级：表单里填的 → config.json 里该供应商已配置的 → 无（裸请求）。
  */
 async function probeModelConnection(
   request: ModelProbeRequest,
@@ -1944,37 +1974,17 @@ async function probeModelConnection(
       };
     }
 
-    const url = `${apiBase.replace(/\/+$/, '')}/models`;
-    const headers: Record<string, string> = { Accept: 'application/json' };
-    const key = typeof request?.apiKey === 'string' ? request.apiKey.trim() : '';
-    if (key) headers.Authorization = `Bearer ${key}`;
-
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 10_000);
-    try {
-      const res = await fetch(url, { method: 'GET', headers, signal: controller.signal });
-      const text = await res.text();
-      const latencyMs = elapsed();
-      if (!res.ok) {
-        return { ok: false, error: `HTTP ${res.status} ${res.statusText} ${text.slice(0, 200)}`, latencyMs };
-      }
-      const parsed = JSON.parse(text) as { data?: { id?: unknown }[] };
-      const models = Array.isArray(parsed.data)
-        ? parsed.data
-            .map((item) => (typeof item?.id === 'string' ? item.id : ''))
-            .filter(Boolean)
-            .sort()
-            .slice(0, 200)
-        : [];
-      return { ok: true, models, latencyMs };
-    } finally {
-      clearTimeout(timer);
-    }
+    const typedKey = typeof request?.apiKey === 'string' ? request.apiKey.trim() : '';
+    const configuredKey = typedKey ? null : await resolveConfiguredProviderKey(provider);
+    return await probeModelEndpoint({
+      apiBase,
+      apiKey: typedKey || configuredKey || '',
+      keySource: typedKey ? 'request' : configuredKey ? 'config' : null,
+    });
   } catch (err) {
-    const aborted = err instanceof Error && err.name === 'AbortError';
     return {
       ok: false,
-      error: aborted ? '连接超时（10s）' : `连接失败：${err instanceof Error ? err.message : String(err)}`,
+      error: `连接失败：${err instanceof Error ? err.message : String(err)}`,
       latencyMs: elapsed(),
     };
   }
@@ -2510,6 +2520,26 @@ ipcMain.handle('shell:openPath', async (_e, path: string) => {
   const errorMessage = await shell.openPath(normalized);
   if (errorMessage) return { ok: false, error: errorMessage };
   return { ok: true };
+});
+
+/**
+ * 用系统默认浏览器打开 http(s) 链接（设置页「查看文档」）。
+ *
+ * **协议白名单是必须的**，不是防御性编程：渲染层的字符串可以来自任何地方
+ * （将来某个配置项、某个引擎返回值），而 `shell.openExternal` 在 Windows 上
+ * 会拿 `file:` 走资源管理器、拿别的协议走注册表里注册的任意程序——等于把
+ * 「主进程能启动任意程序」这个能力开给页面。只放行 http/https。
+ */
+ipcMain.handle('shell:openUrl', async (_e, url: string) => {
+  if (typeof url !== 'string' || !/^https?:\/\//i.test(url)) {
+    return { ok: false, error: `不支持的链接协议：${String(url)}` };
+  }
+  try {
+    await shell.openExternal(url);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
 });
 
 // ——— 本地存储信息（设置「通用 → 存储」卡片）———

@@ -181,6 +181,16 @@ export interface NanobotModelPreset {
   contextWindowTokens: number;
   temperature: number;
   reasoningEffort: string | null;
+  /**
+   * 能力声明（客户端「高级配置」的三项）。
+   *
+   * **刻意是可选的**：`agents.defaults` 组的隐式 default 预设、以及本产品上手
+   * 之前建下的预设都没有这三个键。缺省语义由 `buildManaged` 按引擎字段默认值
+   * 补齐，别在这里写 `false` —— 那会把「没声明过」变成「声明了不支持工具调用」。
+   */
+  supportsTools?: boolean;
+  supportsVision?: boolean;
+  customProtocol?: boolean;
 }
 
 /** 预设引用到的 providers 条目（回显用，含 key 明文——见 NanobotModelsSnapshot） */
@@ -263,6 +273,14 @@ export interface ModelProbeResult {
   /** 探测到的模型 id（按名字排序，最多 200 条，供「模型名称」自动补全） */
   models?: string[];
   latencyMs: number;
+  /**
+   * 本次探测实际用的是哪来的凭据（**只报来源，绝不回传密钥内容**）：
+   * - `request`：表单里填的；
+   * - `config`：引擎 config.json 里该供应商已配置的（表单留空时的兜底）；
+   * - `null`：一个都没有，发的是裸请求。
+   * 界面上用它解释「没填 key 也连上了」以及「401 是谁的 key 被拒」。
+   */
+  keySource?: 'request' | 'config' | null;
 }
 
 /**
@@ -650,6 +668,18 @@ export interface PlatformAdapter {
    */
   openPath(path: string): Promise<{ ok: boolean; error?: string }>;
   /**
+   * 用系统默认浏览器打开一个 http(s) 链接（设置页「查看文档」这类外链入口）。
+   *
+   * 与 `openPath` 分开而不是复用它：`openPath` 是**文件路径**语义（主进程直接交给
+   * shell 打开），拿它去开 URL 会得到「找不到该文件」；而这里的实现要额外做
+   * 协议白名单校验——渲染层能把任意字符串送进来，放行 `file:` / 自定义协议
+   * 等于把主进程的 shell 打开能力交出去。
+   * - electron：主进程 `shell.openExternal`（仅 http/https）；
+   * - web：`window.open`（浏览器自己的行为边界）。
+   * @param url http/https 链接；协议不合法或打开失败返回 ok=false 与原因
+   */
+  openUrl(url: string): Promise<{ ok: boolean; error?: string }>;
+  /**
    * 读取本地文件为 base64（复制消息后粘贴恢复附件内容用）。
    * - electron：主进程 fs.readFile；
    * - web：无文件系统权限，返回 ok=false。
@@ -966,6 +996,8 @@ export interface ElectronAPI {
   nanobotDisconnectChannel(kind: string): Promise<GatewayRestartResult>;
   /** 在系统文件管理器中打开路径（资源管理器/Finder）；失败返回错误描述 */
   openPath(path: string): Promise<{ ok: boolean; error?: string }>;
+  /** 用系统默认浏览器打开 http(s) 链接；协议不合法或打开失败返回 ok=false */
+  openUrl(url: string): Promise<{ ok: boolean; error?: string }>;
   /** 读取本地文件为 base64；失败返回 ok=false 与错误描述 */
   readFileAsBase64(path: string): Promise<ReadFileBase64Result>;
   /** 扫描本地技能目录并解析 SKILL.md（用户级 + 指定工作区的项目级） */

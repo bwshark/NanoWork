@@ -11,6 +11,13 @@ import {
   slugifyProviderKey,
   toProviderConfigKey,
 } from '@/lib/modelProviders';
+import {
+  ENGINE_DEFAULT_CAPABILITIES,
+  ENGINE_DEFAULT_CONTEXT_WINDOW_TOKENS,
+  ENGINE_DEFAULT_MAX_TOKENS,
+  ENGINE_DEFAULT_TEMPERATURE,
+  normalizeTokenLimit,
+} from '@/lib/modelOptions';
 
 /**
  * 设置页「模型」分区里的一行。
@@ -39,6 +46,36 @@ export interface ManagedModel {
   isDefault: boolean;
   /** 是否为自定义供应商（决定删除模型时能否顺带清掉 provider 条目） */
   custom: boolean;
+  /**
+   * 上下文窗口（tokens）；`null` = 与引擎默认值一致 = 界面上的「使用提供商默认值」。
+   *
+   * 归一化在 `buildManaged` 里做（`ENGINE_DEFAULT_CONTEXT_WINDOW_TOKENS → null`），
+   * 这样「我没设过」与「我特意设成 200K（＝引擎默认）」在界面上是同一个状态——它们
+   * 的语义本来就是同一个，区分开只会让用户以为自己的设置丢了。
+   */
+  contextWindowTokens: number | null;
+  /** 单次最大输出（tokens）；`null` 同上 */
+  maxTokens: number | null;
+  /** 思考强度（引擎 `reasoning_effort`）；`null` = 不注入，跟随供应商默认 */
+  reasoningEffort: string | null;
+  /**
+   * 能力声明：该模型支持 function calling。
+   *
+   * 缺省由 `buildManaged` 按引擎字段默认值（true）补齐——**旧预设里没有这个键
+   * 不代表「不支持工具调用」**，把它读成 false 会让老预设一打开就显示成不支持。
+   */
+  supportsTools: boolean;
+  /** 能力声明：该模型接受图片输入（引擎默认 false） */
+  supportsVision: boolean;
+  /** 能力声明：端点不走标准 OpenAI 兼容协议（引擎默认 false） */
+  customProtocol: boolean;
+  /**
+   * 采样温度。
+   *
+   * 表单**不暴露**这个值，但必须回读：`buildMutation` 要把它原样带过去。不读的话
+   * 每次「编辑一下模型名」都会把它重置成引擎默认值，而这种丢失界面上看不见。
+   */
+  temperature: number;
 }
 
 /** 「添加 / 编辑模型」对话框提交的表单值 */
@@ -49,9 +86,26 @@ export interface ModelFormValue {
   customProviderName: string;
   /** 自定义供应商的 API Base（OpenAI 兼容前缀） */
   apiBase: string;
+  /**
+   * 供应商密钥。**可以留空**：密钥也可能来自引擎侧已配置的值、环境变量
+   * （`<PROVIDER>_API_KEY`），或者供应商本来就不需要（本地部署、内网网关）。
+   * 留空时写 `null`，引擎按自己的回退链取值。
+   */
   apiKey: string;
   /** 模型名；**同时就是预设名**，因此也是模型选择器里显示的那行字 */
   model: string;
+  /** 上下文窗口（tokens）；`null` = 写引擎默认值（即不覆盖供应商默认） */
+  contextWindowTokens: number | null;
+  /** 单次最大输出（tokens）；`null` = 写引擎默认值 */
+  maxTokens: number | null;
+  /** 思考强度；`null` = 关闭思考模式（不注入 `reasoning_effort`） */
+  reasoningEffort: string | null;
+  /** 能力声明：支持 function calling（与引擎 `supports_tools` 同名同义） */
+  supportsTools: boolean;
+  /** 能力声明：接受图片输入 */
+  supportsVision: boolean;
+  /** 能力声明：端点不走标准 OpenAI 兼容协议 */
+  customProtocol: boolean;
   /** 保存后是否立即设为默认 */
   setDefault: boolean;
   /** 编辑模式下的原模型（新增时省略） */
@@ -135,6 +189,37 @@ export function buildManaged(snapshot: NanobotModelsSnapshot): ManagedModel[] {
           Boolean(providerKey) &&
           provider !== AUTO_PROVIDER_VALUE &&
           !isBuiltinProvider(providerKey),
+        // 与引擎默认值相同的取值折成 null（＝界面上的「使用提供商默认值」），
+        // 判据集中在 `normalizeTokenLimit`，别在这里再写一遍 `=== 200_000`
+        contextWindowTokens: normalizeTokenLimit(
+          preset?.contextWindowTokens,
+          ENGINE_DEFAULT_CONTEXT_WINDOW_TOKENS,
+        ),
+        maxTokens: normalizeTokenLimit(preset?.maxTokens, ENGINE_DEFAULT_MAX_TOKENS),
+        reasoningEffort:
+          typeof preset?.reasoningEffort === 'string' && preset.reasoningEffort
+            ? preset.reasoningEffort
+            : null,
+        // 能力声明的缺省值与引擎字段默认值一致（`ENGINE_DEFAULT_CAPABILITIES`）。
+        // 必须用 `typeof === 'boolean'` 判真值而不是 `?? true`：`null`（用户手改过
+        // config.json）与「键不存在」（旧预设）要落到同一个缺省，别把 null 留在
+        // 界面状态里——它会让勾选框变成非受控。
+        supportsTools:
+          typeof preset?.supportsTools === 'boolean'
+            ? preset.supportsTools
+            : ENGINE_DEFAULT_CAPABILITIES.supportsTools,
+        supportsVision:
+          typeof preset?.supportsVision === 'boolean'
+            ? preset.supportsVision
+            : ENGINE_DEFAULT_CAPABILITIES.supportsVision,
+        customProtocol:
+          typeof preset?.customProtocol === 'boolean'
+            ? preset.customProtocol
+            : ENGINE_DEFAULT_CAPABILITIES.customProtocol,
+        temperature:
+          typeof preset?.temperature === 'number' && Number.isFinite(preset.temperature)
+            ? preset.temperature
+            : ENGINE_DEFAULT_TEMPERATURE,
       };
     })
     // 默认预设排在最前，其余按名字排序：列表顺序稳定，才不会每次重开设置都跳一遍
@@ -168,10 +253,22 @@ export function buildMutation(value: ModelFormValue): NanobotModelsMutation {
     config: {
       model,
       provider: custom ? providerKey : value.provider,
-      maxTokens: 8192,
-      contextWindowTokens: 200_000,
-      temperature: 0.1,
-      reasoningEffort: null,
+      // `null` = 用户在界面上选了「使用提供商默认值」→ 写入引擎自己的默认值。
+      // 不能省略这两个键：`modelPresets` 由我们整体写入，缺字段会退回 pydantic 默认值，
+      // 结果虽然一样，但「写进去的到底是哪个数」就查不出来了。
+      maxTokens: value.maxTokens ?? ENGINE_DEFAULT_MAX_TOKENS,
+      contextWindowTokens: value.contextWindowTokens ?? ENGINE_DEFAULT_CONTEXT_WINDOW_TOKENS,
+      // 温度不在表单里，必须从原预设带过来：硬编码会让「只改个模型名」顺手把用户在
+      // 引擎 WebUI 里调过的采样温度重置掉（界面上完全看不出来）
+      temperature: value.original?.temperature ?? ENGINE_DEFAULT_TEMPERATURE,
+      // 思考模式：开启写具体档位，关闭写 null（＝不注入，跟随供应商默认）
+      reasoningEffort: value.reasoningEffort,
+      // 能力声明：三项都**显式写全**。它们引擎当前不消费，但缺键会被 pydantic
+      // 静默丢弃（`Base` 未开 extra="allow"）——「勾选了、保存了、再打开又没了」
+      // 就是这么来的。引擎侧字段声明见 `nanobot/config/schema.py::ModelPresetConfig`。
+      supportsTools: value.supportsTools,
+      supportsVision: value.supportsVision,
+      customProtocol: value.customProtocol,
     },
     provider: auto
       ? undefined

@@ -98,6 +98,8 @@ const api: ElectronAPI = {
     ipcRenderer.invoke('nanobot:disconnectChannel', kind),
   /** 在系统文件管理器中打开路径（资源管理器/Finder） */
   openPath: (path: string) => ipcRenderer.invoke('shell:openPath', path),
+  /** 用系统默认浏览器打开 http(s) 链接（主进程侧有协议白名单） */
+  openUrl: (url: string) => ipcRenderer.invoke('shell:openUrl', url),
   /** 读取本地文件为 base64（复制消息粘贴恢复附件用） */
   readFileAsBase64: (path: string) =>
     ipcRenderer.invoke('fs:readFileAsBase64', path),
