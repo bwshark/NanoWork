@@ -52,7 +52,7 @@ flowchart TB
     PRE["preload.ts → window.electronAPI"]
   end
   subgraph EXT["外部"]
-    GW["nanobot 网关<br/>127.0.0.1:8900 (OpenAI 兼容)"]
+    GW["nanobot 网关<br/>127.0.0.1:18900 (OpenAI 兼容)"]
   end
 
   PAGES --> SHARED
@@ -215,7 +215,7 @@ nanowork/
 export type ConnectionStatus = 'connected' | 'offline';
 
 export interface Settings {
-  gatewayEndpoint: string;   // 默认 http://127.0.0.1:8900/v1
+  gatewayEndpoint: string;   // 默认 http://127.0.0.1:18900/v1
   apiToken: string;          // nanobot apiToken/key
   theme: 'light' | 'dark';
   memoryEnabled: boolean;    // 记忆注入开关（默认 true）
@@ -653,7 +653,7 @@ typescript@^5.5.0
 
 - nanobot 是 HKUDS 的 Python 自托管 Agent 框架，**不安装进本项目**。
 - 客户端仅通过 HTTP 访问其 OpenAI 兼容 API：`{endpoint}/chat/completions`（SSE 流式）、`/models`。
-- 默认网关地址 `http://127.0.0.1:8900`（gateway 长运行服务）；endpoint 与 apiToken 在设置中可配。**注**：本行原写作 `8765`，正确值为 `8900`（见 `src/lib/constants.ts`）。
+- 默认网关地址 `http://127.0.0.1:18900`（gateway 长运行服务）；endpoint 与 apiToken 在设置中可配。**注**：本行原写作 `8765`，2026-09-17 修正为 `8900`，2026-09-21 再迁到 `18900`（`8900` 落在 Windows 保留端口区间内，绑定报 `winerror 10013`；见 `src/lib/constants.ts` 的 `DEFAULT_GATEWAY_PORT`）。
 - 桌面端主进程（P2 增强）可负责拉起/管理 nanobot 进程，首版渲染层仅做 HTTP 调用。
 
 ---

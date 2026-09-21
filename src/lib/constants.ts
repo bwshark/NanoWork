@@ -21,8 +21,27 @@ export const APP_NAME = `${APP_DISPLAY_NAME} ${APP_DISPLAY_SUB}`;
  */
 export const APP_VERSION = '0.1.0';
 
-/** 默认 nanobot 网关（OpenAI 兼容 API 前缀，与 nanobot serve 默认端口 8900 对齐） */
-export const DEFAULT_GATEWAY = 'http://127.0.0.1:8900/v1';
+/**
+ * 首选网关端口。
+ *
+ * ⚠️ **与 `electron/main.ts` 的 `DEFAULT_GATEWAY_PORT` 是同一份事实的两处镜像**——
+ * 渲染层与主进程是两个 bundle，主进程 import 本文件会牵进 `@/` 别名（esbuild 未配该别名）。
+ * 改端口时两处一起改，与 `APP_VERSION` 同一套约定。
+ *
+ * 为什么不是 nanobot 自带的 8900：Windows 会把成段端口划入「保留区间」
+ * （Hyper-V / WSL 的 winnat 动态保留，`netsh interface ipv4 show excludedportrange
+ * protocol=tcp` 可查），落在其中的端口**任何进程都绑不上**，报错是 WSAEACCES(10013)
+ * 而不是「端口已占用」的 10048 —— 照「杀旧进程」的思路排障会一直找不到原因。
+ * 18900 不在保留区间内，且高于动态端口范围上界（1024 + 13977 = 15000），
+ * 不会与出站临时端口撞车。
+ *
+ * 这仍然只是**首选值**：主进程 bind 失败时会自动顺延（见 `resolveGatewayPort`），
+ * 实际端口以主进程为准，渲染层据 `nanobotGatewayInfo` 同步地址。
+ */
+export const DEFAULT_GATEWAY_PORT = 18900;
+
+/** 默认 nanobot 网关（OpenAI 兼容 API 前缀） */
+export const DEFAULT_GATEWAY = `http://127.0.0.1:${DEFAULT_GATEWAY_PORT}/v1`;
 
 /**
  * 会话（任务）占位标题：首条消息发送前标题为占位值，

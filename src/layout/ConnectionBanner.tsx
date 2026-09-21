@@ -7,6 +7,30 @@ import { useSettingsStore } from "@/stores/settingsStore";
 import { connectionManager } from "@/ai/connectionManager";
 import { platform } from "@/platform";
 import { nanobotBridge } from "@/platform/nanobotBridge";
+import { DEFAULT_GATEWAY_PORT } from "@/lib/constants";
+import { nextGatewayEndpoint } from "@/lib/gatewayEndpoint";
+import type { NanobotGatewayInfo } from "@/platform/types";
+
+/**
+ * 把网关地址对齐到主进程**实际**监听的端口。
+ *
+ * 端口是运行时值而非约定值：首选端口被占用、或落在 Windows 保留端口区间时，主进程会
+ * 自动顺延（见 `electron/main.ts` 的 `resolveGatewayPort`）。不同步的话界面会一直探测
+ * 一个没人监听的端口 —— 表现为「网关离线」而子进程明明活着。
+ *
+ * 判据全部收在 `nextGatewayEndpoint`（纯函数，已单测）：本机地址才同步、端口未知不动、
+ * 已对齐则返回 null。这里取 store 的**实时值**而非闭包值 —— 轮询间隔内用户可能刚改过地址。
+ *
+ * 写完立即回探一次：不动手的话要等下一个心跳（15s）才转绿，用户会以为「换了端口就连不上」。
+ * @param info 主进程返回的实际监听信息
+ */
+function syncGatewayEndpoint(info: NanobotGatewayInfo): void {
+  const store = useSettingsStore.getState();
+  const next = nextGatewayEndpoint(store.settings.gatewayEndpoint, info);
+  if (next === null) return;
+  store.setSettings({ gatewayEndpoint: next });
+  void connectionManager.probe();
+}
 
 /**
  * 顶部连接状态横幅：显示当前连接模式/状态，
@@ -17,13 +41,21 @@ export function ConnectionBanner() {
   const gatewayEndpoint = useSettingsStore((s) => s.settings.gatewayEndpoint);
   const setSettings = useSettingsStore((s) => s.setSettings);
 
-  // 桌面端：nanobot 网关子进程状态（仅 electron 环境有效）
+  // 桌面端：网关子进程状态 + 端口协商（仅 electron 环境有效）
   const [gwRunning, setGwRunning] = useState(false);
+  const [gwPort, setGwPort] = useState<number | null>(null);
+  const [gwFallback, setGwFallback] = useState(false);
   useEffect(() => {
     if (platform.env !== "electron") return;
     let active = true;
-    const tick = () =>
-      nanobotBridge.status().then((r) => active && setGwRunning(r));
+    const tick = async () => {
+      const info = await nanobotBridge.info();
+      if (!active) return;
+      setGwRunning(info.running);
+      setGwPort(info.port);
+      setGwFallback(info.fallback);
+      syncGatewayEndpoint(info);
+    };
     void tick();
     const t = setInterval(tick, 3000);
     return () => {
@@ -80,9 +112,19 @@ export function ConnectionBanner() {
         size="small"
         value={gatewayEndpoint}
         onChange={(e) => setSettings({ gatewayEndpoint: e.target.value })}
-        placeholder="网关地址，例如 http://127.0.0.1:8900"
+        placeholder={`网关地址，例如 http://127.0.0.1:${DEFAULT_GATEWAY_PORT}`}
         sx={{ width: 320, "& .MuiInputBase-root": { borderRadius: 1.5 } }}
       />
+      {/* 首选端口不可用 → 主进程换了端口，地址已被自动对齐；显式告知，免得用户
+          以为「我明明配的是 8900，怎么连上了另一个端口」 */}
+      {gwFallback && gwPort !== null && (
+        <Chip
+          size="small"
+          variant="outlined"
+          color="warning"
+          label={`端口已自动改为 ${gwPort}`}
+        />
+      )}
       {platform.env === "electron" && (
         <Button
           size="small"

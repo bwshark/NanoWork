@@ -7,6 +7,7 @@ import { request as httpRequest } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import WebSocket from 'ws';
 import { parseWebuiResponseFrame } from './webuiFrames';
+import { canBindPort, resolveGatewayPort } from './gatewayPort';
 import { normalizeEngineChannelAllowFrom } from './channelAllowFrom';
 import { disconnectChannelInConfig, resolveWeixinAccountPath, type DisconnectChannelKind } from './channelDisconnect';
 import {
@@ -468,7 +469,7 @@ async function createWindow(): Promise<void> {
       preload: join(__dirname, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
-      // 允许从 file:// 页面访问本地 nanobot 网关（http://127.0.0.1:8900），避免 CORS 导致离线
+      // 允许从 file:// 页面访问本地 nanobot 网关（端口见 DEFAULT_GATEWAY_PORT，可能被自动顺延），避免 CORS 导致离线
       webSecurity: false,
     },
   });
@@ -530,6 +531,20 @@ let nanobotStartupPromise: Promise<boolean> | null = null;
 /** 最近一次成功启动网关所用的配置文件路径（channels 同步时合并写入该文件） */
 let lastNanobotConfigPath: string | undefined;
 
+/**
+ * 首选网关端口。
+ *
+ * ⚠️ **与 `src/lib/constants.ts` 的 `DEFAULT_GATEWAY_PORT` 是同一份事实的两处镜像**：
+ * 主进程与渲染层是两个 bundle，主进程 import `src/lib/constants.ts` 会牵进 `@/` 别名
+ * （esbuild 未配该别名）。改端口时两处一起改，与 `APP_VERSION` 同一套约定。
+ * 取值理由见 constants.ts 的同名常量注释。
+ */
+const DEFAULT_GATEWAY_PORT = 18900;
+
+/** 实际监听的网关地址（serve 就绪后写入；渲染层经 `nanobot:gatewayInfo` 取用） */
+let nanobotServeHost = '127.0.0.1';
+let nanobotServePort: number | null = null;
+
 /** nanobot 启动配置（bin/host/port 与可选的 config.json 路径） */
 interface NanobotLaunchConfig {
   bin: string;
@@ -546,37 +561,64 @@ function fallbackLaunchConfig(): NanobotLaunchConfig {
       ? join(root, 'nanobot', 'nanobot', '.venv', 'Scripts', 'nanobot.exe')
       : join(root, 'nanobot', 'nanobot', '.venv', 'bin', 'nanobot');
   const bin = existsSync(venvBin) ? venvBin : 'nanobot';
-  return { bin, host: '127.0.0.1', port: '8900', config: join(root, 'nanowork.config.json') };
+  return {
+    bin,
+    host: '127.0.0.1',
+    port: String(DEFAULT_GATEWAY_PORT),
+    config: join(root, 'nanowork.config.json'),
+  };
+}
+
+/**
+ * 读取磁盘上的 nanobot 启动配置（不含环境变量）。
+ * 优先级：userData/nanowork.nanobot.json > 项目本地兜底。
+ *
+ * ⚠️ **缺字段一律回落到项目本地兜底，而不是各自写死默认值**：这份覆盖文件的典型用法是
+ * 「只改端口」（README 第 3.3 节的端口覆盖就是这么写的）。若 `bin` 回落成裸 `'nanobot'`，
+ * 就变成 PATH 查找（本机没全局安装 → spawn 直接 ENOENT），而 `config` 却回落到了项目配置
+ * ——两个字段两套口径，症状是「只改了个端口，网关就起不来了」。三个字段必须同一口径。
+ */
+async function readLaunchConfigFromDisk(): Promise<NanobotLaunchConfig> {
+  const fallback = fallbackLaunchConfig();
+  try {
+    const cfgPath = join(app.getPath('userData'), 'nanowork.nanobot.json');
+    const raw = await fs.readFile(cfgPath, 'utf-8');
+    // 剥掉 UTF-8 BOM：这份文件是**给用户手写**的（记事本 / PowerShell 的 Set-Content 都会
+    // 加 BOM），而 JSON.parse 遇到 BOM 直接抛错 → 整个覆盖被 catch 吞掉、静默回落默认值。
+    // 症状是「我明明改了端口，怎么一点没生效」，而且日志里一个字都没有。
+    const cfg = JSON.parse(raw.replace(/^\uFEFF/, '')) as Partial<{
+      bin: string;
+      host: string;
+      port: string;
+      config: string;
+    }>;
+    return {
+      bin: cfg.bin ?? fallback.bin,
+      host: cfg.host ?? fallback.host,
+      port: cfg.port ?? String(DEFAULT_GATEWAY_PORT),
+      config: cfg.config ?? fallback.config,
+    };
+  } catch {
+    return fallback;
+  }
 }
 
 /**
  * 读取 nanobot 启动配置。
  * 优先级：环境变量 > userData/nanowork.nanobot.json > 项目本地兜底。
- * userData 配置未显式给出 config 时同样回退项目本地 nanowork.config.json，
- * 保证 channels 同步有确定的合并目标。
+ *
+ * 环境变量**按字段**覆盖：早期实现要求 bin/host/port 三者同时给出才生效，
+ * 于是「只想换个端口」这种最常见的用法会被静默忽略——看起来像「环境变量没起作用」。
+ * 现在缺哪个字段就用下层配置补哪个。
  */
 async function readNanobotConfig(): Promise<NanobotLaunchConfig> {
-  const env = {
-    bin: process.env.NANOBOT_BIN,
-    host: process.env.NANOBOT_HOST,
-    port: process.env.NANOBOT_PORT,
+  const base = await readLaunchConfigFromDisk();
+  return {
+    bin: process.env.NANOBOT_BIN || base.bin,
+    host: process.env.NANOBOT_HOST || base.host,
+    port: process.env.NANOBOT_PORT || base.port,
+    config: base.config,
   };
-  if (env.bin && env.host && env.port) {
-    return { bin: env.bin, host: env.host, port: env.port };
-  }
-  try {
-    const cfgPath = join(app.getPath('userData'), 'nanowork.nanobot.json');
-    const raw = await fs.readFile(cfgPath, 'utf-8');
-    const cfg = JSON.parse(raw) as Partial<{ bin: string; host: string; port: string; config: string }>;
-    return {
-      bin: cfg.bin ?? 'nanobot',
-      host: cfg.host ?? '127.0.0.1',
-      port: cfg.port ?? '8900',
-      config: cfg.config ?? fallbackLaunchConfig().config,
-    };
-  } catch {
-    return fallbackLaunchConfig();
-  }
 }
 
 /**
@@ -618,6 +660,11 @@ function isPortInUse(host: string, port: number): Promise<boolean> {
   });
 }
 
+// 端口可用性判定与自动顺延抽在 `./gatewayPort.ts`：
+// 只有真的 bind 过才能认出一类「连不上也绑不上」的端口——Windows 保留区间内的端口
+// （Hyper-V / WSL 的 winnat 动态保留）报 WSAEACCES(10013)，而 `isPortInUse` 的 connect
+// 探测会把它们误判为空闲。那个模块不 import electron，因此能直接起真 socket 单测。
+
 /**
  * 子进程拉起后等待其端口进入监听的默认上限。
  * 实测 `nanobot serve` 从 spawn 到 listen 约 9.4 秒
@@ -655,13 +702,24 @@ async function startNanobot(): Promise<boolean> {
   if (nanobotProcess) return true;
   const { bin, host, port, config } = await readNanobotConfig();
   lastNanobotConfigPath = config;
+  const preferred = Number(port);
   // 端口已被占用（用户手动拉起过 / 上一实例未退出）→ 直接复用，避免 10048 冲突
-  if (await isPortInUse(host, Number(port))) {
-    console.log(`[nanobot] ${host}:${port} 已有网关在监听，复用既有服务，不重复拉起`);
+  if (await isPortInUse(host, preferred)) {
+    console.log(`[nanobot] ${host}:${preferred} 已有网关在监听，复用既有服务，不重复拉起`);
+    nanobotServeHost = host;
+    nanobotServePort = preferred;
     return true;
   }
   try {
-    const serveArgs = ['serve', '--host', host, '--port', port];
+    // 首选端口「不可用」有两种成因：被占用，或落在 Windows 保留区间（bind 报 10013）。
+    // 后者正是「杀了旧进程也起不来」的那种，只能换端口 —— 由 resolveGatewayPort 顺延探测。
+    const listenPort = await resolveGatewayPort(host, preferred);
+    if (listenPort !== preferred) {
+      console.warn(
+        `[nanobot] ${host}:${preferred} 不可用（被占用或落在系统保留端口区间），自动改用 ${listenPort}`,
+      );
+    }
+    const serveArgs = ['serve', '--host', host, '--port', String(listenPort)];
     if (config && existsSync(config)) {
       serveArgs.push('--config', config, '-v');
     }
@@ -678,13 +736,18 @@ async function startNanobot(): Promise<boolean> {
     });
     // 等到端口真正进入监听再返回：只等固定 800ms 会让渲染层的首次探测
     // 必然 ECONNREFUSED，从而被固化成「网关离线」（子进程却已在运行）。
-    const ready = await waitForPort(host, Number(port), LAUNCH_READY_TIMEOUT_MS, () =>
+    const ready = await waitForPort(host, listenPort, LAUNCH_READY_TIMEOUT_MS, () =>
       nanobotProcess === null,
     );
     if (!ready) {
       console.warn(
-        `[nanobot] ${host}:${port} 在 ${LAUNCH_READY_TIMEOUT_MS / 1000} 秒内未进入监听（进程可能已退出）`,
+        `[nanobot] ${host}:${listenPort} 在 ${LAUNCH_READY_TIMEOUT_MS / 1000} 秒内未进入监听（进程可能已退出）`,
       );
+    } else {
+      // 只在实际就绪后写入：渲染层据此把 gatewayEndpoint 对齐到真实端口，
+      // 未就绪就改写地址会让界面指向一个暂时没人监听的端口。
+      nanobotServeHost = host;
+      nanobotServePort = listenPort;
     }
     return ready;
   } catch (err) {
@@ -731,7 +794,8 @@ function stopNanobotGateway(): void {
  * 启动 nanobot 网关子进程（gateway 命令，前台模式）。
  * 与 serve 独立：serve 只提供 /v1 API，gateway 才启动 channels
  * （飞书/钉钉/企微/微信长连接 + websocket 频道 + WebUI 设置路由）。
- * 网关默认监听 18790（health），websocket 频道监听 9900，均不与 serve 的 8900 冲突。
+ * 网关默认监听 18790（health），websocket 频道监听 9900，均不与 serve 的端口
+ * （DEFAULT_GATEWAY_PORT，不可用时自动顺延）冲突。
  * @returns 是否成功拉起（端口已被占用视为复用成功）
  */
 async function startNanobotGateway(): Promise<boolean> {
@@ -869,7 +933,7 @@ async function restartNanobotGateway(): Promise<boolean> {
 // 再发 webui_request 帧。桥单例懒加载：连接断开后下次调用重新签发重连。
 // ——————————————————————————————————————————————
 
-/** 网关 websocket 频道监听地址（与 serve 8900 / health 18790 均不冲突） */
+/** 网关 websocket 频道监听地址（与 serve DEFAULT_GATEWAY_PORT / health 18790 均不冲突） */
 const GATEWAY_WS_HOST = '127.0.0.1';
 const GATEWAY_WS_PORT = 9900;
 
@@ -1571,7 +1635,7 @@ async function syncNanobotMcp(mcpJson: string): Promise<{
     // chat/completions 由 serve 子进程承载；MCP 工具在 serve 启动时加载 → 需重启 serve
     if (nanobotProcess) {
       stopNanobot();
-      await waitForPortFree('127.0.0.1', 8900, 5000);
+      await waitForPortFree(nanobotServeHost, nanobotServePort ?? DEFAULT_GATEWAY_PORT, 5000);
       await startNanobot();
       if (nanobotProcess) {
         return { ok: true, message: 'MCP 配置已写入 config.json.tools.mcpServers，serve 已重启生效' };
@@ -1579,7 +1643,7 @@ async function syncNanobotMcp(mcpJson: string): Promise<{
       return { ok: false, message: 'MCP 配置已写入，但 serve 重启失败，请检查 nanowork 日志' };
     }
     // serve 不在本进程托管（外部进程或尚未启动）
-    const portBusy = await isPortInUse('127.0.0.1', 8900);
+    const portBusy = await isPortInUse(nanobotServeHost, nanobotServePort ?? DEFAULT_GATEWAY_PORT);
     return {
       ok: true,
       message: portBusy
@@ -2348,6 +2412,26 @@ ipcMain.handle('nanobot:stop', async () => {
   stopNanobotGateway();
 });
 ipcMain.handle('nanobot:status', async () => nanobotProcess !== null);
+/**
+ * 实际网关地址与端口协商。
+ * 渲染层据此把 `settings.gatewayEndpoint` 对齐到主进程真实监听的端口——
+ * 首选端口不可用时会自动顺延，没有这条通道界面就会一直指向没人监听的端口。
+ * `preferredPort` 用于界面提示「已自动改用其他端口」，`fallback` 为是否真的漂移过。
+ */
+ipcMain.handle('nanobot:gatewayInfo', async () => {
+  const { host, port } = await readNanobotConfig();
+  const preferredPort = Number(port);
+  return {
+    // 语义与 `nanobot:status` 保持一致：指「serve 子进程由本应用托管且在跑」。
+    // 端口复用（外部网关已监听）时 port 有值但 running 为 false —— 这不是矛盾：
+    // 地址对齐与「能不能由本应用停止它」本来就是两件事。
+    running: nanobotProcess !== null,
+    host: nanobotServePort === null ? null : nanobotServeHost,
+    port: nanobotServePort,
+    preferredPort: Number.isInteger(preferredPort) ? preferredPort : DEFAULT_GATEWAY_PORT,
+    fallback: nanobotServePort !== null && nanobotServePort !== preferredPort,
+  };
+});
 // channels 配置同步：渲染层提交片段 JSON，主进程合并写入 config.json 并重启网关
 ipcMain.handle('nanobot:syncChannels', async (_e, channelsJson: string) =>
   syncNanobotChannels(channelsJson),
@@ -3180,14 +3264,14 @@ async function syncNanobotSkills(overridesJson: string): Promise<{
     // 覆盖表在 serve 启动时读入 AgentDefaults；改完必须重启才作用于新会话。
     if (nanobotProcess) {
       stopNanobot();
-      await waitForPortFree('127.0.0.1', 8900, 5000);
+      await waitForPortFree(nanobotServeHost, nanobotServePort ?? DEFAULT_GATEWAY_PORT, 5000);
       await startNanobot();
       if (nanobotProcess) {
         return { ok: true, changed: true, message: '技能覆盖已写入并生效' };
       }
       return { ok: false, changed: true, message: '技能覆盖已写入，但 serve 重启失败，请检查 nanowork 日志' };
     }
-    const portBusy = await isPortInUse('127.0.0.1', 8900);
+    const portBusy = await isPortInUse(nanobotServeHost, nanobotServePort ?? DEFAULT_GATEWAY_PORT);
     return {
       ok: true,
       changed: true,

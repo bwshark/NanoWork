@@ -147,7 +147,7 @@
 | # | 冲突点 | 材料 A | 材料 B | 裁决 |
 |---|---|---|---|---|
 | 1 | WorkBuddy 归属 | `docs/prd.md`：网易有道 | 安装目录：腾讯 CodeBuddy | **以安装目录为准**（见 0.1） |
-| 2 | 默认网关端口 | `docs/architecture.md`：`127.0.0.1:8765` | `lib/constants.ts`：`127.0.0.1:8900/v1` | **以代码为准：8900**（`docs/architecture.md` 需修正） |
+| 2 | 默认网关端口 | `docs/architecture.md`：`127.0.0.1:8765` | `lib/constants.ts`：`127.0.0.1:18900/v1` | **以代码为准：`18900`**（`docs/architecture.md` 需修正）。演进：`8765` → `8900` → `18900`（`8900` 落在 Windows 保留端口区间内绑不上，见 `docs/README.md` 修正记录 13） |
 | 3 | 产品形态 | `docs/nanowork-prd.md`：企业多租户平台 | 代码：本地优先单用户客户端 | **分期**：V1 客户端 → V1.5 账户同步 → V2 团队 → V3 企业（见第 2 章） |
 | 4 | nanobot 引入方式 | `docs/nanowork-prd.md`：Python 依赖 + 防腐层 Adapter | 代码：独立进程 `nanobot serve` + HTTP 直连 | **保持独立进程**（进程隔离更符合 sidecar 思想），但**必须补上防腐层**（第 8 章） |
 | 5 | 持久化介质 | `docs/architecture.md`：JSON 过渡，SQLite 预留 | 代码：Zustand persist（localStorage / JSON） | **V1 引入事件日志（JSONL）+ 索引库（SQLite）双轨**（第 9 章） |
@@ -2851,7 +2851,7 @@ nanowork-server/                 # 云侧单仓库（V1.5 起步，monorepo）
 | `README.md` | 「对标 WorkBuddy（网易有道）」 | 改为「对标 WorkBuddy（腾讯，CodeBuddy Agent 内核）」 |
 | `OVERVIEW.md` | 同上；且交付状态停留在「T01–T36 完成」，未反映 IM 渠道 / 扫码接入 / 专家团 / 语音输入等后续实现 | 更正归属；重写交付状态章节，以本文第 1.2 节为基线 |
 | `docs/prd.md` | 同上；FR-010 标注「首版仅预留」，实际已实现 5 渠道 | 更正归属；FR-010 状态改为已实现并升级验收标准 |
-| `docs/architecture.md` | 默认网关写成 `127.0.0.1:8765`；文件清单已过期（缺 platform/nanobotBridge、im、composer、memory 等） | 改为 8900；文件清单以本文第 22 章为准；或直接标注「本文件为历史版本，以 `nanowork-prd-design-v2.md` 为准」 |
+| `docs/architecture.md` | 默认网关写成 `127.0.0.1:8765`；文件清单已过期（缺 platform/nanobotBridge、im、composer、memory 等） | 改为 `18900`（2026-09-21 当前值；曾为 `8900`）；文件清单以本文第 22 章为准；或直接标注「本文件为历史版本，以 `nanowork-prd-design-v2.md` 为准」 |
 | `docs/chat.md` | 是一段口语化需求描述，无编号与验收标准 | 收编为 FR-1.x 与第 13 章（入口预设 × 执行模式的关系）；原文件标注已被取代 |
 | `docs/nanowork-prd.md` | 定位为企业平台（WorkPilot），与代码基线不符 | 保留为 V3 需求来源；顶部加注「V3 阶段需求，见 v2 文档第 2.3 节」 |
 | `docs/user-sync-login.md` | 已被 `cross-platform-sync-design.md` 整合取代 | 标注 superseded |

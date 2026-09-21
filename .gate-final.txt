@@ -1,0 +1,21 @@
+=== vite build ===
+[2mdist/[22m[36massets/cynefin-VYW2F7L2-DWO_uSmW.js              [39m[1m[2m690.80 kB[22m[1m[22m[2m │ gzip: 155.10 kB[22m
+[2mdist/[22m[36massets/markdown-aJTacZWr.js                      [39m[1m[2m787.73 kB[22m[1m[22m[2m │ gzip: 277.08 kB[22m
+[32m✓ built in 21.57s[39m
+=== rebuild cjs ===
+main.cjs ok
+preload.cjs ok
+=== full vitest ===
+ [32m✓[39m tests/taskDraft.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m tests/hooks/useVoiceInput.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m tests/lib/workspaceLabel.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m tests/settingsMemoryMigration.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m tests/constants.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m tests/lib/conversation.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m86 passed[39m[22m[90m (86)[39m
+[2m      Tests [22m [1m[32m1391 passed[39m[22m[90m (1391)[39m
+[2m   Start at [22m 13:00:28
+[2m   Duration [22m 73.92s[2m (transform 3.82s, setup 1.08s, import 59.76s, tests 53.89s, environment 74.15s)[22m
+
+done exit=0

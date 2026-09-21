@@ -23,18 +23,27 @@ npx vitest run tests/gateway.integration.test.ts
 
 ```bash
 pip install nanobot
-nanobot serve --host 127.0.0.1 --port 8900
+nanobot serve --host 127.0.0.1 --port 18900
 ```
 
-> ⚠️ **端口必须与本项目客户端默认值一致**。客户端默认网关为 **`http://127.0.0.1:8900`**
+> ⚠️ **端口必须与本项目客户端默认值一致**。客户端默认网关为 **`http://127.0.0.1:18900`**
 > （见 `src/lib/constants.ts`）。若把网关起在别的端口（例如 `8765`），必须在 ConnectionBanner
 > 里手改 endpoint，否则连接失败。
+>
+> **为什么不是 nanobot 自带的 `8900`**：Windows 会把成段端口划入保留区间（Hyper-V / WSL 的
+> winnat 动态保留，`netsh interface ipv4 show excludedportrange protocol=tcp` 可查），
+> `8900` 恰好落在其中一段（8807–8906）。这种端口**任何进程都绑不上**，报
+> `[winerror 10013]`（权限不允许）而**不是** `10048`（已被占用）——按「杀旧进程」的思路排障
+> 会一直找不到原因。`18900` 既不在保留区间内，也高于动态端口范围上界（15000）。
 >
 > 本仓库的推荐做法不是 `pip install`，而是用仓库内已就绪的隔离环境（editable 安装，改源码即生效）：
 >
 > ```bash
-> .\nanobot\nanobot\.venv\Scripts\nanobot.exe serve --config nanowork.config.json --host 127.0.0.1 --port 8900 -v
+> .\nanobot\nanobot\.venv\Scripts\nanobot.exe serve --config nanowork.config.json --host 127.0.0.1 --port 18900 -v
 > ```
+>
+> 桌面端（`npm run electron:serve`）无需手工指定端口：主进程会**自动挑可用端口**并把界面
+> 网关地址一起对齐（详见根 `README.md` 第 3.3 节）。
 >
 > 详见根 `README.md` 第 3 节 与 `docs/engine-dev-setup.md`。
 

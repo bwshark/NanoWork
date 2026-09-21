@@ -56,7 +56,7 @@
 
 | 文档 | 阶段 | 取代者 | 保留原因 / 注意事项 |
 |---|---|---|---|
-| `architecture.md` | V1（历史初版） | v2 第 7、22 章 | 分层图与 AIClient / platform 约定仍有参考价值。**⚠️ 其默认网关写作 `127.0.0.1:8765`，正确值是 `8900`**（见 `src/lib/constants.ts:15`）；文件清单已过期 |
+| `architecture.md` | V1（历史初版） | v2 第 7、22 章 | 分层图与 AIClient / platform 约定仍有参考价值。**⚠️ 其默认网关写作 `127.0.0.1:8765`（后修正为 `8900`，2026-09-21 起为 `18900`）**，权威值见 `src/lib/constants.ts` 的 `DEFAULT_GATEWAY_PORT`；文件清单已过期 |
 | `chat.md` | V1（历史） | v2 第 13 章 | 内容已收编为 `FR-1.x` 与「入口预设 × 执行模式」矩阵 / 第 13 章提示词工程。原文为口语化描述、无编号与验收标准 |
 | `cloud-sync-design.md` | V1.5 | `cross-platform-sync-design.md` | 早期同步设计，约束与整合版不同（未限定 FastAPI、未排除 Node），保留作设计演进痕迹 |
 | `user-sync-login.md` | V1.5 | `cross-platform-sync-design.md` | 同上，内容已被整合版吸收 |
@@ -138,13 +138,14 @@
 | 3 | `OVERVIEW.md`（根） | 交付状态未反映 IM 渠道 / 扫码接入 / 专家团 / 语音输入等已实现能力 | ✅ |
 | 4 | `docs/prd.md` | WorkBuddy 归属误标为「网易有道」 | ✅ |
 | 5 | `docs/prd.md` | `FR-010` 标注「首版仅预留」，实际 5 渠道 + 扫码接入已实现 | ✅ |
-| 6 | `docs/architecture.md` | 默认网关写成 `127.0.0.1:8765`，应为 `8900` | ✅ |
+| 6 | `docs/architecture.md` | 默认网关写成 `127.0.0.1:8765`，应为 `8900`（2026-09-21 起为 `18900`） | ✅ |
 | 7 | `docs/architecture.md` | 文件清单过期（缺 `platform` / `nanobotBridge` / `im` / `composer` / `memory` 等），或在文首标注「历史版本，以 v2 为准」。另：3.2 节与 T04 引用的 `src/ai/types.ts` / `nanobotClient.ts` 已在 D1 迁至 `src/ai/runtime/types.ts` / `runtime/nanobotHttp/chat.ts`（见 v2 第 8.4.1 节） | ✅ |
 | 8 | `docs/chat.md` | 无编号、无验收标准；需收编进 v2 后在文首标注已被取代 | ✅ |
 | 9 | `docs/nanowork-prd.md` | 定位为企业平台，与代码基线不符；需在文首加注「V3 阶段需求，见 v2 第 2.3 节」 | ✅ |
 | 10 | `docs/user-sync-login.md` | 已被 `cross-platform-sync-design.md` 整合；需加 superseded 横幅 | ✅ |
 | 11 | `docs/cloud-sync-design.md` | 同上，需加 superseded 横幅 | ✅ |
 | 12 | `docs/gateway-e2e.md` | 第 2 节写 `nanobot serve --port 8765`，与项目默认网关 `8900` 不一致，照做会连不上 | ✅ |
+| 13 | 全部端口文档 + 代码 | 默认网关 `8900` 落在 Windows 保留端口区间（8807–8906）内，绑定报 `winerror 10013`（不是「被占用」的 `10048`），手工起网关必失败。**2026-09-21**：首选端口迁到 `18900`，并在主进程加「自动顺延 + 地址协商」（`resolveGatewayPort` / `nanobot:gatewayInfo`），渲染层自动对齐 `gatewayEndpoint` | ✅ |
 | 13 | `src/`（4 文件） | **平台边界越界**：`src/layout/AppLayout.tsx`、`src/components/TitleBar.tsx`、`src/pages/settings/SettingsPage.tsx`、`src/events/electronStore.ts` 直连 `window.electronAPI`，未收口到 `src/platform/`。v2 §18.2.3 原则 3 原写「仅出现在 `src/platform/`」，**该断言不成立，已在该节加勘误** | ⬜ 待收口（已在 CI 基线登记） |
 | 14 | `src/`（2 文件） | **引擎 wire 字段泄漏**：`src/lib/channelScan.ts`、`src/types/channel.ts` 含 `session_id`，未收进 `src/ai/runtime/nanobotHttp/`，与 ADR-020 的边界声明不符 | ⬜ 待收口（已在 CI 基线登记） |
 

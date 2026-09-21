@@ -35,7 +35,7 @@
 
 | 键 | 类型 | 默认值 | 界面位置 | 备注 |
 |---|---|---|---|---|
-| `gatewayEndpoint` | string | `http://127.0.0.1:8900/v1` | 连接与模型 | 变更后重探连接 + 重拉模型目录 |
+| `gatewayEndpoint` | string | `http://127.0.0.1:18900/v1` | 连接与模型 | 变更后重探连接 + 重拉模型目录；**本机地址会被主进程的实际端口自动对齐**（端口可能顺延，见 `nanobot:gatewayInfo`） |
 | `apiToken` | string | `''` | 连接与模型 | 走密码输入框 |
 | `theme` | `light/dark/system` | `system` | 通用 · 外观 | 读取侧经 `normalizeTheme` 兜底 |
 | `memoryEnabled` | boolean | `true` | 记忆 | 是否把记忆块注入 system |
@@ -116,7 +116,7 @@
 
 | # | 候选 | 现状（硬编码点） | 建议落点 | 理由 |
 |---|---|---|---|---|
-| 1 | **引擎端口族**：serve `8900` / gateway health `18790` / 频道 WS `9900` | `src/lib/constants.ts` `DEFAULT_GATEWAY`；`electron/main.ts`（serve 端口、`isPortInUse(18790)`、WS 9900）多处字面量 | ③ 引擎配置目录 + 「连接与模型 · 高级」 | 端口冲突是本地部署最常见的故障，现在只能改代码重打包 |
+| 1 | **引擎端口族**：serve `18900`（首选，可自动顺延）/ gateway health `18790` / 频道 WS `9900` | `src/lib/constants.ts` `DEFAULT_GATEWAY_PORT`；`electron/main.ts` 同名镜像常量（serve 端口、`isPortInUse(18790)`、WS 9900）多处字面量 | ③ 引擎配置目录 + 「连接与模型 · 高级」 | 端口冲突是本地部署最常见的故障，现在只能改代码重打包。⚠️ 2026-09-21 已加**主进程自动顺延 + 地址协商**（`resolveGatewayPort` + `nanobot:gatewayInfo`）：首选端口被占用或落在 Windows 保留区间（`winerror 10013`）时会自动换端口并同步界面地址 |
 | 2 | **网络代理**（直连 / 系统代理 / 手动） | 无（Electron 用默认会话网络栈） | ④ → 主进程 `session.setProxy` | WorkBuddy「通用 · 网络代理」直接对应；企业网下是刚需 |
 | 3 | **客户端通知开关 + 提示音** | `src/platform/notification.ts` 只暴露 `notify()`，无开关 | ① `settings.json` | 现状无法静音；WorkBuddy 有「客户端通知 / 通知提示音」两项 |
 | 4 | **新任务默认权限策略**（完全访问 / 逐条批准） | 新会话靠**继承当前会话**，无全局默认 | ① `settings.json` | 「每次新建都要重设一遍」是当前明确的操作负担 |

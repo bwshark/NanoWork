@@ -18,9 +18,12 @@ export default defineConfig(({ command }) => ({
     port: 5176,
     host: true,
     proxy: {
-      // 开发模式下把 /api/nanobot 代理到本地 nanobot serve，避免浏览器跨域导致网关显示离线
+      // 开发模式下把 /api/nanobot 代理到本地 nanobot serve，避免浏览器跨域导致网关显示离线。
+      // 端口是**首选值**：主进程默认用 18900（8900 落在 Windows 保留端口区间，绑不上，
+      // 见 src/lib/constants.ts 的说明）。若主进程自动顺延了端口，这里的代理会失效——
+      // 代理只作用于 `npm run dev` 的浏览器调试，Electron 走 webSecurity:false 直连。
       '/api/nanobot': {
-        target: 'http://127.0.0.1:8900',
+        target: 'http://127.0.0.1:18900',
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api\/nanobot/, ''),
       },

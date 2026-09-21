@@ -705,6 +705,26 @@ export interface EventAppendResult {
   eventCount: number;
 }
 
+/**
+ * 网关子进程的实际监听信息（主进程 `nanobot:gatewayInfo` 返回）。
+ *
+ * 端口是**运行时值而非约定值**：首选端口被占用、或落在 Windows 保留端口区间时，
+ * 主进程会自动顺延。渲染层只有拿到这里返回的实际端口，才能对齐
+ * `settings.gatewayEndpoint`——否则界面会一直探测一个没人监听的端口。
+ */
+export interface NanobotGatewayInfo {
+  /** serve 子进程是否由本应用托管且正在运行（端口复用时为 false） */
+  running: boolean;
+  /** 实际监听主机；端口未知时为 null */
+  host: string | null;
+  /** 实际监听端口；尚未解析出时为 null */
+  port: number | null;
+  /** 配置里的首选端口（界面提示「已自动改用其他端口」用） */
+  preferredPort: number;
+  /** 实际端口是否已偏离首选端口 */
+  fallback: boolean;
+}
+
 export interface ElectronAPI {
   storageGet(key: string): Promise<string | null>;
   storageSet(key: string, value: string): Promise<void>;
@@ -758,6 +778,8 @@ export interface ElectronAPI {
   nanobotStop(): Promise<void>;
   /** 查询 nanobot 网关子进程是否在运行 */
   nanobotStatus(): Promise<boolean>;
+  /** 查询网关**实际**监听的地址与端口（端口自动顺延后据此对齐渲染层地址） */
+  nanobotGatewayInfo(): Promise<NanobotGatewayInfo>;
   /** 同步 channels 配置片段到 nanobot（主进程合并写入 config.json 并重启网关） */
   nanobotSyncChannels(channelsJson: string): Promise<ChannelSyncResult>;
   /** 只读回读 nanobot config.json 的 channels 段；不存在返回 null */

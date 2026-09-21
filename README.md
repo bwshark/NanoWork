@@ -115,16 +115,27 @@ C:\Users\xinmi\.workbuddy\binaries\python\versions\3.13.12\python.exe -m venv na
 #### 3.3 启动网关 + 前端
 
 ```bash
-# 终端 A：启动 nanobot 网关（默认监听 127.0.0.1:8900）
-.\nanobot\nanobot\.venv\Scripts\nanobot.exe serve --config nanowork.config.json --host 127.0.0.1 --port 8900 -v
+# 终端 A：启动 nanobot 网关（默认监听 127.0.0.1:18900）
+.\nanobot\nanobot\.venv\Scripts\nanobot.exe serve --config nanowork.config.json --host 127.0.0.1 --port 18900 -v
 
 # 终端 B：启动前端
 npm run dev
 ```
 
-然后在前端顶部 **ConnectionBanner** 填入网关地址 `http://127.0.0.1:8900` 并连接，选择「通用助手」（默认模型 `qwen3-32b`）发送消息即可。
+然后在前端顶部 **ConnectionBanner** 填入网关地址 `http://127.0.0.1:18900` 并连接，选择「通用助手」（默认模型 `qwen3-32b`）发送消息即可。
 
-> 端口冲突（`[winerror 10048]`）：同一端口不能两个进程共用。重启用 `netstat -ano | findstr :8900` 查 PID，`taskkill /PID <pid> /F` 杀掉旧进程再起。
+> **端口只有一份来源**：首选端口是 `18900`（`src/lib/constants.ts` 的 `DEFAULT_GATEWAY_PORT`
+> 与 `electron/main.ts` 的同名常量，两处镜像）。手工起网关时端口必须和它对上，否则客户端连不上。
+> 桌面端不需要手工指定：主进程会自动拉起并**自动挑可用端口**（见下）。
+
+> **端口冲突分两种，别混为一谈**：
+> - `[winerror 10048]` = 端口已被占用。手工排障：`netstat -ano | findstr :18900` 查 PID，
+>   `taskkill /PID <pid> /F` 杀掉旧进程再起。
+> - `[winerror 10013]` = **端口不可用**（Windows 把端口划进了保留区间），杀掉任何进程都没用。
+>   查区间：`netsh interface ipv4 show excludedportrange protocol=tcp`；典型元凶是 Hyper-V / WSL
+>   的 winnat 动态保留。这也是本项目不再使用 nanobot 自带的 `8900` 的原因——它恰好落在
+>   8807–8906 这段保留区间里。桌面端遇到这种情况会**自动顺延到下一个可用端口**并把界面地址
+>   一起改掉（横幅上会出现「端口已自动改为 N」），无需人工干预。
 
 ### 4. Electron 桌面端
 

@@ -50,6 +50,7 @@ const api: ElectronAPI = {
   nanobotStart: () => ipcRenderer.invoke('nanobot:start'),
   nanobotStop: () => ipcRenderer.invoke('nanobot:stop'),
   nanobotStatus: () => ipcRenderer.invoke('nanobot:status'),
+  nanobotGatewayInfo: () => ipcRenderer.invoke('nanobot:gatewayInfo'),
   nanobotSyncChannels: (channelsJson: string) =>
     ipcRenderer.invoke('nanobot:syncChannels', channelsJson),
   nanobotGetChannels: () => ipcRenderer.invoke('nanobot:getChannels'),

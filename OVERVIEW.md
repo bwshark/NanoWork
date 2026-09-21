@@ -123,10 +123,13 @@ npm run verify:gateway            # 网关链路集成测试（monkeypatch fetch
 真实网关（详见根 `README.md` 第 3 节与 `docs/engine-dev-setup.md`）：
 
 ```bash
-.\nanobot\nanobot\.venv\Scripts\nanobot.exe serve --config nanowork.config.json --host 127.0.0.1 --port 8900 -v
+.\nanobot\nanobot\.venv\Scripts\nanobot.exe serve --config nanowork.config.json --host 127.0.0.1 --port 18900 -v
 ```
 
-> 客户端默认网关为 `http://127.0.0.1:8900`（`src/lib/constants.ts`）。**端口不一致会连不上**。
+> 客户端默认网关为 `http://127.0.0.1:18900`（`src/lib/constants.ts`）。**端口不一致会连不上**。
+> 首选端口被占用或落在 Windows 保留端口区间（`winerror 10013`，如 nanobot 自带的 8900 就落在
+> 8807–8906 区间里）时，桌面端主进程会**自动顺延挑一个可用端口**，并经 `nanobot:gatewayInfo`
+> 把真实端口同步给渲染层（横幅提示「端口已自动改为 N」）。手工起网关时端口需自己保证可用。
 
 ---
 

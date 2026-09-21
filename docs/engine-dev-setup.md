@@ -162,12 +162,15 @@ cd nanobot
 
 | 项 | 值 | 来源 |
 |---|---|---|
-| 客户端默认网关 | `http://127.0.0.1:8900` | `src/lib/constants.ts` |
-| 启动网关 | `.\nanobot\nanobot\.venv\Scripts\nanobot.exe serve --config nanowork.config.json --host 127.0.0.1 --port 8900 -v` | 根 `README.md` 第 3.3 节 |
+| 客户端默认网关 | `http://127.0.0.1:18900` | `src/lib/constants.ts` 的 `DEFAULT_GATEWAY_PORT` |
+| 桌面端自动挑端口 | 首选端口不可用（被占用 / 落在 Windows 保留区间）时顺延探测，并经 `nanobot:gatewayInfo` 同步地址 | `electron/main.ts` 的 `resolveGatewayPort` |
+| 启动网关 | `.\nanobot\nanobot\.venv\Scripts\nanobot.exe serve --config nanowork.config.json --host 127.0.0.1 --port 18900 -v` | 根 `README.md` 第 3.3 节 |
 | 配置文件 | `nanowork.config.json`（**已 gitignore，含密钥**） | 根 `README.md` 第 3.2 节 |
 | 引擎工作区 / 用户目录 | `resolveNanobotWorkspacePath()`；用户资产在 `~/.nanowork` | ADR-018 / v2 §18.2 |
 
 > **端口不一致会连不上**：`docs/gateway-e2e.md` 曾把网关写成 `8765`，已于 2026-09-17 修正为 `8900`。
+> **2026-09-21 再次迁移到 `18900`**：`8900` 落在 Windows 保留端口区间（8807–8906）内，绑不上且报
+> `10013`（不是「被占用」的 `10048`）。此后首选端口定为 `18900`，并新增主进程自动顺延 + 地址协商。
 
 ---
 
