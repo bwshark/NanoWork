@@ -660,7 +660,7 @@ function RunOptionsBar({
         }}
         sx={TOOLBAR_BUTTON_SX}
       >
-        {describeModelId(models, model) ?? 'Auto'}
+        {describeModelId(models, model)}
       </Button>
       <Menu
         anchorEl={modelAnchor}
@@ -676,7 +676,7 @@ function RunOptionsBar({
           }}
           sx={{ fontSize: 13 }}
         >
-          {`Auto（默认 ${describeModelId(models, null) ?? 'nanobot'}）`}
+          {describeModelId(models, null)}
         </MenuItem>
         <Divider />
         {models
@@ -691,7 +691,7 @@ function RunOptionsBar({
               }}
               sx={{ fontSize: 13 }}
             >
-              {m.label ?? m.model ?? m.id}
+              {describeModelId(models, m.id)}
             </MenuItem>
           ))}
       </Menu>

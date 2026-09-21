@@ -931,9 +931,9 @@ export function Composer({
   const models = useModelsStore((s) => s.models);
   const refreshModels = useModelsStore((s) => s.refresh);
   const [modelAnchor, setModelAnchor] = useState<null | HTMLElement>(null);
-  // 展示名：所选预设 label；未选择（Auto）展示目录首位（default）
-  const effectiveModel =
-    describeModelId(models, activeSession?.model) ?? "Auto";
+  // 展示名：与菜单行同源（未选模型 → `Auto · <默认模型名>`，已选 → `预设名 · <模型名>`）。
+  // 这里不再自己写 `?? "Auto"` 兜底——文案口径只留一处，见 describeModelId 的说明。
+  const effectiveModel = describeModelId(models, activeSession?.model);
 
   /** 无活跃会话时先创建（继承当前全局活跃专家团 / 专家），返回会话 id */
   const ensureSessionId = (): string => {
@@ -1720,13 +1720,15 @@ export function Composer({
             onClose={() => setModelAnchor(null)}
             slotProps={{ paper: { sx: { minWidth: 160 } } }}
           >
-            {/* Auto：跟随 nanobot 配置默认模型（目录首位 default 预设） */}
+            {/* Auto：请求不带 `model` 字段，实际生效的是隐式 default 预设。
+                文案与 chip 同源（describeModelId）——别在这里另拼一套「默认 X」：
+                两处口径一旦分叉，就会出现「chip 说 A、菜单说 B」这种更难查的状态。 */}
             <MenuItem
               selected={!activeSession?.model}
               onClick={() => handleModelSelect("")}
               sx={{ fontSize: 13 }}
             >
-              Auto（默认 {describeModelId(models, null) ?? "nanobot"}）
+              {describeModelId(models, null)}
             </MenuItem>
             <Divider />
             {models
@@ -1738,7 +1740,7 @@ export function Composer({
                   onClick={() => handleModelSelect(m.id)}
                   sx={{ fontSize: 13 }}
                 >
-                  {m.label ?? m.model ?? m.id}
+                  {describeModelId(models, m.id)}
                 </MenuItem>
               ))}
           </Menu>
