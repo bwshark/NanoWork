@@ -414,6 +414,14 @@ export interface SessionMeta {
   updatedAt: string;
   /** 同步元数据（第 19 章） */
   rev?: number;
+  /**
+   * 最后改动这份元数据的**设备标识**（`lib/deviceId.ts` 的 `currentDeviceId()`）。
+   *
+   * 老数据（事件化之前写的 meta）没有这个字段，读作空串——空串明确表示「来源未知」，
+   * 不要兜底成 `'unknown'`：那会伪装成一台真实设备，多台机器共用同一个值，
+   * LWW 里「谁改的」就彻底失去意义。
+   */
+  updatedBy?: string;
   deletedAt?: string | null;
 }
 
@@ -457,7 +465,16 @@ export interface SessionIndexEntry {
   messageCount: number;
   createdAt: string;
   updatedAt: string;
+  /**
+   * 同步元数据（第 19 章）。
+   *
+   * 与 `SessionMeta` **保持同一份形状**：索引是「meta + 计数」的投影，重建时
+   * `entryFromMeta` 直接照抄。若只给 meta 加字段而不给条目加，重建一次
+   * （索引版本不符 / 文件损坏时会发生）就会把同步元数据整批洗掉，而界面上看不出异常
+   * ——直到下次同步发现所有会话的 `rev` 都回到了缺省值。
+   */
   rev?: number;
+  updatedBy?: string;
   deletedAt?: string | null;
 }
 

@@ -152,8 +152,14 @@ LWW 同步要求删除能被传播，因此必须改为「置 `deletedAt` 并保
 > ⚠️ **落地时改了一处（2026-09-25，详见 §7.2）**：store 数组那五个实体**没有**采用
 > 「条目留在数组里 + 每个读取处过滤」，而是**把墓碑拆成独立的 `SyncTombstones` 表**
 > （`types/sync.ts`），存活数组天生只含存活条目。上面这段「每一个读取处都要过滤」的
-> 代价因此只剩**内联形态**（会话索引，批次 3）。改动理由：数组里的墓碑会被合并函数
+> 代价因此只剩**内联形态**——会话。改动理由：数组里的墓碑会被合并函数
 > 冲掉，且 UI 读取点有二十余处。
+>
+> ⚠️ **会话那一路的结局（2026-09-25，详见 §7.3）**：会话只落到了「元数据写入」
+> （`rev` / `updatedBy`），**删除墓碑没有做**——`deleteSession` 至今是三件套全删，
+> 没有可留墓碑的载体。所以「内联形态必须过滤墓碑」这件事在会话上**目前还不成立**
+> （读取侧 `listSessionEntries` 已过滤、`normalizeSessionMeta` 已容错，写入侧缺位）。
+> 补齐它要动主进程的 `removeSession`，归 V1.5。
 
 ### 5.2 运行时事实字段必须从同步负载剔除
 
@@ -209,7 +215,7 @@ LWW 同步要求删除能被传播，因此必须改为「置 `deletedAt` 并保
 |---|---|---|
 | **1 地基** | `types/sync.ts` + `lib/syncMeta.ts` + `lib/syncSelect.ts` + `lib/deviceId.ts` + 单测 | ✅ **已完成（2026-09-25，见 §7.1）**：纯函数单测覆盖 `markDirty` 递增、`markDeleted` 幂等、`isTombstone`、`liveEntities` 过滤 |
 | **2 实体接线** | Agent / ExpertGroup / Task / MCP / Channel 五个 store 接线 + Skill 覆盖表抽离 + 各自的 `version` 升版 | ✅ **已完成（2026-09-25，见 §7.2）**：五个 store 各一条「改 → rev+1」「删 → 墓碑且不出现在列表」；Channel 另有「同步负载不含 `clientSecret` / `appSecret` / `botSecret` / `token`」「引擎回读不复活已删渠道」 |
-| **3 会话与设置** | `indexFile` 写入 `rev` / `updatedBy`；`lib/syncPayloads.ts` 的 `toSyncPayload(settings)` + 排除表 | 一条「会话重命名后 `rev` 递增」用例；一条「同步负载不含 `gatewayEndpoint` / `apiToken`」用例 |
+| **3 会话与设置** | `indexFile` 写入 `rev` / `updatedBy`；`lib/settingsSync.ts` 的 `toSyncPayload(settings)` + 排除表 | ✅ **已完成（2026-09-25，见 §7.3）**：一条「会话重命名后 `rev` 递增」用例（含「没改元数据就不涨版本」三条反向护栏）；一条「同步负载不含 `gatewayEndpoint` / `apiToken`」用例 |
 
 **门禁（沿用 `nanowork-dev-gate`）**：三套 `tsc` 0 错误 → `vitest run --maxWorkers=3` 全绿
 → `vite build --emptyOutDir false` 绿。**动了 `electron/storageRoutes.ts`（新增
@@ -242,10 +248,12 @@ LWW 同步要求删除能被传播，因此必须改为「置 `deletedAt` 并保
 - `pickSyncable` 剔除凭据（`clientSecret` / `appSecret` / `botSecret` / `token`）与运行时事实（`tools` / `lastProbedAt` / `status` / `authKeyNames`）——§5.3 与 §5.2 的单元级对应物。
 - `getDeviceId` 并发只生成一个 id 且只写一次存储；Electron 分支**不生成、不写存储**。
 
-**尚未做（属批次 3 —— 别把「地基 + 实体接线完成」当成「同步前置换完了」）**：
-`indexFile` 写入 `rev` / `updatedBy`；`lib/syncPayloads.ts` 的 `toSyncPayload(settings)` + 排除表。
-§三 表里 #7 会话元数据只缺 `updatedBy` 的补写也在批次 3。
-另：§二 C 类（文件型资产）的段落级 LWW **不在本文范围**，V1.5 另案。
+**尚未做（本文范围之外，V1.5 前必须补）**：
+**会话删除的墓碑**（`deleteSession` / `deleteSessions` 至今是「JSONL + meta + 索引条目」三件套全删，
+没有可留墓碑的载体）。详见 §7.3 的「明确未做」一节——它与 §二 C 类（文件型资产）的段落级
+LWW 一起归 V1.5 另案。
+
+**至此本文 §三 表格的 8 个实体全部落位**（1–6 见 §7.2，7–8 见 §7.3）。
 
 ### 7.2 批次 2（实体接线）已完成 · 2026-09-25
 
@@ -307,6 +315,73 @@ LWW 同步要求删除能被传播，因此必须改为「置 `deletedAt` 并保
   重新安装把档位拉回 `on`（保留置顶）；v2 老数据迁移**只抽有意图的条目**且 `rev = 0`。
 - `syncPayloads`：排除表里的键在负载里一个都不能有，且负载不能被剔到只剩几个键
   （反向护栏，防「把排除表写成全集」也算通过）；同时守一条边界——提交给引擎的片段**带凭据**。
+
+### 7.3 批次 3（会话与设置）已完成 · 2026-09-25
+
+落地文件：
+
+| 文件 | 内容 |
+|---|---|
+| `src/lib/sessionSyncMeta.ts`（新增） | 可同步字段白名单 `SESSION_SYNC_FIELDS`（12 个）、`sessionMetaChanged`、`sessionSyncPatch` / `sessionCreatePatch` / `withSessionSync` |
+| `src/lib/settingsSync.ts`（新增） | `toSyncPayload(settings)`、`SETTINGS_SYNC_OMIT_KEYS`、`TRANSCRIPTION_SYNC_OMIT_KEYS`、`SettingsSyncPayload` |
+| `src/types/event.ts` | `SessionMeta` / `SessionIndexEntry` 各补 `updatedBy`（**两个都补**，理由见下） |
+| `src/types/session.ts` | `Session` 补 `rev` / `updatedBy`（内联形态） |
+| `src/events/indexFile.ts` | `normalizeSessionMeta` 读 `updatedBy`；`entryFromMeta` / `applyAppend` 透传 |
+| `src/events/project.ts` | `metaToSession` 透传 `rev` / `updatedBy`（回读路径） |
+| `src/stores/sessionsStore.ts` | `toMeta` 透传两个字段；`createSession` 落 `rev = 1`；**`updateSession` 自动维护** |
+
+用例：`tests/lib/sessionSyncMeta.test.ts`（22 例）、`tests/lib/settingsSync.test.ts`（10 例）、
+`tests/sessionsSyncMeta.test.ts`（8 例，走真实 store + 内存事件存储的集成链路）。
+
+门禁：三套 `tsc` 0 错误 / `vitest run --maxWorkers=3` **99 文件 1594 用例全绿** /
+`vite build --emptyOutDir false` 17.13s exit=0。**未动 `electron/`，故无需重建 `main.cjs`。**
+
+实现时**细化**了本文四处——原表述照做会真的写错：
+
+| 处 | 本文原表述 | 实际落地 | 为什么 |
+|---|---|---|---|
+| §七 批次 3 落点 | `indexFile` 写入 `rev` / `updatedBy`（把「写」放在索引层） | 递增点落在 **`sessionsStore.updateSession`**，`indexFile` 只负责**透传** | 索引是**可再生派生物**，它没有「改过几次」的记忆——重建一次（版本不符 / 文件损坏时会发生）就无从知道该写几。递增必须挂在有状态的地方：渲染层的会话对象。索引只照抄 |
+| §3.1 第 7 行 `markDirty` 调用点 | 列了七个动作名（`renameSession` / `togglePinSession` / `setSessionMode` / …） | **不逐个标记**，而是**比较改动前后的可同步字段**，真的变了才打脏 | 这七个动作＋未来新增的都从 `updateSession` 走。逐个手写必然漏，而漏掉的后果是**静默**的（本地一切正常，换台设备才发现少了一次改动）。自动判定另有一个收益：改**记忆快照**（`loadMemoryInto` 也走 `updateSession`）不会涨版本——否则每开一次会话就涨一版，`rev` 退化成「打开过几次」的计数器 |
+| §3.3 落点 | 同节既写 `src/lib/settingsSync.ts`，§7.2 的表格又写「并入 `syncPayloads.ts` 同一文件」 | **独立成 `src/lib/settingsSync.ts`** | 文档自相矛盾，取 §3.3 的路径。更实际的理由：Settings 的裁剪有一块**嵌套**处理（`transcription` 要保住 `enabled` / `model` / `language`，只剔 `endpoint` / `apiToken`），与 `pickSyncable` 的**顶层**语义不同构；放同一文件会让「两个实体共用一套规则」的错觉更强 |
+| §3.3 排除表 | 把 `transcription.endpoint` / `transcription.apiToken` 列为「必须排除」 | 顶层排除表里**没有** `transcription`，它单独走 `TRANSCRIPTION_SYNC_OMIT_KEYS` | `pickSyncable` 只做顶层浅拷贝：在顶层 omit 掉 `transcription` 会连同三个正当偏好一起扔掉（语音开关是跨设备成立的偏好）。而内层字段又不能顶层表达，所以拆两张表 |
+| §5.2 运行时事实 | 只点名 `eventCount` / `lastSeq` / `messageCount` 三个索引计数 | 白名单**额外排除** `streamWorkdir` | 它是「这条会话的记录落在**哪台机器的哪个目录**」——本机事实，且各机路径不同。它与 `workdir` 必须分开看：后者是用户选的语义工作空间（是声明，保留同步），前者是落盘分片（是事实，不上云） |
+
+另有两处具体决定（都写进了用例）：
+
+- **凭据是「省略」而不是「置空」**：`transcription.endpoint` / `apiToken` 从负载里**消失**，
+  而不是写成 `''`。省略 = 不参与同步、对端保留自己的本机值；置空会把对端配好的地址清掉。
+- **`SessionIndexEntry` 也补 `updatedBy`**（而不只是 `SessionMeta`）：索引是「meta + 计数」的投影，
+  重建时 `entryFromMeta` 直接照抄。只给 meta 加字段的话，一次重建就会把同步元数据整批洗掉，
+  而界面上看不出异常——直到下次同步发现所有会话的 `rev` 都回到缺省值。
+
+**批次 3 已钉住的可证伪判据**（都在用例里）：
+
+- 「新建 → `rev = 1`」「重命名 → 落盘 meta 的 `rev = 2` 且 `updatedBy` 是当前设备号」。
+- 连续三次改动（重命名 / 置顶 / 换模式）得到 `rev = 4`——**逐次累加**，不是每次从 1 重数。
+- 三条反向护栏：改标题为**同一个值**不涨版本；刷记忆快照（`memory*`）不涨版本；
+  改 `streamWorkdir` 不涨版本。
+- 白名单逐条核对：`streamWorkdir` / `messageCount` / `memory*` / `messages` / `permissionLog`
+  一个都不在 `SESSION_SYNC_FIELDS` 里；11 个可同步字段逐条断言「改了就算改过」。
+- 技能挂载按**顺序**比较（`['x','y']` ≠ `['y','x']`）；`undefined` 与 `[]` 不同义。
+- `settings`：`gatewayEndpoint` / `apiToken` / `desktop` / 三个路径字段 / `hiddenSessions`
+  都不在负载里；`transcription` 里三个偏好字段**在**、两个机器字段**不在**；
+  排除表逐条反向核对 + 「负载不能被剔到只剩几个键」的反向护栏。
+
+#### 明确未做：会话删除的墓碑（V1.5 另案）
+
+本文 §3.1 把 `deleteSession` / `deleteSessions` 列在 `markDirty` 调用点上，**本批次没有做**。
+现状与原因：
+
+- 会话删除至今是「JSONL + meta + 索引条目」**三件套全删**，没有可留墓碑的载体。改成墓碑要
+  保留 meta 与索引条目、只删 JSONL，于是多出一种**「有 meta、无 JSONL」**的新形态，需要逐一
+  审计 `listMetas` / `rebuildIndex` / `loadSessions` / `isEventStreamSession` 四条读取路径；
+  `removeSession` 是主进程实现的整体删除，还要新增一个渲染层可调的「写墓碑」入口
+  （动 `electron/eventStore.ts` + 三个存储实现 + preload + `platform/types.ts`）。
+- 收益**只在 V1.5 兑现**：V1 没有同步层，墓碑不产生任何用户可感知的变化；而现在就把
+  `deletedAt` 写进会话，等于给一条暂时无人读的字段承担上面全部风险。
+- 当前状态是**自洽**的：`SessionIndexEntry.deletedAt` 已在 `listSessionEntries` 里过滤
+  （有墓碑条目就不会进列表）、`normalizeSessionMeta` 也容错读到它——**读取侧已经准备好**，
+  只差写入侧。V1.5 之前必须补上，否则「删掉的会话在另一台设备上复活」。
 
 ---
 

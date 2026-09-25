@@ -113,4 +113,17 @@ export interface Session {
   memoryWorkspace?: string;
   createdAt: string;
   updatedAt: string;
+  /**
+   * 同步元数据的版本号与修改者（第 19 章）。
+   *
+   * 会话是**内联形态**：不像那五个 store 的实体那样把墓碑拆成独立表，而是直接
+   * 挂在对象上。原因是会话的删除至今是「三件套全删」（JSONL + meta + 索引条目），
+   * 没有可留墓碑的载体；`deletedAt` 因此只在读取侧容错（见 `normalizeSessionMeta`），
+   * 写入侧不做（`docs/architecture-syncmeta.md` §7.3 记了原因）。
+   *
+   * 递增由 `updateSession` 自动完成（见 `lib/sessionSyncMeta.ts`），
+   * **不要在调用点手写 `rev`**。
+   */
+  rev?: number;
+  updatedBy?: string;
 }

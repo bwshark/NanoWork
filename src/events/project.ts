@@ -440,6 +440,11 @@ export function metaToSession(meta: SessionMeta): Omit<Session, 'messages' | 'pe
     title: meta.title,
     createdAt: meta.createdAt,
     updatedAt: meta.updatedAt,
+    // 同步元数据（第 19 章）：meta 是权威，读回时必须带上——漏掉它的话，
+    // 会话从磁盘水合一次就把 `rev` 洗回 undefined，下一次编辑会从 0 重算
+    // （而不是在既有版本上递增），同步层据此判「谁更新」会判错方向
+    rev: meta.rev,
+    updatedBy: meta.updatedBy,
   };
 }
 

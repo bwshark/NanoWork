@@ -174,6 +174,9 @@ export function normalizeSessionMeta(value: unknown): SessionMeta | null {
     createdAt: typeof obj.createdAt === 'string' ? obj.createdAt : now,
     updatedAt: typeof obj.updatedAt === 'string' ? obj.updatedAt : now,
     rev: typeof obj.rev === 'number' ? obj.rev : undefined,
+    // 与 `rev` 同处一条纪律：缺失不兜底成 `'unknown'`（那会伪装成一台真实设备），
+    // 保持 `undefined` 让读侧知道「这份元数据没记过来源」
+    updatedBy: typeof obj.updatedBy === 'string' ? obj.updatedBy : undefined,
     deletedAt: typeof obj.deletedAt === 'string' ? obj.deletedAt : null,
   };
 }
@@ -290,6 +293,7 @@ export function entryFromMeta(meta: SessionMeta, counters: SessionCounters): Ses
     createdAt: meta.createdAt,
     updatedAt: meta.updatedAt,
     rev: meta.rev,
+    updatedBy: meta.updatedBy,
     deletedAt: meta.deletedAt,
   };
 }
@@ -375,6 +379,7 @@ export function applyAppend(
           pinned: meta.pinned,
           createdAt: meta.createdAt,
           rev: meta.rev,
+          updatedBy: meta.updatedBy,
           deletedAt: meta.deletedAt,
         }
       : {}),

@@ -32,6 +32,7 @@ import {
 } from '@/lib/attachments';
 import { MemoryService, isEmptySummary } from '@/lib/memory';
 import { isSameMemoryWorkspace } from '@/lib/workspaceMemory';
+import { sessionCreatePatch, withSessionSync } from '@/lib/sessionSyncMeta';
 import {
   MEMORY_WRITE_INSTRUCTION,
   parseMemoryDirectives,
@@ -402,6 +403,10 @@ function toMeta(s: Session): SessionMeta {
     pinned: s.pinned,
     createdAt: s.createdAt,
     updatedAt: s.updatedAt,
+    // 同步元数据（第 19 章）：`rev` / `updatedBy` 由 `updateSession` 自动维护
+    // （见 `lib/sessionSyncMeta.ts`）；这里是**唯一的落盘出口**，漏掉就等于没记过
+    rev: s.rev,
+    updatedBy: s.updatedBy,
   };
 }
 
@@ -1065,6 +1070,10 @@ export const useSessionsStore = create<SessionsState>()(
         permissionLog: [],
         createdAt: nowIso(),
         updatedAt: nowIso(),
+        // 新建会话的同步元数据（第 19 章）：`rev = 1`、`updatedBy` 取当前设备。
+        // 走 `sessionCreatePatch` 而不是让 `updateSession` 顺手打脏——新建不该经过
+        // 「改动」那条路径，否则首条会话的 `rev` 会依赖「谁先调了 updateSession」
+        ...sessionCreatePatch(),
       };
       set((s) => ({
         sessions: [session, ...s.sessions],
@@ -1493,9 +1502,21 @@ export const useSessionsStore = create<SessionsState>()(
       persistMetaOf(id);
     },
 
+    /**
+     * 唯一的会话改动入口。
+     *
+     * 同步元数据（第 19 章）在这里**自动**维护：比较改动前后的「可同步字段」
+     * （白名单见 `lib/sessionSyncMeta.ts`），真的变了才 `rev + 1` 并刷新 `updatedBy`。
+     *
+     * 为什么放在这里而不是各调用点：本入口有十来个调用方（重命名 / 置顶 / 换模式 /
+     * 换模型 / 换工作空间 / 换权限 / 改记忆快照…），逐个手写 `rev` 必然漏，
+     * 而漏掉的后果是**静默**的——本地一切正常，换台设备才发现少了一次改动。
+     * 自动判定的另一个好处是改记忆快照（`memory*`，纯缓存）不会涨版本：
+     * 它们不在白名单里。
+     */
     updateSession: (id, updater) =>
       set((s) => ({
-        sessions: s.sessions.map((x) => (x.id === id ? updater(x) : x)),
+        sessions: s.sessions.map((x) => (x.id === id ? withSessionSync(x, updater(x)) : x)),
       })),
 
     updateMessage: (sessionId, messageId, updater) =>
