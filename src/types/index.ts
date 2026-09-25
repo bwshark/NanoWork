@@ -16,3 +16,4 @@ export * from './memory';
 export * from './prompt';
 export * from './channel';
 export * from './plugin';
+export * from './sync';

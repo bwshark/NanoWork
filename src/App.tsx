@@ -14,6 +14,7 @@ import { useSessionsStore } from '@/stores/sessionsStore';
 import { useStorageInfoStore } from '@/stores/storageInfoStore';
 import { PromptLibrary } from '@/lib/promptLibrary';
 import { IdentityService } from '@/lib/identity';
+import { getDeviceId } from '@/lib/deviceId';
 
 /**
  * 顶层壳：AppLayout（侧栏 + 横幅 + Outlet）+ 全局 Toast + 权限门控弹窗。
@@ -50,6 +51,10 @@ export function App() {
     // 读盘失败/未完成时退化为「内置提示词 + 无身份文件」，不影响发消息。
     void PromptLibrary.loadAll();
     void IdentityService.loadAll();
+    // 设备标识（同步元数据 `updatedBy` 的来源）：**启动预热一次**，运行时用
+    // `currentDeviceId()` 同步读快照。store 的写动作是同步的，标记 `markDirty` 时
+    // 拿不到 Promise——不预热就只能在写的那一刻拿空值。
+    void getDeviceId();
     // 启动回读：本地缺失的渠道配置从 nanobot config.json 反向补齐（回显）；
     // 随后校准：把本地已保存的频道配置同步进 nanobot，保证历史配置自动生效。
     // 主进程合并是幂等的（配置一致时返回 changed=false 且不重启网关）；

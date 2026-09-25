@@ -294,7 +294,7 @@ V1 的方案是把 cron 镜像进本地 `nanobot` 的 `jobs.json`（已实现）
 | FR-1.3 | 工具调用卡片 | P0 | ✅ | both | 参数 / 结果可展开；状态机 pending→running→done/error 完整 |
 | FR-1.4 | **三种执行模式 Ask / Plan / Craft** | **P0** | ✅ | both | Ask：只读，禁止任何写工具；Plan：先产出结构化计划，**经用户批准后**才进入执行；Craft：直接执行。模式在会话内可切换且落到会话元数据。**已落地**：`session.mode`（事件 `session-start` / `mode-change` + meta），引擎侧由工具网关强制，不靠提示词（见 10.1） |
 | FR-1.5 | **计划审批流** | **P0** | ✅ | both | Plan 模式产出的计划以可勾选清单呈现；支持逐项批准 / 全批准 / 打回并附意见；未批准前引擎不得调用写类工具（由工具网关强制，见第 11 章）。**已落地**：引擎新增 `submit_plan` 工具 → `kind=plan` 事件 → 客户端 `PlanCard` 勾选清单 → `plan-decision` 事件（见 10.2） |
-| FR-1.6 | 事件化会话记录 | **P0** | ⬜ | both | 会话以 JSONL 追加事件流持久化；事件带 `id`/`parentId`；支持按 `parentId` 重建分支与重放 |
+| FR-1.6 | 事件化会话记录 | **P0** | ✅ | both | 会话以 JSONL 追加事件流持久化；事件带 `id`/`parentId`；支持按 `parentId` 重建分支与重放。**已落地**：`src/events/` 双实现（Electron 主进程落盘 / Web 降级），迁移三步（双写 → 切读 → 清理）均已完成，见 §9.6 |
 | FR-1.7 | 会话检索 | P1 | 🟡 | both | 支持标题 / 全文 / 时间 / 工作区 / Agent 多条件检索（`lib/taskQuery.ts` 已有雏形，需扩展到事件流） |
 | FR-1.8 | 会话导入导出 | P2 | 🟡 | both | `lib/sessionImport.ts` 已有导入；补导出与跨端迁移格式（含事件流） |
 
@@ -401,7 +401,7 @@ V1 的方案是把 cron 镜像进本地 `nanobot` 的 `jobs.json`（已实现）
 | FR-10.2 | 云端账户 | P1 | ⬜ | both | 邮箱+密码 + JWT；refresh 轮换；Electron 用系统钥匙串，Web 用 httpOnly Cookie |
 | FR-10.3 | 双向同步 | P1 | ⬜ | both | `/api/sync/push` + `/api/sync/pull`；LWW + tombstone（已定设计见 `cross-platform-sync-design.md`） |
 | FR-10.4 | 离线优先 | P1 | ⬜ | both | 无网络时本地照常工作，联网自动合并；状态 `local/syncing/synced/conflict/offline` |
-| FR-10.5 | 同步范围控制 | P1 | ⬜ | both | `settings` 只同步用户偏好，**机器专属字段（网关地址、本地路径）排除在同步负载之外** |
+| FR-10.5 | 同步范围控制 | P1 | ⬜ | both | `settings` 只同步用户偏好，**机器专属字段（网关地址、本地路径）排除在同步负载之外**；**凭据同样不入同步负载**（`MCPConfig.auth` 已在主进程保险库；渠道密钥现为明文落 `channels.json`，**定案不上行**，见 `architecture-syncmeta.md` §5.3） |
 | FR-10.6 | 数据主权 | P1 | ⬜ | both | 一键导出全部数据；彻底删除账户 |
 | FR-10.7 | 端到端加密 | P2 | ⬜ | both | 可选开启；云端只存密文（V2） |
 
