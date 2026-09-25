@@ -1,3 +1,5 @@
+import type { SyncMetaFields } from './sync';
+
 /**
  * 任务调度（对齐 nanobot CronSchedule 的三种形态）：
  * - cron：标准 5 段表达式（可选时区 tz）→ nanobot { kind:'cron', expr, tz }
@@ -47,7 +49,7 @@ export interface TaskRunOptions {
 }
 
 /** 自动化任务配置 */
-export interface TaskConfig {
+export interface TaskConfig extends SyncMetaFields {
   id: string;
   name: string;
   schedule: TaskSchedule;

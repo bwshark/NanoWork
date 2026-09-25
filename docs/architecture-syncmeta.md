@@ -149,6 +149,12 @@ LWW 同步要求删除能被传播，因此必须改为「置 `deletedAt` 并保
 **V1 阶段只打标记、不清理**：GC 策略（保留 N 天后删墓碑）依赖「所有设备都已同步到该墓碑」
 这个 V1 无法回答的问题，归 V1.5。V1 只保证墓碑写进去了。
 
+> ⚠️ **落地时改了一处（2026-09-25，详见 §7.2）**：store 数组那五个实体**没有**采用
+> 「条目留在数组里 + 每个读取处过滤」，而是**把墓碑拆成独立的 `SyncTombstones` 表**
+> （`types/sync.ts`），存活数组天生只含存活条目。上面这段「每一个读取处都要过滤」的
+> 代价因此只剩**内联形态**（会话索引，批次 3）。改动理由：数组里的墓碑会被合并函数
+> 冲掉，且 UI 读取点有二十余处。
+
 ### 5.2 运行时事实字段必须从同步负载剔除
 
 同一个实体里混着**声明**与**事实**，只有声明该同步：
@@ -202,8 +208,8 @@ LWW 同步要求删除能被传播，因此必须改为「置 `deletedAt` 并保
 | 批次 | 内容 | 完成判据 |
 |---|---|---|
 | **1 地基** | `types/sync.ts` + `lib/syncMeta.ts` + `lib/syncSelect.ts` + `lib/deviceId.ts` + 单测 | ✅ **已完成（2026-09-25，见 §7.1）**：纯函数单测覆盖 `markDirty` 递增、`markDeleted` 幂等、`isTombstone`、`liveEntities` 过滤 |
-| **2 实体接线** | Agent / ExpertGroup / Task / MCP / Channel 五个 store 接线 + Skill 覆盖表抽离 + 各自的 `version` 升版 | 每个 store 一条「改 → rev+1」「删 → 墓碑且不出现在列表」的用例；**Channel 额外一条：「同步负载不含 `clientSecret` / `appSecret` / `botSecret` / `token`」**（§5.3 定案的可证伪判据） |
-| **3 会话与设置** | `indexFile` 写入 `rev` / `updatedBy`；`lib/settingsSync.ts` 的 `toSyncPayload` + 排除表 | 一条「会话重命名后 `rev` 递增」用例；一条「同步负载不含 `gatewayEndpoint` / `apiToken`」用例 |
+| **2 实体接线** | Agent / ExpertGroup / Task / MCP / Channel 五个 store 接线 + Skill 覆盖表抽离 + 各自的 `version` 升版 | ✅ **已完成（2026-09-25，见 §7.2）**：五个 store 各一条「改 → rev+1」「删 → 墓碑且不出现在列表」；Channel 另有「同步负载不含 `clientSecret` / `appSecret` / `botSecret` / `token`」「引擎回读不复活已删渠道」 |
+| **3 会话与设置** | `indexFile` 写入 `rev` / `updatedBy`；`lib/syncPayloads.ts` 的 `toSyncPayload(settings)` + 排除表 | 一条「会话重命名后 `rev` 递增」用例；一条「同步负载不含 `gatewayEndpoint` / `apiToken`」用例 |
 
 **门禁（沿用 `nanowork-dev-gate`）**：三套 `tsc` 0 错误 → `vitest run --maxWorkers=3` 全绿
 → `vite build --emptyOutDir false` 绿。**动了 `electron/storageRoutes.ts`（新增
@@ -236,10 +242,71 @@ LWW 同步要求删除能被传播，因此必须改为「置 `deletedAt` 并保
 - `pickSyncable` 剔除凭据（`clientSecret` / `appSecret` / `botSecret` / `token`）与运行时事实（`tools` / `lastProbedAt` / `status` / `authKeyNames`）——§5.3 与 §5.2 的单元级对应物。
 - `getDeviceId` 并发只生成一个 id 且只写一次存储；Electron 分支**不生成、不写存储**。
 
-**尚未做（属批次 2/3 —— 别把「地基完成」当成「同步前置换完了」）**：五个 store 的接线与
-`version` 升版、Skill 覆盖表抽离、`indexFile` 写入 `rev` / `updatedBy`、`lib/settingsSync.ts`
-的 `toSyncPayload` + 排除表；§三 表里 #7 会话元数据只缺 `updatedBy` 的补写也在批次 3。
+**尚未做（属批次 3 —— 别把「地基 + 实体接线完成」当成「同步前置换完了」）**：
+`indexFile` 写入 `rev` / `updatedBy`；`lib/syncPayloads.ts` 的 `toSyncPayload(settings)` + 排除表。
+§三 表里 #7 会话元数据只缺 `updatedBy` 的补写也在批次 3。
 另：§二 C 类（文件型资产）的段落级 LWW **不在本文范围**，V1.5 另案。
+
+### 7.2 批次 2（实体接线）已完成 · 2026-09-25
+
+落地的 store 与版本号：
+
+| Store | 持久化 key | `version` | 删除形态 | 墓碑键 |
+|---|---|---|---|---|
+| `agentsStore` | `nanowork.agents` | 1（新增） | 摘除 + 墓碑 | `id` |
+| `expertGroupsStore` | `nanowork.expertGroups` | 1（新增） | 摘除 + 墓碑 | `id` |
+| `tasksStore` | `nanowork.tasks` | 不变（无旧数据形态变化） | 摘除 + 墓碑 | `id` |
+| `mcpStore` | `nanowork.mcp` | 1（新增） | 摘除 + 墓碑 | `id` |
+| `channelsStore` | `nanowork.channels` | 2 → **3** | 摘除 + 墓碑 | **`kind`** |
+| `skillsStore` | `nanowork.skills` v2 → **3**；新增 `nanowork.skillOverrides` | 3 | 覆盖表无墓碑（值变化） | — |
+
+新增共享件：`src/lib/syncStamp.ts`（store 专用的三个带设备标识的标记入口）、
+`src/lib/skillOverrideTable.ts`（覆盖表的纯函数）、`src/lib/syncPayloads.ts`（云端负载裁剪）。
+
+用例：`tests/stores/syncMetaWiring.test.ts`（16 例）、`tests/lib/syncPayloads.test.ts`（6 例）。
+
+门禁：三套 `tsc` 0 错误 / `vitest run --maxWorkers=3` **96 文件 1554 用例全绿** /
+`vite build --emptyOutDir false` 23.39s exit=0。**动了 `electron/storageRoutes.ts`
+（新增 `skills/overrides.json` 路由），已重建 `main.cjs` + `preload.cjs`**，
+并核对新路由字符串确实进了产物（不重建则 Electron 下新路由静默缺失、界面上看不出异常）。
+
+> 全量首次运行时 `tests/electron/{pluginPackage,workspaceMemoryStore}.test.ts` 各有 1 例
+> `afterEach` 清理钩子超时（Windows 并发下的文件删除争用）；单独复跑 68 例全绿，
+> 复跑全量亦全绿——与本次改动无关，属环境抖动（已核：两文件不触及本次改动的任何模块）。
+
+实现时**细化**了本文五处——原表述照做会真的写错：
+
+| 处 | 本文原表述 | 实际落地 | 为什么 |
+|---|---|---|---|
+| §5.1 删除语义 | 「置 `deletedAt` 并保留数组项」，代价是「每一个读取处都要过滤」 | **墓碑拆成独立 `SyncTombstones` 表**，存活数组只含存活条目 | 两个硬约束：① 数组里的墓碑会被**合并函数冲掉**——`agentsStore.refresh()` 走 `mergeAgents(get().agents)`，合并产出只含「内置 + 存活用户条目」，于是每次启动都把墓碑洗净再写回，删除标记活不过一次重启；② UI 读取点实测二十余处，在 selector 里内联过滤每次 store 变动都产出新数组引用，要么给每处补 `useShallow`、要么放任多余重渲染，两条路都要改二十多个文件且漏一处是静默的 |
+| §5.2 墓碑键 | （未提） | `channelsStore` 的墓碑键是 **`kind`** 而不是 `id` | 渠道的实体身份是 `kind`（一卡一配置），而 `id` 是本地随机数且**回读会重新生成**（`fromNanobotChannels` 每次 `genId()`）。按 `id` 键控时回读侧永远匹配不上墓碑——症状是「删掉的渠道下次启动自己回来了」。已用一条「引擎回读不复活已删渠道」用例钉住 |
+| §5.3 凭据排除 | 「`clientSecret` / `appSecret` / `botSecret` / `token` 四个字段进排除表」 | **凭据对成组剔除**：连 `clientId` / `appId` / `botId` 一起剔 | 只剔 secret 会同步出一条「有 id、没密钥」的渠道——看着配好了、实际永远连不上，而界面上看不出差在哪，比什么都不留更难查 |
+| §5.3 适用范围 | （未提） | **引擎负载 ≠ 云端负载**：`channelsStore.syncAll` 提交给引擎的片段**必须带凭据**，§5.3 约束的只是云端同步负载 | 引擎靠凭据连 IM，少一个 `appSecret` 渠道直接不可用。两者字段清单重叠但不相同，故各一处显式声明（`nanobotHttp/channels.ts` / `lib/syncPayloads.ts`），并在两处都写了「别把裁剪套到对面」的注释 |
+| §3.3 落点 | `src/lib/settingsSync.ts` 的 `toSyncPayload` | 先落成 `src/lib/syncPayloads.ts`（渠道），批次 3 的 settings 并入**同一文件** | 两个同构文件（都是「实体 → 可上云负载」）会各自演化，排除表也就有了两个家。放一处，改的人一次只看一张表 |
+
+另有三处 store 内的具体决定（都写进了用例）：
+
+- **运行时事实不推进 `rev`**：`mcpStore.setStatus` / `testConfig` 的探测结果（`status` /
+  `tools` / `lastProbedAt`）不算「用户改过这条配置」——否则每点一次「测试」就涨一次版本号，
+  LWW 的「谁改的更新」会被探测噪声淹没。但实测到的 `urlType` 是**声明**，那一次要标记。
+- **墓碑 id 不被引擎镜像重放复活**：`tasksStore.addTask` 遇到「该 id 有墓碑」时返回 `null`
+  并**不写入**（返回值类型从 `TaskConfig` 变成 `TaskConfig | null`）。放在 store 层而不是
+  让调用方各自判断——`cronTaskMirror` 与历史消息重放都会走它。
+- **技能覆盖表是用户意图的唯一来源**：`skills` 降为**派生视图**（事实 + 覆盖表合成），
+  `pinnedIds` 由覆盖表派生且**不落盘**（落盘就是第二份真相，症状是「点过置顶、重启后顺序变了」）。
+  「回到默认档」写 `override: 'on'` 而**不是删条目**——删除与「从来没有过」在数据上无法区分，
+  而 LWW 需要能比较新旧；只有「技能本身已卸载」才真删条目（否则是一条指向不存在技能的僵尸）。
+
+**批次 2 已钉住的可证伪判据**（都在用例里）：
+
+- 五个 store 各一条「建 1 → 改 2 → 删 3」，且删除后**列表里查不到**、墓碑表里查得到。
+- `channelsStore`：墓碑键等于 `kind`（`Object.keys(tombstones)` 断言，不是「看着像」）；
+  引擎回读已删渠道返回 `false` 且列表仍为空；重新配置同 kind 会清掉旧墓碑。
+- `mcpStore`：写入 `status` 后 `rev` **不变**。
+- `skillsStore`：改档 `rev+1`；置顶 `rev+1` 且**不改覆盖档、不推引擎**；卸载清条目；
+  重新安装把档位拉回 `on`（保留置顶）；v2 老数据迁移**只抽有意图的条目**且 `rev = 0`。
+- `syncPayloads`：排除表里的键在负载里一个都不能有，且负载不能被剔到只剩几个键
+  （反向护栏，防「把排除表写成全集」也算通过）；同时守一条边界——提交给引擎的片段**带凭据**。
 
 ---
 

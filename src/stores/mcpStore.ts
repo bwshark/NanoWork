@@ -4,6 +4,8 @@ import { zustandStorage } from '@/platform';
 import { platform } from '@/platform';
 import { STORAGE_KEYS } from '@/lib/constants';
 import { genId } from '@/lib/id';
+import { ensureMetaList, pickMeta, withTombstone, withoutTombstone } from '@/lib/syncMeta';
+import { metaForDelete, metaForEdit, metaForNew } from '@/lib/syncStamp';
 import { getRuntime, type SyncResult } from '@/ai/runtime';
 import { MCP_SERVERS } from '@/ai/builtinMcps';
 import {
@@ -11,6 +13,7 @@ import {
   isBuiltinMcpId,
   type MCPConfig,
   type MCPStatus,
+  type SyncTombstones,
 } from '@/types';
 import type {
   CredentialVaultStatus,
@@ -20,6 +23,11 @@ import type {
 
 interface McpState {
   configs: MCPConfig[];
+  /**
+   * 已删除条目的墓碑表（`id → 删除元数据`）。
+   * 与 `configs` 分开存，理由同 `agentsStore.tombstones`。
+   */
+  tombstones: SyncTombstones;
   /**
    * 凭据保险库可用性（`null` = 尚未查询）。
    * 用来决定「凭据是否加密保存」这句提示怎么写——不可用时必须显式告知，
@@ -95,11 +103,14 @@ function mergeConfigs(stored: MCPConfig[]): MCPConfig[] {
           ...b,
           enabled: over.enabled ?? b.enabled,
           status: over.status ?? b.status,
+          // 同步元数据随用户覆盖一起保留（理由同 agentsStore 的 mergeAgents）
+          ...pickMeta(over),
         }
       : { ...b };
   });
 
-  // user：保留持久化条目（可能比 builtin 旧，转换老数据为 user）
+  // user：保留持久化条目（可能比 builtin 旧，转换老数据为 user）。
+  // 本函数只处理**存活**条目——删除的痕迹在 `tombstones` 表里，与此无关
   const user = stored
     .filter((c) => !isBuiltinMcpId(c.id))
     .map((c) => ({ ...c, source: (c.source ?? 'user') as 'user' }));
@@ -111,6 +122,9 @@ function mergeConfigs(stored: MCPConfig[]): MCPConfig[] {
  * 把 Chat UI 需要的「候选 MCP 列表」挑出来：
  * 已启用条目（builtin/user 统一语义：enabled !== false，
  * 老数据 undefined 默认启用，向后兼容）。
+ *
+ * 本函数是两个同步路径（`syncConfig` / `syncEnabled`）取「要写进引擎的条目」的
+ * 唯一入口。列表天生只含存活条目，所以被用户删掉的 MCP 不会再被写回 `config.json`。
  */
 export function selectEnabledConfigs(configs: MCPConfig[]): MCPConfig[] {
   return configs.filter((c) => c.enabled !== false);
@@ -120,10 +134,14 @@ export const useMcpStore = create<McpState>()(
   persist(
     (set, get) => ({
       configs: mergeConfigs([]),
+      tombstones: {},
       vaultAvailable: null,
       secretKeys: {},
 
       addConfig: (partial) => {
+        // createdAt 与同步元数据的 updatedAt 取同一时刻：两处各自 `nowIso()`
+        // 会差几毫秒，「创建时间」与「首次修改时间」对不上而没人知道为什么
+        const stamp = metaForNew();
         const config: MCPConfig = {
           id: genId(),
           name: partial?.name ?? '新 MCP 服务',
@@ -137,14 +155,22 @@ export const useMcpStore = create<McpState>()(
           status: 'idle',
           source: 'user',
           enabled: true,
+          createdAt: stamp.updatedAt,
+          ...stamp,
         };
-        set((s) => ({ configs: [...s.configs, config] }));
+        set((s) => ({
+          configs: [...s.configs, config],
+          // 同 id 重新出现 = 「删除后又建回来」：清掉旧墓碑，否则同步会把这个刚建好
+          // 的条目按「已删除」推出去，而本机看起来一切正常（理由同 agentsStore）
+          tombstones: withoutTombstone(s.tombstones, config.id),
+        }));
         return config;
       },
 
+      // 元数据在 patch 之后展开，理由同 agentsStore.updateAgent
       updateConfig: (id, patch) =>
         set((s) => ({
-          configs: s.configs.map((c) => (c.id === id ? { ...c, ...patch } : c)),
+          configs: s.configs.map((c) => (c.id === id ? { ...c, ...patch, ...metaForEdit(c) } : c)),
         })),
 
       /** 删除自定义 MCP；builtin 拒绝删除（保护内置目录） */
@@ -152,8 +178,16 @@ export const useMcpStore = create<McpState>()(
         const cfg = get().configs.find((c) => c.id === id);
         // builtin 不可删，保持现有语义
         if (!cfg || isBuiltinMcpId(cfg.id)) return;
-        // 先从 store 移除，再触发同步，确保提交的是删除后的 configs
-        set((s) => ({ configs: s.configs.filter((c) => c.id !== id) }));
+        /*
+         * 删除 = **摘除条目 + 留墓碑**（与 agentsStore.removeAgent 同一形态）。
+         * 摘除让 `configs` 天生只含存活条目——UI（`s.configs`）与下面两条同步路径
+         * （`selectEnabledConfigs`）都不必再过滤；墓碑让删除能被 LWW 传播到别的设备。
+         * 见 `types/sync.ts` 的 `SyncTombstones`。
+         */
+        set((s) => ({
+          configs: s.configs.filter((c) => c.id !== id),
+          tombstones: withTombstone(s.tombstones, id, metaForDelete(cfg)),
+        }));
         // 凭据一并清理：条目没了而密钥还留在保险库里，是一份没有归属的明文
         // （且下次同名 server 会被"自动带上旧凭据"，是最难排查的一类串味）
         if (platform.env === 'electron') {
@@ -175,13 +209,15 @@ export const useMcpStore = create<McpState>()(
       toggleMcp: (id) =>
         set((s) => ({
           configs: s.configs.map((c) =>
-            c.id === id ? { ...c, enabled: !(c.enabled ?? !isBuiltinMcpId(c.id)) } : c,
+            c.id === id
+              ? { ...c, enabled: !(c.enabled ?? !isBuiltinMcpId(c.id)), ...metaForEdit(c) }
+              : c,
           ),
         })),
 
       setMcpEnabled: (id, enabled) =>
         set((s) => ({
-          configs: s.configs.map((c) => (c.id === id ? { ...c, enabled } : c)),
+          configs: s.configs.map((c) => (c.id === id ? { ...c, enabled, ...metaForEdit(c) } : c)),
         })),
 
       setStatus: (id, status) =>
@@ -238,18 +274,35 @@ export const useMcpStore = create<McpState>()(
           command: cfg.command,
           urlType: cfg.urlType,
         });
-        get().updateConfig(id, {
-          status: result.ok ? 'connected' : 'error',
-          // 失败时保留上次清单：一次抖动不该让授权视图变成空白
-          tools: result.ok ? result.tools : cfg.tools,
-          lastProbedAt: result.ok ? Date.now() : cfg.lastProbedAt,
-          // 实测到的传输方式要落回配置：引擎按它挑 client（sse / streamableHttp），
-          // 与实际不符就是「测试通过、聊天时连不上」。只在探测成功且与当前不同时写，
-          // 避免每次点测试都动一次 state（会白白触发重渲染与持久化）。
-          ...(result.ok && result.transport && result.transport !== cfg.urlType
-            ? { urlType: result.transport }
-            : {}),
-        });
+        // 实测到的传输方式要落回配置：引擎按它挑 client（sse / streamableHttp），
+        // 与实际不符就是「测试通过、聊天时连不上」。只在探测成功且与当前不同时写，
+        // 避免每次点测试都动一次 state（会白白触发重渲染与持久化）。
+        const urlTypeChanged = Boolean(
+          result.ok && result.transport && result.transport !== cfg.urlType,
+        );
+        /*
+         * 刻意**不走 `updateConfig`**：探测结果（`status` / `tools` / `lastProbedAt`）
+         * 是运行时事实，本机重算，不算「用户改过这条配置」——走 updateConfig 会让
+         * 每点一次「测试」就递增一次 `rev`，版本号里掺进噪声，同步层就没法用它判
+         * 「谁的改动更新」。
+         *
+         * 但 `urlType` 是**声明**：实测值落回时必须标记，否则「测试通过、聊天连不上」
+         * 的这次修复传不到别的设备。两类字段混在同一次 set 里，所以要分开判断。
+         */
+        set((s) => ({
+          configs: s.configs.map((c) => {
+            if (c.id !== id) return c;
+            const next: MCPConfig = {
+              ...c,
+              status: result.ok ? 'connected' : 'error',
+              // 失败时保留上次清单：一次抖动不该让授权视图变成空白
+              tools: result.ok ? result.tools : c.tools,
+              lastProbedAt: result.ok ? Date.now() : c.lastProbedAt,
+              ...(urlTypeChanged ? { urlType: result.transport } : {}),
+            };
+            return urlTypeChanged ? { ...next, ...metaForEdit(c) } : next;
+          }),
+        }));
         return result;
       },
 
@@ -263,7 +316,11 @@ export const useMcpStore = create<McpState>()(
             const list = [...next].sort();
             // 空黑名单收敛为 undefined：让"无限制"只有一种表示，
             // 避免 [] 与 undefined 两态在比较/序列化时来回抖动
-            return { ...c, disabledTools: list.length > 0 ? list : undefined };
+            return {
+              ...c,
+              disabledTools: list.length > 0 ? list : undefined,
+              ...metaForEdit(c),
+            };
           }),
         })),
 
@@ -327,11 +384,21 @@ export const useMcpStore = create<McpState>()(
                 authKeyNames: names && names.length > 0 ? names : undefined,
               };
             });
-            // 按名称去重：仅追加本地缺失的条目，不覆盖本地已有配置
+            // 按名称去重：仅追加本地缺失的条目，不覆盖本地已有配置。
+            // 两道判据：
+            // - 名字：`configs` 只含存活条目，所以「被用户删掉的」不会阻止回读；
+            // - 墓碑：引擎侧 job/配置还没被清理干净时（上一次同步失败、或引擎自行
+            //   写入了同名条目），回读会把用户刚删掉的 MCP 原样搬回来。删除是**显式
+            //   事实**，不因回读而复活——与 tasksStore.addTask 对墓碑的处理同一条规则。
             const localNames = new Set(get().configs.map((c) => c.name));
-            const missing = sanitized.filter((c) => !localNames.has(c.name));
+            const tombstones = get().tombstones;
+            const missing = sanitized.filter(
+              (c) => !localNames.has(c.name) && !(c.id in tombstones),
+            );
             if (missing.length === 0) return;
-            set((s) => ({ configs: [...s.configs, ...missing] }));
+            set((s) => ({
+              configs: [...s.configs, ...missing.map((c) => ({ ...c, ...metaForNew() }))],
+            }));
           } catch {
             // 回读失败不影响主流程：保持本地状态
           } finally {
@@ -359,7 +426,19 @@ export const useMcpStore = create<McpState>()(
           platform.env === 'electron'
             ? s.configs.map((c) => ({ ...c, auth: undefined }))
             : s.configs,
+        tombstones: s.tombstones,
       }),
+      // v1：给存量数据补同步元数据四字段（缺字段按 `LEGACY_REV` 落盘）、补空墓碑表
+      version: 1,
+      migrate: (persisted) => {
+        const p = persisted as
+          | { configs?: MCPConfig[]; tombstones?: SyncTombstones }
+          | undefined;
+        return {
+          configs: ensureMetaList(p?.configs),
+          tombstones: p?.tombstones ?? {},
+        };
+      },
       merge: (persisted, current) => {
         // 反序列化时再合并一次，以确保 builtin 与新版本代码同步
         const persistedConfigs =
@@ -367,6 +446,9 @@ export const useMcpStore = create<McpState>()(
         return {
           ...current,
           configs: mergeConfigs(persistedConfigs),
+          tombstones:
+            (persisted as { tombstones?: SyncTombstones } | undefined)?.tombstones ??
+            current.tombstones,
         };
       },
     },

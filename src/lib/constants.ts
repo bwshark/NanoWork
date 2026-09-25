@@ -112,7 +112,22 @@ export const STORAGE_KEYS = {
   legacySessions: 'nanowork.sessions',
   agents: 'nanowork.agents',
   expertGroups: 'nanowork.expertGroups',
+  /**
+   * 技能索引与运行时视图（事实缓存 + 覆盖态的合成结果）。
+   *
+   * ⚠️ **不是同步负载**：它混着磁盘扫描的事实（`path` 等机器专属字段）。用户意图
+   * 单独落在 `skillOverrides` 里，见下一条。
+   */
   skills: 'nanowork.skills',
+  /**
+   * 技能覆盖表（用户意图）：`SkillOverrideEntry[]`，独立落 ① `skills/overrides.json`。
+   *
+   * 与 `skills` 分成两个 key 的原因见 `types/skill.ts` 的 `SkillOverrideEntry`：
+   * 技能正文由各设备的磁盘决定、多端自然一致，跨端要同步的只有「用户把它调成了
+   * 哪一档、有没有置顶」。整实体同步会把 `Skill.path` 这个机器专属字段带上云
+   * （FR-10.5 禁止）。
+   */
+  skillOverrides: 'nanowork.skillOverrides',
   // ⚠️ 这里**刻意没有** `plugins` 键。插件（FR-3.4）的持久化只有一处：
   // `settings.enabledPlugins`（用户意图）。已安装清单与引擎激活状态都是**事实**，
   // 每次从权威重新读（磁盘扫描 / `GET /v1/plugins`），落盘只会制造第二份可能

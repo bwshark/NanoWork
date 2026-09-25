@@ -3,8 +3,10 @@ import { persist } from 'zustand/middleware';
 import { zustandStorage } from '@/platform';
 import { STORAGE_KEYS } from '@/lib/constants';
 import { genId } from '@/lib/id';
+import { ensureMetaList, withTombstone, withoutTombstone } from '@/lib/syncMeta';
+import { metaForDelete, metaForEdit, metaForNew } from '@/lib/syncStamp';
 import { getRuntime, type SyncResult } from '@/ai/runtime';
-import type { ChannelConfig, ChannelKind } from '@/types';
+import type { ChannelConfig, ChannelKind, SyncTombstones } from '@/types';
 
 /**
  * IM 频道配置 store（FR-010）。
@@ -33,6 +35,15 @@ export interface ChannelSyncSummary {
 
 interface ChannelsState {
   configs: ChannelConfig[];
+  /**
+   * 已删除渠道的墓碑表，**键是 `kind` 而不是 `id`**。
+   *
+   * 渠道的实体身份是 `kind`（一个渠道至多一条配置），而 `id` 只是本地随机数
+   * 且**会被回读重新生成**（`fromNanobotChannels` 每次 `genId()`）。若按 `id`
+   * 键控，回读侧永远匹配不上墓碑——表现成「删掉的渠道下次启动自己回来了」。
+   * 与 `agentsStore.tombstones`（按 `id`）的差别仅此一处，但这条差别是必需的。
+   */
+  tombstones: SyncTombstones;
   /** 最近一次同步结果（UI 据此弹提示） */
   lastSync: ChannelSyncSummary | null;
   /** 保存配置（同 kind 已存在则覆盖更新，否则新增）并触发自动同步；返回保存后的配置 */
@@ -106,32 +117,51 @@ export const useChannelsStore = create<ChannelsState>()(
 
       return {
         configs: [],
+        tombstones: {},
         lastSync: null,
 
         saveConfig: (partial) => {
+          // `configs` 天生只含存活条目（删除走墓碑表），所以同 kind 的存活条目直接找得到
           const existing = get().configs.find((c) => c.kind === partial.kind);
           let result: ChannelConfig;
           if (existing) {
-            result = { ...existing, ...partial, id: existing.id };
+            result = { ...existing, ...partial, id: existing.id, ...metaForEdit(existing) };
             set((s) => ({
               configs: s.configs.map((c) => (c.id === existing.id ? result : c)),
             }));
           } else {
-            result = { ...defaultsFor(partial.kind), ...partial };
-            set((s) => ({ configs: [...s.configs, result] }));
+            result = { ...defaultsFor(partial.kind), ...partial, ...metaForNew() };
+            set((s) => ({
+              configs: [...s.configs, result],
+              // 同 kind 重新出现 = 「删掉又配回来」：清掉旧墓碑，否则同步会把这个
+              // 刚配好的渠道按「已删除」推出去，而本机看起来一切正常
+              tombstones: withoutTombstone(s.tombstones, partial.kind),
+            }));
           }
           scheduleAutoSync();
           return result;
         },
 
         removeConfig: (kind) => {
-          set((s) => ({ configs: s.configs.filter((c) => c.kind !== kind) }));
+          set((s) => {
+            const target = s.configs.find((c) => c.kind === kind);
+            // 没有存活条目可删（重复删除 / 本就没配）：早退，不产生新对象引用
+            if (!target) return s;
+            return {
+              // 删除 = **摘除条目 + 留墓碑**（形态同 agentsStore.removeAgent，
+              // 差别只在墓碑键是 kind，理由见 tombstones 的说明）
+              configs: s.configs.filter((c) => c.kind !== kind),
+              tombstones: withTombstone(s.tombstones, kind, metaForDelete(target)),
+            };
+          });
           scheduleAutoSync();
         },
 
         setEnabled: (kind, enabled) => {
           set((s) => ({
-            configs: s.configs.map((c) => (c.kind === kind ? { ...c, enabled } : c)),
+            configs: s.configs.map((c) =>
+              c.kind === kind ? { ...c, enabled, ...metaForEdit(c) } : c,
+            ),
           }));
           scheduleAutoSync();
         },
@@ -142,6 +172,13 @@ export const useChannelsStore = create<ChannelsState>()(
           })),
 
         syncAll: async () => {
+          /*
+           * ⚠️ 提交给**引擎**的负载必须带凭据——引擎要靠它连 IM。
+           * 「凭据不上行」那条定案（architecture-syncmeta §5.3）约束的是**云端同步**
+           * 负载，不是这里；两者别混。云端负载的裁剪在 `lib/syncPayloads.ts`。
+           *
+           * `configs` 天生只含存活条目，所以被删渠道不会再被写回引擎配置。
+           */
           const configs = get().configs;
           configs.forEach((c) => get().setSyncStatus(c.id, 'syncing'));
           try {
@@ -189,10 +226,23 @@ export const useChannelsStore = create<ChannelsState>()(
             // web 端无文件系统权限：回读返回空数组，天然短路
             const remote = await getRuntime().read('channels');
             if (remote.length === 0) return false;
+            /*
+             * 两道判据，缺一不可：
+             * - kind：`configs` 只含存活条目，「本地已有」即「用户配过且没删」；
+             * - 墓碑：引擎侧配置还没被清理干净时（上一次同步失败、或引擎自行写入），
+             *   回读会把用户刚删掉的渠道原样搬回来。删除是**显式事实**，不因回读
+             *   而复活——与 mcpStore.hydrateFromNanobot 同一条规则。
+             *   判据用 kind 而非 id：回读每次重新 genId()，id 根本对不上。
+             */
             const localKinds = new Set(get().configs.map((c) => c.kind));
-            const missing = remote.filter((c) => !localKinds.has(c.kind));
+            const tombstones = get().tombstones;
+            const missing = remote.filter(
+              (c) => !localKinds.has(c.kind) && !(c.kind in tombstones),
+            );
             if (missing.length === 0) return false;
-            set((s) => ({ configs: [...s.configs, ...missing] }));
+            set((s) => ({
+              configs: [...s.configs, ...missing.map((c) => ({ ...c, ...metaForNew() }))],
+            }));
             return true;
           } catch {
               // 回读失败不影响主流程：卡片保持本地状态
@@ -216,11 +266,22 @@ export const useChannelsStore = create<ChannelsState>()(
             // 再同步会用旧片段反向覆盖引擎刚写入的凭证。
             set((s) => {
               const idx = s.configs.findIndex((c) => c.kind === kind);
-              if (idx < 0) return { configs: [...s.configs, entry] };
+              // 扫码接入成功 = 这个渠道**重新建立**了：旧墓碑必须清掉，否则同步会
+              // 把用户刚扫上的渠道按「已删除」推给对端（本机却显示已连接）。
+              const tombstones = withoutTombstone(s.tombstones, kind);
+              if (idx < 0) {
+                return {
+                  configs: [...s.configs, { ...entry, ...metaForNew() }],
+                  tombstones,
+                };
+              }
               return {
                 configs: s.configs.map((c, i) =>
-                  i === idx ? { ...entry, id: c.id } : c,
+                  // 元数据在最后展开：回读的 entry 没有元数据，且 `id` 归一也不该
+                  // 影响本次「渠道被重新配置」这个改动的事实
+                  i === idx ? { ...entry, id: c.id, ...metaForEdit(c) } : c,
                 ),
+                tombstones,
               };
             });
             return true;
@@ -255,7 +316,11 @@ export const useChannelsStore = create<ChannelsState>()(
                 delete cleared.appId;
                 delete cleared.appSecret;
               }
-              return cleared;
+              // 断开是**改动**（`enabled` 由 true 变 false，是声明字段）：必须标记，
+              // 否则「这台断开了、那台还在跑」这个差异传不出去。
+              // 元数据在最后展开——上面几个 `delete` 是对 cleared 的原地修改，
+              // 顺序反了会被 `...c` 的旧值盖回去
+              return { ...cleared, ...metaForEdit(c) };
             }),
           }));
         },
@@ -264,16 +329,25 @@ export const useChannelsStore = create<ChannelsState>()(
     {
       name: STORAGE_KEYS.channels,
       storage: zustandStorage,
-      version: 2,
-      migrate: (persistedState) => {
-        // v2：旧版本空白名单在 nanobot 中是「仅配对码」模式，迁移为放开接入（"*"）
-        const state = persistedState as { configs?: ChannelConfig[] } | undefined;
-        const configs = (state?.configs ?? []).map((c) =>
-          c.allowFrom.length === 0 ? { ...c, allowFrom: ['*'] } : c,
-        );
-        return { configs };
+      version: 3,
+      migrate: (persistedState, version) => {
+        const state = persistedState as
+          | { configs?: ChannelConfig[]; tombstones?: SyncTombstones }
+          | undefined;
+        let configs = state?.configs ?? [];
+        // v2：旧版本空白名单在 nanobot 中是「仅配对码」模式，迁移为放开接入（"*"）。
+        // 判据是**落盘时的版本号**而非「现在读到的形状」——重跑一次归一虽然幂等，
+        // 但把「已经迁移过」当成「需要迁移」会让这段逻辑永远留在执行路径上
+        if (version < 2) {
+          configs = configs.map((c) =>
+            (c.allowFrom?.length ?? 0) === 0 ? { ...c, allowFrom: ['*'] } : c,
+          );
+        }
+        // v3：补同步元数据四字段（缺字段按 `LEGACY_REV` 落盘，见 syncMeta.ensureMetaList）
+        // 与空墓碑表
+        return { configs: ensureMetaList(configs), tombstones: state?.tombstones ?? {} };
       },
-      partialize: (s) => ({ configs: s.configs }),
+      partialize: (s) => ({ configs: s.configs, tombstones: s.tombstones }),
     },
   ),
 );

@@ -13,6 +13,8 @@
  * config.json 的 `channels` 片段（见 ai/runtime/nanobotHttp/channels.ts）。
  */
 
+import type { SyncMetaFields } from './sync';
+
 /** 支持的 IM 渠道（与 nanobot channel name 对齐；lark 为 feishu 的 domain 变体） */
 export type ChannelKind = 'dingtalk' | 'feishu' | 'lark' | 'weixin' | 'wecom';
 
@@ -23,11 +25,13 @@ export type ChannelSyncStatus = 'idle' | 'syncing' | 'synced' | 'error';
 export type GroupPolicy = 'open' | 'mention';
 
 /** IM 频道配置（一条配置 = nanobot 一个 channel 实例） */
-export interface ChannelConfig {
+export interface ChannelConfig extends SyncMetaFields {
   id: string;
   kind: ChannelKind;
   /** 是否启用（同步到 nanobot 时映射为 enabled） */
   enabled: boolean;
+  /** 创建时间 ISO 8601 UTC（老数据缺失） */
+  createdAt?: string;
 
   // —— 钉钉 / 企业微信 / 飞书(Lark) 凭证 ——
   /** 钉钉 Client ID */

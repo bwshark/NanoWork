@@ -10,7 +10,7 @@
  * 的**确切值**，而不是「大概不是 null」。
  */
 
-import type { SyncMeta, SyncMetaInput } from '@/types/sync';
+import type { SyncMeta, SyncMetaInput, SyncTombstones } from '@/types/sync';
 
 /** 新建实体的起始版本号 */
 export const INITIAL_REV = 1;
@@ -48,9 +48,107 @@ function normalize(meta: SyncMetaInput | undefined | null): SyncMeta {
   };
 }
 
+/**
+ * 补齐缺失字段，拿到「有形状的元数据」。
+ *
+ * 与 `legacyMeta()` 的差别：后者刻意返回全空（`rev = 0`、时间与设备都为空），
+ * 用于「新建一条老数据」；本函数**保留已有值**，只把缺失的按老数据读。
+ */
+export function normalizeMeta(meta: SyncMetaInput | undefined | null): SyncMeta {
+  return normalize(meta);
+}
+
+/**
+ * 迁移用：给实体列表补齐四字段（已有的原样保留，缺的按 `LEGACY_REV` 读）。
+ *
+ * 与「读取时补」的差别在于**落盘**——`normalize()` 已能兜住缺失字段，所以本函数
+ * 不承担正确性，只承担可观测性：补过之后文件里就写着 `rev: 0`，V1.5 首次全量推送
+ * 据此识别「迁移前的老数据、从未被改写过」（§六 问题 4 的保留值）。
+ */
+export function ensureMetaList<T extends SyncMetaInput>(
+  list: readonly T[] | undefined | null,
+): T[] {
+  return (list ?? []).map((item) => ({ ...item, ...normalize(item) }));
+}
+
+/**
+ * 登记一条删除：把墓碑写进独立表（见 `types/sync.ts` 的 `SyncTombstones`）。
+ *
+ * **幂等**：已有同 id 墓碑时连引用都不换——重复删除（右键 + 批量、双击确认按钮）
+ * 在真实操作里不罕见，而换引用会白白触发一次重渲染。
+ */
+export function withTombstone(
+  tombstones: SyncTombstones | undefined | null,
+  id: string,
+  meta: SyncMeta,
+): SyncTombstones {
+  const base = tombstones ?? {};
+  if (isTombstone(base[id])) return base;
+  return { ...base, [id]: meta };
+}
+
+/**
+ * 移除墓碑：**「删除后又建了同 id 的条目」必须调它**。
+ *
+ * 不清的话那张墓碑会在同步时把刚建好的条目按「已删除」推出去，而本机看起来一切
+ * 正常（条目在列表里）——最难自查的一类不一致。
+ */
+export function withoutTombstone(
+  tombstones: SyncTombstones | undefined | null,
+  id: string,
+): SyncTombstones {
+  const base = tombstones ?? {};
+  if (!(id in base)) return base;
+  const { [id]: _dropped, ...rest } = base;
+  return rest;
+}
+
+/**
+ * 把墓碑表展开成「删除态条目」，供同步层与存活条目拼成完整负载。
+ *
+ * 现在没有调用方（V1 不实现同步），但它是本文几条断言的可测锚点：
+ * 「删除可传播」「墓碑带 `rev`」「`withoutTombstone` 之后不再出现」都靠它验证。
+ */
+export function tombstoneEntries(
+  tombstones: SyncTombstones | undefined | null,
+): Array<SyncMeta & { id: string }> {
+  return Object.entries(tombstones ?? {}).map(([id, meta]) => ({ id, ...normalize(meta) }));
+}
+
 /** 新建实体的元数据：`rev = 1`、非墓碑 */
 export function stampCreate(updatedBy: string, now: string = nowIso()): SyncMeta {
   return { rev: INITIAL_REV, updatedAt: now, updatedBy, deletedAt: null };
+}
+
+/**
+ * 从实体上摘出四个元数据字段（**只摘这四个**，不夹带实体自己的字段）。
+ *
+ * 用途：合并函数重建内置条目时透传「用户对该条目的改动痕迹」。
+ * `mergeAgents` / `mergeGroups` / `mergeConfigs` 每次都从代码里的内置定义重建对象，
+ * 只有被用户改过的字段被覆盖回去——元数据必须一起覆盖，否则「用户改了内置 Agent
+ * 的启用状态」这件事在下次启动后就查无对证（`rev` 回到缺省）。
+ *
+ * 源对象没有元数据时，这里返回的四个键值为 `undefined`：展开进对象后 JSON 序列化
+ * 会自然丢掉它们，读出时按 `LEGACY_REV` 处理——与「从来没写过元数据」等价。
+ */
+export function pickMeta(source: SyncMetaInput | undefined | null): SyncMetaInput {
+  return {
+    rev: source?.rev,
+    updatedAt: source?.updatedAt,
+    updatedBy: source?.updatedBy,
+    deletedAt: source?.deletedAt,
+  };
+}
+
+/**
+ * 迁移产出的元数据：`rev = 0`（§六 问题 4 的保留值）、`updatedBy` 为空。
+ *
+ * **不用 `stampCreate`**：那会给老数据 `rev = 1`，与真新建的条目撞车，
+ * 而 LWW 正是靠这个数判谁更新。`rev = 0` 明确表示「迁移前的老数据、从未被改写
+ * 过」，V1.5 首次全量推送据此识别需要补齐的对象。
+ */
+export function legacyMeta(): SyncMeta {
+  return { rev: LEGACY_REV, updatedAt: '', updatedBy: '', deletedAt: null };
 }
 
 /**

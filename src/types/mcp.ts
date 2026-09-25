@@ -1,3 +1,5 @@
+import type { SyncMetaFields } from './sync';
+
 /** MCP 传输类型 */
 export type MCPTransport = 'url' | 'command';
 
@@ -34,10 +36,12 @@ export interface McpToolInfo {
 }
 
 /** MCP Server 配置（FR-004） */
-export interface MCPConfig {
+export interface MCPConfig extends SyncMetaFields {
   id: string;
   name: string;
   transport: MCPTransport;
+  /** 创建时间 ISO 8601 UTC（老数据缺失，同 TaskConfig 的语义） */
+  createdAt?: string;
   /** url 模式下的地址 */
   endpoint?: string;
   /**

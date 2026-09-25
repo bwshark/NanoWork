@@ -26,9 +26,13 @@
 /**
  * 实体的同步元数据。
  *
- * `deletedAt` 有非空时间即**墓碑**：删除不摘除数组项，而是打标记（LWW 要求删除可
- * 传播）。代价是每个读取处都要过滤——一律走 `liveEntities()`，别自己写
- * `filter((item) => !item.deletedAt)`。
+ * `deletedAt` 有非空时间即**墓碑**。存储层有两种形态，取决于实体怎么存的：
+ *
+ * - **内联在实体上**（`SessionMeta` / `SessionIndexEntry` 这类逐条落文件的记录）：
+ *   删除只置 `deletedAt` 并保留条目，读取处走 `liveEntities()` 过滤。
+ * - **拆出独立的墓碑表**（`Agent` / `TaskConfig` / `MCPConfig` / `ChannelConfig`
+ *   这类 store 数组）：条目被真正摘除，删除痕迹记在 `SyncTombstones` 里。见该类型的
+ *   说明——这是落地时对 §19.2 原始方案的修正。
  */
 export interface SyncMeta {
   /**
@@ -55,7 +59,48 @@ export interface SyncMeta {
  */
 export type SyncMetaInput = Partial<SyncMeta>;
 
+/**
+ * 实体接口上的同步元数据字段（`Agent` / `TaskConfig` / `MCPConfig` … 用它 `extends`）。
+ *
+ * **刻意是可选形态**，与 `SessionMeta` 的既有声明一致，原因有二：
+ * - 老数据的四字段一个都没有，必填会逼着每处 `migrate` 凭空造一份；
+ * - 内置条目（`BUILTIN_AGENTS` / `MCP_SERVERS` 等）的真源是**代码**，它们的元数据
+ *   只有在用户改动过该条目时才存在（见 `markDirty` 的「老数据按 `LEGACY_REV` 读」）。
+ *
+ * 与 `SyncMetaInput` 是同一个类型、两个名字：一个说「函数入参」，一个说
+ * 「实体字段」，读代码时不必在两处语义间做翻译。
+ */
+export type SyncMetaFields = Partial<SyncMeta>;
+
 /** 可同步实体的约束形状：`id` + 同步元数据。只用于类型约束，不参与运行时。 */
 export interface SyncableEntity extends SyncMeta {
   id: string;
 }
+
+/**
+ * 墓碑表：`实体 id → 该条目的删除元数据`（`deletedAt` 必为非空）。
+ *
+ * ## 为什么墓碑不与存活条目放在同一个数组里
+ *
+ * §19.2 的原始方案是「删除时置 `deletedAt` 并保留数组项」，文档自己也点出了代价
+ * （「漏一处就是删不掉的幽灵条目」）。落地时撞上两个更硬的约束：
+ *
+ * 1. **数组里的墓碑会被合并函数冲掉**。`agentsStore.refresh()` 走
+ *    `mergeAgents(get().agents)`，而合并产出只含「内置 + 存活用户条目」
+ *    （`pickMeta` 只搬元数据，不搬条目）——于是每次启动都会把墓碑洗净、再写回
+ *    持久化，删除标记活不过一次重启。要修就得让三个合并函数同时管「合并内置」
+ *    与「保留墓碑」两件事，而这两件事没有任何关系。
+ * 2. **读取处远不止「十几个」**。实测五个 store 的 UI 读取点有二十余处；在
+ *    selector 里内联过滤（`useStore((s) => liveEntities(s.agents))`）每次 store
+ *    变动都产出新数组引用，要么给每处补 `useShallow`、要么放任多余重渲染——
+ *    两条路都要改二十多个文件，且漏一处是静默的。
+ *
+ * 拆表之后：存活数组**天生只含存活条目**（UI 与合并函数都不必知道墓碑的存在），
+ * 删除只在这张表里留痕，同步层把两者拼起来即完整负载（`tombstoneEntries()`）。
+ * `liveEntities()` 因此只服务**内联形态**（会话索引，批次 3）。
+ *
+ * 代价要写清楚：墓碑**不保留条目正文**，只留 `id` + 元数据。LWW 下删除只按
+ * `(id, rev)` 传播，正文对判决无用；而「删除后引用的历史消息仍要能显示名称」这类
+ * 需求，靠的是消息自己的快照，不是实体。
+ */
+export type SyncTombstones = Record<string, SyncMeta>;

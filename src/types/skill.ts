@@ -1,3 +1,5 @@
+import type { SyncMeta } from './sync';
+
 /**
  * 技能 / Expert Kit（FR-003 / FR-3.1）。
  * 技能是一段可复用的前置提示词（prompt），可在 Composer 中临时挂载到本会话，
@@ -31,6 +33,38 @@ export type SkillScope = 'builtin' | 'user' | 'project';
  */
 export type SkillOverride = 'on' | 'user-invocable-only' | 'off';
 
+/**
+ * 可同步的技能覆盖表条目（`skillId` → 用户意图 + 同步元数据）。
+ *
+ * ## 为什么技能**不**整体加 `SyncMeta`（与 Agent / Task / MCP 的区别）
+ *
+ * `skillsStore` 的 `skills` 数组混着两种东西：
+ * - **事实**：从 `~/.nanowork/skills` 与 `<workspace>/skills` 扫出来的清单
+ *   （正文、`path`、`installedAt`…）——由磁盘决定，多端自然一致。同步它等于把
+ *   「扫描结果」当可变实体，还会把 `path` 这个**机器专属字段**带上云（FR-10.5 禁止）。
+ * - **用户意图**：三态覆盖与置顶——**这个才是要同步的**。
+ *
+ * 所以覆盖态抽成这张独立表：技能正文继续由各设备的磁盘决定，跨端只传「用户把它
+ * 调成了哪一档、有没有置顶」。见 `docs/architecture-syncmeta.md` §3.2。
+ *
+ * **覆盖表条目不做墓碑**：把一条覆盖「删掉」的语义是「回到默认档 `on`」，那是值的
+ * 变化而不是删除，直接移除条目即可。`deletedAt` 随 `SyncMeta` 一起带上是类型统一的
+ * 结果，恒为 `null`。
+ */
+export interface SkillOverrideEntry extends SyncMeta {
+  skillId: string;
+  override: SkillOverride;
+  /** 是否置顶（只影响「我安装的」列表顺序，不推引擎） */
+  pinned: boolean;
+}
+
+/**
+ * 技能实体本身。
+ *
+ * ⚠️ **刻意不 `extends SyncMetaFields`**：技能正文是磁盘扫描的产物、不是可变实体，
+ * 用户意图由 `SkillOverrideEntry` 承载。给这里加同步元数据会让「同步扫描结果」
+ * 看起来是刻意的设计（详见 `SkillOverrideEntry` 的注释）。
+ */
 export interface Skill {
   id: string;
   name: string;

@@ -3,11 +3,19 @@ import { persist } from 'zustand/middleware';
 import { platform, zustandStorage } from '@/platform';
 import { STORAGE_KEYS } from '@/lib/constants';
 import { genId } from '@/lib/id';
+import { ensureMetaList, withTombstone, withoutTombstone } from '@/lib/syncMeta';
+import { metaForDelete, metaForEdit, metaForNew } from '@/lib/syncStamp';
 import { toast } from '@/components/Toast';
 import { getRuntime } from '@/ai/runtime';
 import { cronRecordsToSession } from '@/lib/sessionImport';
 import { useSessionsStore } from '@/stores/sessionsStore';
-import type { TaskConfig, TaskRunRecord, TaskSchedule, TaskStatus } from '@/types';
+import type {
+  SyncTombstones,
+  TaskConfig,
+  TaskRunRecord,
+  TaskSchedule,
+  TaskStatus,
+} from '@/types';
 
 /**
  * 定时任务 store（FR-005）。
@@ -39,13 +47,25 @@ export interface TaskSyncSummary {
 
 interface TasksState {
   tasks: TaskConfig[];
+  /**
+   * 已删除条目的墓碑表（`id → 删除元数据`）。
+   * 与 `tasks` 分开存，理由同 `agentsStore.tombstones`。
+   */
+  tombstones: SyncTombstones;
   /** 运行记录（倒序：最新在前；含本地测试运行与 nanobot 定时触发） */
   runs: TaskRunRecord[];
   /** 最近一次同步结果 */
   lastSync: TaskSyncSummary | null;
   /** 是否正在同步到 nanobot */
   syncing: boolean;
-  addTask: (partial?: Partial<TaskConfig>) => TaskConfig;
+  /**
+   * 新增或按 `id` 幂等合并任务。
+   *
+   * @returns 落库的任务；**该 `id` 已被删除（有墓碑）时返回 `null`**，调用方需处理
+   *   ——这条路径真实存在：引擎侧 cron job 的镜像（`cronTaskMirror`）会把 nanobot
+   *   的任务重放进来，而用户可能刚把它删掉。
+   */
+  addTask: (partial?: Partial<TaskConfig>) => TaskConfig | null;
   updateTask: (id: string, patch: Partial<TaskConfig>) => void;
   removeTask: (id: string) => void;
   toggleTask: (id: string) => void;
@@ -87,6 +107,7 @@ export const useTasksStore = create<TasksState>()(
 
       return {
       tasks: [],
+      tombstones: {},
       runs: [],
       lastSync: null,
       syncing: false,
@@ -105,11 +126,23 @@ export const useTasksStore = create<TasksState>()(
           const patch = Object.fromEntries(
             Object.entries(partial ?? {}).filter(([, v]) => v !== undefined),
           );
-          const merged: TaskConfig = { ...existing, ...patch, id, createdAt: existing.createdAt };
+          const merged: TaskConfig = {
+            ...existing,
+            ...patch,
+            id,
+            createdAt: existing.createdAt,
+            ...metaForEdit(existing),
+          };
           set((s) => ({ tasks: s.tasks.map((t) => (t.id === id ? merged : t)) }));
           scheduleAutoSync();
           return merged;
         }
+
+        // 没有存活条目，但该 id 有墓碑 = 「这条已经被删过，现在又要被建回来」。
+        // 唯一现实来源是引擎侧 job 的镜像（cronTaskMirror）：nanobot 的 job 还没被
+        // 清理干净，或聊天历史在重放。删除是**显式事实**，不因重放而复活——否则
+        // 用户会看到「删了又回来」，且每删一次就多一条同 id 记录。
+        if (id in get().tombstones) return null;
 
         const task: TaskConfig = {
           id,
@@ -120,21 +153,35 @@ export const useTasksStore = create<TasksState>()(
           status: partial?.status ?? 'enabled',
           createdAt: nowIso(),
           ...(partial?.runOptions ? { runOptions: partial.runOptions } : {}),
+          ...metaForNew(),
         };
-        set((s) => ({ tasks: [...s.tasks, task] }));
+        set((s) => ({
+          tasks: [...s.tasks, task],
+          // 同 id 重新出现 = 「删除后又建回来」：清掉旧墓碑（理由同 agentsStore.createAgent）
+          tombstones: withoutTombstone(s.tombstones, task.id),
+        }));
         scheduleAutoSync();
         return task;
       },
 
+      // 元数据在 patch 之后展开，理由同 agentsStore.updateAgent
       updateTask: (id, patch) => {
         set((s) => ({
-          tasks: s.tasks.map((t) => (t.id === id ? { ...t, ...patch } : t)),
+          tasks: s.tasks.map((t) => (t.id === id ? { ...t, ...patch, ...metaForEdit(t) } : t)),
         }));
         scheduleAutoSync();
       },
 
       removeTask: (id) => {
-        set((s) => ({ tasks: s.tasks.filter((t) => t.id !== id) }));
+        set((s) => {
+          const target = s.tasks.find((t) => t.id === id);
+          if (!target) return s;
+          return {
+            // 删除 = 摘除条目 + 留墓碑（理由同 agentsStore.removeAgent）
+            tasks: s.tasks.filter((t) => t.id !== id),
+            tombstones: withTombstone(s.tombstones, id, metaForDelete(target)),
+          };
+        });
         scheduleAutoSync();
       },
 
@@ -142,7 +189,11 @@ export const useTasksStore = create<TasksState>()(
         set((s) => ({
           tasks: s.tasks.map((t) =>
             t.id === id
-              ? { ...t, status: (t.status === 'enabled' ? 'disabled' : 'enabled') as TaskStatus }
+              ? {
+                  ...t,
+                  status: (t.status === 'enabled' ? 'disabled' : 'enabled') as TaskStatus,
+                  ...metaForEdit(t),
+                }
               : t,
           ),
         }));
@@ -215,6 +266,7 @@ export const useTasksStore = create<TasksState>()(
         if (get().syncing) return;
         set({ syncing: true });
         try {
+          // `tasks` 天生只含存活条目（删除痕迹在 tombstones 表里），直接提交即可
           const result = await getRuntime().sync('tasks', get().tasks);
           set({
             lastSync: { at: nowIso(), ok: result.ok, message: result.message, changed: result.changed },
@@ -297,16 +349,25 @@ export const useTasksStore = create<TasksState>()(
 
         set((s) => {
           // 单次任务执行完成后自动移除（nanobot 侧 deleteAfterRun 已清理 job，
-          // 前端同步移除 TaskConfig 保持一致）
-          const completedOnceTaskIds = new Set(
-            cronRuns
-              .filter((r) => r.status !== 'running')
-              .map((r) => r.taskId)
-              .filter((id) => s.tasks.some((t) => t.id === id && t.schedule.kind === 'once')),
+          // 前端同步保持一致）。移除方式同样是**摘除 + 留墓碑**——「这条 once 任务
+          // 已经跑完并消失」这个事实要能传播到别的设备。
+          const finishedIds = new Set(
+            cronRuns.filter((r) => r.status !== 'running').map((r) => r.taskId),
           );
-          const tasks = completedOnceTaskIds.size > 0
-            ? s.tasks.filter((t) => !completedOnceTaskIds.has(t.id))
-            : s.tasks;
+          const completed = s.tasks.filter(
+            (t) => finishedIds.has(t.id) && t.schedule.kind === 'once',
+          );
+          const tasks =
+            completed.length > 0
+              ? s.tasks.filter((t) => !finishedIds.has(t.id))
+              : s.tasks;
+          const tombstones =
+            completed.length > 0
+              ? completed.reduce(
+                  (acc, t) => withTombstone(acc, t.id, metaForDelete(t)),
+                  s.tombstones,
+                )
+              : s.tombstones;
 
           // 定时触发记录以磁盘审计文件为准整体替换（id 带 cron- 前缀），
           // 本地测试运行记录原样保留，合并后按开始时间倒序
@@ -314,7 +375,7 @@ export const useTasksStore = create<TasksState>()(
           const merged = [...manualRuns, ...cronRuns].sort((a, b) =>
             Date.parse(b.startedAt) - Date.parse(a.startedAt),
           );
-          return { tasks, runs: merged.slice(0, RUNS_MAX) };
+          return { tasks, tombstones, runs: merged.slice(0, RUNS_MAX) };
         });
       },
 
@@ -361,20 +422,35 @@ export const useTasksStore = create<TasksState>()(
     {
       name: STORAGE_KEYS.tasks,
       storage: zustandStorage,
+      // v1：给存量数据补同步元数据四字段（缺字段按 `LEGACY_REV` 落盘）、补空墓碑表
+      version: 1,
+      migrate: (persisted) => {
+        const p = persisted as
+          | { tasks?: TaskConfig[]; tombstones?: SyncTombstones }
+          | undefined;
+        return {
+          tasks: ensureMetaList(p?.tasks),
+          tombstones: p?.tombstones ?? {},
+        };
+      },
       // 定时触发记录源自 nanobot 磁盘审计文件，每次拉取即最新快照，
       // 无需持久化（避免重启后残留过期的「运行中」状态）
       partialize: (s) => ({
         tasks: s.tasks,
+        tombstones: s.tombstones,
         runs: s.runs.filter((r) => r.trigger === 'manual'),
       }),
       // 重启后不可能存在仍在执行的运行：rehydrate 时把遗留的 running 记录
       // 收敛为「已中断」，避免任务卡片与运行记录永远停留在「运行中」
       merge: (persisted, current) => {
-        const p = (persisted ?? {}) as Partial<Pick<TasksState, 'tasks' | 'runs'>>;
+        const p = (persisted ?? {}) as Partial<
+          Pick<TasksState, 'tasks' | 'tombstones' | 'runs'>
+        >;
         const now = nowIso();
         return {
           ...current,
           tasks: p.tasks ?? current.tasks,
+          tombstones: p.tombstones ?? current.tombstones,
           runs: (p.runs ?? current.runs).map((r) =>
             r.status === 'running'
               ? { ...r, status: 'error' as const, error: '已中断', finishedAt: now }

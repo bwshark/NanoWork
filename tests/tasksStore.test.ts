@@ -10,7 +10,15 @@ import { useTasksStore } from '@/stores/tasksStore';
 beforeEach(() => {
   // 假定时器：吞掉 addTask 后的 600ms 防抖自动同步，避免测试尾焰
   vi.useFakeTimers();
-  useTasksStore.setState({ tasks: [], runs: [], lastSync: null, syncing: false });
+  // `tombstones` 必须一起清：`addTask` 会拿它判「这个 id 是否已被删过」，
+  // 跨用例残留会让新建被当成「镜像重放」而拒绝写入
+  useTasksStore.setState({
+    tasks: [],
+    tombstones: {},
+    runs: [],
+    lastSync: null,
+    syncing: false,
+  });
 });
 
 afterEach(() => {
@@ -20,7 +28,7 @@ afterEach(() => {
 describe('addTask: 带 id 幂等', () => {
   it('不带 id：自动生成 id 并追加', () => {
     const task = useTasksStore.getState().addTask({ name: '新任务' });
-    expect(task.id).toBeTruthy();
+    expect(task?.id).toBeTruthy();
     expect(useTasksStore.getState().tasks).toHaveLength(1);
   });
 
@@ -28,7 +36,7 @@ describe('addTask: 带 id 幂等', () => {
     const task = useTasksStore
       .getState()
       .addTask({ id: 'ab12cd34', name: '早报', prompt: '生成早报' });
-    expect(task.id).toBe('ab12cd34');
+    expect(task?.id).toBe('ab12cd34');
     expect(useTasksStore.getState().tasks).toHaveLength(1);
   });
 
@@ -48,10 +56,10 @@ describe('addTask: 带 id 幂等', () => {
 
     const tasks = useTasksStore.getState().tasks;
     expect(tasks).toHaveLength(1); // 未重复追加
-    expect(merged.id).toBe('ab12cd34');
-    expect(merged.name).toBe('早报（镜像更新）'); // partial 字段覆盖
-    expect(merged.prompt).toBe('生成早报'); // 未提供的字段保留既有值
-    expect(merged.schedule).toEqual({ kind: 'cron', expr: '0 9 * * *' });
-    expect(merged.createdAt).toBe(first.createdAt); // createdAt 不被重置
+    expect(merged?.id).toBe('ab12cd34');
+    expect(merged?.name).toBe('早报（镜像更新）'); // partial 字段覆盖
+    expect(merged?.prompt).toBe('生成早报'); // 未提供的字段保留既有值
+    expect(merged?.schedule).toEqual({ kind: 'cron', expr: '0 9 * * *' });
+    expect(merged?.createdAt).toBe(first?.createdAt); // createdAt 不被重置
   });
 });

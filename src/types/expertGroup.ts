@@ -10,6 +10,8 @@
  * 当前 store 只负责持久化与 UI 展示，可由编排面板选择专家团启动会话。
  */
 
+import type { SyncMetaFields } from './sync';
+
 /** 协作模式 */
 export type ExpertGroupMode = 'sequential' | 'parallel' | 'coordinator';
 
@@ -30,7 +32,7 @@ export const EXPERT_GROUP_MODE_DESC: Record<ExpertGroupMode, string> = {
 /** 专家团来源 */
 export type ExpertGroupSource = 'builtin' | 'user';
 
-export interface ExpertGroup {
+export interface ExpertGroup extends SyncMetaFields {
   id: string;
   /** 专家团名（卡片标题） */
   name: string;

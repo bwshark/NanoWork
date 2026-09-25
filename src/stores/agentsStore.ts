@@ -3,11 +3,21 @@ import { persist } from 'zustand/middleware';
 import { zustandStorage } from '@/platform';
 import { STORAGE_KEYS } from '@/lib/constants';
 import { genId } from '@/lib/id';
+import { ensureMetaList, pickMeta, withTombstone, withoutTombstone } from '@/lib/syncMeta';
+import { metaForDelete, metaForEdit, metaForNew } from '@/lib/syncStamp';
 import { BUILTIN_AGENTS } from '@/ai/builtinAgents';
-import type { Agent } from '@/types';
+import type { Agent, SyncTombstones } from '@/types';
 
 interface AgentsState {
   agents: Agent[];
+  /**
+   * 已删除条目的墓碑表（`id → 删除元数据`）。
+   *
+   * 与 `agents` **分开存**：存活数组天生只含存活项，因此 UI（`s.agents`）与
+   * `mergeAgents` 都不必知道墓碑的存在。理由与被否决的「内联 `deletedAt` 方案」
+   * 见 `types/sync.ts` 的 `SyncTombstones`。
+   */
+  tombstones: SyncTombstones;
   activeAgentId: string | null;
   /** 重新合并内置 Agent 与持久化数据（启动时调用，保证内置恒在） */
   refresh: () => void;
@@ -53,10 +63,16 @@ function mergeAgents(stored: Agent[]): Agent[] {
       promptStyle: over.promptStyle ?? b.promptStyle,
       // 头像：内置 Agent 不接受用户上传，因此不取 over.avatar；
       // 派生占位（名称首字符 + hashColor）由 UI 层做
+      // 同步元数据随用户覆盖一起保留：内置条目的真源是代码，`rev` 只有在用户
+      // 改动过它时才存在。不透传的话「改了内置 Agent 的启用状态」在下次启动
+      // 重建后查无对证（`rev` 回到缺省，被当成从未改过的老数据）
+      ...pickMeta(over),
       source: 'builtin' as const,
     };
   });
 
+  // 用户 Agent：保留持久化中 source !== 'builtin' 的条目。
+  // 本函数只处理**存活**条目——删除的痕迹在 `tombstones` 表里，与此无关
   const userAgents = stored.filter(
     (a) =>
       a.source !== 'builtin' &&
@@ -71,6 +87,7 @@ export const useAgentsStore = create<AgentsState>()(
   persist(
     (set, get) => ({
       agents: mergeAgents([]),
+      tombstones: {},
       activeAgentId: DEFAULT_AGENT_ID,
 
       refresh: () => {
@@ -96,31 +113,49 @@ export const useAgentsStore = create<AgentsState>()(
           imBinding: partial?.imBinding ?? null,
           enabled: partial?.enabled ?? true,
           createdAt: nowIso(),
+          ...metaForNew(),
           source: 'user',
         };
-        set((s) => ({ agents: [...s.agents, agent], activeAgentId: agent.id }));
+        set((s) => ({
+          agents: [...s.agents, agent],
+          // 同 id 重新出现 = 「删除后又建回来」：必须清掉旧墓碑，否则同步会把这个
+          // 刚建好的条目按「已删除」推出去，而本机看起来一切正常
+          tombstones: withoutTombstone(s.tombstones, agent.id),
+          activeAgentId: agent.id,
+        }));
         return agent;
       },
 
+      // 元数据在 `patch` **之后**展开：调用方传进来的 patch 里若夹带元数据字段
+      // （如从别处整对象回填），不得覆盖本次改动的标记
       updateAgent: (id, patch) =>
         set((s) => ({
-          agents: s.agents.map((a) => (a.id === id ? { ...a, ...patch } : a)),
+          agents: s.agents.map((a) =>
+            a.id === id ? { ...a, ...patch, ...metaForEdit(a) } : a,
+          ),
         })),
 
       removeAgent: (id) =>
         set((s) => {
           // 内置 Agent 不可删除，保持与 skillsStore 一致
           const target = s.agents.find((a) => a.id === id);
-          if (target?.source === 'builtin') return s;
+          if (!target || target.source === 'builtin') return s;
           const agents = s.agents.filter((a) => a.id !== id);
-          const activeAgentId =
-            s.activeAgentId === id ? agents[0]?.id ?? null : s.activeAgentId;
-          return { agents, activeAgentId };
+          return {
+            agents,
+            // 删除 = 摘除条目 + 留墓碑。摘除让列表天然干净（无需任何过滤器），
+            // 墓碑让删除能被 LWW 传播到别的设备——两者缺一不可
+            tombstones: withTombstone(s.tombstones, id, metaForDelete(target)),
+            // 删掉的是当前激活项时，退到剩余列表的第一条（对齐原实现）
+            activeAgentId: s.activeAgentId === id ? agents[0]?.id ?? null : s.activeAgentId,
+          };
         }),
 
       toggleAgent: (id) =>
         set((s) => ({
-          agents: s.agents.map((a) => (a.id === id ? { ...a, enabled: !a.enabled } : a)),
+          agents: s.agents.map((a) =>
+            a.id === id ? { ...a, enabled: !a.enabled, ...metaForEdit(a) } : a,
+          ),
         })),
 
       setActiveAgent: (id) => set({ activeAgentId: id }),
@@ -128,7 +163,22 @@ export const useAgentsStore = create<AgentsState>()(
     {
       name: STORAGE_KEYS.agents,
       storage: zustandStorage,
-      partialize: (s) => ({ agents: s.agents, activeAgentId: s.activeAgentId }),
+      // v1：给存量数据补同步元数据四字段（缺字段按 `LEGACY_REV` 落盘）、补空墓碑表
+      version: 1,
+      migrate: (persisted) => {
+        const p = persisted as
+          | { agents?: Agent[]; tombstones?: SyncTombstones; activeAgentId?: string | null }
+          | undefined;
+        return {
+          agents: ensureMetaList(p?.agents),
+          tombstones: p?.tombstones ?? {},
+        };
+      },
+      partialize: (s) => ({
+        agents: s.agents,
+        tombstones: s.tombstones,
+        activeAgentId: s.activeAgentId,
+      }),
     },
   ),
 );

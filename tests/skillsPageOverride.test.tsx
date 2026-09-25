@@ -96,7 +96,15 @@ beforeEach(() => {
   ]);
   vi.spyOn(platform, 'syncNanobotSkills').mockResolvedValue({ ok: true, message: '' });
   vi.spyOn(platform, 'onSkillsChanged').mockReturnValue(() => {});
-  useSkillsStore.setState({ skills: [], pinnedIds: [], loaded: false, syncError: null });
+  // `overrides` 必须一起清：它是用户意图的权威表，跨用例残留会让「置顶」这类
+  // 依赖其现值的动作读到上一条用例的状态（表现成「点了置顶没反应」）
+  useSkillsStore.setState({
+    skills: [],
+    overrides: [],
+    pinnedIds: [],
+    loaded: false,
+    syncError: null,
+  });
   useSessionsStore.setState({ sessions: [], activeId: null });
 });
 

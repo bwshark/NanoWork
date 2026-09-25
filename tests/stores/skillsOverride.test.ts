@@ -23,9 +23,13 @@ const FIRST_BUILTIN = SKILLS[0].id;
 beforeEach(() => {
   vi.restoreAllMocks();
   localStorage.clear();
-  // 出厂状态：内置技能齐全、状态全 on、无同步错误
+  // 出厂状态：内置技能齐全、状态全 on、无同步错误、覆盖表为空
+  // （`overrides` 必须显式清：它是用户意图的权威表，跨用例残留会让依赖其现值的
+  // 动作读到上一条用例的状态）
   useSkillsStore.setState({
     skills: SKILLS.map((s) => ({ ...s, override: 'on', enabled: true })),
+    overrides: [],
+    pinnedIds: [],
     loaded: false,
     syncError: null,
   });

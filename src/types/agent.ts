@@ -5,6 +5,8 @@
  * 真实绑定动作依赖 nanobot 运行时（经 IM 网关），当前为本地记录 + 占位同步。
  */
 
+import type { SyncMetaFields } from './sync';
+
 /** 支持的 IM 平台 */
 export type IMPlatform = 'wecom' | 'feishu' | 'dingtalk' | 'slack' | 'telegram' | 'other';
 
@@ -27,7 +29,7 @@ export interface IMBinding {
  */
 export type AgentSource = 'builtin' | 'user';
 
-export interface Agent {
+export interface Agent extends SyncMetaFields {
   id: string;
   name: string;
   /** 系统身份提示 */

@@ -47,6 +47,9 @@ describe('resolveRoute：落点归属', () => {
     [STORAGE_KEYS.agents, join('experts', 'agents.json')],
     [STORAGE_KEYS.expertGroups, join('experts', 'groups.json')],
     [STORAGE_KEYS.skills, join('skills', 'index.json')],
+    // 技能覆盖表（用户意图）与索引并列但职责不同；分开落盘是为了让 V1.5 的同步层
+    // 直接把它当集合读，不必再过滤掉索引里的事实字段
+    [STORAGE_KEYS.skillOverrides, join('skills', 'overrides.json')],
   ])('用户资产 %s 落在 ① %s', (key, rel) => {
     const route = resolveRoute(key, roots);
     expect(route.scope).toBe('user');

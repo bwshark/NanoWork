@@ -102,6 +102,10 @@ const USER_FILES: Record<string, FileEntry> = {
   [STORAGE_KEYS.agents]: { rel: 'experts/agents.json', format: 'json' },
   [STORAGE_KEYS.expertGroups]: { rel: 'experts/groups.json', format: 'json' },
   [STORAGE_KEYS.skills]: { rel: 'skills/index.json', format: 'json' },
+  // 技能覆盖表（用户意图）：与 `skills/index.json` 并列，但**职责不同**——
+  // 前者是事实缓存，这张才是可同步的用户意图（见 types/skill.ts 的说明）。
+  // 分开落盘的意义在于 V1.5 的同步层可以直接把这一份当集合读，不必再过滤事实字段。
+  [STORAGE_KEYS.skillOverrides]: { rel: 'skills/overrides.json', format: 'json' },
   // 用户级长期记忆（L2）：与工作区记忆（`memory/<ws>.md`）分属两层，落在 ① 根目录
   [USER_MEMORY_KEY]: { rel: 'MEMORY.md', format: 'text' },
   // 身份文件（L4）：文件名即用户可见的名字，落 ① 根目录（§18.1 布局）
