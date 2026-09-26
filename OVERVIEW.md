@@ -11,11 +11,11 @@
 
 基于 **nanobot 引擎**、对标 **WorkBuddy** 的跨端智能体客户端。同一套 React 渲染层既可在浏览器运行，也可被 Electron 加载为桌面应用；直连 nanobot 网关（`/v1/chat/completions`，OpenAI 兼容 SSE），连接状态实时探测（connected / offline）。
 
-**V1（工作台成型）尚未整体收口**：M1 引擎与事件地基、M2 安全与执行模式已闭合；M3 扩展与提示词 4/6 批次、M4 自动化与产物 0/6、M5 可观测部分落地。详见下节。
+**V1（工作台成型）尚未整体收口**：M1 引擎与事件地基、M2 安全与执行模式已闭合；M3 扩展与提示词 4/6 批次、M4 自动化与产物 0/6、M5 可观测部分落地。另：**V1.5 的 Phase 0 前置（`SyncMeta`）已在 V1 期提前落地**（2026-09-25）。详见下节。
 
 ---
 
-## 一、V1 里程碑状态（2026-09-17）
+## 一、V1 里程碑状态（表 2026-09-17 实测；2026-09-25 补表外一件）
 
 | 里程碑 | 文档口径 | 代码实测 | 说明 |
 |---|---|---|---|
@@ -25,18 +25,27 @@
 | **M4** 自动化与产物 | — | ⬜ **0/6 未开工** | 文件快照与回滚（FR-7.3）、结果回推 IM（FR-6.3）、定时任务真实 runner 等 |
 | **M5** 可观测 | — | 🟡 部分 | 引擎侧审计留痕已落；`llm_usage.sqlite3` 已存在数据但**前端零消费**，无用量/成本报表（FR-11.1） |
 
+> **表外一件（跨期地基）**：V1.5 的 Phase 0 前置 **`SyncMeta` 已于 2026-09-25 在 V1 期提前落地** ——
+> `src/types/sync.ts` + `lib/{syncMeta,syncSelect,syncStamp,deviceId}.ts` + 8 个实体接线 + 墓碑独立表 +
+> `Settings` 字段级排除表（`vitest` 99 文件 1594 用例全绿）。它不属于 M1–M5 任何一批，但 v2 §19.2 把它定为
+> 「V1 必须先落」，故记在此处。**未做**：会话删除的墓碑。清单见 `docs/architecture-syncmeta.md`；
+> V1.5 开工前置（除 `SyncMeta` 外还有 5 条）见 `docs/architecture-m6-sync.md` §2.2。
+
 ---
 
 ## 二、质量门禁（实测，非引用）
 
 | 门禁 | 命令 | 实测结果 |
 |---|---|---|
-| 渲染层单测 | `npm test` | ✅ 全绿（`tests/` 66 个用例文件，含 gateway 集成、事件等价性、权限、记忆、cron 等） |
+| 渲染层单测 | `npm test` | ✅ 全绿（**99 个用例文件 / 1594 用例**，2026-09-25 实测；含 gateway 集成、事件等价性、权限、记忆、cron、同步元数据等） |
 | 类型检查（渲染层） | `npm run typecheck` | ✅ 0 错误 |
 | 类型检查（桌面外壳） | `npm run typecheck:electron` | ✅ 0 错误 |
 | 类型检查（测试代码） | `npm run typecheck:tests` | ✅ 0 错误（**注意：不在 `build` 门禁内**） |
 | 生产构建 | `npm run build` | ✅ 绿（= `typecheck` + `typecheck:electron` + `vite build`） |
 | 引擎侧 pytest | `nanobot/nanobot/.venv/Scripts/python.exe -m pytest tests/...` | 🟡 340 passed / 1 failed，唯一失败为 `tests/security/test_workspace_policy.py::test_resolve_allowed_path_blocks_symlink_escape`（Windows 无 symlink 权限，属环境类红，非回归） |
+
+> 门禁数字**随每次改动变动**：本表最近一次复核为 **2026-09-25**（渲染层单测用例规模）；引擎侧
+> `pytest` 一行为 **2026-09-17** 实测、此后未在本文复测（各批次的门禁实测数字记在 v2 第 6 章进度块）。
 
 > CI 门禁定义见 `.github/workflows/ci.yml`（含平台边界检查）。`typecheck:tests` 是否纳入门禁见该文件注释。
 
@@ -87,13 +96,13 @@
 - 根目录 `llm_usage.sqlite3` —— 用量库已存在（**尚未被前端消费**）。
 
 **存储**
-- 会话走 **事件日志（JSONL）+ JSON 索引**（D2），`sessionsStore` 已切读；其余域（agents / skills / mcp / tasks / settings / artifacts / channels / expertGroups）仍用 Zustand `persist` → `platform.storage`。
+- 会话走 **事件日志（JSONL）+ JSON 索引**（D2），`sessionsStore` 已切读；其余域（agents / skills / mcp / tasks / settings / artifacts / channels / expertGroups）仍用 Zustand `persist` → `platform.storage`。**其中可同步的 8 个实体均已带 `SyncMeta`**（`rev` / `updatedAt` / `deletedAt` / `updatedBy`），删除走墓碑；见 §四-1。
 
 ---
 
 ## 四、已知限制 / 遗留风险
 
-1. **`SyncMeta` 未落**：`src/types/event.ts` 只有类型声明，无写入点。v2 第 19.2 节明确要求「V1 必须先落 `SyncMeta`」，不补则 V1.5 双向同步要返工。
+1. **`SyncMeta` 已落（2026-09-25 更正），但会话删除墓碑仍未做**：`src/types/sync.ts` + `lib/{syncMeta,syncSelect,syncStamp,deviceId}.ts` + 8 个实体接线全部完成，删除由「摘除数组项」改为**墓碑**（五个 store 拆 `SyncTombstones` 独立表、`channels` 按 `kind` 键控），`Settings` 走字段级排除表。**缺口**：`deleteSession` 仍是「JSONL + meta + 索引条目」三件套全删，**删除无法传播** → 跨设备会「删了复活」；读取侧（`listSessionEntries` 过滤、`normalizeSessionMeta` 容错）已就绪而写入侧缺位，归 V1.5 首批。因此 v2 `FR-10.1` 记 🟡 而非 ✅。清单见 `docs/architecture-syncmeta.md` §7；V1.5 开工前置（除它之外还有 5 条）见 `docs/architecture-m6-sync.md` §2.2。
 2. **`FR-8.4`「默认拒绝写入」语义与实现不符**：引擎侧 `default_deny_write: bool = False`（默认放行），实为 opt-in 开关；需改默认值或改名。
 3. **`FR-7.3` 文件回滚是「假就绪」**：事件类型已定义，全仓无生产者，UI 亦无入口。
 4. **`FR-2.4` 专家团三模式只持久化未真实执行**：`sequential` / `parallel` / `coordinator` 目前是配置态。

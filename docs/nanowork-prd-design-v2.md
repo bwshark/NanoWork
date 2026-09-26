@@ -397,7 +397,7 @@ V1 的方案是把 cron 镜像进本地 `nanobot` 的 `jobs.json`（已实现）
 
 | 编号 | 名称 | 优先级 | 现状 | 环境 | 验收标准 |
 |---|---|---|---|---|---|
-| FR-10.1 | 同步元数据 | **P1** | ⬜ | both | 所有可同步实体带 `id` / `rev` / `updatedAt` / `deletedAt` / `updatedBy` |
+| FR-10.1 | 同步元数据 | **P1** | 🟡 | both | 所有可同步实体带 `id` / `rev` / `updatedAt` / `deletedAt` / `updatedBy`。**已落地（V1 期提前完成，2026-09-25）**：`src/types/sync.ts`（`SyncMeta` / `SyncMetaInput` / `SyncableEntity` / `SyncTombstones`）+ `lib/{syncMeta,syncSelect,syncStamp,deviceId}.ts`；**8 个实体全部接线**（`Agent` / `ExpertGroup` / `TaskConfig` / `MCPConfig` / `ChannelConfig` / `SkillOverrideEntry` / `SessionMeta`(+索引条目) / `Settings`），删除由「摘除数组项」改为**墓碑**（五个 store 拆 `SyncTombstones` 独立表、`channels` 按 `kind` 键控），`Settings` 走字段级排除表（`lib/settingsSync.ts`）。**唯一缺口：会话删除的墓碑**——`deleteSession` 至今是「JSONL + meta + 索引条目」三件套全删，读取侧（`listSessionEntries` 过滤、`normalizeSessionMeta` 容错）已就绪而**写入侧缺位**，故本行记 🟡 而非 ✅；该缺口归 V1.5 首批。落地清单与实现偏差见 `architecture-syncmeta.md` §7.1–§7.3 |
 | FR-10.2 | 云端账户 | P1 | ⬜ | both | 邮箱+密码 + JWT；refresh 轮换；Electron 用系统钥匙串，Web 用 httpOnly Cookie |
 | FR-10.3 | 双向同步 | P1 | ⬜ | both | `/api/sync/push` + `/api/sync/pull`；LWW + tombstone（已定设计见 `cross-platform-sync-design.md`） |
 | FR-10.4 | 离线优先 | P1 | ⬜ | both | 无网络时本地照常工作，联网自动合并；状态 `local/syncing/synced/conflict/offline` |
@@ -629,6 +629,8 @@ V1 的方案是把 cron 镜像进本地 `nanobot` 的 `jobs.json`（已实现）
 > **D2 遗留**：附件内容仍不入事件流（附件库属 R7/M4，见 9.6 的「已知范围差异」）。
 >
 > **⚠️ 与上游的刻意分歧**：`tests/tools/test_exec_security.py` 与 `test_tool_validation.py` 中「`rm <ws路径> 2>/dev/null` 应当放行」的三条断言（含上游 #3599 回归）已被**改写为断言拦截**，并以 `[LOCAL PATCH]` 标注。上游关心的是「重定向不该触发路径越界告警」，nanowork 关心的是「删除必须能进回收站」——两条需求叠加后结论相反。合并上游时这三处会冲突，属预期。
+>
+> **M6 前置（Phase 0）· `SyncMeta` 落地（2026-09-25）**：这是一件**跨期地基**而非 M6 本体——`FR-10.1` 归 V1.5，但 §19.2 要求「V1 创建的实体必须当场带同步元数据」（晚做只能全量迁移或在同步层永久补字段），故在 V1 期提前落。三批全部完成：① 地基纯逻辑件（`types/sync.ts` + `lib/{syncMeta,syncSelect,deviceId}`）；② 五个 store 接线 + 技能覆盖表抽离（新增 `nanowork.skillOverrides`）；③ 会话 `rev`/`updatedBy`（递增点落 `updateSession`）+ `Settings` 字段级负载裁剪。**门禁**：三套 `tsc` 0 错误 / `vitest` **99 文件 1594 用例全绿** / `vite build`（`--emptyOutDir false`）绿；批次 2 动了 `electron/storageRoutes.ts`（新增 `skills/overrides.json` 路由）故**已重建 `main.cjs` + `preload.cjs`**。**未做**：会话删除的墓碑（归 V1.5 首批，见 `architecture-syncmeta.md` §7.3 末节）。完整清单与逐批实现偏差见该文 §七；V1.5 开工前置（`SyncMeta` 之外还有 5 条）见 `architecture-m6-sync.md` §2.2。
 
 **系统交付对照**（对应 2.5 的清单）：M1–M5 全部落在**客户端**（0 个新系统）；**M6 交付系统 ①**（云核）；**M7 交付 ②③**（若承诺关机执行则含 ④）；**M8 交付 ⑤⑥⑦⑧**。
 
