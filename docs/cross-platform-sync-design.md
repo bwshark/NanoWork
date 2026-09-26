@@ -6,6 +6,26 @@
 
 ---
 
+## ⚠️ 勘误（2026-09-26 追加，实施前必读）
+
+本文是跨端同步的**设计权威**，§16 的开放问题已全部定案、结论仍有效。但下面几处**已被后续决策推翻或细化**，
+其中第 3 条照抄会直接推翻 M1 的决策；**实施时一律以 `architecture-m6-sync.md` 为准**（其 §5.1 就是本文 §4.3 的裁决）。
+
+| 节 | 原文 | 现行结论（权威出处） |
+|---|---|---|
+| **§4.1 / §4.4** | 可同步集合为 `agents`、`sessions`、`settings`、`memory`、`artifacts`（共 5 个） | 实际分 **9 个 collection**，权威表见 `architecture-m6-sync.md` §四。三处关键差异：① `sessions` 要**拆成两个** collection、两种策略（`sessionMeta` 走 LWW / `sessionEvents` 按 `seq` 追加——混成一个等于让 LWW 去裁决一条只会增长的事件流）；② `memory` **不是实体 collection**，而是 **C 类文件型资产**（版本是文件 `mtime` / 段落时间，段落级 LWW 另案）；③ `artifacts` 按**内容寻址**（只传新增 hash）而非 LWW。另缺 `expertGroups` / `tasks` / `mcp` / `channels` / `skillOverrides` 五个 |
+| **§4.2** | `updatedBy` 注释为「账户 id，便于审计/排查」 | 落地为**设备标识**（`lib/deviceId.ts`：Electron 取 `<userData>/device-id.txt`、Web 取 `localStorage`）——LWW 要回答「哪台设备改的」，账户粒度回答不了 |
+| **§4.3 / §14** | 本地引入 `sync_metadata` + `sync_changelog` 两张 **SQLite** 表，用变更日志桥接 | **不引入 SQLite，且 MVP 连 changelog 都不做。** ADR-022 已定案 V1 舍弃 SQLite（Electron 31 = Node 20 无内置 `node:sqlite`、仓库零原生依赖），索引层已改 JSON（PRD §9.4）；`SyncMeta` 落地后变更日志是**派生物**——「哪些实体改过」由实体自身的 `rev` / `updatedAt` 回答，实体量几十条故 MVP **全量 push**。同步状态（若确需水位）走 `platform.storage` **一 key 一文件**，登记 `electron/storageRoutes.ts` |
+| **§11** | 「字段补齐：旧本地数据缺 `rev`/`updatedAt` 时，**引擎**在 `markDirty` 补默认值」 | 补字段的是**各 store**（渲染层），不是引擎；老数据按 `LEGACY_REV = 0` 读（`lib/syncMeta.ts`），首次全量推送时据此识别「需补齐」的对象 |
+| **§12 Phase 3 · §13** | 「本地 SQLite 改造」；目录写 `nanowork-cloud/` + `nanowork-desktop/` | 服务端落**同仓 `cloud/`**（与 `nanobot/` 并列，**不新增第二个嵌套 git**）；客户端同步层落 `src/sync/`（渲染层，**不得 `import 'electron'`**） |
+| **§12 Phase 4 · §14** | 「Web 端共享 SPA 接入 SyncEngine / **多租户 nanobot-gateway** + 云端 PostgreSQL」「Web 端直连云端，Electron 端本地运行 nanobot」 | 本期**仅个人账户**（§16.3 已定）；运行时**只有一条**：客户端直连云端 Sync API，**不新增 gateway 形态** |
+| **§12 Phase 5 · §15** | 冲突解决 UI、实时 WS 推送、字段级 CRDT | 均为**后续演进**，不在 M6 范围（MVP：LWW + 状态徽章 + toast）；实际分批见 `architecture-m6-sync.md` §七 |
+| **§16.6** | `uvicorn app.main:app --reload --port 8910` | 该端口是全仓唯一出处、**尚未与项目端口纪律对齐**（本机已有「首选端口落在 Windows 保留区间 → 绑定报 `winerror 10013`」的教训）。定端口前先看 `architecture-m6-sync.md` §六 |
+
+**仍然有效**：§5 存储抽象、§6 同步协议、§7 LWW / tombstone（30 天 GC）、§8 认证、§9 离线、§10 安全边界、§15 风险表、§16 的六条定案。
+
+---
+
 ## 1. 背景与目标
 
 ### 1.1 现状（根因）
@@ -112,7 +132,12 @@ interface SyncMeta {
 }
 ```
 
+> ⚠️ **勘误（2026-09-26）**：§4.1 的集合清单与上面 `updatedBy` 的语义均有修订（前者为 9 个 collection、后者落地为**设备标识**）。见**文首横幅**。
+
 ### 4.3 本地 SQLite 同步表（本地统一缓存层）
+
+> ⚠️ **勘误（2026-09-26）**：**本节整体不要照做。** 本地不引入 SQLite、也不做 changelog；理由与替代方案见**文首横幅**第 3 行与 `architecture-m6-sync.md` §5.1。
+
 nanobot 已支持 SQLite 后端，引入同步元数据表与变更日志：
 ```sql
 -- 本地同步元数据
@@ -140,6 +165,8 @@ CREATE TABLE sync_changelog (
 ```
 
 ### 4.4 同步集合（collections，对应 React store）
+
+> ⚠️ **勘误（2026-09-26）**：本表 5 个 collection 与落地不一致（实际 9 个），尤其 `sessions` 要拆成 `sessionMeta` + `sessionEvents` 两个、`memory` 属文件型资产不走 LWW。见**文首横幅**与 `architecture-m6-sync.md` §四。
 | 集合 | 实体 | 关键字段（示例） |
 |---|---|---|
 | `agents` | Agent | `name, systemPrompt, model, tools[], avatar?` |
@@ -416,6 +443,8 @@ contextBridge.exposeInMainWorld('syncAPI', {
 ---
 
 ## 11. 迁移方案
+
+> ⚠️ **勘误（2026-09-26）**：第 2 条的「字段补齐在**引擎**侧 `markDirty`」有误——补字段的是各 store（渲染层），老数据按 `LEGACY_REV = 0` 读。见**文首横幅**。
 - **首次登录**：本地存量一次性 `POST /api/sync/push`（作为 changes），云端 LWW 合并。
 - **字段补齐**：旧本地数据缺 `rev/updatedAt` 时，引擎在 `markDirty` 补默认值（`rev=1`，`updatedAt=now`）。
 - **回退**：登出后本地数据保留，可继续离线使用；重新登录再次合并。
@@ -423,6 +452,8 @@ contextBridge.exposeInMainWorld('syncAPI', {
 ---
 
 ## 12. 实施路线图
+
+> ⚠️ **勘误（2026-09-26）**：Phase 3 的「本地 SQLite 改造」已废除；Phase 4 / 5 的 gateway 形态与实时推送**不在本期范围**。实际分批（6 批，含新增的 `pytest` 门禁）以 `architecture-m6-sync.md` §七 为准。见**文首横幅**。
 | 阶段 | 任务 | 预估工作量 |
 |------|------|-----------|
 | **Phase 1** | 搭建 Python(FastAPI) 云端认证服务（JWT，邮箱+密码起步），数据按 `user_id` 隔离 | 2-3 周 |
@@ -434,6 +465,8 @@ contextBridge.exposeInMainWorld('syncAPI', {
 ---
 
 ## 13. 代码结构预览
+
+> ⚠️ **勘误（2026-09-26）**：目录名已改——服务端为**同仓 `cloud/`**、客户端同步层为 `src/sync/`、认证页为 `src/pages/auth/`。见**文首横幅**。
 ```
 nanowork-cloud/
 ├── auth/                  # 邮箱+密码 + JWT 服务（OAuth2 后续可选）
@@ -462,6 +495,8 @@ nanowork-web/    # 与 desktop 共用 src/ 渲染层
 ---
 
 ## 14. 三层解耦（核心思想）
+
+> ⚠️ **勘误（2026-09-26）**：第 2 条「存储解耦：本地 SQLite…通过 `sync_changelog` 桥接」已废除（本地无 SQLite、无 changelog）；末段「只需在之上增加版本号、变更日志和同步协议」的表述同理。见**文首横幅**。
 1. **认证解耦**：JWT + 系统级安全存储，Web 用 Cookie、Electron 用 Keychain。
 2. **存储解耦**：本地 SQLite（缓存/离线）+ 云端 PostgreSQL（权威/多设备），通过 `sync_changelog` 桥接。
 3. **运行时解耦**：Web 端直连云端，Electron 端本地运行 nanobot + 后台同步引擎。
