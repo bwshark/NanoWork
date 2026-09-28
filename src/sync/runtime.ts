@@ -36,6 +36,7 @@ import { useSettingsStore } from '@/stores/settingsStore';
 import { useSessionsStore } from '@/stores/sessionsStore';
 import { SyncClient } from './SyncClient';
 import { SyncEngine, createMemoryCursorStore } from './SyncEngine';
+import { createSessionEventStreamAdapter } from './eventStream';
 import { createStorageSyncAccount } from './syncAccount';
 import { createDefaultRegistry } from './syncRegistry';
 import { resetSyncStatus } from './useSyncStatus';
@@ -106,6 +107,8 @@ export function createSyncRuntime(opts: SyncRuntimeOptions = {}): SyncRuntime {
     registry,
     now: opts.now,
     cursorStore: createMemoryCursorStore(),
+    // 事件流通道（批次 5）：装配适配器并注入引擎——引擎因此**不 import 任何 store**
+    eventStream: createSessionEventStreamAdapter(),
   });
 
   // ── 本地变更 → 防抖同步（§G.3）──
@@ -139,6 +142,11 @@ export function createSyncRuntime(opts: SyncRuntimeOptions = {}): SyncRuntime {
 
   // ── 登录 / 登出 生命周期（订阅是唯一入口，§G.2）──
   const onSession = (session: AccountSession | null): void => {
+    // 账户变化（登录 / 登出到 null / 换号）：复位「账户态」——pull 游标 + 内存事件水位。
+    // runtime 全应用复用同一个 engine，且服务端为每个账户维护独立的 `server_seq` 空间：
+    // 不复位则 B 会继承 A 的游标（`pull(since=A的值)` 拉不到任何数据）与水位（本机
+    // `seq ≤ 水位` 的事件永不上行），两者都**不报错**。只清内存；持久化水位分片不动，切回可恢复。
+    engine.resetAccountScopedState();
     if (session) {
       engine.start();
     } else {

@@ -1,0 +1,135 @@
+%% 批次 5 · 会话事件流追加同步 · 类图 / 结构契约
+%% 客户端（TS）与 服务端（Python/SQLModel）在同一张图上以 <<stereotype>> 区分
+
+classDiagram
+    %% ============ 客户端：引擎 ============
+    class SyncEngine {
+        <<class · src/sync/SyncEngine.ts>>
+        -client: SyncClient
+        -account: SyncAccount
+        -registry: SyncRegistry
+        -eventStream?: SessionEventStreamAdapter   %% 新增·可选注入
+        -cursorStore: CursorStore
+        -eventSeqs: Map~string,number~              %% 新增·每会话推送水位
+        +syncNow(): SyncRunResult
+        +collectChanges(): SyncChange[]            %% 实体（同步）
+        +collectEventChanges(): Promise~{events, maxSeqBySession}~  %% 新增（异步）
+        -applyChange(change): boolean              %% 实体 LWW 落地
+        -applyPull(resp): number
+        -applyPulledEvents(events): Promise~number~ %% 新增·按 sessionId 分组落地
+    }
+
+    class SessionEventStreamAdapter {
+        <<interface · src/sync/eventStream.ts · 新增>>
+        +localSessions(): Array~{id, shard}~
+        +readEventsSince(sessionId, sinceSeq): Promise~SessionEvent[]~
+        +appendRemoteEvents(sessionId, events): Promise~number~
+    }
+
+    class createSessionEventStreamAdapter {
+        <<工厂 · src/sync/eventStream.ts>>
+        +(): SessionEventStreamAdapter
+    }
+
+    class SyncClient {
+        <<class · src/sync/SyncClient.ts>>
+        +push(changes, events=[]): Promise~PushResponse~   %% 签名扩展
+        +pull(since): Promise~PullResponse~
+    }
+
+    class SyncRuntime {
+        <<src/sync/runtime.ts>>
+        +createSyncRuntime(): SyncRuntime
+        +initSyncRuntime(): Promise~SyncRuntime~
+    }
+
+    class SyncRegistry {
+        <<src/sync/syncRegistry.ts · 不改>>
+        +register(spec)
+        +get(collection)
+        +entries()
+    }
+    class SyncCollectionSpec {
+        <<interface · LWW>>
+        +keyOf(entity)
+        +read(): {entities, tombstones}   %% ★同步契约
+        +apply(entity)
+        +payload(entity)
+    }
+
+    class EventStore {
+        <<interface · src/events/store.ts>>
+        +append(params): Promise~EventAppendResult~
+        +readEvents(sessionId, workdir): Promise~SessionEvent[]~
+        +tombstoneSession(meta): Promise~void~
+    }
+    class sessionsStore {
+        <<src/stores/sessionsStore.ts>>
+        +sessions: Session[]
+        +isEventStreamSession(s): boolean   %% ★ 本批导出
+    }
+    class SessionEvent {
+        <<type · src/types/event.ts>>
+        id: string
+        sessionId: string
+        parentId: string|null
+        seq: number
+        type: EventType
+        timestamp: number
+    }
+
+    %% ============ 服务端 ============
+    class push_pull {
+        <<router · cloud/app/sync/routes.py>>
+        +push(body): PushResponse
+        +pull(since): PullResponse
+        +reset(): 204
+        -_next_seq(session,user): int   %% ★跨两表取最大值+1
+    }
+    class SyncItem {
+        <<table sync_items · models.py>>
+        user_id, collection, entity_id   %% UNIQUE
+        rev, updated_at, payload, server_seq
+    }
+    class SyncEvent {
+        <<table sync_events · models.py · 新增>>
+        user_id, session_id, event_id    %% UNIQUE
+        seq, payload, server_seq
+    }
+    class PushResponse {
+        <<pydantic>>
+        accepted: string[]
+        conflicts: Conflict[]
+        cursor: int
+        accepted_events: int   %% ★新增
+    }
+    class PullResponse {
+        <<pydantic>>
+        cursor: int
+        changes: SyncChange[]
+        events: dict[]         %% ★新增
+    }
+
+    %% ============ 关系 ============
+    SyncRuntime ..> SyncEngine : 装配并注入
+    SyncRuntime ..> createSessionEventStreamAdapter : new
+    createSessionEventStreamAdapter ..|> SessionEventStreamAdapter
+    SyncEngine o--> SyncClient : push/pull
+    SyncEngine o--> SyncRegistry : 读（不 import store）
+    SyncEngine o--> SessionEventStreamAdapter : 可选注入（事件通道）
+    SyncRegistry o--> SyncCollectionSpec : 8 个 LWW collection（不含 sessionEvents）
+    SessionEventStreamAdapter ..> EventStore : getEventStore().append/readEvents
+    SessionEventStreamAdapter ..> sessionsStore : 分片 = streamWorkdir ?? workdir
+    SessionEventStreamAdapter ..> SessionEvent : 载运
+    SyncClient ..> PushResponse : 解析
+    SyncClient ..> PullResponse : 解析
+
+    push_pull ..> SyncItem : 实体（LWW，归一 updatedAt）
+    push_pull ..> SyncEvent : 事件（append，按 id 幂等，不归一）
+    push_pull ..> PushResponse
+    push_pull ..> PullResponse
+    SyncItem ..> SyncEvent : 共享 server_seq 游标
+
+    note for SessionEventStreamAdapter "事件通道全异步，与 LWW 的同步 read() 分道；\nsessionEvents 不进 SyncRegistry。"
+    note for SyncEvent "唯一键 (user_id, session_id, event_id)：重复推 = 幂等跳过，不推进 server_seq。"
+    note for SyncEngine "eventSeqs 只在 push 成功后推进（拉取落地不推进，否则并发下丢推）。"

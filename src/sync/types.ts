@@ -19,6 +19,11 @@
  * 传的是序号，不是时间。
  */
 
+// 事件流（批次 5）：`events` 是**原始事件**数组，与 LWW 实体分道。
+// 用 type-only import——避免把 `@/types/event` 的运行时拖进 `src/sync`（该模块只
+// 需要它的**类型**），也避免潜在环。
+import type { SessionEvent } from '@/types/event';
+
 /**
  * 已登记同步的 collection 名（§四 collection 契约表的客户端侧类型）。
  *
@@ -62,17 +67,27 @@ export interface PushConflict {
  * `accepted` 是**实体 id 列表**（不是整条实体）；`cursor` 是本次 push 后服务端的
  * 变更流序号——push 之后要回拉一次（`pull(cursor)`），把服务端归一后的 `updatedAt`
  * 取回来（§5.3：`updatedAt` 以服务端接收时间为准）。
+ *
+ * `accepted_events`（批次 5）是本次 push **新增**的事件数（幂等跳过的不计）。
  */
 export interface PushResponse {
   accepted: string[];
   conflicts: PushConflict[];
   cursor: number;
+  accepted_events: number;
 }
 
-/** `GET /api/sync/pull?since=<cursor>` 的响应。 */
+/**
+ * `GET /api/sync/pull?since=<cursor>` 的响应。
+ *
+ * `events`（批次 5）是 `server_seq > since` 的原始事件，与 `changes` 同属一条
+ * 游标命名空间（服务端 `cursor` 取 `sync_items` / `sync_events` 两表最大值）。
+ * 实体数组先于事件数组被客户端落地，保证「会话 meta 先于其事件」被看到。
+ */
 export interface PullResponse {
   cursor: number;
   changes: SyncChange[];
+  events: SessionEvent[];
 }
 
 /**
@@ -137,3 +152,22 @@ export const TOMBSTONE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
  * 在两侧反序列化行为不一致）。
  */
 export const SYNC_ACCOUNT_STORAGE_KEY = 'nanowork.sync.account';
+
+/**
+ * 事件推送水位（per-session「已确保上行」的最大 `seq`）的存储 key（批次 5）。
+ *
+ * 也走 `platform.storage`（② 运行时存储）的**未登记 key 兜底**——与
+ * `nanowork.sync.account` 同款：不登记 `electron/storageRoutes.ts` 时落
+ * `<userData>/misc/*.json`。因此**本批不动 electron**。值一律是字符串 JSON。
+ *
+ * ## 值形状：`Record<userId, Record<sessionId, number>>`（按账户分片）
+ *
+ * 水位必须**按账户隔离**：runtime 全应用复用**同一个** `SyncEngine` 实例，若水位不带
+ * 账户维度，用户 A 登出、B 登录后 B 会继承 A 留下的水位 → B 本机 `seq ≤ 水位` 的事件
+ * **永不上行**且**没有任何报错**（静默丢推）。故外层键是 `userId`，引擎只读写**当前
+ * 账户**那一份分片（切换账户时切分片，其它账户分片原样保留 → 切回原账户进度可恢复）。
+ *
+ * 单个 `sessionId` 的值为该会话「`seq ≤ 该值的本机事件都已上行」的最大值。丢了不影响
+ * 正确性：水位归 0 → 全量重推 → 服务端按事件 id 去重。
+ */
+export const EVENT_CURSOR_STORAGE_KEY = 'nanowork.sync.eventCursor';

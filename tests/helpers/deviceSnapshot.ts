@@ -14,6 +14,12 @@
  * 不需要结构化共享，也不会把函数 clone 进去。
  */
 
+import {
+  __resetRecordersForTest,
+  createMemoryEventStore,
+  __setEventStoreForTest,
+  type EventStore,
+} from '@/events';
 import { useAgentsStore } from '@/stores/agentsStore';
 import { useExpertGroupsStore } from '@/stores/expertGroupsStore';
 import { useTasksStore } from '@/stores/tasksStore';
@@ -148,6 +154,44 @@ export function emptyDevice(defaultWorkspacePath: string): StoreSnapshot {
 /** 把全局 store 复位成「一台空设备」。 */
 export function resetStoresEmpty(defaultWorkspacePath = '/local/default-ws'): void {
   restoreStores(emptyDevice(defaultWorkspacePath));
+}
+
+/**
+ * 一台「设备」：一份 store 同步切片快照 + 一份**独立**的内存 `EventStore`。
+ *
+ * 现夹具只有一套全局 `EventStore`（`beforeEach` 里 `__setEventStoreForTest(...)`），
+ * 无法表达「A 追加的事件 B 看不见」——不隔离就「A 追加即 B 可见」，用例失去鉴别力。
+ * 把每设备一份事件存储纳入设备对象后，`activateDevice` 负责连事件存储一起换装。
+ */
+export interface Device {
+  snap: StoreSnapshot;
+  eventStore: EventStore;
+}
+
+/**
+ * 造一台「空设备」（`ws` 为本机默认工作空间）：空 store 快照 + **全新**内存事件存储。
+ *
+ * 事件存储**每设备一份**（规格 §2.5 / Q5）——两台设备的事件流因此互不可见。
+ */
+export function makeDevice(ws: string): Device {
+  return { snap: emptyDevice(ws), eventStore: createMemoryEventStore() };
+}
+
+/**
+ * 换装成该设备：store 快照 + **该设备那份**事件存储 + 清空记录器与写队列。
+ *
+ * `__resetRecordersForTest()` 一并清掉：记录器持有 `seq` 与链尖，跨设备换装不清会
+ * 让「B 侧第一条事件 seq 不是 1」或把 A 的写入队列带到 B。
+ */
+export function activateDevice(dev: Device): void {
+  restoreStores(dev.snap);
+  __setEventStoreForTest(dev.eventStore);
+  __resetRecordersForTest();
+}
+
+/** 拍下该设备当前的 store 快照（事件存储已在 `dev.eventStore` 上累积，无需再拍）。 */
+export function captureDevice(dev: Device): void {
+  dev.snap = snapshotStores();
 }
 
 /** 造一个带同步元数据的用户 Agent（同步相关字段：id / name / enabled）。 */

@@ -9,6 +9,7 @@ export * from './types';
 export * from './SyncClient';
 export * from './syncAccount';
 export * from './syncRegistry';
+export * from './eventStream';
 export * from './SyncEngine';
 export * from './runtime';
 export * from './useSyncStatus';

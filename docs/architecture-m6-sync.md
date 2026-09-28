@@ -10,6 +10,12 @@
 > ⚠️ **但不要把那份设计文档整篇照抄进代码**：其 §4.3 / §12 / §13 / §14 的「本地 SQLite + `sync_changelog`」
 > 与 `nanowork-cloud/` 目录名，已被 **ADR-022** 与本文 **§5.1** 推翻。该文档**已在文首加「⚠️ 勘误」横幅**
 > （2026-09-26，登记在 `docs/README.md` §九 看板 #17），**先看 §5.1 再看那两节**。
+>
+> ⚠️ **本文自身亦有三处勘误（2026-09-28 批次 5 追加，登记为 §九 看板 #22）**——落点复核时发现
+> 以下三处「照现在这样写就会写错」。按「加勘误、不改原文」口径处理：**原文保留**，在原处加注：
+> ① **§5.5** 的「撞号时按**设备号** tie-break」**不可实现**（`BaseEvent` 上根本没有设备号字段）→ 末级键改用**事件 `id`**；
+> ② **§5.5 / §七 批次 5** 的「并集不丢」是**事件层**语义，**投影层只显示一条链**（`project.ts::activePath` 只沿单一 max-`seq` 尖端回溯）；
+> ③ **§四** `sessionEvents` 行的「append（按 seq）」其**实施含义**是「push 游标 = 每会话**推送确认水位**」，**不是**「服务端已知最大 `seq`」——后者在并发下会**丢推**。
 
 ---
 
@@ -56,7 +62,8 @@
 >   FR-7.2（产物落点会随它重做，现在写会白写），两者都归**批次 6**。
 >
 > 换句话说：本节从「开工前置清单」变成了**批次内的排期表**——批次 1（服务端）/ 批次 2（客户端引擎）/
-> 批次 3（前置欠账）均已落，**批次 4（实体接线）现在可以开工**。
+> 批次 3（前置欠账）/ 批次 4（实体接线）/ 批次 5（事件流追加同步）**均已落**；余 C 类文件型资产与
+> 产物内容寻址归**批次 6**。
 
 | # | 欠账 | 为什么必须在 M6 补 | 详见 |
 |---|---|---|---|
@@ -152,6 +159,16 @@ cloud/                          # 与 nanobot/ 并列的仓库根子目录
 > 用例：`cloud/tests/test_sync.py` 的 `test_push_normalizes_updated_at_to_server_receive_time`、
 > `test_identical_push_is_idempotent_and_does_not_advance_seq`。
 
+**落地备注（2026-09-28 批次 5 追加第 6 条）**——对上面第 1 条「每次写入都推进 `server_seq`」的**第二个例外**：
+
+> **6 · 事件（`sync_events`）按唯一键幂等跳过时同样不推进 `server_seq`（批次 5）**
+>
+> 批次 5 新增事件流通道（§四 `sessionEvents`）。事件**不可改写**，故其「重复」判据不是 `updatedAt` / `rev`
+> 而是**唯一键 `(user_id, session_id, event_id)`**：已存在 → **不写库、不推进 `server_seq`、不计入
+> `accepted_events`**。与第 5 条同源（都属「重收同一事实时不得制造新变更」），只是判据从「除 `updatedAt`
+> 外负载相同」换成了「事件 id 相同」。
+> 用例：`cloud/tests/test_sync_events.py::test_repush_same_events_is_idempotent`。
+
 ### 3.2 客户端：`src/sync/`（新建，渲染层，**不得 `import 'electron'`**）
 
 ```
@@ -203,6 +220,17 @@ src/sync/
 > ⚠️ **`sessionMeta` 与 `sessionEvents` 是两个 collection、两种策略**——这是会话同步最容易做错的地方：
 > 标题/置顶/模式走 LWW（可冲突），消息正文走追加（天然无冲突）。混成一个 collection 会让 LWW 去裁决
 > 一条只会增长的事件流。
+
+> **`sessionEvents` 行的实施含义（2026-09-28 批次 5 勘误）**——该行「append（按 `seq`）」有三个不显然的落点：
+> 1. **它不进 `syncRegistry`**：`SyncCollectionSpec.read()` 是**同步**的，而事件存储（`EventStore`）**全异步**；
+>    硬套会得到一个撒谎的 `read()`。故事件通道是**第二个适配器**（`src/sync/eventStream.ts`），**可选注入**引擎；
+>    未注入时是纯 LWW 引擎，既有行为一字不变。
+> 2. **push 游标是「每会话推送确认水位」，且只在 push 成功后推进**——**不是**「服务端已知最大 `seq`」。
+>    后者在并发下会**丢推**：A 离线攒 `seq 1..5`、B 先推 `1..3`，A 联网 pull 到 `1..3` 若据此推进水位，
+>    A 本机那几条**永不上行**。代价是「每条远端事件回显一次」（服务端按 id 去重，**有界**，非无限回环）。
+>    该水位**按账户隔离**（换号不得互相影响，见 `docs/README.md` §九 看板 #23）。
+> 3. 「无元数据」⇒ 事件**不参与 LWW**、服务端**不归一** `updatedAt`、**不**入 `sync_items`——另立 `sync_events`
+>    表，但**共享同一条每用户 `server_seq` 游标**（`_next_seq` 取两表最大值 + 1），故 pull 仍是单游标一次取全。
 
 ---
 
@@ -257,6 +285,19 @@ LWW 直接比较客户端 `updatedAt` 会被「系统时间快的设备」永久
 MVP 的裁决：**按事件 `id`（uuid）去重 + 按 `seq` 排序**，撞号时按设备号 tie-break，**保留双方事件**
 （并集不丢，符合门禁②）；文档明确「同一会话不建议两端同时继续」为已知限制。
 
+> ⚠️ **勘误（2026-09-28 批次 5）——上面「按设备号 tie-break」不可实现；「并集不丢」的粒度也需澄清**：
+> 1. **「设备号 tie-break」作废**：`BaseEvent`（`src/types/event.ts`）**没有**设备号字段；`updatedBy` 只存在于
+>    `SessionMeta` / 实体元数据上。真要按设备号裁决，就必须给事件**加字段 + 迁移既有 JSONL**，超出本批。
+>    → 末级键改用 **事件 `id` 字典序**，即 `dedupe(by id)` → `sort(by (seq asc, id asc))`。
+>    `id` 是 uuid、跨端一致，用它做末级键**确定且两端一致**，已满足「并集不丢 + 顺序确定」的全部诉求。
+>    （真要设备号，应作为**后续批次的事件 schema 变更**另立。）
+> 2. **「并集不丢」是事件层语义**：`src/events/project.ts::activePath` 只沿**单一** max-`seq` 尖端回溯
+>    → 两端并发追加时，并集**在事件层完整保留**，但**投影层只显示一条链**（另一分支的事件在文件里、
+>    不在当前会话视图里）。故门禁判据必须断言在**原始事件列表**（id 集合 / 条数 / 顺序），**不能**断言在
+>    `messages` 投影上——否则会把「另一分支不出现在消息气泡里」误判成失败。
+> 3. 补充（本批落地的两条纪律）：**落地分片只认接收方本机**（`sessionsStore` 的 `streamWorkdir ?? workdir`）；
+>    会话在本机未知 / 已墓碑 → **跳过该批事件**（不落孤儿文件），绝不照抄发送方路径（与 §六 #11 同一条纪律）。
+
 > **另有四条同类约束尚未定案**，见 §六 第 9–12 条：pull 落地的合并语义、墓碑 GC 的过滤责任、
 > `Session.workdir` 跨设备落地、首次 push/pull 顺序。它们与上面五条一样「照现在的文档写就会写错」，
 > 差别只是还缺一个裁决——所以放在 §六 而不是这里。
@@ -299,10 +340,10 @@ MVP 的裁决：**按事件 `id`（uuid）去重 + 按 `seq` 排序**，撞号�
 
 ## 七、分批实施与门禁
 
-> 顺序原则：**批次 1（服务端）/ 批次 2（客户端引擎）/ 批次 3（前置欠账）/ 批次 4（实体接线 + 认证 UI + 状态徽章）
-> 已全部落地**——批次 1/2 是纯新增（`cloud/` 与 `src/sync/` 都不改既有代码、可最先开工并彼此并行），
-> 批次 3 与批次 4 均已补齐；**批次 5（事件流追加同步）现在可以开工**（8 个 LWW collection 已全部接线，
-> `sessionEvents` 是它唯一的增量，且按 §四 末注与 §5.5 需专门设计、不能走 LWW）。
+> 顺序原则：**批次 1（服务端）/ 批次 2（客户端引擎）/ 批次 3（前置欠账）/ 批次 4（实体接线 + 认证 UI + 状态徽章）/
+> 批次 5（事件流追加同步）已全部落地**——批次 1/2 是纯新增（`cloud/` 与 `src/sync/` 都不改既有代码、
+> 可最先开工并彼此并行），批次 3/4/5 依次补齐；**余下只剩批次 6（C 类文件型资产 + 产物内容寻址 +
+> 数据主权 + 墓碑 GC 30 天）**。
 
 | 批次 | 内容 | 完成判据（可证伪） |
 |---|---|---|
@@ -310,7 +351,7 @@ MVP 的裁决：**按事件 `id`（uuid）去重 + 按 `seq` 排序**，撞号�
 | **2 客户端引擎** | ✅ **已落（2026-09-28）**：`src/sync/` 七件（`types` / `SyncClient` / `syncAccount` / `syncRegistry` / `SyncEngine` / `useSyncStatus` / `index`）+ `tests/sync/` 5 文件 59 用例（mock fetch）；本批 registry **只注册 `agents` 样板**，其余 8 个 collection 留批次 4；**未动 `electron/`** | **未登录时 fetch 调用次数 = 0**（local-first 守卫）；push 组装**含墓碑**且**过裁剪函数**；pull 落地后墓碑条目不出现在列表（三条均有用例，经 QA 变异测试逐个击穿） |
 | **3 前置欠账** | ✅ **已落（2026-09-28）**：渠道凭据保险库化（`src/lib/channelSecrets.ts` + `electron/channelSecretInjection.ts` + `channelsStore` 接线 + 启动期/UI 判据）+ 排除表落地（早于本批，2026-09-25）+ wire 泄漏收口（§2.2 #6，同日）。（**会话删除墓碑与平台边界均已提前闭合**，见 §2.2 #1 / #5；C 类资产与产物寻址随批次 6） | ✅ `channels.json` 与同步负载里**都没有** secret（保险库不可用时退化为明文，此时 `partialize` **不**剔除、界面标注「未加密」——fail-open 以保渠道可用）；**CI wire 检查的基线清零**（新增越界会被拦）；**动了 `electron/` → 已重建 `main.cjs` + `preload.cjs`**（门禁：三套 tsc + vitest **106 文件 1717 用例** + `vite build` 全绿） |
 | **4 实体接线 + 认证 UI** | ✅ **已落（2026-09-28）**：`syncRegistry` 由「只注册 `agents`」补齐到 **8 个 collection**（`agents` + `expertGroups` / `tasks` / `mcp` / `channels` / `skillOverrides` / `settings` / `sessionMeta`；**`sessionEvents` 刻意不注册**，归批次 5）；新增 `src/sync/runtime.ts`（装配 + store 订阅 + suppress/missed + 账户生命周期，单例 `getSyncRuntime` / `initSyncRuntime` / `disposeSyncRuntime`）；`settingsStore` 加 `syncMeta` 兄弟切片（v11→v12）、`sessionsStore` 加 `sessionTombstones` + 远端落地入口；`src/pages/auth/`（登录/注册，**不引入全局守卫**——local-first）+ `SyncStatusBadge`（落**侧栏底部**而非 TitleBar：后者只在 Electron 渲染）+ 设置页「账户」分区（导出/删账户为禁用占位，归批次 6）；**另修掉 §3.1 落地备注第 5 条的阻断缺口**（服务端 payload 归一 + 同版幂等跳过）。落地规格：`docs/batch-4-entity-wiring-spec.md` | ✅ 门禁①（**已自动化**，非只有真机）：`tests/sync/integration.twoDevice.test.ts` 双实例夹具（真 spawn `uvicorn` + 两套 store 快照/换装）→ A↔B **双向一致**（Agent 与会话元数据），空闲同步 `status === 'synced'` 且 `conflict === 0`；✅ 门禁②：离线改 → 联网 → **并集不丢**（`aX` 与 `aY` 同时在两端），同实体并发改按 LWW 收敛且条目不消失；**17 项变异全部「改坏 → 变红 → 还原」**——其中**新增的服务端变异**（去掉归一）会让门禁①②的 `synced` 断言**双双变红**，证明该修复是必需的而非装饰 |
-| **5 事件流追加同步** | `sessionEvents` 按 `seq` 游标 push/pull；跨设备**落本机 `streamWorkdir`** | 门禁②：断网追加 N 条 → 联网后对端拿到全部 N 条且顺序正确；两端并发追加**并集不丢** |
+| **5 事件流追加同步** | ✅ **已落（2026-09-28）**：新增事件通道 `src/sync/eventStream.ts`（`SessionEventStreamAdapter`，**可选注入**引擎，未注入即纯 LWW 引擎；**刻意不进 `syncRegistry`**——`SyncCollectionSpec.read()` 是同步的而 `EventStore` 全异步）；服务端新增 `sync_events` 表（唯一键 `(user_id, session_id, event_id)`）**与 `sync_items` 共享同一条每用户 `server_seq` 游标**（`_next_seq` 取两表 max + 1），**扩展**既有 push/pull 各加 `events` 字段（**不新增端点**，避免第二条游标）；事件**不归一** `updatedAt`（不可改写的事实）；跨设备**只落接收方本机分片**（`streamWorkdir ?? workdir`，未知/已墓碑会话**跳过**）；去重/排序 `dedupe(by id) → sort(by (seq asc, id asc))`；**push 游标 = 每会话「推送确认水位」且只在 push 成功后推进**（pull 落地**不**推进，否则并发下丢推）。**另修两条账户态缺陷**（README §九 #23：pull 游标与事件推送水位此前**换号既不重置也不隔离** → B 登录后拉不到自己账户里的数据）。落地规格 `docs/batch-5-session-events-spec.md`；m6 文档自身三处勘误见文首横幅与 README §九 #22 | ✅ 门禁②（**事件层**验收）：`tests/sync/sessionEventsSync.test.ts` 双实例夹具**每设备一份 `EventStore`**（原夹具只有一套共享 → 不隔离就「A 追加即 B 可见」，用例失去鉴别力）→ 断网追加 N 条 → 联网后对端拿到全部 N 条且 `(seq,id)` 顺序正确；两端并发追加**并集不丢**（断言**原始数组长度 + 每 id 出现次数恰为 1**，**不用** `Set.size`——`Set` 会把重复折叠成假绿）。**QA 独立变异 15 项，13 项击穿**；另 2 项「打了不红」由 QA 自己揪出并补强：① 门禁② 原判据用 `new Set(ids).size === 6`（去重删掉后 `rawLength` 6→9 而 `unique` 仍 6，**断言照样绿**）→ 改为原始长度 + 出现次数；② 服务端「跨两表共享游标」**零覆盖**（`_next_seq` 退化成 items-only 仍全绿）→ 补 `test_pure_event_batches_advance_shared_cursor`。门禁实测：三套 tsc 0 错 + `vitest --maxWorkers=3` **118 文件 / 1787 用例** + `vite build` + 服务端 `ruff`/`pytest` **35 例**全绿；**未动 `electron/`**（水位走 `platform.storage` 未登记 key 的 `misc` 兜底）→ 无需重建产物。**已知限制**：并发分支在**投影层只显示一条链**（见 §5.5 勘误 ②）；远端事件落地后**不**重对齐本机记录器（同源限制） |
 | **6 其余欠账 + 数据主权** | C 类文件型资产（记忆段落级 LWW / 身份文件 / 提示词覆盖）；产物内容寻址；导出全部数据 / 删账户；墓碑 GC 30 天 | 段落级 LWW 有单测；导出产物可重新导入；GC 后 pull 不复活已删条目 |
 
 **门禁（沿用并扩展 `nanowork-dev-gate`）**：

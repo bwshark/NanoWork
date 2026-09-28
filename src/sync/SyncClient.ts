@@ -21,6 +21,7 @@
 
 import { DEFAULT_SYNC_BASE_URL } from './types';
 import type { PullResponse, PushResponse, SyncChange } from './types';
+import type { SessionEvent } from '@/types/event';
 
 export interface SyncClientOptions {
   /** 服务端根地址（缺省 `DEFAULT_SYNC_BASE_URL`） */
@@ -58,9 +59,15 @@ export class SyncClient {
     this.refreshAccessToken = options.refreshAccessToken;
   }
 
-  /** 提交一批变更；返回服务端裁决结果（accepted / conflicts / cursor）。 */
-  push(changes: SyncChange[]): Promise<PushResponse> {
-    return this.request<PushResponse>('POST', '/api/sync/push', { changes });
+  /**
+   * 提交一批变更；返回服务端裁决结果（accepted / conflicts / cursor / accepted_events）。
+   *
+   * `events`（批次 5）是**原始事件**数组（每条自描述 `sessionId`），缺省 `[]`。
+   * body **恒为** `{ changes, events }`——即便 events 为空也带该字段，避免服务端
+   * 对「字段缺失」与「空数组」产生两种解析路径。
+   */
+  push(changes: SyncChange[], events: SessionEvent[] = []): Promise<PushResponse> {
+    return this.request<PushResponse>('POST', '/api/sync/push', { changes, events });
   }
 
   /**

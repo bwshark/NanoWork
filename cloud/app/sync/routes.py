@@ -28,7 +28,7 @@ from app.auth.deps import current_user
 from app.auth.models import User
 from app.db import get_session
 from app.sync.merger import VersionStamp, compare_versions, resolve
-from app.sync.models import SyncItem
+from app.sync.models import SyncEvent, SyncItem
 from app.timeutil import coerce_utc, iso_z, utc_now
 
 router = APIRouter(prefix="/api/sync", tags=["sync"])
@@ -44,6 +44,9 @@ class SyncChange(BaseModel):
 
 class PushRequest(BaseModel):
     changes: list[SyncChange] = []
+    # 会话事件流（批次 5）：每条事件**自描述**（`sessionId` 在事件体内），与实体
+    # 走同一批 `server_seq`。缺省 `[]` 保证老客户端（只推实体）照旧可用。
+    events: list[dict] = []
 
 
 class Conflict(BaseModel):
@@ -57,11 +60,15 @@ class PushResponse(BaseModel):
     accepted: list[str]
     conflicts: list[Conflict]
     cursor: int
+    # 本次 push **新增**的事件数（幂等跳过的不计）
+    accepted_events: int
 
 
 class PullResponse(BaseModel):
     cursor: int
     changes: list[SyncChange]
+    # 事件行按 `server_seq` 排序；与 `changes` 同属一条游标
+    events: list[dict]
 
 
 def _stamp_of(entity: dict) -> VersionStamp:
@@ -102,10 +109,19 @@ def _payload_matches_ignoring_updated_at(row: SyncItem, entity: dict) -> bool:
 
 
 def _next_seq(session: Session, user_id: str) -> int:
-    current = session.exec(
+    """下一次写入用的 `server_seq`：**跨 `sync_items` + `sync_events` 共享游标**。
+
+    取两表 `server_seq` 最大值 + 1。两者共用同一条命名空间后，`pull?since=` 一次
+    即可取回「实体 + 事件」，客户端只需维护一个游标（规格 Q2 / §7「单一游标」）。
+    只取实体表会让事件行拿到与实体行相同的序号而排序歧义；只取事件表则反之。
+    """
+    item_max = session.exec(
         select(func.max(SyncItem.server_seq)).where(SyncItem.user_id == user_id)
     ).one()
-    return int(current or 0) + 1
+    event_max = session.exec(
+        select(func.max(SyncEvent.server_seq)).where(SyncEvent.user_id == user_id)
+    ).one()
+    return max(int(item_max or 0), int(event_max or 0)) + 1
 
 
 def _find(session: Session, user_id: str, collection: str, entity_id: str) -> SyncItem | None:
@@ -118,6 +134,17 @@ def _find(session: Session, user_id: str, collection: str, entity_id: str) -> Sy
     ).first()
 
 
+def _find_event(session: Session, user_id: str, session_id: str, event_id: str) -> SyncEvent | None:
+    """按唯一键 `(user_id, session_id, event_id)` 找已落库事件（幂等跳过的判据）。"""
+    return session.exec(
+        select(SyncEvent).where(
+            SyncEvent.user_id == user_id,
+            SyncEvent.session_id == session_id,
+            SyncEvent.event_id == event_id,
+        )
+    ).first()
+
+
 @router.post("/push", response_model=PushResponse)
 def push(
     body: PushRequest,
@@ -126,6 +153,7 @@ def push(
 ) -> PushResponse:
     accepted: list[str] = []
     conflicts: list[Conflict] = []
+    accepted_events = 0
     seq = _next_seq(session, user.id)
 
     for change in body.changes:
@@ -199,8 +227,35 @@ def push(
         session.add(row)
         accepted.append(entity_id)
 
+    # ── 事件循环（批次 5）：在**既有实体循环之后**，与实体共用本批 `seq` ──
+    # 顺序不变式：同一 push 内实体先于事件 —— 保证「会话 meta 先于其事件」被对端
+    # 看到（Q2 / §7）。缺身份的事件**跳过而不整批失败**（对齐实体缺 id 的处理）。
+    for ev in body.events:
+        event_id = str(ev.get("id", ""))
+        session_id = str(ev.get("sessionId", ""))
+        if not event_id or not session_id:
+            continue
+        # 幂等跳过：事件 id 已存在 → 不写库、不推进 seq、不计入 accepted_events
+        # （与批次 4 实体「完全同版幂等跳过」同一纪律，见 §3.4）。
+        if _find_event(session, user.id, session_id, event_id) is not None:
+            continue
+        session.add(
+            SyncEvent(
+                user_id=user.id,
+                session_id=session_id,
+                event_id=event_id,
+                seq=int(ev.get("seq") or 0),
+                # 原样序列化：**不归一** `updatedAt` / 不注入服务端时间（事件是事实）
+                payload=json.dumps(ev, ensure_ascii=False),
+                server_seq=seq,
+            )
+        )
+        accepted_events += 1
+
     session.commit()
-    return PushResponse(accepted=accepted, conflicts=conflicts, cursor=seq)
+    return PushResponse(
+        accepted=accepted, conflicts=conflicts, cursor=seq, accepted_events=accepted_events
+    )
 
 
 @router.get("/pull", response_model=PullResponse)
@@ -221,17 +276,35 @@ def pull(
         .order_by(SyncItem.server_seq)  # type: ignore[arg-type]
     ).all()
 
+    # 事件行属于同一条 `server_seq` 命名空间，`since` 过滤天然覆盖两者
+    event_rows = session.exec(
+        select(SyncEvent)
+        .where(SyncEvent.user_id == user.id, SyncEvent.server_seq > since)
+        .order_by(SyncEvent.server_seq)  # type: ignore[arg-type]
+    ).all()
+
     changes = [
         SyncChange(collection=row.collection, entity=json.loads(row.payload)) for row in rows
     ]
-    cursor = max((row.server_seq for row in rows), default=since)
-    return PullResponse(cursor=cursor, changes=changes)
+    events = [json.loads(row.payload) for row in event_rows]
+    # 游标取**两表**最大值：否则只推事件的批会算不出新游标、对端下次重复拉
+    cursor = max(
+        [row.server_seq for row in rows] + [row.server_seq for row in event_rows],
+        default=since,
+    )
+    return PullResponse(cursor=cursor, changes=changes, events=events)
 
 
 @router.delete("/reset", status_code=status.HTTP_204_NO_CONTENT)
 def reset(user: User = Depends(current_user), session: Session = Depends(get_session)) -> None:
-    """清空本账户的同步数据（供测试与「删账户」复用；MVP 不做公开端点）。"""
+    """清空本账户的同步数据（供测试与「删账户」复用；MVP 不做公开端点）。
+
+    实体与事件一并清理——否则「删账户」后事件残留（对齐既有 `reset` 语义）。
+    """
     rows = session.exec(select(SyncItem).where(SyncItem.user_id == user.id)).all()
     for row in rows:
         session.delete(row)
+    event_rows = session.exec(select(SyncEvent).where(SyncEvent.user_id == user.id)).all()
+    for event_row in event_rows:
+        session.delete(event_row)
     session.commit()

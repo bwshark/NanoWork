@@ -383,8 +383,11 @@ const nowIso = () => new Date().toISOString();
  * 前两条与旧 `persist` 的 `partialize` 白名单一致；第三条是**新增的明确排除**：
  * 旧实现把它们持久化过（注释写着「非 readonly 以便持久化」），那其实是在本地
  * 复制引擎的权威数据，Phase E 起不再这么做。
+ *
+ * **导出**（批次 5）：事件流同步适配器（`src/sync/eventStream.ts`）据此过滤本机
+ * 存在事件流的会话，避免在适配器里复制一份判据而漂移。
  */
-function isEventStreamSession(s: Pick<Session, 'id' | 'channel' | 'readonly'>): boolean {
+export function isEventStreamSession(s: Pick<Session, 'id' | 'channel' | 'readonly'>): boolean {
   return !s.channel && !s.readonly && !s.id.startsWith(CRON_SESSION_ID_PREFIX);
 }
 

@@ -34,10 +34,13 @@
  */
 
 import { isTombstone, tombstoneEntries } from '@/lib/syncMeta';
+import { platform } from '@/platform';
 import type { SyncTombstones } from '@/types';
+import type { SessionEvent } from '@/types/event';
 import { setSyncStatus } from './useSyncStatus';
-import { TOMBSTONE_MAX_AGE_MS } from './types';
+import { EVENT_CURSOR_STORAGE_KEY, TOMBSTONE_MAX_AGE_MS } from './types';
 import type { SyncClient } from './SyncClient';
+import type { SessionEventStreamAdapter } from './eventStream';
 import type { SyncAccount } from './syncAccount';
 import type { SyncEntityRecord, SyncRegistry } from './syncRegistry';
 import type { PullResponse, PushConflict, SyncChange, VersionStamp } from './types';
@@ -74,6 +77,10 @@ export interface SyncRunResult {
   conflicts: number;
   /** 是否跳过（未登录 / 并发的重复调用） */
   skipped: boolean;
+  /** 本轮 pull **真正落地**的事件条数（批次 5；未注入事件通道时为 0） */
+  pulledEvents: number;
+  /** 本轮 push 被服务端**新增**接受的事件条数（批次 5；未注入时为 0） */
+  pushedEvents: number;
 }
 
 export interface SyncEngineOptions {
@@ -90,6 +97,13 @@ export interface SyncEngineOptions {
   onlineTarget?: Pick<Window, 'addEventListener' | 'removeEventListener'>;
   /** 游标存储；缺省内存实现 */
   cursorStore?: CursorStore;
+  /**
+   * 事件流通道（批次 5）；缺省 `undefined` = **纯 LWW 引擎**（既有行为不变）。
+   *
+   * 事件通道**全异步**、与 LWW 的同步 `read()` 分道；引擎只经此适配器访问事件流，
+   * **不 import 任何 store**（不变量 2）。
+   */
+  eventStream?: SessionEventStreamAdapter;
 }
 
 const DEFAULT_DEBOUNCE_MS = 1000;
@@ -182,6 +196,30 @@ export class SyncEngine {
   private readonly intervalMs: number;
   private readonly onlineTarget?: Pick<Window, 'addEventListener' | 'removeEventListener'>;
   private readonly cursorStore: CursorStore;
+  private readonly eventStream?: SessionEventStreamAdapter;
+
+  /**
+   * **当前账户**每会话「已确保上行到服务端」的事件水位（批次 5 的 push 游标，规格 §2.1）。
+   *
+   * 语义：`eventSeqs[sid]` = 「`seq ≤ 该值的本机事件都已上行到服务端」的最大值。
+   * **只在 push 成功后推进**——拉取落地时绝不推进（否则并发下会丢推，反例见规格）。
+   *
+   * **按账户隔离**：本 Map 只承载 `activeAccountScope` 对应账户的水位；账户变化时会被清空
+   * 并按新账户重载（见 `resetAccountScopedState` / `ensureAccountState`）。
+   */
+  private readonly eventSeqs = new Map<string, number>();
+  /** 内存 `eventSeqs` 是否已从 `platform.storage` 载入（惰性；账户变化时强制重载） */
+  private eventCursorsLoaded = false;
+  /**
+   * 引擎「账户态」当前归属的账户 scope（`userId`；无 `getSession` 时为 `''`）。`null` = 尚未归属。
+   *
+   * 账户态 = **pull 游标**（`cursorStore`）+ **内存事件水位**（`eventSeqs`）：服务端为每个账户
+   * 维护独立的 `server_seq` 空间，二者都必须按账户隔离。每次同步前比对它与此账户的 scope，
+   * **不同即换号** → 复位账户态——这是「引擎实例被 runtime 复用」场景防跨账户泄漏的关键。
+   */
+  private activeAccountScope: string | null = null;
+  /** 构造时的初始 pull 游标（账户态复位时回到它；缺省 0 = 「`since=0` 全量拉」）。 */
+  private readonly initialCursor: number;
 
   private timer: ReturnType<typeof setInterval> | null = null;
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -199,6 +237,9 @@ export class SyncEngine {
     this.intervalMs = options.intervalMs ?? DEFAULT_INTERVAL_MS;
     this.onlineTarget = options.onlineTarget ?? defaultOnlineTarget();
     this.cursorStore = options.cursorStore ?? createMemoryCursorStore();
+    // 记下初始游标：账户态复位（换号 / 登出）时回到它——缺省 0 = 「`since=0` 全量拉」
+    this.initialCursor = this.cursorStore.get();
+    this.eventStream = options.eventStream;
   }
 
   /**
@@ -247,6 +288,39 @@ export class SyncEngine {
       this.onlineHandler = null;
     }
     this.started = false;
+  }
+
+  /**
+   * 复位「账户态」：把 pull 游标归零 + 清空内存事件水位，并记下当前归属账户。
+   *
+   * 账户态 = **pull 游标**（`cursorStore`）+ **内存事件水位**（`eventSeqs`）。二者都只属于
+   * 当前账户：服务端为每个账户维护独立的 `server_seq` 空间，换号后若沿用上一账户的游标，
+   * `pull(since=<上一账户的值>)` 会**什么都拉不到** → 看不到本账户里已有的任何数据，且不报错
+   * （比事件水位的静默丢推更早、更普遍地可达：任何换号都会踩）。
+   *
+   * 归零是安全的：批次 2 的既有裁决即「游标仅内存、重启 `since=0` 全量拉、幂等」——换号归零
+   * 与之同源，代价只是一次全量重拉，**不会丢数据**。只动内存，**不删**持久化事件水位分片
+   * （其它账户的水位要靠分片恢复，切回时仍可恢复其进度）。
+   *
+   * **账户生命周期入口调用**（`runtime.onSession` 在登录 / 登出 / 换号时）；引擎自身在每次
+   * 同步前也会经 `ensureAccountState` 检测换号（双保险，见其说明）。
+   */
+  resetAccountScopedState(): void {
+    this.activeAccountScope = this.eventCursorScope();
+    this.eventSeqs.clear();
+    this.eventCursorsLoaded = false;
+    this.cursorStore.set(this.initialCursor);
+  }
+
+  /**
+   * 同步前确保「账户态」属于当前账户：账户变化（首次 / 换号 / 登出后重登）即复位。
+   *
+   * 仅可能在**已登录**路径被调用（`syncNow` 的 auth 守卫之后，守卫未过直接返回）——本方法
+   * 只动内存（`cursorStore.set`），**不发任何网络请求**，不变量 1「未登录 = 零 fetch」不受影响。
+   */
+  private ensureAccountState(): void {
+    if (this.activeAccountScope === this.eventCursorScope()) return;
+    this.resetAccountScopedState();
   }
 
   /**
@@ -305,33 +379,69 @@ export class SyncEngine {
   async syncNow(): Promise<SyncRunResult> {
     if (!this.account.isAuthenticated()) {
       setSyncStatus({ status: 'local' });
-      return { pulled: 0, pushed: 0, conflicts: 0, skipped: true };
+      return {
+        pulled: 0,
+        pushed: 0,
+        conflicts: 0,
+        skipped: true,
+        pulledEvents: 0,
+        pushedEvents: 0,
+      };
     }
 
     if (this.running) {
       // 已有同步在跑：不叠加，避免同一批变更被推两次
-      return { pulled: 0, pushed: 0, conflicts: 0, skipped: true };
+      return {
+        pulled: 0,
+        pushed: 0,
+        conflicts: 0,
+        skipped: true,
+        pulledEvents: 0,
+        pushedEvents: 0,
+      };
     }
 
     this.running = true;
     setSyncStatus({ status: 'syncing' });
     let pulled = 0;
+    let pulledEvents = 0;
 
     try {
+      // 账户态（pull 游标 + 事件水位）按账户隔离：换号即复位，避免沿用上一账户的游标 / 水位
+      this.ensureAccountState();
+      // 事件通道：首次（或换号后）同步时从 `platform.storage` 载入本账户水位（纯 LWW 跳过）
+      if (this.eventStream) await this.ensureEventCursorsLoaded();
+
       // 1. 先 pull：把对端 / 上次同步后的变更落下来（§六 #12）
       const firstPull = await this.client.pull(this.cursorStore.get());
       pulled += this.applyPull(firstPull);
+      // 事件落地：异步，按 sessionId 分组逐会话落地；**绝不推进水位**（规格 §2.1 J1-b）
+      pulledEvents += await this.applyPulledEvents(firstPull.events);
       this.cursorStore.set(firstPull.cursor);
 
       // 2. 组装并 push
       const changes = this.collectChanges();
+      const eventBatch = await this.collectEventChanges();
       let pushed = 0;
+      let pushedEvents = 0;
       let conflictCount = 0;
 
-      if (changes.length > 0) {
-        const response = await this.client.push(changes);
+      if (changes.length > 0 || eventBatch.events.length > 0) {
+        const response = await this.client.push(changes, eventBatch.events);
         pushed = response.accepted.length;
+        pushedEvents = response.accepted_events;
         conflictCount = response.conflicts.length;
+
+        // 事件水位**只在 push 成功后**推进（J1-c：不得挪到 push 之前）。
+        // 推进到「本批实际推送的该会话最大 seq」：即便服务端按 id 幂等跳过
+        // （`accepted_events` 为 0）这些事件也确已被服务端持有，推进安全，且避免了
+        // 「每轮把远端事件回推」的无界开销（规格 §2.1：稳态是每条远端事件回显一次）。
+        if (eventBatch.events.length > 0) {
+          for (const [sessionId, maxSeq] of eventBatch.maxSeqBySession) {
+            this.eventSeqs.set(sessionId, maxSeq);
+          }
+          await this.persistEventCursors();
+        }
 
         for (const conflict of response.conflicts) {
           this.rememberConflict(conflict);
@@ -343,6 +453,7 @@ export class SyncEngine {
         if (response.accepted.length > 0) {
           const secondPull = await this.client.pull(this.cursorStore.get());
           pulled += this.applyPull(secondPull);
+          pulledEvents += await this.applyPulledEvents(secondPull.events);
           this.cursorStore.set(secondPull.cursor);
         }
       }
@@ -355,15 +466,143 @@ export class SyncEngine {
         lastError: null,
       });
 
-      return { pulled, pushed, conflicts: conflictCount, skipped: false };
+      return {
+        pulled,
+        pushed,
+        conflicts: conflictCount,
+        skipped: false,
+        pulledEvents,
+        pushedEvents,
+      };
     } catch (error) {
       setSyncStatus({
         status: 'offline',
         lastError: error instanceof Error ? error.message : String(error),
       });
-      return { pulled, pushed: 0, conflicts: 0, skipped: false };
+      return {
+        pulled,
+        pushed: 0,
+        conflicts: 0,
+        skipped: false,
+        pulledEvents,
+        pushedEvents: 0,
+      };
     } finally {
       this.running = false;
+    }
+  }
+
+  /**
+   * 组装上行的**事件流批次**：每会话 `readEventsSince(eventSeqs.get(id) ?? 0)`。
+   *
+   * 返回事件数组 + 「本会话本批最大 seq」映射（供 push 成功后推进水位）。未注入
+   * `eventStream` → 返回空批次（纯 LWW 引擎，既有行为不变）。
+   */
+  private async collectEventChanges(): Promise<{
+    events: SessionEvent[];
+    maxSeqBySession: Map<string, number>;
+  }> {
+    const events: SessionEvent[] = [];
+    const maxSeqBySession = new Map<string, number>();
+    if (!this.eventStream) return { events, maxSeqBySession };
+
+    for (const { id } of this.eventStream.localSessions()) {
+      const since = this.eventSeqs.get(id) ?? 0;
+      const sessionEvents = await this.eventStream.readEventsSince(id, since);
+      if (sessionEvents.length === 0) continue;
+      let maxSeq = since;
+      for (const ev of sessionEvents) {
+        events.push(ev);
+        if (ev.seq > maxSeq) maxSeq = ev.seq;
+      }
+      maxSeqBySession.set(id, maxSeq);
+    }
+    return { events, maxSeqBySession };
+  }
+
+  /**
+   * 落地一批 pull 来的事件：按 `sessionId` 分组 → `adapter.appendRemoteEvents`。
+   *
+   * **绝不推进水位**（规格 §2.1 的关键裁决）：拉取落地时若推进水位会丢推——设备 A
+   * 离线攒了 `seq 1..5`、B 攒了 `1..3` 并先推；A 联网先 pull 到 B 的 `1..3`，若此时
+   * 把水位推到 3，则 A 本机 `seq 1..3` 的事件**永远不会上行**。返回实际**新增落地**
+   * 的事件数（供 `SyncRunResult.pulledEvents`）。
+   */
+  private async applyPulledEvents(events: SessionEvent[]): Promise<number> {
+    if (!this.eventStream || events.length === 0) return 0;
+    const bySession = new Map<string, SessionEvent[]>();
+    for (const ev of events) {
+      const list = bySession.get(ev.sessionId);
+      if (list) list.push(ev);
+      else bySession.set(ev.sessionId, [ev]);
+    }
+    let applied = 0;
+    for (const [sessionId, sessionEvents] of bySession) {
+      applied += await this.eventStream.appendRemoteEvents(sessionId, sessionEvents);
+    }
+    return applied;
+  }
+
+  /**
+   * 当前账户的 cursor scope：取 `account.getSession()?.userId`。
+   *
+   * 未登录 / 无 `getSession`（如纯 LWW 单测桩）时退化为 `''`——同一引擎实例下所有匿名
+   * 场景共用一个空 scope，语义等价于「无账户维度」，但换到具名账户时仍能正确切分。
+   * 引擎**不 import 任何 store**（不变量 2），只经 `SyncAccount` 现有 API 取 `userId`。
+   */
+  private eventCursorScope(): string {
+    return this.account.getSession()?.userId ?? '';
+  }
+
+  /**
+   * 载入**当前账户**的事件水位（惰性；每次同步前由 `ensureAccountState` 保证账户已切分）。
+   *
+   * 存储形状：`Record<userId, Record<sessionId, number>>`（见 `types.ts`）——只读**当前账户**
+   * 那一份分片到内存 `eventSeqs`。账户变化时 `ensureAccountState` 已把 `eventCursorsLoaded`
+   * 复位为 `false`，故这里天然是「按账户各载入一次」。
+   */
+  private async ensureEventCursorsLoaded(): Promise<void> {
+    if (this.eventCursorsLoaded) return;
+    this.eventCursorsLoaded = true;
+    const scope = this.eventCursorScope();
+    try {
+      const raw = await platform.storage.get<string>(EVENT_CURSOR_STORAGE_KEY);
+      if (typeof raw !== 'string' || raw.trim() === '') return;
+      const parsed: unknown = JSON.parse(raw);
+      if (typeof parsed !== 'object' || parsed === null) return;
+      const forScope = (parsed as Record<string, unknown>)[scope];
+      if (typeof forScope !== 'object' || forScope === null) return;
+      for (const [sessionId, seq] of Object.entries(forScope as Record<string, unknown>)) {
+        if (typeof seq === 'number' && Number.isFinite(seq)) this.eventSeqs.set(sessionId, seq);
+      }
+    } catch {
+      // 坏值 / 存储不可用：当作空水位——水位归 0 → 全量重推 → 服务端按事件 id 去重
+    }
+  }
+
+  /**
+   * 把**当前账户**的水位写回 `platform.storage`（`Record<userId, Record<sessionId, number>>`
+   * 的字符串 JSON）。
+   *
+   * **读-改-写**：先读回整个分片表，**只替换本账户那一份**再写回——其它账户的分片原样
+   * 保留。若直接整体覆盖，账户来回切换就会互相清掉对方的水位，退化成「每次换号都全量
+   * 重推」（无害但多余）；更糟的是若只写单账户形状，B 的写入会让 A 的进度彻底丢失。
+   */
+  private async persistEventCursors(): Promise<void> {
+    const scope = this.eventCursorScope();
+    const current: Record<string, number> = {};
+    for (const [sessionId, seq] of this.eventSeqs) current[sessionId] = seq;
+    try {
+      const raw = await platform.storage.get<string>(EVENT_CURSOR_STORAGE_KEY);
+      let all: Record<string, unknown> = {};
+      if (typeof raw === 'string' && raw.trim() !== '') {
+        const parsed: unknown = JSON.parse(raw);
+        if (typeof parsed === 'object' && parsed !== null) all = parsed as Record<string, unknown>;
+      }
+      all[scope] = current;
+      await platform.storage.set(EVENT_CURSOR_STORAGE_KEY, JSON.stringify(all));
+    } catch {
+      // 丢了不影响正确性（见 types.ts `EVENT_CURSOR_STORAGE_KEY` 的说明）
     }
   }
 

@@ -208,7 +208,15 @@ describe('判据 1：未登录时零网络请求（local-first 守卫）', () =>
 
     const result = await engine.syncNow();
 
-    expect(result).toEqual({ pulled: 0, pushed: 0, conflicts: 0, skipped: true });
+    expect(result).toEqual({
+      pulled: 0,
+      pushed: 0,
+      conflicts: 0,
+      skipped: true,
+      // 批次 5 新增字段（未注入事件通道 → 恒 0）。行为未变，仅形状扩展。
+      pulledEvents: 0,
+      pushedEvents: 0,
+    });
     expect(calls).toHaveLength(0);
     expect(getSyncStatus().status).toBe('local');
   });

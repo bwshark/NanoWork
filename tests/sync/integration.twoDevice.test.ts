@@ -3,8 +3,14 @@
  *
  * ## 夹具
  * 真的起一个 uvicorn（`cloud/.venv`，临时 sqlite），两台「设备」= 两份
- * `SyncEngine`（各自独立内存 cursor）+ 两套 store 快照（`tests/helpers/deviceSnapshot`），
- * 交替换装后调 `engine.syncNow()`。`cloud/.venv` 不存在 → `describe.skipIf` 跳过。
+ * `SyncEngine`（各自独立内存 cursor）+ 两套 store 快照 + **各自一份内存
+ * `EventStore`**（`tests/helpers/deviceSnapshot` 的 `makeDevice` / `activateDevice`
+ * / `captureDevice`），交替换装后调 `engine.syncNow()`。`cloud/.venv` 不存在 →
+ * `describe.skipIf` 跳过。
+ *
+ * 事件存储**每设备一份**（批次 5 §2.5）：现夹具早先是一套共享 store，无法表达
+ * 「A 追加的事件 B 看不见」。两个门禁用例都不触碰事件流，但夹具统一到设备对象后，
+ * 事件流的隔离对后续用例（`sessionEventsSync.test.ts`）自然成立。
  *
  * ## 与规格的偏差（按文首「决策勘误」横幅）
  * G1 走 **C2**（服务端落库前归一 `updatedAt` + 完全同版幂等跳过），**不是** C1。
@@ -24,14 +30,14 @@ import { getSyncStatus, resetSyncStatus } from '@/sync/useSyncStatus';
 import { createMemorySyncAccount } from '@/sync/syncAccount';
 import { useAgentsStore } from '@/stores/agentsStore';
 import { useSessionsStore } from '@/stores/sessionsStore';
-import { createMemoryEventStore, __setEventStoreForTest } from '@/events';
+import { __setEventStoreForTest } from '@/events';
 import {
-  emptyDevice,
+  activateDevice,
+  captureDevice,
   makeAgent,
+  makeDevice,
   makeSession,
-  restoreStores,
-  snapshotStores,
-  type StoreSnapshot,
+  type Device,
 } from '../helpers/deviceSnapshot';
 import type { SyncAccount } from '@/sync';
 import type { Agent, Session } from '@/types';
@@ -77,6 +83,39 @@ function waitHealth(url: string, timeoutMs: number): Promise<void> {
   });
 }
 
+/**
+ * 等子进程**真正退出**（最多 `timeoutMs`）。
+ *
+ * 不能只 `kill()` 就删库：Windows 上被 kill 的 uvicorn 仍可能短暂持有 SQLite 文件句柄，
+ * `fs.rmSync` 随即抛 `EBUSY: resource busy or locked` → **用例全过、suite 级红**。先等
+ * `exit` 事件（或进程已退出）再删，即可消除该竞态（与 `sessionEventsSync.test.ts` 同款硬化）。
+ */
+function waitChildExit(child: ChildProcess, timeoutMs: number): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
+  return new Promise((resolve) => {
+    const finish = (): void => {
+      clearTimeout(timer);
+      child.off('exit', finish);
+      resolve();
+    };
+    const timer = setTimeout(finish, timeoutMs);
+    child.once('exit', finish);
+  });
+}
+
+/** 带退避的目录删除：仍偶发占用则重试；最后一次仍失败则静默放弃（临时目录交 OS 回收）。 */
+async function rmWithRetry(target: string, attempts = 30, delayMs = 100): Promise<void> {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      fs.rmSync(target, { recursive: true, force: true });
+      return;
+    } catch {
+      // 仍被占用：退避后重试（吞掉异常——teardown 抛错会把整 suite 拖红）
+      if (attempt < attempts - 1) await sleep(delayMs);
+    }
+  }
+}
+
 beforeAll(async () => {
   if (!hasVenv) return;
   dbDir = fs.mkdtempSync(path.join(os.tmpdir(), 'nanowork-it-'));
@@ -90,11 +129,16 @@ beforeAll(async () => {
   await waitHealth(`${BASE}/health`, 20000);
 }, 30000);
 
-afterAll(() => {
-  server?.kill();
-  server = null;
-  if (dbDir) fs.rmSync(dbDir, { recursive: true, force: true });
-});
+afterAll(async () => {
+  if (server) {
+    const child = server;
+    server = null;
+    child.kill();
+    // 先等服务进程真正退出，再删临时库（否则 EBUSY）——再重试删除兜底
+    await waitChildExit(child, 5000);
+  }
+  if (dbDir) await rmWithRetry(dbDir);
+}, 20000);
 
 // ─────────────────────────── 工具 ───────────────────────────
 
@@ -141,9 +185,15 @@ function sessionById(id: string): Session | undefined {
   return useSessionsStore.getState().sessions.find((s) => s.id === id);
 }
 
+// 每台设备一份独立的内存事件存储（批次 5 §2.5）；每个用例重建，互不串扰。
+let devA: Device;
+let devB: Device;
+
 beforeEach(() => {
-  __setEventStoreForTest(createMemoryEventStore());
   resetSyncStatus();
+  devA = makeDevice(DEV_A_WS);
+  devB = makeDevice(DEV_B_WS);
+  activateDevice(devA);
 });
 
 afterAll(() => {
@@ -159,7 +209,7 @@ describe.skipIf(!hasVenv)('门禁①：两端登录同账户后 Agent / 会话�
     const engineB = buildEngine(account);
 
     // —— 设备 A：置入 agents + 两个会话 ——
-    restoreStores(emptyDevice(DEV_A_WS));
+    activateDevice(devA);
     useAgentsStore.setState({
       agents: [makeAgent('a1', { name: 'A1' }), makeAgent('a2', { name: 'A2', enabled: false })],
       tombstones: {},
@@ -176,10 +226,10 @@ describe.skipIf(!hasVenv)('门禁①：两端登录同账户后 Agent / 会话�
 
     await engineA.syncNow();
     expect(getSyncStatus().status, 'A 首同步应 synced').toBe('synced');
-    const snapA1: StoreSnapshot = snapshotStores();
+    captureDevice(devA);
 
     // —— 设备 B：空装 → 拉取 ——
-    restoreStores(emptyDevice(DEV_B_WS));
+    activateDevice(devB);
     await engineB.syncNow();
     expect(getSyncStatus().status, 'B 首同步应 synced').toBe('synced');
 
@@ -215,7 +265,7 @@ describe.skipIf(!hasVenv)('门禁①：两端登录同账户后 Agent / 会话�
     expect(getSyncStatus().status, 'B 改动同步应 synced').toBe('synced');
 
     // —— 设备 A：换回快照 → 拉取 B 的改动 ——
-    restoreStores(snapA1);
+    activateDevice(devA);
     await engineA.syncNow();
     expect(getSyncStatus().status, 'A 回同步应 synced').toBe('synced');
 
@@ -250,19 +300,19 @@ describe.skipIf(!hasVenv)('门禁②：离线改 → 联网 → 合并无丢失'
     const engineB = buildEngine(account);
 
     // —— 基线：A 有一条 a1，同步；B 空装同步拿到 a1 ——
-    restoreStores(emptyDevice(DEV_A_WS));
+    activateDevice(devA);
     useAgentsStore.setState({ agents: [makeAgent('a1', { name: 'A1' })], tombstones: {} });
     await engineA.syncNow();
     expect(getSyncStatus().status).toBe('synced');
-    const snapABase: StoreSnapshot = snapshotStores();
+    captureDevice(devA);
 
-    restoreStores(emptyDevice(DEV_B_WS));
+    activateDevice(devB);
     await engineB.syncNow();
     expect(useAgentsStore.getState().agents.find((a) => a.id === 'a1')).toBeTruthy();
-    const snapBBase: StoreSnapshot = snapshotStores();
+    captureDevice(devB);
 
     // —— A 离线：新增 aX（同步失败，本地保留） ——
-    restoreStores(snapABase);
+    activateDevice(devA);
     aOnline = false;
     useAgentsStore.setState((s) => ({
       agents: [...s.agents, makeAgent('aX', { name: 'AX', updatedAt: nowIso() })],
@@ -271,37 +321,37 @@ describe.skipIf(!hasVenv)('门禁②：离线改 → 联网 → 合并无丢失'
     await engineA.syncNow();
     expect(getSyncStatus().status, 'A 离线同步应 offline').toBe('offline');
     expect(useAgentsStore.getState().agents.find((a) => a.id === 'aX')).toBeTruthy();
-    const snapAOffline: StoreSnapshot = snapshotStores();
+    captureDevice(devA);
 
     // —— B 在线：新增 aY 并推上 ——
-    restoreStores(snapBBase);
+    activateDevice(devB);
     useAgentsStore.setState((s) => ({
       agents: [...s.agents, makeAgent('aY', { name: 'AY', updatedAt: nowIso() })],
       tombstones: s.tombstones,
     }));
     await engineB.syncNow();
     expect(getSyncStatus().status, 'B 同步应 synced').toBe('synced');
-    const snapBWithY: StoreSnapshot = snapshotStores();
+    captureDevice(devB);
 
     // —— A 联网：拉 aY + 推 aX ——
-    restoreStores(snapAOffline);
+    activateDevice(devA);
     aOnline = true;
     await engineA.syncNow();
     expect(getSyncStatus().status, 'A 恢复联网同步应 synced').toBe('synced');
     const aIds = useAgentsStore.getState().agents.map((a) => a.id).sort();
     expect(aIds, 'A 联网后应同时有 aX 与 aY（并集不丢）').toEqual(['a1', 'aX', 'aY']);
-    const snapAFinal: StoreSnapshot = snapshotStores();
+    captureDevice(devA);
 
     // —— B 同步：也应同时有 aX 与 aY ——
-    restoreStores(snapBWithY);
+    activateDevice(devB);
     await engineB.syncNow();
     const bIds = useAgentsStore.getState().agents.map((a) => a.id).sort();
     expect(bIds, 'B 同步后应同时有 aX 与 aY').toEqual(['a1', 'aX', 'aY']);
-    const snapBAfterMerge: StoreSnapshot = snapshotStores();
+    captureDevice(devB);
 
     // —— 并发改同一实体 a1：B 的 updatedAt 更新 → 两端收敛到 B，且 a1 不消失 ——
     // A 基于合并态改成 A-edit（较早）
-    restoreStores(snapAFinal);
+    activateDevice(devA);
     useAgentsStore.setState((s) => ({
       agents: s.agents.map((a) =>
         a.id === 'a1' ? { ...a, name: 'A-edit', rev: (a.rev ?? 1) + 1, updatedAt: nowIso() } : a,
@@ -309,10 +359,10 @@ describe.skipIf(!hasVenv)('门禁②：离线改 → 联网 → 合并无丢失'
       tombstones: s.tombstones,
     }));
     await engineA.syncNow();
-    const snapAEdited: StoreSnapshot = snapshotStores();
+    captureDevice(devA);
 
     // B 基于同一合并态改成 B-edit（更晚 → LWW 应胜）；先等一会，确保服务端接收时刻严格递增
-    restoreStores(snapBAfterMerge);
+    activateDevice(devB);
     await sleep(20);
     useAgentsStore.setState((s) => ({
       agents: s.agents.map((a) =>
@@ -321,16 +371,16 @@ describe.skipIf(!hasVenv)('门禁②：离线改 → 联网 → 合并无丢失'
       tombstones: s.tombstones,
     }));
     await engineB.syncNow();
-    const snapBEdited: StoreSnapshot = snapshotStores();
+    captureDevice(devB);
 
     // A 拉 B 的更新 → 收敛到 B-edit，a1 仍在
-    restoreStores(snapAEdited);
+    activateDevice(devA);
     await engineA.syncNow();
     const a1 = useAgentsStore.getState().agents.find((a) => a.id === 'a1');
     expect(a1, 'a1 不应消失').toBeTruthy();
     expect(a1?.name, 'LWW 应收敛到更新的 B 版本').toBe('B-edit');
 
-    restoreStores(snapBEdited);
+    activateDevice(devB);
     await engineB.syncNow();
     expect(useAgentsStore.getState().agents.find((a) => a.id === 'a1')?.name).toBe('B-edit');
   }, 60000);

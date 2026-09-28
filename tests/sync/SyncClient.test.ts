@@ -61,7 +61,7 @@ describe('SyncClient.push / pull 的请求组装', () => {
     expect(calls[0].url).toBe('http://x/api/sync/push');
     expect(calls[0].init.method).toBe('POST');
     expect(headersOf(calls[0].init).Authorization).toBe('Bearer tok');
-    expect(JSON.parse(String(calls[0].init.body))).toEqual({ changes: [CHANGE] });
+    expect(JSON.parse(String(calls[0].init.body))).toEqual({ changes: [CHANGE], events: [] });
   });
 
   it('pull：GET /api/sync/pull?since=<number>，不是 ISO 时间', async () => {
