@@ -25,6 +25,7 @@ const api: ElectronAPI = {
     ipcRenderer.invoke('events:read', sessionId, workdir),
   eventsRemove: (sessionId: string, workdir?: string | null) =>
     ipcRenderer.invoke('events:remove', sessionId, workdir),
+  eventsTombstone: (meta) => ipcRenderer.invoke('events:tombstone', meta),
   readSessionMeta: (sessionId: string, workdir?: string | null) =>
     ipcRenderer.invoke('meta:read', sessionId, workdir),
   writeSessionMeta: (meta) => ipcRenderer.invoke('meta:write', meta),

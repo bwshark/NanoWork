@@ -16,7 +16,7 @@ import type { Settings } from '@/types';
  */
 function DesktopCard() {
   const { desktop, apply } = useDesktopConfig();
-  const isMac = window.electronAPI?.getPlatform() === 'darwin';
+  const isMac = platform.platformOs() === 'darwin';
 
   return (
     <SettingsCard

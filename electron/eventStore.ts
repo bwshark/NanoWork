@@ -17,6 +17,7 @@ import {
   rebuildSessionIndex as buildIndexFromMetas,
   removeSessionEntry,
   serializeSessionIndex,
+  tombstoneEntry,
 } from './eventIndex';
 import type { StorageRoots } from './storageRoutes';
 import type { EventAppendParams, EventAppendResult } from '../src/platform/types';
@@ -62,6 +63,14 @@ export interface EventStore {
   readEvents(sessionId: string, workdir?: string | null): Promise<SessionEvent[]>;
   /** 删除会话的事件流与元数据，并移除索引条目（幂等） */
   remove(sessionId: string, workdir?: string | null): Promise<void>;
+  /**
+   * 软删除：写墓碑元数据 + 覆盖索引条目 + **丢弃事件流正文**（保留 meta 与索引条目）。
+   *
+   * 与 `remove` 的差别只有「留不留痕迹」，而它决定了删除能否跨设备传播——
+   * 正文丢弃是为了「删了内容就不再留在盘上」，meta 与索引条目留着是为了让
+   * 删除成为一条可被 LWW 裁决的记录（见 `src/events/store.ts`）。
+   */
+  tombstone(meta: SessionMeta): Promise<void>;
   /** 读取会话元数据；不存在返回 null */
   readMeta(sessionId: string, workdir?: string | null): Promise<SessionMeta | null>;
   /** 覆盖写入会话元数据（会话 id / 工作空间取自 meta 自身） */
@@ -234,6 +243,29 @@ export function createEventStore(roots: StorageRoots): EventStore {
           await fs.mkdir(dirname(indexPath), { recursive: true });
           await fs.writeFile(indexPath, serializeSessionIndex(next), 'utf-8');
         }
+      });
+    },
+
+    async tombstone(meta) {
+      // ① 正文丢弃：删除之后它不该再留在盘上（JSONL 也可能是最大的那个文件）
+      await fs.rm(sessionJsonlPath(roots, meta.id, meta.workdir), { force: true });
+
+      // ② meta **不删**，覆写成墓碑版本——它是删除能跨设备传播的载体之一
+      const metaPath = sessionMetaPath(roots, meta.id, meta.workdir);
+      const json = JSON.stringify(meta);
+      await enqueueWrite(metaPath, async () => {
+        await fs.mkdir(dirname(metaPath), { recursive: true });
+        await fs.writeFile(metaPath, json, 'utf-8');
+      });
+
+      // ③ 索引条目整体覆盖为墓碑条目。**这一步不能省**：列表的数据源是索引，
+      //    而 `listSessions()` 只认条目上的 `deletedAt`——不写进去，重启后
+      //    删掉的会话会重新出现在列表里（用户看到的是「删了又回来」）。
+      const indexPath = sessionIndexPath(roots);
+      await enqueueWrite(indexPath, async () => {
+        const index = parseSessionIndex(await readTextFileOrNull(indexPath));
+        await fs.mkdir(dirname(indexPath), { recursive: true });
+        await fs.writeFile(indexPath, serializeSessionIndex(tombstoneEntry(index, meta)), 'utf-8');
       });
     },
 

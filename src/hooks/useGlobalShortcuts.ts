@@ -161,9 +161,9 @@ function stepTask(delta: number, navigate: (path: string) => void): boolean {
 
 /** 全屏切换：桌面端走主进程，Web 端退回浏览器 Fullscreen API */
 function toggleFullscreen(): boolean {
-  const api = window.electronAPI;
-  if (platform.env === 'electron' && api) {
-    api.windowToggleFullScreen();
+  // 桌面端走主进程；Web 端 platform 层对应方法是 no-op，所以这里按 env 分支
+  if (platform.env === 'electron') {
+    platform.windowToggleFullScreen();
     return true;
   }
   // 旧浏览器没有 Fullscreen API：不吞按键，交回给系统（F11 在多数环境本就是全屏）

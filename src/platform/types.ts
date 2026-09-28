@@ -710,6 +710,55 @@ export interface PlatformAdapter {
    * - web：返回 `ok=false`。
    */
   uninstallPlugin(name: string): Promise<PluginActionResult>;
+  // —— 桌面端集成（窗口控制 / 托盘配置 / 主进程指令）——
+  // 这一组在 Web 端一律降级为 no-op / null / 空取消函数，**渲染层据此分支而不是
+  // 自己判断 preload 桥在不在**。原先 `TitleBar` / `useDesktopConfig` /
+  // `useGlobalShortcuts` / `AppLayout` 各自 `if (window.electronAPI)`，于是
+  // 「有没有桥」这个判据在四处各写了一遍（2026-09-27 收口）。
+  /**
+   * 当前操作系统。
+   * - electron：主进程 `process.platform`；
+   * - web：按 UA 粗推断（只服务 macOS 判定这类展示逻辑）。
+   */
+  platformOs(): PlatformName;
+  /**
+   * 读取主进程**实际生效**的桌面端配置（开机自启取系统真实状态，可能与渲染层
+   * 保存的期望值不同——例如用户在系统设置里改过）。
+   * - electron：主进程回读；
+   * - web：`null`（浏览器里没有托盘 / 全局快捷键这回事）。
+   */
+  getDesktopConfig(): Promise<DesktopConfig | null>;
+  /**
+   * 应用桌面端配置补丁并回读主进程实际生效值。
+   * - electron：`ok=false` + `error` 表示某项没生效（如快捷键被占用），`config`
+   *   是回退后的实际值；
+   * - web：`null`，调用方据此跳过「已生效」反馈。
+   */
+  setDesktopConfig(patch: Partial<DesktopConfig>): Promise<DesktopConfigResult | null>;
+  /**
+   * 订阅托盘菜单勾选变更（用户在托盘里改了开机自启等开关）。
+   * 回调**只用于同步 UI，不得回写主进程**，否则形成「主进程→渲染层→主进程」回环。
+   * 返回取消订阅函数；web 端为空实现。
+   */
+  onDesktopConfigChange(cb: (config: DesktopConfig) => void): () => void;
+  /** 真正退出应用（绕过「最小化到托盘」）；web 端 no-op */
+  appQuit(): void;
+  /** 订阅主进程下发的路由跳转（托盘菜单「打开设置」）；返回取消订阅函数，web 端为空实现 */
+  onAppNavigate(cb: (path: string) => void): () => void;
+  /** 订阅主进程下发的「打开关于弹窗」指令（托盘菜单「关于」）；返回取消订阅函数，web 端为空实现 */
+  onAppOpenAbout(cb: () => void): () => void;
+  /** 窗口最小化；web 端 no-op */
+  windowMinimize(): void;
+  /** 窗口最大化 / 还原切换；web 端 no-op */
+  windowToggleMaximize(): void;
+  /** 关闭窗口（开启「关闭到托盘」时由主进程改为隐藏）；web 端 no-op */
+  windowClose(): void;
+  /** 全屏切换（快捷键走这里）；web 端 no-op——那边由调用方回退到 Fullscreen API */
+  windowToggleFullScreen(): void;
+  /** 查询窗口是否最大化；web 端恒 `false` */
+  windowIsMaximized(): Promise<boolean>;
+  /** 订阅窗口最大化状态变化；web 端空实现（与桥同形：**不返回**取消订阅函数） */
+  onWindowMaximizeChange(cb: (maximized: boolean) => void): void;
   /**
    * 应用元信息（名称 / 版本 / 运行时版本 / 平台）。
    *
@@ -898,6 +947,13 @@ export interface ElectronAPI {
   eventsRead(sessionId: string, workdir?: string | null): Promise<SessionEvent[]>;
   /** 删除会话的事件流与元数据，并移除索引条目（幂等） */
   eventsRemove(sessionId: string, workdir?: string | null): Promise<void>;
+  /**
+   * 软删除：写墓碑元数据 + 覆盖索引条目 + **丢弃事件流正文**（保留 meta 与索引条目）。
+   *
+   * 与 `eventsRemove` 的差别只有「留不留痕迹」，而它决定了删除能否跨设备传播——
+   * 详见 `src/events/store.ts` 的 `tombstoneSession`。
+   */
+  eventsTombstone(meta: SessionMeta): Promise<void>;
   /** 读取会话元数据；不存在返回 null */
   readSessionMeta(sessionId: string, workdir?: string | null): Promise<SessionMeta | null>;
   /** 覆盖写入会话元数据 */

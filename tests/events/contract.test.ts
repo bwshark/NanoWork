@@ -129,6 +129,33 @@ for (const impl of IMPLS) {
       await expect(store.removeSession('s1', null)).resolves.toBeUndefined();
     });
 
+    it('tombstoneSession：墓碑当场进索引、正文丢弃、meta 保留，重建索引也不复活', async () => {
+      await store.writeMeta(sessionMeta());
+      await store.append({
+        sessionId: 's1',
+        workdir: null,
+        events: [msgEvent(1, 'x'), msgEvent(2, 'y')],
+      });
+      const deletedAt = '2026-09-27T00:00:00.000Z';
+      expect((await store.readIndex()).entries.s1.eventCount).toBe(2);
+
+      await store.tombstoneSession({ ...sessionMeta(), deletedAt, rev: 2 });
+
+      // 正文丢弃：删了就不该再留在盘上
+      expect(await store.readEvents('s1', null)).toEqual([]);
+      // meta 与索引条目**保留**：这是删除能跨设备传播的唯一载体（硬删在这里不留痕迹）
+      expect(await store.readMeta('s1', null)).toMatchObject({ id: 's1', deletedAt });
+      const entry = (await store.readIndex()).entries.s1;
+      expect(entry?.deletedAt).toBe(deletedAt);
+      // 计数照抄既有条目而不是重算成 0：正文已丢，重算等于抹掉「这条曾有很多消息」
+      expect(entry?.eventCount).toBe(2);
+      // 列表的数据源是索引 → 墓碑必须**当场**生效，否则重启后「删了的会话又回来」
+      expect(await store.listSessions()).toEqual([]);
+      // 重建索引走的是「meta → 条目」投影，同样不能把它放回来
+      expect((await store.rebuildIndex()).entries.s1?.deletedAt).toBe(deletedAt);
+      expect(await store.listSessions()).toEqual([]);
+    });
+
     it('rebuildIndex 依元数据与事件计数重建', async () => {
       await store.writeMeta(sessionMeta());
       await store.append({

@@ -26,8 +26,8 @@
  * 可枚举的；黑名单则要随新字段不断补，漏一个就把本机事实推上云（§5.2 的假状态）。
  */
 
-import { metaForEdit, metaForNew } from './syncStamp';
-import type { Session } from '@/types';
+import { metaForDelete, metaForEdit, metaForNew } from './syncStamp';
+import type { Session, SyncMeta } from '@/types';
 
 /**
  * 参与同步的会话字段（白名单）。
@@ -86,6 +86,23 @@ export function sessionMetaChanged(
 ): boolean {
   if (!prev) return true;
   return SESSION_SYNC_FIELDS.some((key) => !sameValue(prev[key], next[key]));
+}
+
+/**
+ * 会话删除时的**墓碑元数据**（软删除，FR-10.1 / `architecture-syncmeta.md` §7.3）。
+ *
+ * 与 `sessionSyncPatch` 分工不同：那个回答「这次编辑该不该涨版本」，这个回答
+ * 「删除时那四个字段各写什么」。判据同样只有一处实现——这里包一层
+ * `metaForDelete`，而不是手写 `deletedAt = now()`：
+ * `rev += 1`、`updatedAt` 与 `deletedAt` 取**同一时刻**、`updatedBy` 取当前设备，
+ * 且**对已墓碑的会话幂等**（重复删除不递增版本，否则 LWW 的「谁更新」会被
+ * 「右键删除 + 批量删除」这种重复动作淹没）。
+ *
+ * 返回完整的 `SyncMeta`（而非 `SessionSyncPatch`）：墓碑必须带齐 `deletedAt` 与
+ * `updatedAt`——前者是墓碑判据，后者参与 LWW 比较，少一个同步层就判不出来。
+ */
+export function sessionDeletePatch(session: Session): SyncMeta {
+  return metaForDelete(session);
 }
 
 /** 会话上承载的同步元数据（内联在 `Session` 上，与会话索引的条目形状对齐） */

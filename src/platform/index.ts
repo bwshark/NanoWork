@@ -1,5 +1,5 @@
 import { createJSONStorage, type StateStorage } from 'zustand/middleware';
-import { isElectron } from './env';
+import { electronBridge, isElectron, webPlatformOs } from './env';
 import {
   WebStorageAdapter,
   WebWorkspaceMemoryFiles,
@@ -13,6 +13,8 @@ import type {
   ChannelConnectAction,
   ChannelSyncResult,
   CredentialVaultStatus,
+  DesktopConfig,
+  DesktopConfigResult,
   GatewayRestartResult,
   MCPSyncResult,
   McpProbeRequest,
@@ -25,6 +27,7 @@ import type {
   NanobotMcpSnapshot,
   NanobotModelsSnapshot,
   PlatformAdapter,
+  PlatformName,
   SecretWriteResult,
   SkillOverrideSyncResult,
   TaskSyncResult,
@@ -375,6 +378,52 @@ export const platform: PlatformAdapter = {
       return window.electronAPI.pluginsUninstall(name);
     }
     return Promise.resolve({ ok: false, error: 'Web 端无法卸载插件包，请使用桌面端' });
+  },
+  // —— 桌面端集成（窗口控制 / 托盘配置 / 主进程指令）——
+  // 这一组统一走 `electronBridge()`（而非上面那种 `isElectron() && window.electronAPI`
+  // 的写法）：桥不在就是「Web 降级」，判据只有一处。
+  platformOs: () => electronBridge()?.getPlatform() ?? webPlatformOs(),
+  getDesktopConfig: () => {
+    const api = electronBridge();
+    return api ? api.appGetDesktopConfig() : Promise.resolve(null);
+  },
+  setDesktopConfig: (patch) => {
+    const api = electronBridge();
+    return api ? api.appSetDesktopConfig(patch) : Promise.resolve(null);
+  },
+  onDesktopConfigChange: (cb) => {
+    const api = electronBridge();
+    return api ? api.onDesktopConfigChange(cb) : () => undefined;
+  },
+  appQuit: () => {
+    electronBridge()?.appQuit();
+  },
+  onAppNavigate: (cb) => {
+    const api = electronBridge();
+    return api ? api.onAppNavigate(cb) : () => undefined;
+  },
+  onAppOpenAbout: (cb) => {
+    const api = electronBridge();
+    return api ? api.onAppOpenAbout(cb) : () => undefined;
+  },
+  windowMinimize: () => {
+    electronBridge()?.windowMinimize();
+  },
+  windowToggleMaximize: () => {
+    electronBridge()?.windowToggleMaximize();
+  },
+  windowClose: () => {
+    electronBridge()?.windowClose();
+  },
+  windowToggleFullScreen: () => {
+    electronBridge()?.windowToggleFullScreen();
+  },
+  windowIsMaximized: () => {
+    const api = electronBridge();
+    return api ? api.windowIsMaximized() : Promise.resolve(false);
+  },
+  onWindowMaximizeChange: (cb) => {
+    electronBridge()?.onWindowMaximizeChange(cb);
   },
   /** 应用元信息：Web 端没有「应用版本」这个概念，如实返回 null */
   appInfo: () => {

@@ -97,7 +97,8 @@ export function ShortcutsSection() {
     setRecording(null);
 
     if (def.id === 'app.wake') {
-      if (!desktopReady || !window.electronAPI) return;
+      // Web 端 `desktopReady` 为 false；桥的有无已由 platform 层吸收
+      if (!desktopReady) return;
       // apply 内部已处理「被系统占用 → 提示并回退」，这里只补成功反馈
       const ok = await apply({
         hotkey: binding ?? DEFAULT_WAKE_ACCELERATOR,

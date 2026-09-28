@@ -110,16 +110,15 @@ function InfoRow({ label, value }: { label: string; value: string }) {
 
 /**
  * 自绘标题栏 + 自绘菜单 + 自绘窗口控件（仅 Electron 桌面端渲染）。
- * 通过 window.electronAPI 调用主进程窗口控制 IPC；macOS 使用系统红绿灯，
- * win/linux 显示自绘的最小化/最大化/关闭按钮。
+ * 窗口控制与托盘指令一律经 `platform` 适配层（Web 端为 no-op），
+ * 本文件不再直接读 preload 桥；macOS 使用系统红绿灯，win/linux 显示自绘按钮。
  */
 export function TitleBar() {
   // 双保险：非 Electron 环境不渲染（AppLayout 也会做 env 判断）
   if (platform.env !== "electron") return null;
 
   const navigate = useNavigate();
-  const api = window.electronAPI;
-  const isMac = api?.getPlatform() === "darwin";
+  const isMac = platform.platformOs() === "darwin";
   // 开启「关闭到托盘」后关闭按钮不再结束进程，据此调整提示文案并补一个显式退出入口
   const closeToTray = useSettingsStore((s) => s.settings.desktop?.closeToTray ?? true);
 
@@ -147,20 +146,19 @@ export function TitleBar() {
 
   // 挂载时查询当前最大化状态，并订阅主进程推送的状态变化
   useEffect(() => {
-    if (!api) return;
-    void api.windowIsMaximized().then(setMaximized);
-    api.onWindowMaximizeChange(setMaximized);
-  }, [api]);
+    void platform.windowIsMaximized().then(setMaximized);
+    platform.onWindowMaximizeChange(setMaximized);
+  }, []);
 
   // 关于弹窗打开时加载应用元信息（首次 + 每次打开都刷新，保证版本号最新）
   useEffect(() => {
-    if (!aboutOpen || !api) return;
-    void api.appGetInfo().then(setAppInfo);
-  }, [aboutOpen, api]);
+    if (!aboutOpen) return;
+    void platform.appInfo().then(setAppInfo);
+  }, [aboutOpen]);
 
   // 托盘菜单「关于」→ 打开本弹窗（托盘在主进程，无法直接操作渲染层状态，走 IPC 下发）
   useEffect(() => {
-    return window.electronAPI?.onAppOpenAbout(() => setAboutOpen(true));
+    return platform.onAppOpenAbout(() => setAboutOpen(true));
   }, []);
 
   // 全局快捷键：Alt+E 打开编辑菜单、Alt+H 打开帮助菜单。
@@ -480,7 +478,7 @@ export function TitleBar() {
             <MenuItem
               onClick={() => {
                 closeMenu();
-                window.electronAPI?.appQuit();
+                platform.appQuit();
               }}
               sx={{ fontSize: 12.5, py: 0.5 }}
             >
@@ -500,7 +498,7 @@ export function TitleBar() {
             <IconButton
               size="small"
               sx={windowControlBtnSx}
-              onClick={() => api?.windowMinimize()}
+              onClick={() => platform.windowMinimize()}
               title="最小化"
             >
               <HorizontalRule sx={{ fontSize: 16 }} />
@@ -508,7 +506,7 @@ export function TitleBar() {
             <IconButton
               size="small"
               sx={windowControlBtnSx}
-              onClick={() => api?.windowToggleMaximize()}
+              onClick={() => platform.windowToggleMaximize()}
               title="最大化/还原"
             >
               {maximized ? (
@@ -520,7 +518,7 @@ export function TitleBar() {
             <IconButton
               size="small"
               sx={windowControlBtnSx}
-              onClick={() => api?.windowClose()}
+              onClick={() => platform.windowClose()}
               title={closeToTray ? "关闭（最小化到托盘）" : "关闭"}
             >
               <Close sx={{ fontSize: 16 }} />

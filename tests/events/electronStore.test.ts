@@ -19,6 +19,7 @@ function installBridge(over: Partial<Record<keyof ElectronAPI, unknown>> = {}): 
     eventsAppend: vi.fn(async () => ({ lastSeq: 1, eventCount: 1 })),
     eventsRead: vi.fn(async () => [msgEvent(1, 'x')]),
     eventsRemove: vi.fn(async () => undefined),
+    eventsTombstone: vi.fn(async () => undefined),
     readSessionMeta: vi.fn(async () => null),
     writeSessionMeta: vi.fn(async () => undefined),
     listSessionMetas: vi.fn(async () => []),
@@ -71,6 +72,17 @@ describe('electronStore: IPC 转发', () => {
 
     await store.removeSession('s1', '/w');
     expect(api.eventsRemove).toHaveBeenCalledWith('s1', '/w');
+  });
+
+  it('tombstoneSession 走**独立**通道（复用硬删通道会把墓碑当场抹掉）', async () => {
+    const store = createElectronEventStore();
+    const dead = { ...sessionMeta(), deletedAt: '2026-09-27T00:00:00.000Z', rev: 3 };
+
+    await store.tombstoneSession(dead);
+
+    expect(api.eventsTombstone).toHaveBeenCalledWith(dead);
+    // 硬删通道一次都不该被走到：它会把 meta 与索引条目一起删掉，删除又变回不可传播
+    expect(api.eventsRemove).not.toHaveBeenCalled();
   });
 
   it('writeMeta 转发领域对象（序列化归主进程）', async () => {

@@ -155,11 +155,12 @@ LWW 同步要求删除能被传播，因此必须改为「置 `deletedAt` 并保
 > 代价因此只剩**内联形态**——会话。改动理由：数组里的墓碑会被合并函数
 > 冲掉，且 UI 读取点有二十余处。
 >
-> ⚠️ **会话那一路的结局（2026-09-25，详见 §7.3）**：会话只落到了「元数据写入」
-> （`rev` / `updatedBy`），**删除墓碑没有做**——`deleteSession` 至今是三件套全删，
-> 没有可留墓碑的载体。所以「内联形态必须过滤墓碑」这件事在会话上**目前还不成立**
-> （读取侧 `listSessionEntries` 已过滤、`normalizeSessionMeta` 已容错，写入侧缺位）。
-> 补齐它要动主进程的 `removeSession`，归 V1.5。
+> ⚠️ **会话那一路的结局（2026-09-25 记，2026-09-27 已补做）**：会话当时只落到了「元数据写入」
+> （`rev` / `updatedBy`），**删除墓碑没有做**——`deleteSession` 当时是三件套全删，没有可留墓碑的载体。
+> **该缺口已于 2026-09-27 补齐**：新增契约方法 `tombstoneSession(meta)`（写墓碑 + 覆盖索引条目 +
+> 丢弃 JSONL 正文，保留 meta 与索引条目），硬删 `removeSession` 只留给「空会话搬迁分片」这类
+> 物理移动。三个存储实现（内存参照 / Web 分片 / Electron 主进程）与 `events:tombstone` IPC
+> 全部落地，详见 §7.4。
 
 ### 5.2 运行时事实字段必须从同步负载剔除
 
@@ -367,21 +368,47 @@ LWW 一起归 V1.5 另案。
   都不在负载里；`transcription` 里三个偏好字段**在**、两个机器字段**不在**；
   排除表逐条反向核对 + 「负载不能被剔到只剩几个键」的反向护栏。
 
-#### 明确未做：会话删除的墓碑（V1.5 另案）
+### 7.4 会话删除墓碑（2026-09-27 补做 · 原「明确未做」项的收口）
 
-本文 §3.1 把 `deleteSession` / `deleteSessions` 列在 `markDirty` 调用点上，**本批次没有做**。
-现状与原因：
+本文 §3.1 把 `deleteSession` / `deleteSessions` 列在 `markDirty` 调用点上，2026-09-25 的三批
+**没有做**。当时记下的现状与原因（保留以便追溯）：
 
-- 会话删除至今是「JSONL + meta + 索引条目」**三件套全删**，没有可留墓碑的载体。改成墓碑要
+- 会话删除当时是「JSONL + meta + 索引条目」**三件套全删**，没有可留墓碑的载体。改成墓碑要
   保留 meta 与索引条目、只删 JSONL，于是多出一种**「有 meta、无 JSONL」**的新形态，需要逐一
   审计 `listMetas` / `rebuildIndex` / `loadSessions` / `isEventStreamSession` 四条读取路径；
-  `removeSession` 是主进程实现的整体删除，还要新增一个渲染层可调的「写墓碑」入口
+  `removeSession` 是主进程实现的整体删除，还要新增一个渲染层可调的入口
   （动 `electron/eventStore.ts` + 三个存储实现 + preload + `platform/types.ts`）。
-- 收益**只在 V1.5 兑现**：V1 没有同步层，墓碑不产生任何用户可感知的变化；而现在就把
-  `deletedAt` 写进会话，等于给一条暂时无人读的字段承担上面全部风险。
-- 当前状态是**自洽**的：`SessionIndexEntry.deletedAt` 已在 `listSessionEntries` 里过滤
-  （有墓碑条目就不会进列表）、`normalizeSessionMeta` 也容错读到它——**读取侧已经准备好**，
-  只差写入侧。V1.5 之前必须补上，否则「删掉的会话在另一台设备上复活」。
+- 收益**只在 V1.5 兑现**：V1 没有同步层，墓碑不产生任何用户可感知的变化；当时就写 `deletedAt`
+  等于给一条暂时无人读的字段承担上面全部风险。
+- 读取侧当时已就绪：`SessionIndexEntry.deletedAt` 已在 `listSessionEntries` 里过滤、
+  `normalizeSessionMeta` 也容错读到它——**只差写入侧**。
+
+**2026-09-27 补齐**。落地形状与上面的预估有三处不同，都是照预估做会写错的地方：
+
+| 处 | 原预估 | 实际落地 | 为什么 |
+|---|---|---|---|
+| 新能力 | 「渲染层可调的**写墓碑**入口」 | **一个方法做完三件事**：`tombstoneSession(meta)` = 写墓碑 meta + 覆盖索引条目 + **丢弃 JSONL 正文** | 拆成「写 meta + 删正文」两次调用会留下中间态：只写了 meta（正文还在 → 下次同步把正文当新内容推上去），或只删了正文（索引条目没墓碑 → **重启后会话复活**）。顺序也不能反 |
+| 索引更新 | 未提 | **必须显式投影进索引**（新增纯函数 `tombstoneEntry`） | `listSessions()` 读的是**索引条目**上的 `deletedAt`，而 meta 文件只在 `rebuildIndex` 时才影响索引。不写索引 = 「删了 → 重启 → 又回来」，且界面上看不出任何异常 |
+| 旧 `removeSession` | 改造成软删 | **保留为硬删**，只给「空会话搬迁分片」（`setSessionWorkdir`）用 | 搬迁要删的是**旧分片**的整套文件（含旧索引条目）；改成软删会让会话搬完后从列表里消失 |
+
+落地清单（12 个文件）：契约 `EventStore.tombstoneSession(meta)` × 3 个实现（内存参照 / Web 分片 /
+Electron 主进程）+ `events:tombstone` IPC 三件套（`electron/main.ts` / `preload.ts` /
+`platform/types.ts`）+ 会话侧 `sessionDeletePatch()`（`lib/sessionSyncMeta.ts`，包 `metaForDelete`
+以保证**墓碑幂等**）+ `sessionsStore` 的 `dropSessionStream` → `tombstoneSessionStream`。
+**动了 `electron/` → 已重建 `main.cjs` + `preload.cjs`**。
+
+**可证伪判据**（都在用例里，不是「应该没问题」）：
+
+- 契约测试对**两个实现**各跑一遍：墓碑**当场**进索引、正文丢弃、meta 保留、
+  「重建索引后 `listSessions()` 仍为空」；并断言**计数照抄既有条目**而非重算成 0
+  （正文已丢，重算等于抹掉「这条曾有很多消息」）。
+- `tests/electron/eventStore.test.ts` 在**真实临时目录**上断言 JSONL **从盘上消失**
+  （`existsSync` 由 true → false，前一条断言先证明它本来在盘上，否则「不在了」是空断言），
+  且重建索引后条目仍带 `deletedAt`。
+- `tests/sessionsStore.test.ts` 断言 `deleteSession` 后墓碑落盘（`deletedAt` + `rev > 0`）
+  且索引当场生效、重建不复活。
+- `tests/events/electronStore.test.ts` 断言软删走**独立通道**，`eventsRemove` 一次都没被调到
+  （复用硬删通道会把墓碑当场抹掉，删除又变回不可传播）。
 
 ---
 

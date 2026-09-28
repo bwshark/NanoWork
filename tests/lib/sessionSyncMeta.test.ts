@@ -72,7 +72,14 @@ describe('sessionMetaChanged：只认可同步字段', () => {
     const next = session({
       streamWorkdir: 'D:\\ws',
       messageCount: 12,
-      messages: [{ id: 'm-1', role: 'user', content: '你好' }],
+      messages: [
+        {
+          id: 'm-1',
+          role: 'user',
+          content: '你好',
+          createdAt: new Date().toISOString(),
+        },
+      ],
     });
 
     expect(sessionMetaChanged(pickSyncFields(prev), pickSyncFields(next))).toBe(false);

@@ -41,6 +41,7 @@ function spyStore(opts: { failOn?: number } = {}) {
       return [];
     },
     async removeSession() {},
+    async tombstoneSession() {},
     async readMeta() {
       return null;
     },

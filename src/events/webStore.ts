@@ -9,6 +9,7 @@ import {
   normalizeSessionMeta,
   rebuildSessionIndex,
   removeSessionEntry,
+  tombstoneEntry,
 } from './indexFile';
 import type { SessionCounters } from './indexFile';
 import type { EventStore, EventStoreCapabilities } from './store';
@@ -111,6 +112,15 @@ export function createWebEventStore(): EventStore {
       );
       const index = removeSessionEntry(await readIndex(), sessionId);
       await storage.set(KEYS.index, index);
+    },
+
+    async tombstoneSession(meta) {
+      // 正文丢掉、meta 留着；id 也必须继续留在注册表里——`listMetas()` 靠它枚举，
+      // 掉了的话下一次 `rebuildIndex()` 会把墓碑一起重建掉，删除就此失效。
+      await storage.remove(KEYS.events(meta.id));
+      await registerId(meta.id);
+      await storage.set(KEYS.meta(meta.id), meta);
+      await storage.set(KEYS.index, tombstoneEntry(await readIndex(), meta));
     },
 
     readMeta,

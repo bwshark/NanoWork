@@ -1,4 +1,4 @@
-import { isElectron } from '@/platform/env';
+import { electronBridge } from '@/platform/env';
 import type { ElectronAPI } from '@/platform/types';
 import { listSessionEntries } from './indexFile';
 import type { EventStore, EventStoreCapabilities } from './store';
@@ -8,7 +8,10 @@ import type { EventStore, EventStoreCapabilities } from './store';
  *
  * 本模块是**薄转发层**——所有落盘逻辑（JSONL 编码、索引投影、路径安全、
  * 容错解析）都在主进程的 `electron/eventStore.ts`。这里只把 preload 桥
- * （`window.electronAPI`）的方法名对齐到 `EventStore` 契约。
+ * 的方法名对齐到 `EventStore` 契约。
+ *
+ * 桥从 `@/platform/env` 的 `electronBridge()` 取，**本文件不直接读那个全局**：
+ * 渲染层只允许 `src/platform/` 知道它存在（CI 平台边界检查，2026-09-27）。
  *
  * 为什么单独一层而不是直接用桥：契约是两个实现共用的（Web 也要满足），
  * 有了它，Phase D 的 UI 读写路径才能完全无视「跑在哪个平台」。
@@ -24,9 +27,9 @@ const CAPABILITIES: EventStoreCapabilities = {
 
 /** 取 preload 桥；非 Electron 或桥未就绪时抛错（工厂保证只在 Electron 下构造） */
 function bridge(): ElectronAPI {
-  const api = window.electronAPI;
-  if (!isElectron() || !api) {
-    throw new Error('[events] Electron 桥不可用：window.electronAPI 缺失');
+  const api = electronBridge();
+  if (!api) {
+    throw new Error('[events] Electron 桥不可用：preload 未注入');
   }
   return api;
 }
@@ -48,6 +51,9 @@ export function createElectronEventStore(): EventStore {
     },
     async removeSession(sessionId, workdir) {
       return bridge().eventsRemove(sessionId, workdir);
+    },
+    async tombstoneSession(meta) {
+      return bridge().eventsTombstone(meta);
     },
     async readMeta(sessionId, workdir) {
       return bridge().readSessionMeta(sessionId, workdir);

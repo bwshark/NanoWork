@@ -28,8 +28,10 @@
 > **表外一件（跨期地基）**：V1.5 的 Phase 0 前置 **`SyncMeta` 已于 2026-09-25 在 V1 期提前落地** ——
 > `src/types/sync.ts` + `lib/{syncMeta,syncSelect,syncStamp,deviceId}.ts` + 8 个实体接线 + 墓碑独立表 +
 > `Settings` 字段级排除表（`vitest` 99 文件 1594 用例全绿）。它不属于 M1–M5 任何一批，但 v2 §19.2 把它定为
-> 「V1 必须先落」，故记在此处。**未做**：会话删除的墓碑。清单见 `docs/architecture-syncmeta.md`；
+> 「V1 必须先落」，故记在此处。清单见 `docs/architecture-syncmeta.md`；
 > V1.5 开工前置（除 `SyncMeta` 外还有 5 条）见 `docs/architecture-m6-sync.md` §2.2。
+> **2026-09-27 补**：会话删除的墓碑已补做（`deleteSession` 改走 `tombstoneSession`），
+> `FR-10.1` 随之转 ✅。
 
 ---
 
@@ -102,7 +104,7 @@
 
 ## 四、已知限制 / 遗留风险
 
-1. **`SyncMeta` 已落（2026-09-25 更正），但会话删除墓碑仍未做**：`src/types/sync.ts` + `lib/{syncMeta,syncSelect,syncStamp,deviceId}.ts` + 8 个实体接线全部完成，删除由「摘除数组项」改为**墓碑**（五个 store 拆 `SyncTombstones` 独立表、`channels` 按 `kind` 键控），`Settings` 走字段级排除表。**缺口**：`deleteSession` 仍是「JSONL + meta + 索引条目」三件套全删，**删除无法传播** → 跨设备会「删了复活」；读取侧（`listSessionEntries` 过滤、`normalizeSessionMeta` 容错）已就绪而写入侧缺位，归 V1.5 首批。因此 v2 `FR-10.1` 记 🟡 而非 ✅。清单见 `docs/architecture-syncmeta.md` §7；V1.5 开工前置（除它之外还有 5 条）见 `docs/architecture-m6-sync.md` §2.2。
+1. **`SyncMeta` 与「会话删除墓碑」均已落地**（2026-09-25 / 2026-09-27）：`src/types/sync.ts` + `lib/{syncMeta,syncSelect,syncStamp,deviceId}.ts` + 8 个实体接线全部完成，删除由「摘除数组项」改为**墓碑**（五个 store 拆 `SyncTombstones` 独立表、`channels` 按 `kind` 键控），`Settings` 走字段级排除表。会话的删除墓碑亦已补齐：`deleteSession` / `deleteSessions` 改走 `tombstoneSession`（写墓碑 + 覆盖索引条目 + 丢弃 JSONL 正文，保留 meta 与索引条目），硬删只留给「空会话搬迁分片」。因此 v2 `FR-10.1` 记 ✅。清单与偏差见 `docs/architecture-syncmeta.md` §7；V1.5 开工前置（`SyncMeta` 之外的 6 条已清掉 2 条）见 `docs/architecture-m6-sync.md` §2.2。
 2. **`FR-8.4`「默认拒绝写入」语义与实现不符**：引擎侧 `default_deny_write: bool = False`（默认放行），实为 opt-in 开关；需改默认值或改名。
 3. **`FR-7.3` 文件回滚是「假就绪」**：事件类型已定义，全仓无生产者，UI 亦无入口。
 4. **`FR-2.4` 专家团三模式只持久化未真实执行**：`sequential` / `parallel` / `coordinator` 目前是配置态。

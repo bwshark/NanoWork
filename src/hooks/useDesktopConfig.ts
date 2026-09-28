@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { toast } from '@/components/Toast';
+import { platform } from '@/platform';
 import { DEFAULT_DESKTOP, useSettingsStore } from '@/stores/settingsStore';
 import type { DesktopConfig } from '@/types';
 
@@ -14,6 +15,9 @@ import type { DesktopConfig } from '@/types';
  * 状态同步要点：渲染层 store 保存的是**用户期望值**，主进程保存的是**实际生效值**。
  * 两者可能不一致（例如快捷键被系统占用注册失败），因此挂载时以主进程回读为准，
  * 每次修改后也用主进程返回值覆盖本地。
+ *
+ * 桥的有无由 platform 层吸收（Web 端 `getDesktopConfig()` 返回 `null`、
+ * `onDesktopConfigChange` 是空订阅），本 hook 不再自己判断环境。
  */
 export function useDesktopConfig() {
   const settings = useSettingsStore((s) => s.settings);
@@ -34,15 +38,14 @@ export function useDesktopConfig() {
   );
 
   // 挂载时以主进程实际状态为准：开机自启可能被用户在系统设置里改过，
-  // 快捷键也可能因被占用而没注册上
+  // 快捷键也可能因被占用而没注册上。
+  // Web 端拿到 null → 保持本地值不动（不能把「读不到」当成「配置为空」）。
   useEffect(() => {
-    const api = window.electronAPI;
-    if (!api) return;
     let alive = true;
-    void api
-      .appGetDesktopConfig()
+    void platform
+      .getDesktopConfig()
       .then((cfg) => {
-        if (alive) commit(cfg);
+        if (alive && cfg) commit(cfg);
       })
       .catch(() => undefined);
     return () => {
@@ -51,11 +54,8 @@ export function useDesktopConfig() {
   }, [commit]);
 
   // 托盘菜单里改了开关 → 同步回 UI。
-  // 只更新视图与持久化，绝不回写主进程，否则形成「主进程→渲染层→主进程」回环
-  useEffect(() => {
-    if (!window.electronAPI) return;
-    return window.electronAPI.onDesktopConfigChange(commit);
-  }, [commit]);
+  // 只更新视图与持久化，绝不回写主进程，否则形成「主进程→渲染层→主进程」回环。
+  useEffect(() => platform.onDesktopConfigChange(commit), [commit]);
 
   /**
    * 应用补丁：本地先更新保证即时反馈，再让主进程生效并回读实际值。
@@ -65,9 +65,7 @@ export function useDesktopConfig() {
     async (patch: Partial<DesktopConfig>): Promise<boolean> => {
       commit({ ...desktop, ...patch });
 
-      const res = await window.electronAPI
-        ?.appSetDesktopConfig(patch)
-        .catch(() => undefined);
+      const res = await platform.setDesktopConfig(patch).catch(() => null);
       if (!res) return false;
       if (res.ok) {
         setHotkeyError('');

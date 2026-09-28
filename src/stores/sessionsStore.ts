@@ -32,7 +32,7 @@ import {
 } from '@/lib/attachments';
 import { MemoryService, isEmptySummary } from '@/lib/memory';
 import { isSameMemoryWorkspace } from '@/lib/workspaceMemory';
-import { sessionCreatePatch, withSessionSync } from '@/lib/sessionSyncMeta';
+import { sessionCreatePatch, sessionDeletePatch, withSessionSync } from '@/lib/sessionSyncMeta';
 import {
   MEMORY_WRITE_INSTRUCTION,
   parseMemoryDirectives,
@@ -450,20 +450,29 @@ function persistMetaOf(sessionId: string): void {
 }
 
 /**
- * 删除会话的**事件流**（JSONL + meta + 索引条目）并丢弃记录器。
+ * 删除会话：**打墓碑**并丢弃事件流正文与记录器。
  *
- * 必须排进该会话的写队列：否则「刚排队的追加」会在文件被删后又把它写回来。
+ * ## 为什么不再是 `removeSession`（硬删）
+ *
+ * 硬删把 `meta` 与索引条目**一并抹掉**，删除因此没有载体可以传播——另一台设备
+ * 下次同步时又会把自己那份推回来，用户看到的是「删掉的会话自己回来了」。
+ * 墓碑（`deletedAt` + `rev` + `updatedBy`）是唯一能让删除进入 LWW 裁决的载体
+ * （FR-10.1，见 `architecture-syncmeta.md` §7.3）。**正文仍然丢弃**：删了就不该
+ * 再留在盘上，而墓碑只留 `id` 与元数据这些小对象。
+ *
+ * 必须排进该会话的写队列：否则「刚排队的追加」会在删除之后又把正文写回来。
  * 删除完成后才丢记录器（队列条目随之释放）。
  */
-function dropSessionStream(s: Session): void {
+function tombstoneSessionStream(s: Session): void {
   hydratedSessions.delete(s.id);
   if (!isEventStreamSession(s)) return;
   const id = s.id;
-  // 删的是**分片**里的文件：切过工作空间的会话，记录仍留在原分片，
-  // 按 `s.workdir` 去删会什么也删不到（还留下一个删不掉的孤儿文件）
-  const shard = streamShardOf(s);
+  // 墓碑按**分片**落盘（`toMeta` 内部走 `streamShardOf`）：切过工作空间的会话，
+  // 元数据仍在原分片里。按 `s.workdir` 去写会留下原分片那份「没打墓碑的元数据」，
+  // 它在下一次重建索引时会让这个会话复活。
+  const tombstone: SessionMeta = { ...toMeta(s), ...sessionDeletePatch(s) };
   void enqueueSessionTask(id, async () => {
-    await getEventStore().removeSession(id, shard);
+    await getEventStore().tombstoneSession(tombstone);
   }).then(
     () => dropRecorder(id),
     (e: unknown) => reportStreamError(id, e),
@@ -1467,8 +1476,8 @@ export const useSessionsStore = create<SessionsState>()(
         return { sessions, activeId };
       });
 
-      // 事件流随会话一并删除（内存视图已移除，磁盘不再保留副本）
-      if (target) dropSessionStream(target);
+      // 落盘走**墓碑**：内存视图已移除，但磁盘上要留下「它被删了」这条记录
+      if (target) tombstoneSessionStream(target);
     },
 
     deleteSessions: (ids) => {
@@ -1485,7 +1494,7 @@ export const useSessionsStore = create<SessionsState>()(
           s.activeId && doomed.has(s.activeId) ? sessions[0]?.id ?? null : s.activeId;
         return { sessions, activeId };
       });
-      targets.forEach(dropSessionStream);
+      targets.forEach(tombstoneSessionStream);
     },
 
     renameSession: (id, title) => {

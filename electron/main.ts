@@ -2450,6 +2450,9 @@ ipcMain.handle('events:read', async (_e, sessionId: string, workdir?: string | n
 ipcMain.handle('events:remove', async (_e, sessionId: string, workdir?: string | null) => {
   await eventStore.remove(sessionId, workdir);
 });
+ipcMain.handle('events:tombstone', async (_e, meta: SessionMeta) => {
+  await eventStore.tombstone(meta);
+});
 ipcMain.handle('meta:read', async (_e, sessionId: string, workdir?: string | null) =>
   eventStore.readMeta(sessionId, workdir),
 );

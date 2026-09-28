@@ -66,26 +66,40 @@ jobs:
         run: |
           set -euo pipefail
 
-          # 基线例外（技术债，2026-09-17 实测登记）---------------------------------
-          # 这 4 个文件当前越界，属 v2 §18.2.3 原则 3 的「落点与声明不一致」。
-          # 它们均已用 ?. 或 isElectron() 守卫，Web 下不会崩，但绕过了 platform 收口。
-          # 本作业采用「基线棘轮」：基线内的越界只告警，基线外任何新增越界即失败。
-          # 收口这 4 处后，请把对应项从下面删掉。
-          BASELINE="src/layout/AppLayout.tsx src/components/TitleBar.tsx src/pages/settings/SettingsPage.tsx src/events/electronStore.ts"
+          # 允许区：src/platform/** —— 适配层是渲染层唯一该知道 preload 桥的地方。
+          #
+          # 2026-09-27 收口：原先 4 项基线例外 + 5 处**从未登记**的越界（设置页被拆成
+          # components/settings/sections/* 之后新增的 3 个 section 与 2 个 hooks）
+          # 全部收敛进适配层，**基线就此清空**。此后任何越界都是新增的。
+          BASELINE=""
           # ----------------------------------------------------------------------
+
+          fail=0
+
+          # 基线棘轮自带「基线项必须真实存在」自检。没有它，基线会**静默失效**：
+          # 2026-09-27 实测，4 项基线里 pages/settings/SettingsPage.tsx 已被拆成
+          # components/settings/sections/*，它不再命中——于是脚本看起来「通过」，
+          # 实际上「基线内」与「基线外」两边都拦不住了。
+          for b in $BASELINE; do
+            if [ ! -f "$b" ]; then
+              echo "::error title=基线失效::$b 不存在（可能已改名或拆分），请更新 BASELINE"
+              fail=1
+            fi
+          done
 
           # 只统计**代码行**命中：排除行注释与块注释续行（形如 ` * ...`），
           # 否则纯注释里提到 window.electronAPI 也会被误判为越界。
+          # 同时排除 src/platform/：那是允许区，不是例外。
           hits=$(grep -rIn --include='*.ts' --include='*.tsx' 'window\.electronAPI' src \
+                 | grep -v '^src/platform/' \
                  | grep -vE ':[0-9]+:[[:space:]]*(//|\*|/\*)' \
                  | cut -d: -f1 | sort -u || true)
 
-          if [ -z "$hits" ]; then
-            echo "越界 0 处（基线也已清空，可删除 BASELINE 列表）"
+          if [ -z "$hits" ] && [ "$fail" -eq 0 ]; then
+            echo "越界 0 处（基线已清空，允许区 = src/platform/）"
             exit 0
           fi
 
-          fail=0
           for f in $hits; do
             case " $BASELINE " in
               *" $f "*)
@@ -102,7 +116,7 @@ jobs:
             echo "平台边界检查失败：渲染层只允许经 src/platform/ 暴露的能力访问主进程。"
             exit 1
           fi
-          echo "平台边界检查通过（仅剩已登记基线例外）。"
+          echo "平台边界检查通过（基线为空：渲染层无越界）。"
 
       # ------------------------------------------------------------------
       # 检查二：引擎 wire 格式不得泄漏到 src/ai/runtime/ 之外（ADR-020）

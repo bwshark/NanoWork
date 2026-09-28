@@ -221,6 +221,31 @@ describe('eventStore: 删除与重建', () => {
     await expect(store.remove('s1', null)).resolves.toBeUndefined();
   });
 
+  it('tombstone：JSONL 从磁盘上消失，meta 与索引条目留下墓碑（重建也不复活）', async () => {
+    await store.writeMeta(meta());
+    await store.append({
+      sessionId: 's1',
+      workdir: null,
+      events: [msgEvent(1, 'x'), msgEvent(2, 'y')],
+    });
+    // 先证明它本来在盘上，否则下面那条「不在了」是空断言
+    expect(existsSync(sessionJsonlPath(roots, 's1', null))).toBe(true);
+
+    const deletedAt = '2026-09-27T00:00:00.000Z';
+    await store.tombstone({ ...meta(), deletedAt, rev: 2 });
+
+    // ① 正文真的**从盘上消失**（而不是「读不出来」）
+    expect(existsSync(sessionJsonlPath(roots, 's1', null))).toBe(false);
+    // ② meta 还在，且是墓碑版本——它是删除能跨设备传播的载体
+    expect((await store.readMeta('s1', null))?.deletedAt).toBe(deletedAt);
+    // ③ 索引条目**当场**带墓碑：列表的数据源是索引，晚一步写就等于「删了又回来」
+    expect((await store.readIndex()).entries.s1?.deletedAt).toBe(deletedAt);
+    // ④ 全量重建（重启后索引损坏 / schema 升级会走这条）也不能把墓碑洗掉
+    const rebuilt = await store.rebuildIndex();
+    expect(rebuilt.entries.s1?.deletedAt).toBe(deletedAt);
+    expect((await store.readIndex()).entries.s1?.deletedAt).toBe(deletedAt);
+  });
+
   it('rebuildIndex 以 meta 为骨架并按 JSONL 统计计数', async () => {
     await store.writeMeta(meta());
     await store.append({

@@ -22,11 +22,9 @@ export function AboutSection() {
   const [info, setInfo] = useState<AppInfo | null>(null);
 
   useEffect(() => {
-    const api = window.electronAPI;
-    if (!api) return;
     let alive = true;
-    void api
-      .appGetInfo()
+    void platform
+      .appInfo()
       .then((next) => {
         if (alive) setInfo(next);
       })

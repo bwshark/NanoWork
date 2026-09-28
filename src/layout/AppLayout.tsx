@@ -19,8 +19,8 @@ export function AppLayout() {
   // 托盘菜单「打开设置」等主进程指令 → 执行路由跳转。
   // 窗口只是被隐藏而非卸载，渲染层仍在运行，指令可即时生效。
   useEffect(() => {
-    if (platform.env !== 'electron') return;
-    return window.electronAPI?.onAppNavigate((path) => navigate(path));
+    // Web 端 platform.onAppNavigate 返回空取消函数，这里不必再自己判环境
+    return platform.onAppNavigate((path) => navigate(path));
   }, [navigate]);
 
   return (

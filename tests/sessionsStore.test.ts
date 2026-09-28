@@ -282,6 +282,78 @@ describe('sessionsStore: 会话 CRUD', () => {
     expect(after.activeId).toBe(s2.id);
   });
 
+  /** 等墓碑落进存储：写队列是异步的，紧接着断言会拍在空气上 */
+  async function waitTombstone(
+    store: ReturnType<typeof resetEventStream>,
+    id: string,
+    shard?: string,
+  ) {
+    for (let i = 0; i < 60; i += 1) {
+      if ((await store.readMeta(id, shard))?.deletedAt) return;
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    throw new Error(`墓碑未落盘：${id}`);
+  }
+
+  /**
+   * 删除**不是**硬删：磁盘上必须留下墓碑，否则另一台设备下次同步时又会把自己那份
+   * 推回来——用户看到的是「删掉的会话自己回来了」（FR-10.1 / syncmeta §7.3）。
+   */
+  it('deleteSession 打成墓碑：正文丢弃、meta 与索引条目保留', async () => {
+    const store = resetEventStream();
+    const s = useSessionsStore
+      .getState()
+      .createSession('agent-test', '要删的', { workdir: 'D:/ws/other' });
+    // 正文直接预置：本用例验的是删除语义，不是流式链路（那条已有专门用例）
+    await store.append({
+      sessionId: s.id,
+      workdir: 'D:/ws/other',
+      events: [
+        {
+          id: 'e1',
+          sessionId: s.id,
+          parentId: null,
+          seq: 1,
+          type: 'message',
+          timestamp: 1000,
+          messageId: 'e1',
+          role: 'user',
+          content: '历史消息',
+        },
+      ],
+    });
+    // 只断言「有正文」而不是数条数：`createSession` 自己会先落一条 `session-start`
+    expect((await store.readEvents(s.id, 'D:/ws/other')).some((e) => e.type === 'message')).toBe(
+      true,
+    );
+
+    useSessionsStore.getState().deleteSession(s.id);
+    await waitTombstone(store, s.id, 'D:/ws/other');
+
+    // 正文没了（删了就不该再留在盘上）
+    expect(await store.readEvents(s.id, 'D:/ws/other')).toEqual([]);
+    // 墓碑还在，且三要素齐备：同步层靠它们裁决「谁更新」
+    const meta = await store.readMeta(s.id, 'D:/ws/other');
+    expect(meta?.deletedAt).toBeTruthy();
+    expect(meta?.rev ?? 0).toBeGreaterThan(0);
+    // 列表的数据源是索引 → 墓碑必须**当场**生效，不能等下次重建才生效
+    expect(await store.listSessions()).toEqual([]);
+  });
+
+  it('删掉的会话在索引重建后不复活（跨设备同步的判据）', async () => {
+    const store = resetEventStream();
+    const s = useSessionsStore
+      .getState()
+      .createSession('agent-test', '删了别回来', { workdir: 'D:/ws/other' });
+    useSessionsStore.getState().deleteSession(s.id);
+    await waitTombstone(store, s.id, 'D:/ws/other');
+
+    // 「对端拿到墓碑后重建索引」的等价形：投影出来的条目必须仍带 deletedAt
+    const rebuilt = await store.rebuildIndex();
+    expect(rebuilt.entries[s.id]?.deletedAt).toBeTruthy();
+    expect(await store.listSessions()).toEqual([]);
+  });
+
   it('retry 复用最后一条 user 消息重新发送', async () => {
     await useSessionsStore.getState().send('你好');
     const before = useSessionsStore.getState().sessions[0].messages.length;

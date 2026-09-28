@@ -321,6 +321,30 @@ export function removeSessionEntry(
 }
 
 /**
+ * 用**墓碑元数据**覆盖索引条目（软删除用）。
+ *
+ * 为什么不能只写 meta 文件就完事：**列表的数据源是索引，不是 meta 文件**
+ * （`listSessions` → `listSessionEntries(index)`）。`deletedAt` 进不到索引里，
+ * 重启后 `listSessions()` 就会把删掉的会话**又列出来**——而界面看不出任何异常，
+ * 用户只会觉得「删了又回来」。所以这里必须把元数据整体投影进条目。
+ *
+ * 计数从**既有条目照抄**而不是重算：正文此刻已被丢弃，拿空事件流去算只会得到
+ * 三个 0，把「这条曾经有很多消息」这个事实抹掉（`eventCount` 参与列表的排序与
+ * 「是否空会话」判断）。墓碑条目不再增长，照抄是安全的。
+ */
+export function tombstoneEntry(
+  index: SessionIndexFile,
+  meta: SessionMeta,
+): SessionIndexFile {
+  const prev = index.entries[meta.id];
+  return upsertEntry(index, entryFromMeta(meta, {
+    eventCount: prev?.eventCount ?? 0,
+    lastSeq: prev?.lastSeq ?? 0,
+    messageCount: prev?.messageCount ?? 0,
+  }));
+}
+
+/**
  * 把一次追加投影进索引。
  *
  * 语义要点：

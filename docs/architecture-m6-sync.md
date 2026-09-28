@@ -42,19 +42,19 @@
 | 设备标识 | `getDeviceId()` / `currentDeviceId()`（`lib/deviceId.ts`） | push 时补 `updatedBy`；服务端据此区分设备 |
 | 老数据语义 | `INITIAL_REV = 1` / `LEGACY_REV = 0`（`lib/syncMeta.ts`） | 首次全量推送时识别「需补齐」的对象（`rev === 0`） |
 
-### 2.2 必须先补（6 个洞：Phase 0 留下的 4 个 + CI 基线登记的 2 个）
+### 2.2 必须先补（6 个洞：Phase 0 留下的 4 个 + CI 基线登记的 2 个；**#5 已于 2026-09-27 闭合**）
 
 > 前四条都**不是 M6 的新需求**，是 Phase 0 明确「归 V1.5」的欠账；后两条是 CI **已登记为基线例外**
-> 的既有越界（`.github/workflows/ci.yml` 的两条检查）。六条都应在**接线之前**补完，否则会出现
+> 的既有越界（`.github/workflows/ci.yml` 的两条检查）。其余五条都应在**接线之前**补完，否则会出现
 > 「同步做完了，但某类数据同步过去是错的」——或者新代码原地重蹈旧越界。
 
 | # | 欠账 | 为什么必须在 M6 补 | 详见 |
 |---|---|---|---|
-| 1 | **会话删除的墓碑** | `deleteSession` 至今是「JSONL + meta + 索引」**三件套全删**，删除**无法传播** → 另一台设备上会话**复活**。要动主进程 `removeSession` + 三个存储实现 + preload。 | syncmeta §7.3「明确未做」 |
+| 1 | **会话删除的墓碑** | ✅ **已于 2026-09-27 闭合**：`deleteSession` / `deleteSessions` 改走 `tombstoneSession(meta)`——写墓碑（`deletedAt` + `rev` + `updatedBy`）+ **覆盖索引条目** + 丢弃 JSONL 正文，保留 meta 与索引条目，删除自此可传播。硬删 `removeSession` 保留给「空会话搬迁分片」。落地面：新契约方法 ×3 个存储实现（内存参照 / Web 分片 / Electron 主进程）+ `events:tombstone` IPC + `platform` 能力 + `sessionDeletePatch`。 | syncmeta §7.3（已改为「已补做」） |
 | 2 | **渠道凭据保险库化 + 同步排除表** | 已定案「凭据不上行」，但 `channels.json` **目前是明文**。同步一开就必须切；且**排除表与保险库化同期落**（`toChannelSyncPayload` 已写好排除表，缺的是写入侧改道）。 | syncmeta §5.3 |
 | 3 | **C 类文件型资产的同步设计** | 记忆（`MEMORY.md` / `<workdir>/.nanowork/memory/`）、身份文件（`SOUL.md`/`USER.md`）、提示词覆盖、插件包——它们的「版本」是文件 `mtime` / 段落时间，**塞不进实体元数据**，需要段落级 LWW 另案。 | PRD §19.3、syncmeta §二 C 类 |
 | 4 | **产物（`artifacts`）内容寻址同步** | Phase 0 刻意不给它加实体元数据：产物按**内容寻址**（只传新增 hash），且它的落点（②`artifacts.json`）会随 FR-7.2 产物索引（M4）重做。 | syncmeta §八 |
-| 5 | **平台边界收口**（渲染层 4 个文件直连 `window.electronAPI`） | `src/sync/` 的硬约束就是「**不得 `import 'electron'`**」（§3.2 不变量 4），而新增的 `src/pages/auth/` 还要存 token；不收口等于让新代码原地重蹈。CI 检查一已把这 4 个文件（`src/layout/AppLayout.tsx`、`src/components/TitleBar.tsx`、`src/pages/settings/SettingsPage.tsx`、`src/events/electronStore.ts`）登记为基线例外，**新增越界会被 CI 直接拦下**。 | `docs/README.md` §九 看板 #13 |
+| 5 | **平台边界收口**（渲染层直连 `window.electronAPI`） | ✅ **已于 2026-09-27 闭合**（V1.5 开工前完成，比排期提前）：原先 4 项 CI 基线例外 + 复核时查出的 **5 处未登记**越界（设置页拆分后新增的 3 个 section 与 2 个 hooks，共 **9 个文件**）全部改走适配层——新增「桌面端集成」能力组（窗口控制 / 托盘配置 / 主进程指令）、`platformOs()`、事件存储适配器的 `electronBridge()`；CI 检查一补 `src/platform/` 允许区 + **基线清空** + 「基线项必须真实存在」自检。**仍留在本节是因为它是 `src/sync/` 的前提条件**（§3.2 不变量 4「不得 `import 'electron'`」）。 | `docs/README.md` §九 看板 #13 |
 | 6 | **引擎 wire 字段泄漏收口** | `src/lib/channelScan.ts` / `src/types/channel.ts` 含 `session_id`，未收进 `src/ai/runtime/nanobotHttp/`（ADR-020）。而 `channels` 正是本批要接线同步的 collection 之一，顺手收口。 | `docs/README.md` §九 看板 #14 |
 
 ### 2.3 与 V1 余项的耦合（决定 M6 的交付边界）
@@ -250,7 +250,7 @@ MVP 的裁决：**按事件 `id`（uuid）去重 + 按 `seq` 排序**，撞号�
 |---|---|---|
 | **1 服务端骨架** | `cloud/`：FastAPI + auth 五端点 + `sync_items` 表 + LWW merger + push/pull；pytest | `pytest` 全绿；**auth 全生命周期往返**（register→login→refresh→me→logout）；**LWW 三级 tie-break 逐条**（时间大者胜 / 时间等则 rev 大者胜 / 都等则 id 字典序）；push 后 pull 能取回 |
 | **2 客户端引擎** | `src/sync/` 四件套 + `syncRegistry` + 单测（mock fetch） | **未登录时 fetch 调用次数 = 0**（local-first 守卫）；push 组装**含墓碑**且**过裁剪函数**；pull 落地后墓碑条目不出现在列表 |
-| **3 前置欠账** | 会话删除墓碑（动 `electron/`）+ 渠道凭据保险库化 + 排除表落地 + 平台边界收口 + wire 泄漏收口（C 类资产与产物寻址随批次 6） | 删掉的会话**不复活**（跨「设备」模拟）；`channels.json` 与同步负载里**都没有** secret；**CI 平台边界 / wire 两条检查的基线例外清零**（新增越界会被拦）；**动了 `electron/` → 重建 `main.cjs`** |
+| **3 前置欠账** | 渠道凭据保险库化 + 排除表落地 + wire 泄漏收口（**会话删除墓碑与平台边界均已提前闭合**，见 §2.2 #1 / #5；C 类资产与产物寻址随批次 6） | `channels.json` 与同步负载里**都没有** secret；**CI wire 检查的基线清零**（新增越界会被拦）；**动了 `electron/` → 重建 `main.cjs`** |
 | **4 实体接线 + 认证 UI** | 8 实体 + 会话元数据接 registry；首次登录**全量 push**（`rev === 0` 补默认值）；`src/pages/auth/` + 状态徽章 | 门禁①：**两端登录同账户后 Agent / 会话双向一致**（真机跑，非单测）；离线改 → 联网 → 合并无丢失 |
 | **5 事件流追加同步** | `sessionEvents` 按 `seq` 游标 push/pull；跨设备**落本机 `streamWorkdir`** | 门禁②：断网追加 N 条 → 联网后对端拿到全部 N 条且顺序正确；两端并发追加**并集不丢** |
 | **6 其余欠账 + 数据主权** | C 类文件型资产（记忆段落级 LWW / 身份文件 / 提示词覆盖）；产物内容寻址；导出全部数据 / 删账户；墓碑 GC 30 天 | 段落级 LWW 有单测；导出产物可重新导入；GC 后 pull 不复活已删条目 |

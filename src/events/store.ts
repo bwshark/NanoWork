@@ -13,6 +13,7 @@ import {
   listSessionEntries,
   rebuildSessionIndex,
   removeSessionEntry,
+  tombstoneEntry,
 } from './indexFile';
 import type { SessionCounters } from './indexFile';
 
@@ -55,6 +56,20 @@ export interface EventStore {
   readEvents(sessionId: string, workdir?: string | null): Promise<SessionEvent[]>;
   /** 删除会话的事件流与元数据，并移除索引条目（幂等） */
   removeSession(sessionId: string, workdir?: string | null): Promise<void>;
+  /**
+   * **软删除**：写墓碑 + 覆盖索引条目 + **丢弃事件流正文**（保留 meta 与索引条目）。
+   *
+   * 与 `removeSession` 的唯一区别是「留不留痕迹」，而这一条差别决定了删除能否跨设备传播：
+   * 硬删把 meta 与索引条目一并抹掉，于是另一台设备下次同步时又会把自己那份推回来
+   * （「删了又复活」）；软删除只保留 `id + meta + 索引条目`（都是小对象）而丢弃正文
+   * （JSONL 可能很大），让删除变成一条**能被 LWW 裁决的记录**。
+   *
+   * 入参是**完整的墓碑元数据**（`deletedAt` / `rev` / `updatedBy` 由调用方的
+   * `metaForDelete()` 生成）：存储层不碰时钟、也不判断「该不该删」，只负责落盘。
+   *
+   * 硬删仍然保留，供「空会话搬迁分片」这类**物理移动**使用（见 `setSessionWorkdir`）。
+   */
+  tombstoneSession(meta: SessionMeta): Promise<void>;
 
   /** 读取会话元数据；不存在返回 null */
   readMeta(sessionId: string, workdir?: string | null): Promise<SessionMeta | null>;
@@ -114,6 +129,14 @@ export function createMemoryEventStore(): EventStore {
       eventsById.delete(k);
       metasById.delete(k);
       index = removeSessionEntry(index, sessionId);
+    },
+
+    async tombstoneSession(meta) {
+      // 正文丢弃、meta 保留：墓碑要能传播，正文没有第二个人要看
+      const k = scopeKey(meta.id, meta.workdir);
+      eventsById.delete(k);
+      metasById.set(k, meta);
+      index = tombstoneEntry(index, meta);
     },
 
     async readMeta(sessionId, workdir) {
