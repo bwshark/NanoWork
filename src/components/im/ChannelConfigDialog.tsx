@@ -111,6 +111,18 @@ export function ChannelConfigDialog({
   const existing = useChannelsStore((s) => s.configs.find((c) => c.kind === kind));
   const saveConfig = useChannelsStore((s) => s.saveConfig);
   const refreshFromNanobot = useChannelsStore((s) => s.refreshFromNanobot);
+  const vaultAvailable = useChannelsStore((s) => s.vaultAvailable);
+  const secretKeys = useChannelsStore((s) => s.secretKeys);
+
+  /**
+   * 已存进保险库的密钥字段（值不在渲染层，只能靠 key 名清单判定）。
+   *
+   * 它们与「明文落 `channels.json`」时代的差别是**表单不再回显值**：重启后本地没有
+   * 明文可填，输入框必然是空的。所以留空必须解释为「不修改」——否则用户只想改一下
+   * 白名单，却会被必填校验拦下，且除重填密钥外无路可走。
+   */
+  const vaultedSecretKeys = secretKeys[kind] ?? [];
+  const isVaultedSecret = (key: string) => vaultedSecretKeys.includes(key);
 
   /** 是否支持扫码接入：引擎提供 connector 且运行在桌面端 */
   const scanSupported = Boolean(meta.scanConnect) && platform.env === 'electron';
@@ -120,8 +132,13 @@ export function ChannelConfigDialog({
   /**
    * 默认模式判定（初始值与 open 重置两处同步）：按凭证而非条目存在性——
    * 断开后条目保留（策略字段在）但凭证已清，默认应回到扫码接入。
+   *
+   * 判据必须**纳入保险库**：明文已不落本地，重启后 `cfg.token` / `cfg.appId` 可能为空，
+   * 只看配置会把「已配置好」误判成「未配置」→ 默认模式莫名跳回扫码接入。
    */
-  const hasCredential = kind === 'weixin' ? !!existing?.token : !!existing?.appId;
+  const hasCredential =
+    vaultedSecretKeys.length > 0 ||
+    (kind === 'weixin' ? !!existing?.token : !!existing?.appId);
   const defaultMode: DialogMode = scanSupported && !hasCredential ? 'scan' : 'manual';
 
   const [form, setForm] = useState<FormState>(() => initForm(kind, existing));
@@ -185,12 +202,20 @@ export function ChannelConfigDialog({
     // 必填校验：提示首个缺失字段
     for (const key of meta.requiredKeys) {
       const field = meta.fields.find((f) => f.key === key);
-      if (!(form.values[key] ?? '').trim()) {
-        setError(`请填写${field?.label ?? key}`);
-        return;
-      }
+      if ((form.values[key] ?? '').trim()) continue;
+      // 保险库里已有该密钥 → 留空表示「沿用已保存的」，不算缺失
+      if (field?.kind === 'secret' && isVaultedSecret(key)) continue;
+      setError(`请填写${field?.label ?? key}`);
+      return;
     }
     saveConfig({ kind, ...toPatch(meta, form) });
+    if (platform.env === 'electron' && vaultAvailable === false) {
+      // 如实告知：本机没有系统凭据库时凭据不会加密落盘（且重启后需要重填）。
+      // 静默成功才是危险的——用户会以为密钥已经安全保存。
+      toast.warning(`${meta.name} 配置已保存，但本机没有可用的系统凭据库，凭据未加密保存`);
+      onClose();
+      return;
+    }
     toast.success(`${meta.name} 配置已保存`);
     onClose();
   };
@@ -254,7 +279,9 @@ export function ChannelConfigDialog({
               </Typography>
             )}
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-              {rendered.map((f: ChannelFieldMeta) => renderField(f, form, setValue, setBool))}
+              {rendered.map((f: ChannelFieldMeta) =>
+                renderField(f, form, setValue, setBool, isVaultedSecret),
+              )}
             </Box>
             {error && (
               <Typography color="error" sx={{ mt: 1.5, fontSize: 13 }}>
@@ -278,12 +305,17 @@ export function ChannelConfigDialog({
   );
 }
 
-/** 按字段类型渲染单个表单项 */
+/**
+ * 按字段类型渲染单个表单项。
+ * @param isVaultedSecret 该字段的密钥是否已存进加密保险库（用于「留空则不修改」提示：
+ *   值不回传渲染层，重启后输入框必然是空的，不给提示就成了「看不出来配没配过」）
+ */
 function renderField(
   f: ChannelFieldMeta,
   form: FormState,
   setValue: (k: string, v: string) => void,
   setBool: (k: string, v: boolean) => void,
+  isVaultedSecret: (k: string) => boolean,
 ) {
   switch (f.kind) {
     case 'bool':
@@ -341,6 +373,11 @@ function renderField(
           type={f.kind === 'secret' ? 'password' : 'text'}
           value={form.values[f.key] ?? ''}
           onChange={(e) => setValue(f.key, e.target.value)}
+          helperText={
+            f.kind === 'secret' && isVaultedSecret(f.key)
+              ? '已加密保存，留空则不修改'
+              : undefined
+          }
         />
       );
   }

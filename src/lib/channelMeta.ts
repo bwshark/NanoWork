@@ -32,8 +32,6 @@ export interface ChannelFieldMeta {
 export interface ChannelScanConnectMeta {
   /** 引擎侧渠道名（settings.channel.connect.{action} 的 channel 参数；lark 复用 feishu） */
   engineChannel: string;
-  /** start 动作的固定参数（转成网关请求查询参数；不含 channel 本身） */
-  startParams?: Record<string, string>;
   /** 扫码引导文案 */
   scanHint?: string;
 }
@@ -83,7 +81,6 @@ export const CHANNEL_METAS: ChannelMeta[] = [
     requiredKeys: ['appId', 'appSecret'],
     scanConnect: {
       engineChannel: 'feishu',
-      startParams: { domain: 'feishu', instance_id: 'feishu', mode: 'replace' },
       scanHint: '使用飞书扫描下方二维码，自动创建并配置机器人',
     },
     fields: [
@@ -112,7 +109,6 @@ export const CHANNEL_METAS: ChannelMeta[] = [
     requiredKeys: ['appId', 'appSecret'],
     scanConnect: {
       engineChannel: 'feishu',
-      startParams: { domain: 'lark', instance_id: 'lark', mode: 'replace' },
       scanHint: '使用 Lark 扫描下方二维码，自动创建并配置机器人',
     },
     fields: [

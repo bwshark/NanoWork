@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import BookmarksOutlinedIcon from '@mui/icons-material/BookmarksOutlined';
+import CloudOutlinedIcon from '@mui/icons-material/CloudOutlined';
 import ExtensionIcon from '@mui/icons-material/Extension';
 import HubIcon from '@mui/icons-material/Hub';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
@@ -66,7 +67,12 @@ export const SETTINGS_NAV: SettingsNavGroup[] = [
   },
   {
     label: '数据与安全',
-    items: [{ id: 'data', label: '数据管理', icon: <StorageIcon /> }],
+    items: [
+      // 「账户」放「数据管理」之前：它回答的是「数据同步到哪个账户」，
+      // 是「数据管理」的前置身份，同属「数据与安全」一类。
+      { id: 'account', label: '账户', icon: <CloudOutlinedIcon /> },
+      { id: 'data', label: '数据管理', icon: <StorageIcon /> },
+    ],
   },
   {
     items: [{ id: 'about', label: '关于', icon: <InfoOutlinedIcon /> }],

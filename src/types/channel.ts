@@ -64,39 +64,7 @@ export interface ChannelConfig extends SyncMetaFields {
 }
 
 // ———— 扫码接入（settings.channel.connect.*，经网关认证 WebSocket 桥）————
-// 契约对齐 nanobot 网关 webui_response 帧的 result 载荷（引擎侧已核验）。
+// **wire 形状（`session_id` / `qr_url` …）不住在这里**：那是与 `/v1/chat/completions`
+// 并列的另一条引擎协议，字段名与起始参数只允许出现在 `src/ai/runtime/nanobotHttp/`
+// （ADR-020）。编码 / 解码与 camelCase 领域类型见 `nanobotHttp/channelConnect.ts`。
 
-/** 扫码接入轮询结果载荷（网关 settings.channel.connect.* 响应 result） */
-export interface ChannelConnectPayload {
-  /** 连接会话 id（后续 poll / cancel 需携带） */
-  session_id?: string;
-  /** 连接状态机 */
-  status: 'pending' | 'succeeded' | 'failed' | 'expired' | 'cancelled';
-  /** 二维码内容（可扫的 URL，前端自行渲染二维码） */
-  qr_url?: string;
-  /** 建议轮询间隔（毫秒） */
-  interval_ms?: number;
-  /** 会话过期时间戳（毫秒） */
-  expires_at_ms?: number;
-  /** 附加提示信息 */
-  message?: string;
-  /** 额外验证挑战（如 'verify_code'） */
-  challenge?: string;
-  /** 验证码校验是否失败（challenge=verify_code 场景） */
-  verification_failed?: boolean;
-  /** 目标实例 id（飞书 / Lark） */
-  instance_id?: string;
-  /** 目标域（feishu | lark） */
-  domain?: string;
-  /** 扫码创建的应用 App ID */
-  app_id?: string;
-  /** 微信登录账号标识 */
-  account?: string;
-  /** 成功后是否需要重启网关才能生效 */
-  requires_restart?: boolean;
-}
-
-/** 扫码接入统一返回（主进程 / platform 层：不抛异常，错误走 ok=false） */
-export type ChannelConnectResponse =
-  | { ok: true; result: ChannelConnectPayload }
-  | { ok: false; error: string };

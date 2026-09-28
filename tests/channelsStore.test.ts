@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { platform } from '@/platform';
+import { STORAGE_KEYS } from '@/lib/constants';
 import { useChannelsStore } from '@/stores/channelsStore';
 import {
   buildNanobotChannelsFragment,
@@ -17,7 +18,37 @@ import type { ChannelConfig } from '@/types';
 
 /** 重置 store 到初始态，避免跨用例串扰 */
 function resetStore() {
-  useChannelsStore.setState({ configs: [], lastSync: null });
+  useChannelsStore.setState({
+    configs: [],
+    tombstones: {},
+    lastSync: null,
+    vaultAvailable: null,
+    secretKeys: {},
+  });
+}
+
+/**
+ * 用一张内存表模拟凭据保险库（只存 key 名，与真实实现一样不回传值）。
+ * 返回该表便于断言「某条目进了保险库 / 被删了」。
+ */
+function mockVault(initial: Record<string, string[]> = {}): Record<string, string[]> {
+  const entries = { ...initial };
+  vi.spyOn(platform, 'secretsStatus').mockResolvedValue({ available: true, path: '/vault' });
+  vi.spyOn(platform, 'secretsKeys').mockImplementation(async () => ({ ...entries }));
+  vi.spyOn(platform, 'secretsSet').mockImplementation(async (name, secrets) => {
+    entries[name] = Object.keys(secrets).sort();
+    return { ok: true };
+  });
+  vi.spyOn(platform, 'secretsDelete').mockImplementation(async (name) => {
+    delete entries[name];
+    return { ok: true };
+  });
+  return entries;
+}
+
+/** 把平台切到 electron（用例结束后 afterEach 内的 restoreAllMocks 不还原 env，需自行重置） */
+function enterElectron() {
+  (platform as { env: 'electron' | 'web' }).env = 'electron';
 }
 
 beforeEach(() => {
@@ -30,10 +61,14 @@ beforeEach(() => {
   });
 });
 
+/** 测试环境默认 web；用例内可能切 electron，逐例还原避免串扰 */
+const originalEnv = platform.env;
+
 afterEach(() => {
   vi.clearAllTimers();
   vi.useRealTimers();
   vi.restoreAllMocks();
+  (platform as { env: 'electron' | 'web' }).env = originalEnv;
 });
 
 describe('channelsStore: 配置 CRUD', () => {
@@ -222,11 +257,7 @@ describe('channelsStore: 自动同步到 nanobot', () => {
 });
 
 describe('channelsStore: refreshFromNanobot 强制回读（扫码接入成功后）', () => {
-  // 测试环境默认 web；用例内显式切为 electron 验证回读逻辑，结束后还原
-  const originalEnv = platform.env;
-  afterEach(() => {
-    (platform as { env: 'electron' | 'web' }).env = originalEnv;
-  });
+  // 测试环境默认 web；用例内显式切为 electron 验证回读逻辑，文件级 afterEach 负责还原
 
   it('回读覆盖本地同 kind 旧凭证（保留 id），且不触发自动同步', async () => {
     (platform as { env: 'electron' | 'web' }).env = 'electron';
@@ -396,5 +427,159 @@ describe('channelsStore: disconnectChannel 断开连接后清本地状态', () =
     // 跨过防抖窗口：断开不得再触发 platform.syncNanobotChannels
     await vi.advanceTimersByTimeAsync(2000);
     expect(sync).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * V1.5 批次 3：渠道凭据保险库化。
+ *
+ * 验收判据是「`channels.json` 与同步负载里都没有 secret」，所以这里逐条钉住：
+ * 明文真的被剥掉了（且只在保险库确认可用时才剥）、值真的进了保险库、
+ * 断开真的把保险库条目删了、升级存量真的被迁移。
+ */
+describe('channelsStore: 凭据保险库化（批次 3）', () => {
+  /** 取最近一次写入 channels key 的持久化文本 */
+  function lastChannelsWrite(spy: { mock: { calls: unknown[][] } }): string {
+    const hit = spy.mock.calls.filter((call) => call[0] === STORAGE_KEYS.channels).pop();
+    return hit ? String(hit[1]) : '';
+  }
+
+  it('refreshSecrets 只认 channel: 前缀的保险库条目（MCP 的条目不算渠道）', async () => {
+    mockVault({
+      'channel:feishu': ['appSecret'],
+      'channel:weixin': ['token'],
+      'my-mcp-server': ['token'],
+    });
+    const status = await useChannelsStore.getState().refreshSecrets();
+    expect(status.available).toBe(true);
+    expect(useChannelsStore.getState().secretKeys).toEqual({
+      feishu: ['appSecret'],
+      weixin: ['token'],
+    });
+    expect(useChannelsStore.getState().vaultAvailable).toBe(true);
+  });
+
+  it('saveSecrets（electron）以 channel:<kind> 为名写入保险库并刷新清单', async () => {
+    enterElectron();
+    const entries = mockVault();
+    const result = await useChannelsStore.getState().saveSecrets('dingtalk', {
+      clientSecret: 'cs',
+    });
+    expect(result.ok).toBe(true);
+    expect(entries['channel:dingtalk']).toEqual(['clientSecret']);
+    expect(useChannelsStore.getState().secretKeys.dingtalk).toEqual(['clientSecret']);
+  });
+
+  it('saveSecrets 传空集合时不碰保险库（避免把「没填」执行成「删除」）', async () => {
+    enterElectron();
+    mockVault({ 'channel:weixin': ['token'] });
+    await useChannelsStore.getState().saveSecrets('weixin', {});
+    expect(platform.secretsSet).not.toHaveBeenCalled();
+  });
+
+  it('saveSecrets 在 web 端视为成功但不写保险库（浏览器无 OS 凭据库）', async () => {
+    const spy = vi.spyOn(platform, 'secretsSet');
+    const result = await useChannelsStore.getState().saveSecrets('weixin', { token: 'tk' });
+    expect(result.ok).toBe(true);
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('saveConfig（electron）把凭据一并写进保险库', async () => {
+    enterElectron();
+    const entries = mockVault();
+    useChannelsStore.getState().saveConfig({
+      kind: 'feishu',
+      appId: 'cli_a',
+      appSecret: 'secret_a',
+    });
+    // saveSecrets 是 fire-and-forget：让微任务队列跑完再断言
+    await vi.advanceTimersByTimeAsync(0);
+    expect(entries['channel:feishu']).toEqual(['appSecret']);
+  });
+
+  it('持久化时剥掉密钥明文（保险库确认可用 + electron）', () => {
+    enterElectron();
+    useChannelsStore.getState().saveConfig({ kind: 'weixin', token: 'plain-token' });
+    const spy = vi.spyOn(platform.storage, 'set');
+    useChannelsStore.setState({ vaultAvailable: true });
+
+    const written = lastChannelsWrite(spy);
+    expect(written).not.toContain('plain-token');
+    // 配置本身仍在（只剥密钥，不是整条丢弃）
+    expect(written).toContain('weixin');
+  });
+
+  it('保险库不可用时不剥明文（剥掉等于把用户填的凭据直接丢弃）', () => {
+    enterElectron();
+    useChannelsStore.getState().saveConfig({ kind: 'weixin', token: 'plain-token' });
+    const spy = vi.spyOn(platform.storage, 'set');
+    useChannelsStore.setState({ vaultAvailable: false });
+
+    expect(lastChannelsWrite(spy)).toContain('plain-token');
+  });
+
+  it('web 端维持明文落盘（无保险库可迁）', () => {
+    useChannelsStore.getState().saveConfig({ kind: 'weixin', token: 'plain-token' });
+    const spy = vi.spyOn(platform.storage, 'set');
+    useChannelsStore.setState({ vaultAvailable: true });
+
+    // env 仍是 web → 不剥
+    expect(lastChannelsWrite(spy)).toContain('plain-token');
+  });
+
+  it('vaultExistingSecrets 把存量明文迁进保险库，并推一次持久化把明文剥掉', async () => {
+    enterElectron();
+    // 存量数据：升级前落盘的明文（此刻运行内存里还带着）。
+    // 哨兵值取得足够长，避免被 "tombstones" 之类无关子串撞上
+    useChannelsStore.getState().saveConfig({
+      kind: 'wecom',
+      botId: 'bot-id-sentinel',
+      botSecret: 'bot-secret-sentinel',
+    });
+    useChannelsStore.setState({ vaultAvailable: null });
+    const entries = mockVault();
+    const spy = vi.spyOn(platform.storage, 'set');
+
+    await useChannelsStore.getState().vaultExistingSecrets();
+
+    expect(entries['channel:wecom']).toEqual(['botSecret']);
+    expect(useChannelsStore.getState().vaultAvailable).toBe(true);
+    // 迁移后强制写盘：否则明文要等用户下次改配置才被剥掉（验收恰恰看这个文件）
+    const written = lastChannelsWrite(spy);
+    expect(written).not.toContain('bot-secret-sentinel');
+    expect(written).toContain('bot-id-sentinel');
+  });
+
+  it('vaultExistingSecrets 在无明文可迁时不写保险库（幂等且无副作用）', async () => {
+    enterElectron();
+    mockVault();
+    await useChannelsStore.getState().vaultExistingSecrets();
+    expect(platform.secretsSet).not.toHaveBeenCalled();
+  });
+
+  it('disconnectChannel（electron）删除保险库条目，防下次同步把凭据回补回来', async () => {
+    enterElectron();
+    const entries = mockVault({ 'channel:weixin': ['token'] });
+    useChannelsStore.getState().saveConfig({ kind: 'weixin', token: 'tk' });
+    await useChannelsStore.getState().refreshSecrets();
+    expect(entries['channel:weixin']).toEqual(['token']);
+
+    useChannelsStore.getState().disconnectChannel('weixin');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(entries['channel:weixin']).toBeUndefined();
+    expect(useChannelsStore.getState().secretKeys.weixin ?? []).toEqual([]);
+  });
+
+  it('removeConfig（electron）同时清掉保险库条目（防「删掉又配回来」被回补旧凭据）', async () => {
+    enterElectron();
+    const entries = mockVault({ 'channel:lark': ['appSecret'] });
+    useChannelsStore.getState().saveConfig({ kind: 'lark', appId: 'la', appSecret: 'ls' });
+    await useChannelsStore.getState().refreshSecrets();
+    expect(entries['channel:lark']).toEqual(['appSecret']);
+
+    useChannelsStore.getState().removeConfig('lark');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(entries['channel:lark']).toBeUndefined();
+    expect(useChannelsStore.getState().configs).toHaveLength(0);
   });
 });

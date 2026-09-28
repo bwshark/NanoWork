@@ -53,6 +53,39 @@ jobs:
       - name: 生产构建
         run: npm run build
 
+  cloud-gate:
+    # 值里有 `cloud/: `（冒号 + 空格），必须加引号，否则 YAML 会当成嵌套映射
+    name: "服务端门禁（cloud/: ruff + pytest）"
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cloud
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: 安装依赖
+        # 依赖的唯一事实源是 cloud/pyproject.toml。
+        # 先显式装 setuptools/wheel：Python 3.12+ 不再自带它们，而 `-e .` 需要
+        # build backend（本机若镜像源不可达，这一步会失败 → 见 cloud/README.md 的直装备选）。
+        run: |
+          python -m pip install --upgrade pip
+          pip install setuptools wheel
+          pip install -e ".[dev]" --no-build-isolation
+
+      - name: 静态检查（ruff）
+        run: |
+          python -m ruff check app tests
+          python -m ruff format --check app tests
+
+      - name: 单元测试（pytest）
+        # 测试自带临时 SQLite，无需外部服务；数据库 URL 由 tests/conftest.py 在
+        # import app 之前设定（app/db.py 只在加载时读一次环境变量）。
+        run: python -m pytest
+
   platform-boundary:
     name: 平台边界检查（ADR-004 / ADR-010 / ADR-020）
     runs-on: ubuntu-latest
@@ -128,11 +161,25 @@ jobs:
           # ADR-020：src/ai/runtime/nanobotHttp/** 是唯一允许知道引擎 wire 格式的位置。
           # 只查「引擎特有字段名」，不查通用概念（mcpServers 等属契约/配置概念，允许出现）。
           #
-          # 基线例外（2026-09-17 实测登记）：
-          #   src/lib/channelScan.ts / src/types/channel.ts
-          #     —— 走的是 settings.channel.connect.* 认证 WebSocket 帧，是与
-          #        /v1/chat/completions 并列的另一条引擎协议，尚未收进 runtime 层。
-          BASELINE="src/lib/channelScan.ts src/types/channel.ts"
+          # 允许区：src/ai/runtime/**（其中 nanobotHttp/ 是与引擎对话的唯一位置）。
+          #
+          # 2026-09-28 收口：原先登记的 2 个基线例外——扫码接入那条协议
+          # （settings.channel.connect.*）的 wire 字段名——已收进
+          # src/ai/runtime/nanobotHttp/channelConnect.ts（编码 / 解码 + camelCase 领域类型），
+          # **基线就此清空**。此后任何泄漏都是新增的。
+          BASELINE=""
+          # ----------------------------------------------------------------------
+
+          fail=0
+
+          # 与检查一同款的「基线项必须真实存在」自检：基线里挂着一个已改名的路径时，
+          # 这条检查会**静默失效**（告警与报错两边同时失守）。
+          for b in $BASELINE; do
+            if [ ! -f "$b" ]; then
+              echo "::error title=基线失效::$b 不存在（可能已改名或删除），请更新 BASELINE"
+              fail=1
+            fi
+          done
 
           hits=$(grep -rInE --include='*.ts' --include='*.tsx' \
                    '\b(session_id|access_mode|nanobot_event)\b' src \
@@ -140,12 +187,11 @@ jobs:
                  | grep -vE ':[0-9]+:[[:space:]]*(//|\*|/\*)' \
                  | cut -d: -f1 | sort -u || true)
 
-          if [ -z "$hits" ]; then
-            echo "wire 泄漏 0 处（基线也已清空，可删除 BASELINE 列表）"
+          if [ -z "$hits" ] && [ "$fail" -eq 0 ]; then
+            echo "wire 泄漏 0 处（基线已清空，允许区 = src/ai/runtime/）"
             exit 0
           fi
 
-          fail=0
           for f in $hits; do
             case " $BASELINE " in
               *" $f "*)
@@ -162,4 +208,4 @@ jobs:
             echo "wire 边界检查失败：渲染层只允许 import @/ai/runtime（及其 ./types）。"
             exit 1
           fi
-          echo "wire 边界检查通过（仅剩已登记基线例外）。"
+          echo "wire 边界检查通过（基线为空：渲染层无 wire 泄漏）。"

@@ -1,0 +1,46 @@
+[project]
+name = "nanowork-cloud"
+version = "0.1.0"
+description = "nanowork V1.5 跨端同步服务端（认证 + LWW 同步），与 nanobot/ 并列"
+requires-python = ">=3.11"
+
+# 依赖刻意保持最小：MVP 只做「认证 + 行存同步」。
+# 不引入 Node 服务、不依赖 nanowork 既有后端（当前不存在）——见 m6 §八 明确不做。
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn>=0.27",
+    "sqlmodel>=0.0.16",
+    "pyjwt>=2.8",
+    # 直接依赖 bcrypt 原生 API 而非 passlib：passlib 1.7.4 在 Python 3.12+ 与
+    # bcrypt 4.x 的组合下会抛 "(trapped) error reading bcrypt version"。
+    "bcrypt>=4.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "httpx>=0.26",
+    "ruff>=0.4",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+# cloud/ 自带 venv，测试一律用它跑：
+#   cloud/.venv/Scripts/python.exe -m pytest
+# 与 nanobot/ 的测试方式分开（那里是只读参考，不得为它加测试依赖）——m6 §七。
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+# B008 对 FastAPI 是误报：`Depends(...)` 写在参数默认值里是该框架的**唯一**写法，
+# 没有别的位置可放。放开后其余 B 规则仍生效。
+ignore = ["B008"]

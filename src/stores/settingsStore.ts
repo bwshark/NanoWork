@@ -8,10 +8,12 @@ import {
 } from '@/lib/constants';
 import { DEFAULT_BINDINGS, DEFAULT_WAKE_ACCELERATOR } from '@/lib/shortcuts';
 import type { ShortcutId } from '@/lib/shortcuts';
+import { metaForEdit } from '@/lib/syncStamp';
 import type {
   ConnectionStatus,
   DesktopConfig,
   Settings,
+  SyncMeta,
   TranscriptionConfig,
 } from '@/types';
 
@@ -19,6 +21,22 @@ interface SettingsState {
   settings: Settings;
   /** 当前连接状态（由 ConnectionManager 同步写入） */
   status: ConnectionStatus;
+  /**
+   * **同步元数据兄弟切片**（批次 4）。
+   *
+   * `Settings` 不带 `SyncMeta`（`src/types/settings.ts` 是纯 `Settings`），而引擎
+   * `stampOf` 要用实体上的 `rev` / `updatedAt` / `deletedAt` 做 LWW。缺元数据的话
+   * 每条 settings 版本的 `updatedAt` 恒为空串 → 服务端按 EPOCH 处理 → **每条 settings
+   * push 都被判 stale**。
+   *
+   * 做成**兄弟切片**（与其它 store 的 `tombstones` 同类）而不是塞进 `Settings`：
+   * 后者会污染全局类型；而且「把同步元数据放在实体旁边」是既有形态。
+   *
+   * **必须持久化**：不做「重启后 `updatedAt = now`」的懒补偿——那会在「设备 A 离线
+   * 期间 B 改过设置」时用 A 的当前时间压过 B 的改动（丢改动）。它随
+   * `nanowork.settings` 一起落盘（进 `partialize`），**零 electron 改动、零新 key**。
+   */
+  syncMeta: SyncMeta;
   setSettings: (patch: Partial<Settings>) => void;
   setStatus: (status: ConnectionStatus) => void;
   reset: () => void;
@@ -121,12 +139,26 @@ export function normalizeTheme(value: unknown): Settings['theme'] {
   return value === 'light' || value === 'dark' || value === 'system' ? value : 'dark';
 }
 
+/**
+ * 同步元数据的缺省值（`rev = 0` = 「迁移前的老数据、从未被改写过」）。
+ *
+ * 每次返回**新对象**而不是共享常量：该对象会被写进 state 并持久化，
+ * 共享引用一旦被某处就地改动会串味。
+ */
+function defaultSyncMeta(): SyncMeta {
+  return { rev: 0, updatedAt: '', updatedBy: '', deletedAt: null };
+}
+
 export const useSettingsStore = create<SettingsState>()(
   persist(
     (set) => ({
       settings: DEFAULT_SETTINGS,
       status: DEFAULT_STATUS,
-      setSettings: (patch) => set((s) => ({ settings: { ...s.settings, ...patch } })),
+      syncMeta: defaultSyncMeta(),
+      // 改动**可同步字段**（theme / 转录偏好 / 快捷键…）→ bump 同步元数据
+      setSettings: (patch) =>
+        set((s) => ({ settings: { ...s.settings, ...patch }, syncMeta: metaForEdit(s.syncMeta) })),
+      // 连接态是**本机事实**，不进同步负载 → 不 bump（否则每次连接探测都涨 rev）
       setStatus: (status) => set({ status }),
       reset: () => set({ settings: DEFAULT_SETTINGS, status: DEFAULT_STATUS }),
       setWorkspaceAlias: (workdir, alias, fallback) =>
@@ -181,15 +213,18 @@ export const useSettingsStore = create<SettingsState>()(
           // 与默认相同 = 恢复默认，删掉表项而不是写回默认值（理由见接口注释）
           if (binding === null || binding === DEFAULT_BINDINGS[id]) delete next[id];
           else next[id] = binding;
-          return { settings: { ...s.settings, shortcuts: next } };
+          // `shortcuts` 是可同步的「用户偏好」→ bump
+          return { settings: { ...s.settings, shortcuts: next }, syncMeta: metaForEdit(s.syncMeta) };
         }),
       resetShortcuts: () =>
-        set((s) => ({ settings: { ...s.settings, shortcuts: {} } })),
+        // 清空快捷键表是改动**可同步字段**（对端应收到「恢复默认」）→ bump
+        set((s) => ({ settings: { ...s.settings, shortcuts: {} }, syncMeta: metaForEdit(s.syncMeta) })),
     }),
     {
       name: STORAGE_KEYS.settings,
       storage: zustandStorage,
-      version: 11,
+      // v12：新增 `syncMeta` 兄弟切片（批次 4 的 settings 同步元数据）
+      version: 12,
       migrate: (persistedState) => {
         const state = persistedState as Partial<SettingsState> | undefined;
         if (state?.settings?.gatewayEndpoint?.includes(':8765')) {
@@ -252,9 +287,15 @@ export const useSettingsStore = create<SettingsState>()(
             ? state.settings.knownWorkspaces
             : [];
         }
-        return state ?? { settings: DEFAULT_SETTINGS, status: DEFAULT_STATUS };
+        if (state) {
+          // v12：同步元数据兄弟切片。老用户没有它 → 补默认值（`rev = 0` = 从未改过）。
+          // **不懒补偿成 `updatedAt = now`**：那会在「设备 A 离线期间 B 改过设置」时
+          // 用 A 的当前时间压过 B 的改动（丢改动）。缺省即「从未改过」，让对端版本正常胜出。
+          state.syncMeta = state.syncMeta ?? defaultSyncMeta();
+        }
+        return state ?? { settings: DEFAULT_SETTINGS, status: DEFAULT_STATUS, syncMeta: defaultSyncMeta() };
       },
-      partialize: (s) => ({ settings: s.settings, status: s.status }),
+      partialize: (s) => ({ settings: s.settings, status: s.status, syncMeta: s.syncMeta }),
     },
   ),
 );

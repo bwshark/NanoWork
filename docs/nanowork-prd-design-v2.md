@@ -110,7 +110,7 @@
 **IM 通道（超出既有文档记录的部分）**
 
 - `src/types/channel.ts` —— 支持 `dingtalk` / `feishu` / `lark` / `weixin` / `wecom`；字段含 `allowFrom`、`groupPolicy`(open/mention)、`topicIsolation`。
-- `src/lib/channelScan.ts` + `components/im/ChannelScanPanel.tsx` —— **扫码接入**，走网关 `settings.channel.connect.*` 认证 WebSocket 帧。
+- `src/lib/channelScan.ts` + `components/im/ChannelScanPanel.tsx` —— **扫码接入**，走网关 `settings.channel.connect.*` 认证 WebSocket 帧。**协议层已收进 `src/ai/runtime/nanobotHttp/channelConnect.ts`**（wire 键名 / 起始参数 / 编码解码都在那里，2026-09-28，ADR-020）。
 - `electron/channelAllowFrom.ts`、`electron/channelDisconnect.ts` —— 主进程侧白名单写入与断开。
 - 同步链路：`ChannelConfig[]` → `toNanobotChannels()` → `platform.syncNanobotChannels()` → 主进程合并进 `config.json` + 重启网关（Web 降级为下载片段）。
 

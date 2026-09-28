@@ -29,3 +29,4 @@ export function __setRuntimeForTest(next: AgentRuntime | null): void {
 }
 
 export * from './types';
+export * from './nanobotHttp/channelConnect';

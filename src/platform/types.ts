@@ -1,4 +1,4 @@
-import type { ChannelConnectResponse, McpToolInfo, Skill } from '@/types';
+import type { McpToolInfo, Skill } from '@/types';
 import type { PluginInstallResult, PluginScanResult } from '@/types/plugin';
 import type {
   SessionEvent,
@@ -398,6 +398,18 @@ export interface ChannelSendResult {
 
 /** 扫码接入动作（网关 settings.channel.connect.{action}） */
 export type ChannelConnectAction = 'start' | 'poll' | 'cancel';
+
+/**
+ * 扫码接入的**原始**返回（引擎载荷，未解码）。
+ *
+ * `result` 刻意是 `Record<string, unknown>` 而**不是**具体 wire 形状：这条协议与
+ * `/v1/chat/completions` 并列，其字段名只允许出现在 `src/ai/runtime/nanobotHttp/`
+ * （ADR-020，CI 检查二）。平台层只搬运不解释——编码与解码都在
+ * `nanobotHttp/channelConnect.ts` 的 `channelConnect()` / `decodeChannelConnect()`。
+ */
+export type ChannelConnectResponse =
+  | { ok: true; result: Record<string, unknown> }
+  | { ok: false; error: string };
 
 /** 网关重启 / 拉起结果（needsRestart：外部托管需用户手动重启） */
 export interface GatewayRestartResult {

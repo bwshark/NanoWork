@@ -2,6 +2,7 @@ import { Box, Dialog, IconButton, ListItemButton, Tooltip, Typography } from '@m
 import CloseIcon from '@mui/icons-material/Close';
 import { SETTINGS_NAV, SETTINGS_NAV_ITEMS } from '@/components/settings/settingsNav';
 import { AboutSection } from '@/components/settings/sections/AboutSection';
+import { AccountSection } from '@/components/settings/sections/AccountSection';
 import { AssistantSection } from '@/components/settings/sections/AssistantSection';
 import { ConnectionSection } from '@/components/settings/sections/ConnectionSection';
 import { DataSection } from '@/components/settings/sections/DataSection';
@@ -226,6 +227,8 @@ function SectionBody({ section }: { section: SettingsSectionId }) {
       return <PluginsSection />;
     case 'data':
       return <DataSection />;
+    case 'account':
+      return <AccountSection />;
     case 'about':
       return <AboutSection />;
     default: {

@@ -66,6 +66,7 @@ import { useTaskQueryStore } from "@/stores/taskQueryStore";
 import { useTasksStore } from "@/stores/tasksStore";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { LogoIcon } from "@/components/LogoIcon";
+import { SyncStatusBadge } from "@/components/SyncStatusBadge";
 import { ChannelIcon } from "@/components/im/ChannelIcon";
 import { SessionQuickActions } from "@/components/session/SessionQuickActions";
 import { platform } from "@/platform";
@@ -319,10 +320,13 @@ export function SidebarNav() {
         <TasksChannelsTabs />
       </Box>
 
-      {/* 底部：设置（打开设置弹窗，不做路由跳转） */}
+      {/* 底部：同步状态徽章 + 设置（打开设置弹窗，不做路由跳转）。
+          徽章放「设置」上方而非标题栏：TitleBar 只在 Electron 渲染，
+          而 Web 端同样要看同步状态，侧栏底部两平台一致。 */}
       <Box
         sx={{ px: 1, pt: 1, borderTop: "1px solid", borderColor: "divider" }}
       >
+        <SyncStatusBadge />
         <List dense disablePadding>
           <NavRow
             item={{ label: "设置", icon: <SettingsIcon /> }}

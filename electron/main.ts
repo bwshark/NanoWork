@@ -42,6 +42,7 @@ import type {
 // 运行时值（不是 type-only）：供应商目录同时被渲染层（下拉）与这里（连接测试的
 // 默认地址、自定义供应商名冲突检测）消费，必须共用一份，否则两处迟早漂移。
 import { isBuiltinProvider, findModelProvider } from '../src/lib/modelProviders';
+import { channelVaultName } from '../src/lib/channelSecrets';
 import {
   DEVICE_ID_STORAGE_KEY,
   knownRouteFiles,
@@ -66,6 +67,7 @@ import {
 import { createEventStore } from './eventStore';
 import { CredentialVault, safeStorageCipher } from './credentialVault';
 import { probeMcpServer, type McpProbeRequest } from './mcpProbe';
+import { carryOverChannelSecrets, injectChannelSecrets } from './channelSecretInjection';
 import { probeModelEndpoint } from './modelProbe';
 import {
   installPluginPackage,
@@ -940,11 +942,19 @@ async function mergeChannelsIntoConfig(
   for (const key of MANAGED_CHANNEL_KEYS) {
     if (key in existing) currentManaged[key] = existing[key];
   }
-  if (JSON.stringify(currentManaged) === JSON.stringify(channels)) return false;
+  /*
+   * 兜底保留（与 injectChannelSecrets 成对，见 channelSecretInjection 的说明）：
+   * 渲染层已不再持有密钥，片段里天然没有这些字段。托管键是**整体替换**语义，
+   * 照单收下就会把磁盘上的 clientSecret / appSecret / token 抹掉——渠道直接不可用。
+   * 因此：待写条目缺某密钥字段而磁盘上有值时，沿用磁盘值。
+   * 整条渠道不在待写片段里仍代表「用户删了它」，那种情况不做保留。
+   */
+  const next = carryOverChannelSecrets(channels, currentManaged);
+  if (JSON.stringify(currentManaged) === JSON.stringify(next)) return false;
 
   const merged: Record<string, unknown> = { ...existing };
   for (const key of MANAGED_CHANNEL_KEYS) delete merged[key];
-  for (const [key, value] of Object.entries(channels)) merged[key] = value;
+  for (const [key, value] of Object.entries(next)) merged[key] = value;
   data.channels = merged;
   // 唯一后缀避免与并发的读-改-写链路（如 ensureChannelEnabledInConfig）共用临时名互覆
   const tmp = `${configPath}.${process.pid}.${Date.now()}.tmp`;
@@ -1380,6 +1390,17 @@ async function disconnectNanobotChannel(kind: string): Promise<ChannelDisconnect
       await fs.rename(tmp, configPath);
     }
 
+    /*
+     * 保险库里的同名渠道条目一并清除（幂等）。
+     * 不清的话：下一次 syncChannels 会从保险库把凭据**回补**回 config.json，
+     * 症状是「断开之后自己又连上了」——而本地状态显示已断开，两边互相打脸。
+     */
+    try {
+      await credentialVault.remove(channelVaultName(kind));
+    } catch (err) {
+      console.warn(`[nanobot] 清除渠道凭据失败：${String(err)}`);
+    }
+
     // 外部托管：配置已清除，由用户手动重启外部网关完成断开（见函数注释 5）
     if (externallyManaged) {
       return {
@@ -1447,11 +1468,18 @@ async function syncNanobotChannels(channelsJson: string): Promise<ChannelSyncRes
     const channels = (
       typeof parsed.channels === 'object' && parsed.channels !== null ? parsed.channels : parsed
     ) as Record<string, unknown>;
+    /*
+     * 渲染层提交的片段**不含密钥**（凭据已迁加密保险库，见 lib/channelSecrets.ts）：
+     * 合并前必须先按名字从保险库回补，否则整体替换语义会把 config.json 里的凭据抹掉
+     * ——渠道直接不可用，而界面上一切显示正常（最难自查的一类）。
+     * 密钥只回主进程、不回渲染层，同 injectConnectorSecrets 的口径。
+     */
+    const hydrated = await injectChannelSecrets(channels, (name) => credentialVault.read(name));
     const configPath = await resolveNanobotConfigPath();
     if (!configPath) {
       return { ok: false, message: '未找到 nanowork config.json，无法同步频道配置' };
     }
-    const changed = await mergeChannelsIntoConfig(configPath, channels);
+    const changed = await mergeChannelsIntoConfig(configPath, hydrated);
     // 幂等：配置无变化时无需重启网关，避免每次启动都打断既有会话
     if (!changed) {
       // 配置虽无变化，但网关可能尚未拉起（首次启动场景）→ 确保 gateway 在运行

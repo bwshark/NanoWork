@@ -72,6 +72,7 @@ function ChannelsContent({
   const setEnabled = useChannelsStore((s) => s.setEnabled);
   const disconnectChannel = useChannelsStore((s) => s.disconnectChannel);
   const lastSync = useChannelsStore((s) => s.lastSync);
+  const secretKeys = useChannelsStore((s) => s.secretKeys);
   const syncing = configs.some((c) => c.syncStatus === "syncing");
 
   // 断开连接确认弹窗状态（仅扫码渠道且已连接时才会打开）
@@ -147,9 +148,16 @@ function ChannelsContent({
 
       {CHANNEL_METAS.map((meta) => {
         const cfg = configs.find((c) => c.kind === meta.kind);
-        // 「已连接」：扫码渠道 + 桌面端 + 有配置且启用 + 持有凭证（微信有 token / 飞书类实例有 appId）
+        /*
+         * 「已连接」：扫码渠道 + 桌面端 + 有配置且启用 + 持有凭证。
+         *
+         * 凭据判据**必须纳入保险库**：密钥已不落 `channels.json`（见 channelsStore 的文件头），
+         * 重启后微信的 `cfg.token` 是空的——只看配置就会把「已连接」判成「未连接」，
+         * 卡片上的「断开连接」按钮随之消失，用户失去唯一的断开入口。
+         */
         const hasCredential =
-          meta.kind === "weixin" ? !!cfg?.token : !!cfg?.appId;
+          (secretKeys[meta.kind]?.length ?? 0) > 0 ||
+          (meta.kind === "weixin" ? !!cfg?.token : !!cfg?.appId);
         const connected = !!(
           meta.scanConnect &&
           platform.env === "electron" &&

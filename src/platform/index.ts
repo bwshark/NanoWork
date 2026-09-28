@@ -32,7 +32,7 @@ import type {
   SkillOverrideSyncResult,
   TaskSyncResult,
 } from './types';
-import type { ChannelConnectResponse } from '@/types';
+import type { ChannelConnectResponse } from './types';
 
 /**
  * 运行时选择 web / electron 实现并导出统一 API。

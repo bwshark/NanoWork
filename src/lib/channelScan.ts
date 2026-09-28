@@ -4,20 +4,25 @@
  * 分层：
  * - `nextScanState`：纯函数状态迁移（可单测），输入当前快照 + 事件 → 新快照；
  * - `ChannelScanController`：编排层（链式 setTimeout 轮询、指数退避、
- *   硬超时、远端 cancel），仅调用 platform.channelConnect；
+ *   硬超时、远端 cancel），只调用 **runtime 的 `channelConnect`**；
  * - `useChannelScan(kind)`：React hook，薄包装控制器（订阅快照 + 卸载清理）。
  *
+ * 协议细节不在这里：载荷字段与起始参数都是引擎 wire（`session_id` / `qr_url` …），
+ * 只允许出现在 `src/ai/runtime/nanobotHttp/channelConnect.ts`（ADR-020）。本模块
+ * 消费的是它解码后的 camelCase 领域类型，因此改引擎协议只需要改那一处。
+ *
  * 轮询策略：
- * - 链式 `setTimeout`（禁止 setInterval），间隔取响应 `interval_ms`（兜底 2000）；
+ * - 链式 `setTimeout`（禁止 setInterval），间隔取响应 `intervalMs`（兜底 2000）；
  * - 连续传输错误（ok:false）指数退避 2s → 4s → 8s，上限 10s；
  *   累计达 `MAX_TRANSPORT_ERRORS` 次转 `failed`；
- * - 按 `expires_at_ms` 硬超时转 `expired`；
+ * - 按 `expiresAtMs` 硬超时转 `expired`；
  * - `challenge:'verify_code'`（微信）时停止自动轮询，等待用户提交验证码。
  */
 import { useEffect, useState, useSyncExternalStore } from 'react';
-import { platform } from '@/platform';
+import { channelConnect } from '@/ai/runtime';
+import type { ChannelConnectResult } from '@/ai/runtime';
 import { getChannelMeta } from '@/lib/channelMeta';
-import type { ChannelConnectPayload, ChannelKind } from '@/types';
+import type { ChannelKind } from '@/types';
 
 /** 扫码接入状态机 */
 export type ChannelScanState =
@@ -45,13 +50,13 @@ export interface ScanSnapshot {
 
 /** 驱动状态迁移的事件 */
 export type ScanEvent =
-  | { type: 'start'; payload: ChannelConnectPayload }
-  | { type: 'poll'; payload: ChannelConnectPayload }
+  | { type: 'start'; payload: ChannelConnectResult }
+  | { type: 'poll'; payload: ChannelConnectResult }
   | { type: 'transportError'; error: string; consecutiveErrors: number }
   | { type: 'hardTimeout' }
   | { type: 'cancel' };
 
-/** 默认轮询间隔（毫秒；响应未给出 interval_ms 时兜底） */
+/** 默认轮询间隔（毫秒；响应未给出 intervalMs 时兜底） */
 export const DEFAULT_POLL_INTERVAL_MS = 2000;
 /** 传输错误退避基数（毫秒） */
 export const ERROR_BACKOFF_BASE_MS = 2000;
@@ -75,23 +80,23 @@ export function nextScanState(snap: ScanSnapshot, event: ScanEvent): ScanSnapsho
     case 'poll': {
       const p = event.payload;
       // 验证码校验失败：停留在 challenge，等待重新输入
-      if (p.verification_failed) {
+      if (p.verificationFailed) {
         return {
           ...snap,
           state: 'challenge',
           error: '验证码不匹配，请核对后重新输入',
-          qrUrl: p.qr_url ?? snap.qrUrl,
+          qrUrl: p.qrUrl ?? snap.qrUrl,
           message: p.message ?? snap.message,
-          expiresAtMs: p.expires_at_ms ?? snap.expiresAtMs,
+          expiresAtMs: p.expiresAtMs ?? snap.expiresAtMs,
         };
       }
       switch (p.status) {
         case 'succeeded':
-          // 微信已连接过：start 直接返回 succeeded（无 session_id）
+          // 微信已连接过：start 直接返回 succeeded（无 sessionId）
           return {
             ...snap,
             state: 'succeeded',
-            sessionId: p.session_id ?? snap.sessionId,
+            sessionId: p.sessionId ?? snap.sessionId,
             message: p.message ?? snap.message,
             error: undefined,
           };
@@ -100,24 +105,24 @@ export function nextScanState(snap: ScanSnapshot, event: ScanEvent): ScanSnapsho
             ...snap,
             state: 'failed',
             error: p.message ?? '连接失败，请刷新二维码重试',
-            sessionId: p.session_id ?? snap.sessionId,
+            sessionId: p.sessionId ?? snap.sessionId,
           };
         case 'expired':
           return {
             ...snap,
             state: 'expired',
             error: p.message ?? '二维码已过期，请刷新后重试',
-            sessionId: p.session_id ?? snap.sessionId,
+            sessionId: p.sessionId ?? snap.sessionId,
           };
         case 'cancelled':
           return { ...snap, state: 'cancelled' };
         case 'pending': {
           const base = {
             ...snap,
-            // 每次 pending 响应以最新 qr_url 更新（微信自动换码）
-            qrUrl: p.qr_url ?? snap.qrUrl,
-            sessionId: p.session_id ?? snap.sessionId,
-            expiresAtMs: p.expires_at_ms ?? snap.expiresAtMs,
+            // 每次 pending 响应以最新 qrUrl 更新（微信自动换码）
+            qrUrl: p.qrUrl ?? snap.qrUrl,
+            sessionId: p.sessionId ?? snap.sessionId,
+            expiresAtMs: p.expiresAtMs ?? snap.expiresAtMs,
             message: p.message ?? snap.message,
             error: undefined,
           };
@@ -126,6 +131,7 @@ export function nextScanState(snap: ScanSnapshot, event: ScanEvent): ScanSnapsho
           }
           return { ...base, state: 'pending' };
         }
+        // 引擎没给状态 / 给了不认识的值：什么都不做（不猜）
         default:
           return snap;
       }
@@ -153,11 +159,13 @@ export function nextScanState(snap: ScanSnapshot, event: ScanEvent): ScanSnapsho
  * 扫码接入编排控制器（非 React，可直接在测试中驱动）。
  * 生命周期：start → 链式轮询 → 终态（或 challenge 等待用户输入）；
  * cancel / dispose 清定时器并尽力通知远端取消（fire-and-forget）。
+ *
+ * 只持有 `kind` 与 `engineChannel`：起始参数是协议细节，由 runtime 层按 `kind`
+ * 解析（飞书与 Lark 共用引擎渠道 `feishu`，但参数不同——放在这里必然写错一份）。
  */
 export class ChannelScanController {
   readonly kind: ChannelKind;
   private readonly engineChannel: string;
-  private readonly startParams: Record<string, string>;
 
   private snapshot: ScanSnapshot = createInitialSnapshot();
   private listeners = new Set<() => void>();
@@ -170,9 +178,7 @@ export class ChannelScanController {
 
   constructor(kind: ChannelKind) {
     this.kind = kind;
-    const meta = getChannelMeta(kind);
-    this.engineChannel = meta.scanConnect?.engineChannel ?? kind;
-    this.startParams = { ...(meta.scanConnect?.startParams ?? {}) };
+    this.engineChannel = getChannelMeta(kind).scanConnect?.engineChannel ?? kind;
   }
 
   getSnapshot = (): ScanSnapshot => this.snapshot;
@@ -206,8 +212,7 @@ export class ChannelScanController {
    * @param opts.force 微信失败后重登场景携带（透传网关 force 参数）
    */
   start = (opts?: { force?: boolean }): void => {
-    const meta = getChannelMeta(this.kind);
-    if (!meta.scanConnect) {
+    if (!getChannelMeta(this.kind).scanConnect) {
       this.set({ state: 'failed', error: '该渠道不支持扫码接入' });
       return;
     }
@@ -218,22 +223,24 @@ export class ChannelScanController {
     this.sessionId = undefined;
     this.set({ state: 'starting' });
 
-    const params: Record<string, string> = { ...this.startParams };
-    if (opts?.force) params.force = 'true';
-
-    void platform.channelConnect('start', this.engineChannel, params).then((res) => {
+    void channelConnect({
+      action: 'start',
+      kind: this.kind,
+      engineChannel: this.engineChannel,
+      force: opts?.force,
+    }).then((res) => {
       if (runId !== this.runId) return;
       if (!res.ok) {
         this.set({ state: 'failed', error: res.error });
         return;
       }
       const payload = res.result;
-      if (payload.session_id) this.sessionId = payload.session_id;
+      if (payload.sessionId) this.sessionId = payload.sessionId;
       const next = nextScanState(this.snapshot, { type: 'start', payload });
       this.set(next);
       // 微信已连接过：start 直接 succeeded，无需轮询
       if (next.state === 'pending') {
-        this.scheduleNext(payload.interval_ms, payload.expires_at_ms);
+        this.scheduleNext(payload.intervalMs, payload.expiresAtMs);
       }
     });
   };
@@ -243,7 +250,7 @@ export class ChannelScanController {
 
   /**
    * 提交验证码（微信 challenge 场景）：
-   * 带 {session_id, verify_code} 发起一次 poll，由响应决定后续走向。
+   * 带 {sessionId, verifyCode} 发起一次 poll，由响应决定后续走向。
    */
   submitVerifyCode = (code: string): void => {
     const trimmed = code.trim();
@@ -251,7 +258,7 @@ export class ChannelScanController {
     // 在途保护：作废当前在途的另一路响应（如退避中的旧 poll），
     // 防止并发迟到响应翻回状态覆盖本次提交结果（与 cancel 对齐）
     this.runId += 1;
-    void this.doPoll({ verify_code: trimmed });
+    void this.doPoll(trimmed);
   };
 
   /**
@@ -268,16 +275,19 @@ export class ChannelScanController {
       this.set(nextScanState(this.snapshot, { type: 'cancel' }));
     }
     if (cancellable && sid) {
-      void platform
-        .channelConnect('cancel', this.engineChannel, { session_id: sid })
-        .catch(() => undefined);
+      void channelConnect({
+        action: 'cancel',
+        kind: this.kind,
+        engineChannel: this.engineChannel,
+        sessionId: sid,
+      }).catch(() => undefined);
     }
   };
 
   /** 卸载清理：与 cancel 同语义 */
   dispose = (): void => this.cancel();
 
-  /** 链式调度下一次轮询 + 按 expires_at_ms 布防硬超时 */
+  /** 链式调度下一次轮询 + 按 expiresAtMs 布防硬超时 */
   private scheduleNext(intervalMs?: number, expiresAtMs?: number): void {
     this.clearTimers();
     this.pollTimer = setTimeout(
@@ -298,15 +308,19 @@ export class ChannelScanController {
     }
   }
 
-  /** 执行一次 poll（可附带额外参数，如验证码） */
-  private async doPoll(extra?: Record<string, string>): Promise<void> {
+  /** 执行一次 poll（`verifyCode` 仅在验证码场景传入） */
+  private async doPoll(verifyCode?: string): Promise<void> {
     const runId = this.runId;
-    const params: Record<string, string> = { ...extra };
-    if (this.sessionId) params.session_id = this.sessionId;
 
-    let res: Awaited<ReturnType<typeof platform.channelConnect>>;
+    let res: Awaited<ReturnType<typeof channelConnect>>;
     try {
-      res = await platform.channelConnect('poll', this.engineChannel, params);
+      res = await channelConnect({
+        action: 'poll',
+        kind: this.kind,
+        engineChannel: this.engineChannel,
+        sessionId: this.sessionId,
+        verifyCode,
+      });
     } catch (e) {
       res = { ok: false, error: e instanceof Error ? e.message : String(e) };
     }
@@ -335,12 +349,12 @@ export class ChannelScanController {
 
     this.consecutiveErrors = 0;
     const payload = res.result;
-    if (payload.session_id) this.sessionId = payload.session_id;
+    if (payload.sessionId) this.sessionId = payload.sessionId;
     const next = nextScanState(this.snapshot, { type: 'poll', payload });
     this.set(next);
 
     if (next.state === 'pending') {
-      this.scheduleNext(payload.interval_ms, payload.expires_at_ms ?? next.expiresAtMs);
+      this.scheduleNext(payload.intervalMs, payload.expiresAtMs ?? next.expiresAtMs);
     } else {
       // challenge：停止自动轮询，等待用户输入验证码；
       // 终态（succeeded / failed / expired / cancelled）：停止一切定时器

@@ -13,6 +13,7 @@ import {
   getEventStore,
   hasRecorder,
   hasSessionMessages,
+  isExecutionMode,
   listSessionEntries,
   messageEventIdOf,
   metaToSession,
@@ -23,9 +24,11 @@ import {
   setRecordErrorSink,
   setRecorderWorkdir,
   toEventAttachment,
+  UNBOUND_AGENT_SENTINEL,
 } from '@/events';
 import type { EventFactory } from '@/events/factory';
 import type { ExecutionMode, SessionEvent, SessionMeta } from '@/types/event';
+import { normalizeMeta, withoutTombstone } from '@/lib/syncMeta';
 import {
   attachmentsToUploadFiles,
   toPersistableAttachment,
@@ -62,6 +65,8 @@ import type {
   PlanVerdict,
   ProcessToolRow,
   Session,
+  SyncMeta,
+  SyncMetaInput,
   ToolCall,
 } from '@/types';
 import type {
@@ -110,6 +115,19 @@ export interface SessionStream {
 
 interface SessionsState {
   sessions: Session[];
+  /**
+   * **会话墓碑的兄弟表**（批次 4）：`会话 id → 删除元数据`。
+   *
+   * 与 `sessions` 分开存，理由同 `agentsStore.tombstones`（存活数组天生只含存活项）。
+   * 会话的删除在磁盘上由索引条目的 `deletedAt` 承载（`tombstoneSession` → `tombstoneEntry`），
+   * 而同步层需要一份**同步可读**的内存镜像——`loadSessions` 末尾从 `readIndex()` 的
+   * 原始索引（含墓碑）填充，`deleteSession` / `deleteSessions` 与远端落地时写入。
+   *
+   * 为什么不能用 `sessions` 数组内的 `deletedAt` 承载：`loadSessions` 的列表来源是
+   * `listSessions()`（**已过滤墓碑**），墓碑根本进不了 `sessions`；且数组里放墓碑会与
+   * 合成逻辑打架（同 `SyncTombstones` 的说明）。
+   */
+  sessionTombstones: Record<string, SyncMeta>;
   activeId: string | null;
   /**
    * 按会话隔离的流式状态映射：sessionId → 流式上下文。
@@ -181,6 +199,20 @@ interface SessionsState {
    * 逐条调模型总结既慢又无检索价值，且删除是用户明确的「清掉」意图。
    */
   deleteSessions: (ids: string[]) => void;
+  /**
+   * pull 落地一条**存活**的会话元数据（`sessionMeta` collection，§D.4）。
+   *
+   * 与其余 collection 不同：会话的同步负载是「元数据投影」，落地要**双写**——
+   * 内存 `sessions` + 磁盘 `<id>.meta.json` +（防抖）重建索引。写 meta 之后再
+   * `rebuildIndex()` 是必需的：`EventStore.writeMeta` 只写 meta、**不动索引**，
+   * 而列表来源是索引——不重建，重启后这条会话不会出现在列表里。
+   *
+   * `streamWorkdir` 在落地时**重定向为本机默认工作空间**（§D.5）：拉来的会话在本机
+   * 还没有 JSONL，用对端路径做分片会让批次 5 的事件落在错误目录。
+   */
+  applyRemoteSessionMeta: (entity: Record<string, unknown>) => void;
+  /** pull 落地一条会话**墓碑**（§D.4）：写墓碑 + 覆盖索引条目 + 丢弃正文。 */
+  applyRemoteSessionTombstone: (entity: Record<string, unknown>) => void;
   renameSession: (id: string, title: string) => void;
   /** 切换置顶状态：分组内始终排在最前 */
   togglePinSession: (id: string) => void;
@@ -478,6 +510,92 @@ function tombstoneSessionStream(s: Session): void {
     (e: unknown) => reportStreamError(id, e),
   );
 }
+
+// ————————————————————————————————————————————————————————————————
+// 同步落地（批次 4）：sessionMeta collection 的读写转换
+// ————————————————————————————————————————————————————————————————
+
+/** 索引重建的防抖窗口（毫秒）：合并短时间内多条落地为一次重建 */
+const INDEX_REBUILD_DEBOUNCE_MS = 300;
+/** 索引重建的防抖定时器（模块级，跨落地共享） */
+let indexRebuildTimer: ReturnType<typeof setTimeout> | null = null;
+
+/**
+ * 请求一次**防抖的索引重建**。
+ *
+ * `EventStore.writeMeta` / `tombstoneSession` 的写入路径都维护索引，但落地远端会话时
+ * 我们要把「本机此前没有的会话」补进列表——`writeMeta` 只写 meta 不动索引，只有在
+ * `rebuildIndex()`（内部 `entryFromMeta(meta, counters)`）之后它才会出现在列表里。
+ * 每条落地各重建一次会重复扫盘，故用防抖合并。
+ */
+function requestIndexRebuild(): void {
+  if (indexRebuildTimer !== null) clearTimeout(indexRebuildTimer);
+  indexRebuildTimer = setTimeout(() => {
+    indexRebuildTimer = null;
+    void getEventStore().rebuildIndex().catch(() => undefined);
+  }, INDEX_REBUILD_DEBOUNCE_MS);
+}
+
+/** 由 `SessionMeta` 组装会话视图（仅元数据派生字段；runtime 字段留空由调用方补） */
+function buildSessionFromMeta(meta: SessionMeta): Session {
+  return { ...metaToSession(meta), messages: [], permissionLog: [] };
+}
+
+/**
+ * 由同步负载（`sessionMeta` collection 的 entity）组装 `SessionMeta`（**落盘形态**）。
+ *
+ * ⚠️ 负载里的 `workdir` 是**语义工作空间**（`SESSION_SYNC_FIELDS` 的白名单字段），
+ * **不是落盘分片**。落盘分片必须**重定向为本机默认工作空间**（§D.5）：拉来的会话在
+ * 本机还没有 JSONL，若用对端路径做分片，`streamShardOf = streamWorkdir ?? workdir`
+ * 会回退到对端路径，批次 5 的事件就落在错误目录。故这里把 `workdir`（分片）写成
+ * 本机默认、把对端语义工作空间写进 `workspace`（`toMeta` 的落盘约定）。
+ *
+ * 墓碑负载**不带**业务字段（`tombstoneEntries()` 只产出 `id` + 元数据），此时
+ * `workdir` 落到本机默认、`workspace` 缺省——正好是「本机无此会话」的正确形态。
+ */
+export function toMetaFromEntity(entity: Record<string, unknown>): SessionMeta {
+  const streamShard = resolveDefaultWorkspacePath();
+  const semanticWorkdir = typeof entity.workdir === 'string' ? entity.workdir : undefined;
+  const now = new Date().toISOString();
+  return {
+    id: String(entity.id),
+    title: typeof entity.title === 'string' && entity.title ? entity.title : '新任务',
+    agentId:
+      typeof entity.agentId === 'string' && entity.agentId
+        ? entity.agentId
+        : UNBOUND_AGENT_SENTINEL,
+    groupId: typeof entity.groupId === 'string' ? entity.groupId : null,
+    workdir: streamShard,
+    ...(semanticWorkdir !== undefined && semanticWorkdir !== streamShard
+      ? { workspace: semanticWorkdir }
+      : {}),
+    mode: isExecutionMode(entity.mode) ? entity.mode : 'craft',
+    ...(typeof entity.model === 'string' ? { model: entity.model } : {}),
+    permissionMode: entity.fullAccess === true ? 'full' : 'restricted',
+    ...(typeof entity.toolApproval === 'boolean' ? { toolApproval: entity.toolApproval } : {}),
+    ...(Array.isArray(entity.skillIds)
+      ? {
+          skillIds: (entity.skillIds as unknown[]).filter(
+            (x): x is string => typeof x === 'string',
+          ),
+        }
+      : {}),
+    ...(typeof entity.channel === 'string' ? { channel: entity.channel } : {}),
+    ...(typeof entity.readonly === 'boolean' ? { readonly: entity.readonly } : {}),
+    ...(typeof entity.pinned === 'boolean' ? { pinned: entity.pinned } : {}),
+    createdAt: typeof entity.createdAt === 'string' ? entity.createdAt : now,
+    updatedAt: typeof entity.updatedAt === 'string' ? entity.updatedAt : now,
+    rev: typeof entity.rev === 'number' ? entity.rev : undefined,
+    updatedBy: typeof entity.updatedBy === 'string' ? entity.updatedBy : undefined,
+    deletedAt: typeof entity.deletedAt === 'string' ? entity.deletedAt : null,
+  };
+}
+
+/** 从同步负载 / 会话实体身上摘出**四个同步元数据字段**（归一后返回） */
+export function sessionMetaOf(entity: Record<string, unknown>): SyncMeta {
+  return normalizeMeta(entity as SyncMetaInput);
+}
+
 
 // ————————————————————————————————————————————————————————————————
 // 读路径接线（D2 Phase D）：列表来自索引，消息按需从事件流重建
@@ -1005,6 +1123,7 @@ function sedimentSession(target: Session): void {
 export const useSessionsStore = create<SessionsState>()(
   (set, get) => ({
     sessions: [],
+    sessionTombstones: {},
     activeId: null,
     streams: {},
     pendingApprovals: [],
@@ -1401,7 +1520,20 @@ export const useSessionsStore = create<SessionsState>()(
         /* 恢复「上次打开」失败不影响启动，退化为「未选中」 */
       }
 
-      set({ sessions, activeId });
+      // 同步层的内存墓碑镜像：`listSessions()` 会**过滤掉**墓碑条目（见
+      // `listSessionEntries`），所以上面 `entries` 里看不到它们；墓碑只能从**原始
+      // 索引**（`readIndex()` 返回未过滤的 `entries`）恢复。重启后若不回填，本机
+      // 已删除的会话在同步层「看起来从未存在」——下一次 pull 若正好拉到对端尚未
+      // 见到该墓碑的存活副本，就会被当新会话重新落地，删除就此复活。
+      const rawIndex = await store.readIndex();
+      const sessionTombstones: Record<string, SyncMeta> = {};
+      for (const [id, entry] of Object.entries(rawIndex.entries)) {
+        // 只有带 `deletedAt` 的条目才是墓碑；存活条目由上面的 `sessions` 承载
+        if (!entry.deletedAt) continue;
+        sessionTombstones[id] = sessionMetaOf(entry as unknown as Record<string, unknown>);
+      }
+
+      set({ sessions, activeId, sessionTombstones });
       // 首屏就把当前会话的消息准备好，避免用户看到空列表后内容才刷出来
       if (activeId) void get().loadSession(activeId);
     },
@@ -1473,7 +1605,15 @@ export const useSessionsStore = create<SessionsState>()(
       set((s) => {
         const sessions = s.sessions.filter((x) => x.id !== id);
         const activeId = s.activeId === id ? sessions[0]?.id ?? null : s.activeId;
-        return { sessions, activeId };
+        return {
+          sessions,
+          activeId,
+          // 同步层的内存镜像墓碑：磁盘载体是索引条目的 `deletedAt`（`tombstoneSession`
+          // 写入），同步层读的是这张表（见 `sessionTombstones` 的说明）。
+          ...(target
+            ? { sessionTombstones: { ...s.sessionTombstones, [id]: sessionDeletePatch(target) } }
+            : {}),
+        };
       });
 
       // 落盘走**墓碑**：内存视图已移除，但磁盘上要留下「它被删了」这条记录
@@ -1492,9 +1632,65 @@ export const useSessionsStore = create<SessionsState>()(
         if (sessions.length === s.sessions.length) return s;
         const activeId =
           s.activeId && doomed.has(s.activeId) ? sessions[0]?.id ?? null : s.activeId;
-        return { sessions, activeId };
+        // 同步层的内存镜像墓碑（同 deleteSession）
+        const sessionTombstones = { ...s.sessionTombstones };
+        for (const t of targets) sessionTombstones[t.id] = sessionDeletePatch(t);
+        return { sessions, activeId, sessionTombstones };
       });
       targets.forEach(tombstoneSessionStream);
+    },
+
+    /**
+     * pull 落地一条**存活**的会话元数据（`sessionMeta` collection，§D.4）。
+     *
+     * 与其余 collection 不同：会话的同步负载是「元数据投影」，落地要**双写**——
+     * 内存 `sessions` + 磁盘 `<id>.meta.json` +（防抖）重建索引。写 meta 之后再
+     * `rebuildIndex()` 是必需的：`EventStore.writeMeta` 只写 meta、**不动索引**，
+     * 而列表来源是索引——不重建，重启后这条会话不会出现在列表里。
+     */
+    applyRemoteSessionMeta: (entity) => {
+      const meta = toMetaFromEntity(entity);
+      const next = buildSessionFromMeta(meta);
+      void getEventStore()
+        .writeMeta(toMeta(next))
+        .then(() => requestIndexRebuild())
+        .catch((e: unknown) => reportStreamError(next.id, e));
+      set((s) => ({
+        sessions: s.sessions.some((x) => x.id === next.id)
+          ? s.sessions.map((x) =>
+              x.id === next.id
+                ? {
+                    ...x,
+                    ...next,
+                    // 只覆盖元数据派生字段，**保留本机运行时状态**（messages /
+                    // permissionLog / messageCount）。若写成 `{ ...x, ...next }`，
+                    // 本机已水合的会话会被清空消息——而 `hydratedSessions` 已标记就绪，
+                    // `loadSession` 不再重读，聊天记录会永久消失（本机回拉自己刚推的
+                    // 变更时必现：引擎在 accepted 非空后会再 pull 一次）。
+                    messages: x.messages,
+                    permissionLog: x.permissionLog,
+                    messageCount: x.messageCount,
+                  }
+                : x,
+            )
+          : [next, ...s.sessions],
+        // 存活落地清同名墓碑（「删除后又建回来」不留幽灵墓碑）
+        sessionTombstones: withoutTombstone(s.sessionTombstones, next.id),
+      }));
+    },
+
+    /** pull 落地一条会话**墓碑**（§D.4）：写墓碑 + 覆盖索引条目 + 丢弃正文。 */
+    applyRemoteSessionTombstone: (entity) => {
+      const meta = toMetaFromEntity(entity);
+      // `tombstoneSession` 一条动作完成「写墓碑 + 覆盖索引条目 + 丢弃正文」（见 §D.4）。
+      // 等价地改用 `writeMeta` 做不到：它不动索引 → 重启后该会话仍留在列表里（删不掉）。
+      void getEventStore()
+        .tombstoneSession(meta)
+        .catch((e: unknown) => reportStreamError(meta.id, e));
+      set((s) => ({
+        sessions: s.sessions.filter((x) => x.id !== meta.id),
+        sessionTombstones: { ...s.sessionTombstones, [meta.id]: normalizeMeta(meta) },
+      }));
     },
 
     renameSession: (id, title) => {

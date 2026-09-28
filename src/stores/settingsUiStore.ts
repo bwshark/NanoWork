@@ -18,6 +18,7 @@ export const SETTINGS_SECTION_IDS = [
   'assistant',
   'plugins',
   'data',
+  'account',
   'about',
 ] as const;
 

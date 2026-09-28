@@ -16,6 +16,7 @@
  */
 
 import { beforeEach, describe, expect, it } from 'vitest';
+import { MemoryRouter } from 'react-router-dom';
 import { SettingsDialog } from '@/components/settings/SettingsDialog';
 import { SETTINGS_NAV_ITEMS } from '@/components/settings/settingsNav';
 import { useSettingsUiStore } from '@/stores/settingsUiStore';
@@ -39,8 +40,24 @@ const CONTENT_ANCHORS: Record<SettingsSectionId, string> = {
   assistant: '配置 IM 频道',
   plugins: '引擎已激活',
   data: '数据落点',
+  // 「账户」分区用 `useNavigate`（未登录入口跳登录页），故弹窗需挂在 Router 下（见 renderDialog）
+  account: '跨设备同步',
   about: '运行环境',
 };
+
+/**
+ * 挂载设置弹窗。
+ *
+ * 必须包一层 `MemoryRouter`：批次 4 的「账户」分区内含「登录 / 注册」入口，它用
+ * `useNavigate()` 跳 `/auth`——没有 Router 上下文会在渲染时抛错，整棵弹窗都渲染不出来。
+ */
+function renderDialog(): HTMLDivElement {
+  return mount(
+    <MemoryRouter>
+      <SettingsDialog />
+    </MemoryRouter>,
+  );
+}
 
 /** 右侧内容栏 = 左侧菜单 `<nav>` 的兄弟节点（弹窗的两栏是同层 flex 子项） */
 function rightPanel(): HTMLElement {
@@ -79,14 +96,14 @@ beforeEach(() => {
 
 describe('设置弹窗分区联动', () => {
   it('左侧菜单按 SETTINGS_NAV_ITEMS 全量渲染', () => {
-    mount(<SettingsDialog />);
+    renderDialog();
     for (const id of Object.keys(SETTINGS_NAV_ITEMS) as SettingsSectionId[]) {
       expect(navItem(SETTINGS_NAV_ITEMS[id].label), `${id} 菜单项缺失`).toBeTruthy();
     }
   });
 
   it('点击每个菜单项，右侧都渲染出对应内容', async () => {
-    mount(<SettingsDialog />);
+    renderDialog();
     await flush();
 
     for (const id of Object.keys(SETTINGS_NAV_ITEMS) as SettingsSectionId[]) {
@@ -106,7 +123,7 @@ describe('设置弹窗分区联动', () => {
   });
 
   it('弹窗两栏是水平并排，不是上下堆叠', () => {
-    mount(<SettingsDialog />);
+    renderDialog();
     // 这条正是「左侧有菜单、右侧全空」的根因：column 会把右栏压成 0 高。
     // jsdom 会按 emotion 注入的样式做层叠计算，拿到的就是最终生效值。
     expect(getComputedStyle(dialogPaper()).flexDirection).toBe('row');
@@ -136,7 +153,7 @@ describe('设置弹窗的默认分区', () => {
     expect(useSettingsUiStore.getState().section).toBe('general');
     expect(useSettingsUiStore.getState().open).toBe(true);
 
-    mount(<SettingsDialog />);
+    renderDialog();
     await flush();
 
     const panel = rightPanel().textContent ?? '';
@@ -148,7 +165,7 @@ describe('设置弹窗的默认分区', () => {
     const openSettings = useSettingsUiStore.getState().openSettings;
     openSettings(new MouseEvent('click') as unknown as SettingsSectionId);
 
-    mount(<SettingsDialog />);
+    renderDialog();
     await flush();
 
     expect(

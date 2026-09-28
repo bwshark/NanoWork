@@ -89,6 +89,13 @@ export const ROUTES = {
    */
   settings: '/settings',
   artifacts: '/artifacts',
+  /**
+   * 登录 / 注册页（批次 4，FR-10）。
+   *
+   * **不是受保护页**——它就是登录页本身：未登录时不拦截本地使用，只把入口收在
+   * 设置弹窗「账户」分区（或状态徽章）里；点进去才 `navigate('/auth')`。
+   */
+  auth: '/auth',
 } as const;
 
 /** 持久化存储 key 前缀集中管理 */
