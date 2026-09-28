@@ -558,21 +558,45 @@ let nanobotServePort: number | null = null;
 /** nanobot 启动配置（bin/host/port 与可选的 config.json 路径） */
 interface NanobotLaunchConfig {
   bin: string;
+  /**
+   * 传给 `bin` 的前置参数（空数组表示 `bin` 本身就是 nanobot 入口）。
+   *
+   * 为什么需要它：`nanobot.exe` 是 setuptools 生成的 console script，它把**创建它时**
+   * 的解释器绝对路径烧进了 exe 里（`#!D:\...\python.exe`）。venv 一旦被复制或搬迁，
+   * 这个 shebang 依旧指着老位置 —— 于是「用本项目的 venv 拉起，实际跑的是另一个项目的
+   * 源码」：本项目改什么都不生效，异常堆栈里的路径看着还像别人的项目。
+   * 所以优先用 venv 里的 python 以 `-m nanobot` 启动，绕开这个内嵌路径。
+   */
+  args: string[];
   host: string;
   port: string;
   config?: string;
 }
 
-/** 项目本地兜底配置：nanobot/nanobot/.venv 里的可执行文件 + 项目根 nanowork.config.json */
+/** 项目本地兜底配置：nanobot/nanobot/.venv 里的解释器 + 项目根 nanowork.config.json */
 function fallbackLaunchConfig(): NanobotLaunchConfig {
   const root = join(__dirname, '..');
-  const venvBin =
-    process.platform === 'win32'
-      ? join(root, 'nanobot', 'nanobot', '.venv', 'Scripts', 'nanobot.exe')
-      : join(root, 'nanobot', 'nanobot', '.venv', 'bin', 'nanobot');
-  const bin = existsSync(venvBin) ? venvBin : 'nanobot';
+  const isWin = process.platform === 'win32';
+  const venvPython = isWin
+    ? join(root, 'nanobot', 'nanobot', '.venv', 'Scripts', 'python.exe')
+    : join(root, 'nanobot', 'nanobot', '.venv', 'bin', 'python');
+  // 首选：venv 的解释器 + `-m nanobot`（原因见 NanobotLaunchConfig.args）
+  if (existsSync(venvPython)) {
+    return {
+      bin: venvPython,
+      args: ['-m', 'nanobot'],
+      host: '127.0.0.1',
+      port: String(DEFAULT_GATEWAY_PORT),
+      config: join(root, 'nanowork.config.json'),
+    };
+  }
+  // 退路：console script，或 PATH 上的 nanobot
+  const venvBin = isWin
+    ? join(root, 'nanobot', 'nanobot', '.venv', 'Scripts', 'nanobot.exe')
+    : join(root, 'nanobot', 'nanobot', '.venv', 'bin', 'nanobot');
   return {
-    bin,
+    bin: existsSync(venvBin) ? venvBin : 'nanobot',
+    args: [],
     host: '127.0.0.1',
     port: String(DEFAULT_GATEWAY_PORT),
     config: join(root, 'nanowork.config.json'),
@@ -604,6 +628,9 @@ async function readLaunchConfigFromDisk(): Promise<NanobotLaunchConfig> {
     }>;
     return {
       bin: cfg.bin ?? fallback.bin,
+      // 用户显式指定了 bin，就把它当入口可执行文件对待，不再附加 `-m nanobot`；
+      // 只有回落到兜底（venv 解释器）时才带上 args。
+      args: cfg.bin ? [] : fallback.args,
       host: cfg.host ?? fallback.host,
       port: cfg.port ?? String(DEFAULT_GATEWAY_PORT),
       config: cfg.config ?? fallback.config,
@@ -623,8 +650,11 @@ async function readLaunchConfigFromDisk(): Promise<NanobotLaunchConfig> {
  */
 async function readNanobotConfig(): Promise<NanobotLaunchConfig> {
   const base = await readLaunchConfigFromDisk();
+  const envBin = process.env.NANOBOT_BIN;
   return {
-    bin: process.env.NANOBOT_BIN || base.bin,
+    bin: envBin || base.bin,
+    // 同 readLaunchConfigFromDisk：显式给了 bin 就按入口可执行文件对待。
+    args: envBin ? [] : base.args,
     host: process.env.NANOBOT_HOST || base.host,
     port: process.env.NANOBOT_PORT || base.port,
     config: base.config,
@@ -710,7 +740,7 @@ async function waitForPort(
 /** 启动 nanobot 网关子进程；若本机未安装则记录警告并返回 false（不影响主程序） */
 async function startNanobot(): Promise<boolean> {
   if (nanobotProcess) return true;
-  const { bin, host, port, config } = await readNanobotConfig();
+  const { bin, args, host, port, config } = await readNanobotConfig();
   lastNanobotConfigPath = config;
   const preferred = Number(port);
   // 端口已被占用（用户手动拉起过 / 上一实例未退出）→ 直接复用，避免 10048 冲突
@@ -729,7 +759,7 @@ async function startNanobot(): Promise<boolean> {
         `[nanobot] ${host}:${preferred} 不可用（被占用或落在系统保留端口区间），自动改用 ${listenPort}`,
       );
     }
-    const serveArgs = ['serve', '--host', host, '--port', String(listenPort)];
+    const serveArgs = [...args, 'serve', '--host', host, '--port', String(listenPort)];
     if (config && existsSync(config)) {
       serveArgs.push('--config', config, '-v');
     }
@@ -810,14 +840,14 @@ function stopNanobotGateway(): void {
  */
 async function startNanobotGateway(): Promise<boolean> {
   if (nanobotGatewayProcess) return true;
-  const { bin, config } = await readNanobotConfig();
+  const { bin, args, config } = await readNanobotConfig();
   // 网关已在本机运行（用户手动拉起 / 上一实例未退出）→ 复用，不重复拉起
   if (await isPortInUse('127.0.0.1', 18790)) {
     console.log('[nanobot] gateway 18790 已在监听，复用既有网关，不重复拉起');
     return true;
   }
   try {
-    const gatewayArgs = ['gateway', '--foreground'];
+    const gatewayArgs = [...args, 'gateway', '--foreground'];
     if (config && existsSync(config)) gatewayArgs.push('--config', config, '-v');
     nanobotGatewayProcess = spawn(bin, gatewayArgs, {
       stdio: ['ignore', 'pipe', 'pipe'],

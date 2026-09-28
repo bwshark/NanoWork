@@ -168,12 +168,12 @@ describe('mcpStore：改 → rev+1，删 → 墓碑不在列表，运行时事�
     const config = useMcpStore.getState().addConfig({ name: '探测结果不算改动' });
     const revAfterCreate = useMcpStore.getState().configs[0].rev;
 
-    useMcpStore.getState().setStatus(config.id, 'connected');
+    useMcpStore.getState().setConnectionStatus(config.id, 'connected');
 
     // 连接状态是本机探测结果，跨设备同步会得到「从未探测过却已连接」的假状态。
     // 若它推进 rev，LWW 就会把「谁真的改了配置」淹没在探测噪声里
     const stored = useMcpStore.getState().configs.find((c) => c.id === config.id);
-    expect(stored?.status).toBe('connected');
+    expect(stored?.connectionStatus).toBe('connected');
     expect(stored?.rev).toBe(revAfterCreate);
   });
 });

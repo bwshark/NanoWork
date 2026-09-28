@@ -25,7 +25,8 @@ const cfg = (patch: Partial<MCPConfig> = {}): MCPConfig => ({
   name: 'demo mcp',
   transport: 'url',
   endpoint: 'http://localhost:8080/mcp',
-  status: 'idle',
+  connectionStatus: 'unknown',
+  syncStatus: 'idle',
   source: 'user',
   enabled: true,
   ...patch,
@@ -182,7 +183,7 @@ describe('McpPage: 连接测试走真实探针', () => {
       endpoint: 'http://localhost:8080/mcp',
     });
     const stored = useMcpStore.getState().configs[0];
-    expect(stored.status).toBe('connected');
+    expect(stored.connectionStatus).toBe('connected');
     expect(stored.tools).toHaveLength(3);
   });
 
@@ -201,7 +202,7 @@ describe('McpPage: 连接测试走真实探针', () => {
     await flush();
 
     const stored = useMcpStore.getState().configs[0];
-    expect(stored.status).toBe('error');
+    expect(stored.connectionStatus).toBe('error');
     expect(stored.tools).toHaveLength(2);
   });
 });

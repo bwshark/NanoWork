@@ -125,7 +125,8 @@ export function fromNanobotMCP(snapshot: Record<string, unknown> | null): MCPCon
         name,
         transport: 'command',
         command: joinCommand([entry.command, ...args]),
-        status: 'idle',
+        connectionStatus: 'unknown',
+        syncStatus: 'idle',
         source: 'user',
         enabled: true,
       };
@@ -149,7 +150,8 @@ export function fromNanobotMCP(snapshot: Record<string, unknown> | null): MCPCon
       name,
       transport: 'url',
       endpoint: entry.url,
-      status: 'idle',
+      connectionStatus: 'unknown',
+      syncStatus: 'idle',
       source: 'user',
       enabled: true,
     };

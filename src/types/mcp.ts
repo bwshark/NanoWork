@@ -3,8 +3,27 @@ import type { SyncMetaFields } from './sync';
 /** MCP 传输类型 */
 export type MCPTransport = 'url' | 'command';
 
-/** MCP 连接状态 */
-export type MCPStatus = 'idle' | 'syncing' | 'connected' | 'error';
+/**
+ * MCP **连接状态**：回答「这个 server 现在能不能连上」。
+ *
+ * ⚠️ **只有一次真实握手（`testConfig` → 主进程探针）有资格写这个字段**。
+ * 它曾与「同步状态」合并成单个 `status`，于是两种互不相干的事实互相覆盖，
+ * 界面出现自相矛盾：开关显示「停用」而徽章写「已连接」、「连接测试失败后
+ * 点一下同步」徽章又变「已连接」。
+ *
+ * 它是**运行时事实**，跨会话必然过期（引擎会重启、网络会变、地址会被改），
+ * 因此**不落盘** —— 见 `mcpStore` 的 `partialize`。
+ */
+export type McpConnectionStatus = 'unknown' | 'probing' | 'connected' | 'error';
+
+/**
+ * MCP **同步状态**：回答「配置有没有成功写进引擎的 `tools.mcpServers`」。
+ *
+ * ⚠️ **只由 `syncConfig` / `syncEnabled` 写**。同步成功**不代表**连上了——
+ * 这正是它必须与连接状态分开的原因。用户可见的同步反馈是 toast（每次调用点都有），
+ * 这个字段用于卡片的次要指示与防重复提交。
+ */
+export type McpSyncStatus = 'idle' | 'syncing' | 'synced' | 'error';
 
 /**
  * MCP 来源。
@@ -85,7 +104,18 @@ export interface MCPConfig extends SyncMetaFields {
   tools?: McpToolInfo[];
   /** 最近一次真实探测的时间戳（毫秒）；未探测过为 undefined */
   lastProbedAt?: number;
-  status: MCPStatus;
+  /**
+   * 连接状态（真实握手）。**唯一写入者是 `testConfig`**，
+   * 另有「停用即失连」的清理会把它归零。详见 `McpConnectionStatus`。
+   */
+  connectionStatus: McpConnectionStatus;
+  /**
+   * 同步状态（下发引擎）。**唯一写入者是 `syncConfig` / `syncEnabled`**。
+   * 与 `connectionStatus` 各管一件事，别让任一方去写另一方。详见 `McpSyncStatus`。
+   */
+  syncStatus: McpSyncStatus;
+  /** 最近一次同步成功的时间戳（毫秒）；未同步过为 undefined */
+  lastSyncedAt?: number;
   /** 来源（builtin/user）；老数据无此字段时按 'user' 处理 */
   source?: MCPSource;
   /** 是否启用：builtin/user 均可在管理页切换；undefined 视为启用（老数据兼容） */

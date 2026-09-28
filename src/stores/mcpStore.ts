@@ -11,8 +11,9 @@ import { MCP_SERVERS } from '@/ai/builtinMcps';
 import {
   BUILTIN_MCP_PREFIX,
   isBuiltinMcpId,
+  type McpConnectionStatus,
   type MCPConfig,
-  type MCPStatus,
+  type McpSyncStatus,
   type SyncTombstones,
 } from '@/types';
 import type {
@@ -73,7 +74,19 @@ interface McpState {
   syncEnabled: () => Promise<SyncResult>;
   /** 启动回读：从 nanobot config.json 反向补齐本地缺失的 MCP 条目（仅追加，不覆盖） */
   hydrateFromNanobot: () => Promise<void>;
-  setStatus: (id: string, status: MCPStatus) => void;
+  /**
+   * **连接状态**唯一写入入口。
+   *
+   * 只有真实握手（`testConfig`）与「停用即失连」的清理走这里。
+   * 它与 `setSyncStatus` 各管一件事 —— 历史上两者共用一个 `setStatus`，
+   * 于是同步动作能覆盖连接事实，界面出现「测试失败却显示已连接」。
+   */
+  setConnectionStatus: (id: string, status: McpConnectionStatus) => void;
+  /**
+   * **同步状态**唯一写入入口（下发引擎）。
+   * @param syncedAt 同步成功的时间戳；只在 `status === 'synced'` 时被记录
+   */
+  setSyncStatus: (id: string, status: McpSyncStatus, syncedAt?: number) => void;
 }
 
 /** 从草稿里取凭据的 key 名清单（排序后稳定，便于比较与展示） */
@@ -102,7 +115,14 @@ function mergeConfigs(stored: MCPConfig[]): MCPConfig[] {
       ? {
           ...b,
           enabled: over.enabled ?? b.enabled,
-          status: over.status ?? b.status,
+          /*
+           * `connectionStatus` **刻意不从持久化覆盖**：它是运行时事实，
+           * 落盘时已被归零（见 `partialize`），这里再读一次等于把过期值请回来。
+           * `syncStatus` / `lastSyncedAt` 相反，它们记录的是「已经发生过的事」，
+           * 随用户覆盖保留 —— 重装/重启不该让「上次同步成功于何时」失忆。
+           */
+          syncStatus: over.syncStatus ?? b.syncStatus,
+          lastSyncedAt: over.lastSyncedAt ?? b.lastSyncedAt,
           // 同步元数据随用户覆盖一起保留（理由同 agentsStore 的 mergeAgents）
           ...pickMeta(over),
         }
@@ -152,7 +172,8 @@ export const useMcpStore = create<McpState>()(
           urlType: partial?.urlType,
           command: partial?.command,
           auth: partial?.auth,
-          status: 'idle',
+          connectionStatus: 'unknown',
+          syncStatus: 'idle',
           source: 'user',
           enabled: true,
           createdAt: stamp.updatedAt,
@@ -206,23 +227,61 @@ export const useMcpStore = create<McpState>()(
         }
       },
 
+      /*
+       * 启停切换要**连带重置连接状态**：`connectionStatus` 记的是「上一次真实握手的结果」，
+       * 停用并不清算它，于是卡片会自相矛盾——开关显示「停用」、徽章却写「已连接」。
+       * 重置为 `unknown`（未连接）而不是 `idle`：语义上它现在是「没有连接事实」，
+       * 而不是「尝试过但没连上」。重新启用**不恢复**旧值——连接事实只有再跑一次
+       * 连接测试才算数。
+       */
       toggleMcp: (id) =>
         set((s) => ({
-          configs: s.configs.map((c) =>
-            c.id === id
-              ? { ...c, enabled: !(c.enabled ?? !isBuiltinMcpId(c.id)), ...metaForEdit(c) }
-              : c,
-          ),
+          configs: s.configs.map((c) => {
+            if (c.id !== id) return c;
+            const enabled = !(c.enabled ?? !isBuiltinMcpId(c.id));
+            return {
+              ...c,
+              enabled,
+              connectionStatus: enabled ? c.connectionStatus : 'unknown',
+              ...metaForEdit(c),
+            };
+          }),
         })),
 
       setMcpEnabled: (id, enabled) =>
         set((s) => ({
-          configs: s.configs.map((c) => (c.id === id ? { ...c, enabled, ...metaForEdit(c) } : c)),
+          configs: s.configs.map((c) =>
+            c.id === id
+              ? {
+                  ...c,
+                  enabled,
+                  connectionStatus: enabled ? c.connectionStatus : 'unknown',
+                  ...metaForEdit(c),
+                }
+              : c,
+          ),
         })),
 
-      setStatus: (id, status) =>
+      setConnectionStatus: (id, status) =>
         set((s) => ({
-          configs: s.configs.map((c) => (c.id === id ? { ...c, status } : c)),
+          configs: s.configs.map((c) => (c.id === id ? { ...c, connectionStatus: status } : c)),
+        })),
+
+      setSyncStatus: (id, status, syncedAt) =>
+        set((s) => ({
+          configs: s.configs.map((c) =>
+            c.id === id
+              ? {
+                  ...c,
+                  syncStatus: status,
+                  // 只记成功的那次：失败时保留上一次成功时间，
+                  // 用户才知道「最后一次成功同步是何时」
+                  ...(status === 'synced' && syncedAt !== undefined
+                    ? { lastSyncedAt: syncedAt }
+                    : {}),
+                }
+              : c,
+          ),
         })),
 
       refreshSecrets: async () => {
@@ -265,7 +324,7 @@ export const useMcpStore = create<McpState>()(
             latencyMs: 0,
           };
         }
-        get().setStatus(id, 'syncing');
+        get().setConnectionStatus(id, 'probing');
         // 探针按 name 自己查凭据：渲染层手上没有明文密钥，也不需要知道
         const result = await platform.probeMcpServer({
           name: cfg.name,
@@ -281,7 +340,7 @@ export const useMcpStore = create<McpState>()(
           result.ok && result.transport && result.transport !== cfg.urlType,
         );
         /*
-         * 刻意**不走 `updateConfig`**：探测结果（`status` / `tools` / `lastProbedAt`）
+         * 刻意**不走 `updateConfig`**：探测结果（`connectionStatus` / `tools` / `lastProbedAt`）
          * 是运行时事实，本机重算，不算「用户改过这条配置」——走 updateConfig 会让
          * 每点一次「测试」就递增一次 `rev`，版本号里掺进噪声，同步层就没法用它判
          * 「谁的改动更新」。
@@ -294,7 +353,7 @@ export const useMcpStore = create<McpState>()(
             if (c.id !== id) return c;
             const next: MCPConfig = {
               ...c,
-              status: result.ok ? 'connected' : 'error',
+              connectionStatus: result.ok ? 'connected' : 'error',
               // 失败时保留上次清单：一次抖动不该让授权视图变成空白
               tools: result.ok ? result.tools : c.tools,
               lastProbedAt: result.ok ? Date.now() : c.lastProbedAt,
@@ -329,17 +388,22 @@ export const useMcpStore = create<McpState>()(
         if (!cfg) {
           return { ok: false, message: '未找到对应 MCP 配置' };
         }
-        get().setStatus(id, 'syncing');
+        get().setSyncStatus(id, 'syncing');
         // 主进程对 tools.mcpServers 是全量替换语义：单条提交会误删其它条目，
         // 故任何一次同步都完整写回全部启用条目（与 syncEnabled 一致）；
         // 删除语义不变：删除条目后再同步即从 config.json 移除。
         const targets = selectEnabledConfigs(get().configs);
         try {
           const result = await getRuntime().sync('connectors', targets);
-          get().setStatus(id, 'connected');
+          /*
+           * 只写 `syncStatus`：同步成功只说明「配置已写进引擎（tools.mcpServers）」，
+           * 完全不等于「MCP 连上了」。拆字段之前它写的是两者共用的 `status`，
+           * 于是「连接测试失败 → 点同步 → 徽章变已连接」。
+           */
+          get().setSyncStatus(id, 'synced', Date.now());
           return result;
         } catch (err) {
-          get().setStatus(id, 'error');
+          get().setSyncStatus(id, 'error');
           return {
             ok: false,
             message: `同步失败：${err instanceof Error ? err.message : String(err)}`,
@@ -351,13 +415,16 @@ export const useMcpStore = create<McpState>()(
         const targets = selectEnabledConfigs(get().configs);
         // 空集的特殊语义（web 短路 / electron 提交空字典以清空运行时）已收敛到
         // 契约层实现（nanobotHttp/config.ts 的 syncMcpToRuntime），store 不再重复判断。
-        targets.forEach((c) => get().setStatus(c.id, 'syncing'));
+        targets.forEach((c) => get().setSyncStatus(c.id, 'syncing'));
         try {
           const result = await getRuntime().sync('connectors', targets);
-          targets.forEach((c) => get().setStatus(c.id, 'connected'));
+          // 同 syncConfig：只写 syncStatus。同步是「把配置写到引擎」，
+          // 不是「MCP 已连接」——连接事实归 connectionStatus 管。
+          const at = Date.now();
+          targets.forEach((c) => get().setSyncStatus(c.id, 'synced', at));
           return result;
         } catch (err) {
-          targets.forEach((c) => get().setStatus(c.id, 'error'));
+          targets.forEach((c) => get().setSyncStatus(c.id, 'error'));
           return {
             ok: false,
             message: `同步失败：${err instanceof Error ? err.message : String(err)}`,
@@ -422,20 +489,54 @@ export const useMcpStore = create<McpState>()(
        * 界面会明确标注"未加密"），因此 Web 保持原样。
        */
       partialize: (s) => ({
-        configs:
-          platform.env === 'electron'
-            ? s.configs.map((c) => ({ ...c, auth: undefined }))
-            : s.configs,
+        configs: s.configs.map((c) => ({
+          ...c,
+          // electron 端剔除凭据明文（web 端无保险库，只能留在 localStorage）
+          auth: platform.env === 'electron' ? undefined : c.auth,
+          /*
+           * `connectionStatus` 是**运行时事实**，不进持久化。
+           *
+           * 连接状态跨会话必然过期（引擎会重启、网络会变、地址会被改），把它写进
+           * `~/.nanowork/mcp.json` 就会出现「上次会话连通过 → 这次一启动就显示已连接」，
+           * 而且用户没有任何自查手段：界面那句「已连接」没有本次会话的任何证据支撑。
+           *
+           * 落盘为 `unknown`，启动后一切以本次会话的真实握手为准。
+           * 注意 `tools` / `lastProbedAt` / `lastSyncedAt` **要留**——
+           * 工具授权视图与「上次成功同步时间」依赖它们，剔掉等于用户的东西凭空消失。
+           */
+          connectionStatus: 'unknown' as McpConnectionStatus,
+          /*
+           * `syncStatus` 反过来**可以**落盘：它记的是「配置有没有写进引擎」这个
+           * 已经发生的事实，跨会话依然成立。唯一要处理的是 `syncing` 这个瞬态——
+           * 应用在同步途中被杀掉，重启后会永久卡在「同步中」。
+           */
+          syncStatus: c.syncStatus === 'syncing' ? 'idle' : c.syncStatus,
+        })),
         tombstones: s.tombstones,
       }),
       // v1：给存量数据补同步元数据四字段（缺字段按 `LEGACY_REV` 落盘）、补空墓碑表
-      version: 1,
+      // v2：单一 `status` 拆成 `connectionStatus` + `syncStatus`（见 types/mcp.ts）
+      version: 2,
       migrate: (persisted) => {
         const p = persisted as
-          | { configs?: MCPConfig[]; tombstones?: SyncTombstones }
+          | { configs?: (MCPConfig & { status?: string })[]; tombstones?: SyncTombstones }
           | undefined;
+        /*
+         * 老的单一 `status` **一律丢弃、不做映射**：它把「连接」与「同步」两种事实
+         * 混装在同一个字段里，事后无法可靠区分某条到底是连接失败还是同步失败。
+         * 何况连接状态本就跨会话过期，重置成 `unknown` 是唯一诚实的还原。
+         */
+        const configs = ensureMetaList(p?.configs).map((c) => {
+          const { status: _dropped, ...rest } = c as MCPConfig & { status?: string };
+          void _dropped;
+          return {
+            ...rest,
+            connectionStatus: 'unknown' as McpConnectionStatus,
+            syncStatus: 'idle' as McpSyncStatus,
+          } as MCPConfig;
+        });
         return {
-          configs: ensureMetaList(p?.configs),
+          configs,
           tombstones: p?.tombstones ?? {},
         };
       },

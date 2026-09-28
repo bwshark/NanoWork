@@ -20,7 +20,8 @@ const cfg = (patch: Partial<MCPConfig> = {}): MCPConfig => ({
   name: 'user mcp',
   transport: 'url',
   endpoint: 'http://localhost:8080/mcp',
-  status: 'idle',
+  connectionStatus: 'unknown',
+  syncStatus: 'idle',
   source: 'user',
   ...patch,
 });
@@ -170,7 +171,7 @@ describe('testConfig: 走真实探针', () => {
 
     expect(result.ok).toBe(true);
     const stored = useMcpStore.getState().configs[0];
-    expect(stored.status).toBe('connected');
+    expect(stored.connectionStatus).toBe('connected');
     expect(stored.tools?.map((t) => t.name)).toEqual(['echo', 'ping']);
     expect(typeof stored.lastProbedAt).toBe('number');
   });
@@ -185,14 +186,14 @@ describe('testConfig: 走真实探针', () => {
     });
 
     useMcpStore.setState({
-      configs: [cfg({ status: 'connected', tools: [{ name: 'echo' }], lastProbedAt: 111 })],
+      configs: [cfg({ connectionStatus: 'connected', tools: [{ name: 'echo' }], lastProbedAt: 111 })],
     });
     const result = await useMcpStore.getState().testConfig('u-1');
 
     expect(result.ok).toBe(false);
     expect(result.error).toBe('连接超时');
     const stored = useMcpStore.getState().configs[0];
-    expect(stored.status).toBe('error');
+    expect(stored.connectionStatus).toBe('error');
     expect(stored.tools?.map((t) => t.name)).toEqual(['echo']);
     expect(stored.lastProbedAt).toBe(111);
   });

@@ -42,7 +42,8 @@ import {
 import {
   isBuiltinMcpId,
   type MCPConfig,
-  type MCPStatus,
+  type McpConnectionStatus,
+  type McpSyncStatus,
   type MCPTransport,
 } from "@/types";
 
@@ -56,20 +57,36 @@ const EMPTY: McpForm = {
   auth: {},
 };
 
-const STATUS_LABEL: Record<MCPStatus, string> = {
-  idle: "未连接",
-  syncing: "同步中",
+/**
+ * 卡片徽章**只表达连接状态**（一次真实握手的结果）。
+ *
+ * 同步状态刻意不上徽章：它是「配置有没有写进引擎」，与「能不能连上」是两件事，
+ * 混在一个位置正是历史上「开关停用却写已连接」「测试失败点一下同步变已连接」的成因。
+ * 同步的用户可见反馈由各调用点的 toast 承担（`handleToggle` / `runSyncAll` /
+ * `runToolSave` / 保存），卡片上只在异常/进行中时补一个次要指示。
+ */
+const CONNECTION_LABEL: Record<McpConnectionStatus, string> = {
+  unknown: "未连接",
+  probing: "测试中",
   connected: "已连接",
   error: "错误",
 };
-const STATUS_COLOR: Record<
-  MCPStatus,
+const CONNECTION_COLOR: Record<
+  McpConnectionStatus,
   "default" | "warning" | "success" | "error"
 > = {
-  idle: "default",
-  syncing: "warning",
+  unknown: "default",
+  probing: "warning",
   connected: "success",
   error: "error",
+};
+
+/** 同步状态的次要指示：只在「进行中」与「失败」时出现，成功不添噪音牌 */
+const SYNC_HINT: Record<McpSyncStatus, { label: string; color: "warning" | "error" } | null> = {
+  idle: null,
+  syncing: { label: "同步中", color: "warning" },
+  synced: null,
+  error: { label: "同步失败", color: "error" },
 };
 
 /** MCP 管理页（FR-004 / FR-3.2）：CRUD + 启停 + 真实连接测试 + 工具级授权 + 同步 */
@@ -328,6 +345,7 @@ export function McpPage() {
           const disabledCount = (c.disabledTools ?? []).length;
           const hasSecret = (c.authKeyNames ?? []).length > 0;
           const toolCount = (c.tools ?? []).length;
+          const syncHint = SYNC_HINT[c.syncStatus];
           return (
             <Card
               key={c.id}
@@ -376,8 +394,8 @@ export function McpPage() {
                   />
                   <Chip
                     size="small"
-                    label={STATUS_LABEL[c.status]}
-                    color={STATUS_COLOR[c.status]}
+                    label={CONNECTION_LABEL[c.connectionStatus]}
+                    color={CONNECTION_COLOR[c.connectionStatus]}
                     sx={cardStatusChipSx}
                   />
                 </Box>
@@ -474,6 +492,36 @@ export function McpPage() {
                       label={`已禁用 ${disabledCount}`}
                       aria-label={`${c.name} 已禁用工具 ${disabledCount}`}
                     />
+                  )}
+                  {/*
+                    同步状态的次要指示：只在「同步中 / 同步失败」出现。
+                    同步成功**不常驻**——它不代表连上了，常驻只会跟连接状态打架；
+                    成功的反馈由各调用点的 toast 承担（那个位置用户正在看着）。
+                  */}
+                  {syncHint && (
+                    <Chip
+                      size="small"
+                      variant="outlined"
+                      color={syncHint.color}
+                      sx={cardChipOutlinedSx}
+                      label={syncHint.label}
+                      aria-label={`${c.name} ${syncHint.label}`}
+                    />
+                  )}
+                  {/* 上次成功同步的时刻：让用户能判断「这份配置新鲜不新鲜」，
+                      否则一个静默的成功同步在卡片上不留任何痕迹 */}
+                  {c.lastSyncedAt !== undefined && !syncHint && (
+                    <Tooltip
+                      title={`上次成功同步：${new Date(c.lastSyncedAt).toLocaleString()}`}
+                    >
+                      <Chip
+                        size="small"
+                        variant="outlined"
+                        sx={cardChipOutlinedSx}
+                        label={`已同步 ${new Date(c.lastSyncedAt).toLocaleTimeString()}`}
+                        aria-label={`${c.name} 上次成功同步 ${new Date(c.lastSyncedAt).toLocaleString()}`}
+                      />
+                    </Tooltip>
                   )}
                 </Box>
 
