@@ -23,7 +23,13 @@
  * 原 spec §6 的「已知偏差」已闭合（见 `docs/architecture-m6-sync.md` §七 6a 行）。
  */
 
-import { IDENTITY_STORAGE_KEYS, STORAGE_KEYS, USER_MEMORY_KEY } from '@/lib/constants';
+import {
+  IDENTITY_STORAGE_KEYS,
+  PROMPT_KEY_PREFIX,
+  STORAGE_KEYS,
+  USER_MEMORY_KEY,
+} from '@/lib/constants';
+import { PROMPT_SLOTS } from '@/lib/promptCatalog';
 import type { CloudExport } from '@/sync/types';
 import type { SessionEvent, SessionMeta } from '@/types/event';
 
@@ -31,7 +37,7 @@ import type { SessionEvent, SessionMeta } from '@/types/event';
 export const ARCHIVE_FORMAT = 'nanowork-archive';
 
 /** 本端支持的归档版本；读到更高的 `formatVersion` 一律拒绝（J-C3）。 */
-export const ARCHIVE_FORMAT_VERSION = 1;
+export const ARCHIVE_FORMAT_VERSION = 2;
 
 /**
  * `local` 段覆盖的 storage key 全集。
@@ -52,6 +58,10 @@ export const ARCHIVE_LOCAL_KEYS: readonly string[] = [
   ),
   ...Object.values(IDENTITY_STORAGE_KEYS),
   USER_MEMORY_KEY,
+  // 提示词外置覆盖（批次 6b，6a 的 D4 已知偏差 #2）：按 `PROMPT_SLOTS` 静态表展开。
+  // `StorageAdapter` 没有 `keys()`，动态 key 无法枚举——而 UI 只认表内的槽位，
+  // 故枚举这张表就是「全部合法覆盖」。
+  ...PROMPT_SLOTS.map((slot) => `${PROMPT_KEY_PREFIX}${slot.kind}.${slot.key}`),
 ];
 
 /** 归档里的账户元信息（未登录为 null）。 */
@@ -67,6 +77,23 @@ export interface ArchiveSessions {
 }
 
 /**
+ * 归档的工作区记忆段（批次 6b，6a 的 D4 已知偏差 #2）。
+ *
+ * **只进归档、不进跨端同步**（`docs/batch-6b-file-assets-spec.md` D0-2）：工作区由
+ * **路径**标识，而路径每台机器不同，没有跨端身份；且它落在**用户的项目目录**里
+ * （可能已纳入版本控制），跨端同步等于跨设备改写用户仓库。
+ *
+ * 归档是**本机备份**语义，因此导入时**忽略 `workdir`**，一律写进接收方自己当前的
+ * `.nanowork/memory/`（与批次 5「拉来的事件流落接收方自己的分片」同一条结论）。
+ */
+export interface ArchiveWorkspaceMemory {
+  /** 导出时的工作目录；`null` = 无工作目录（产品目录兜底那份） */
+  workdir: string | null;
+  /** 文件名（`MEMORY.md` / `YYYY-MM-DD.md`）→ 正文 */
+  files: Record<string, string>;
+}
+
+/**
  * `buildArchive` 的只读输入快照（由调用方注入）。
  *
  * `local` 的值是**原始字符串**（未解析），键集合见 `ARCHIVE_LOCAL_KEYS`。
@@ -77,6 +104,8 @@ export interface ArchiveSources {
   sessionEvents: Record<string, SessionEvent[]>;
   /** 云端副本（`GET /api/account/export`）；未登录 / 未取为 `null`。 */
   cloud: CloudExport | null;
+  /** 当前工作区的记忆文件全集；无工作区时为 `null`。 */
+  workspaceMemory: ArchiveWorkspaceMemory | null;
 }
 
 /** 归档的头部元信息（与数据段分开注入，便于调用方只关心「这次导出是谁、何时」。 */
@@ -100,6 +129,8 @@ export interface NanoworkArchive {
   local: Record<string, string>;
   sessions: ArchiveSessions;
   cloud: CloudExport | null;
+  /** 工作区记忆；v1 归档没有这一段，解析为 `null`（向后兼容）。 */
+  workspaceMemory: ArchiveWorkspaceMemory | null;
 }
 
 /** 归档解析失败。**不返回半个归档**——导入写坏一半存储比直接报错糟糕得多。 */
@@ -136,6 +167,7 @@ export function buildArchive(sources: ArchiveSources, meta: ArchiveMeta): Nanowo
       events: sources.sessionEvents,
     },
     cloud: sources.cloud,
+    workspaceMemory: sources.workspaceMemory,
   };
 }
 
@@ -213,6 +245,30 @@ export function parseArchive(text: string): NanoworkArchive {
     throw new ArchiveParseError('归档 cloud 段非法');
   }
 
+  // workspaceMemory 可缺省：**v1 归档没有这一段**（批次 6b 才加）→ 解析为 null。
+  // 与 `cloud` 同款容错，保证老归档仍可导入。
+  const wsRaw = root.workspaceMemory;
+  let workspaceMemory: ArchiveWorkspaceMemory | null = null;
+  if (wsRaw !== null && wsRaw !== undefined) {
+    if (typeof wsRaw !== 'object' || Array.isArray(wsRaw)) {
+      throw new ArchiveParseError('归档 workspaceMemory 段非法');
+    }
+    const ws = wsRaw as Record<string, unknown>;
+    const filesRaw = ws.files;
+    if (typeof filesRaw !== 'object' || filesRaw === null || Array.isArray(filesRaw)) {
+      throw new ArchiveParseError('归档 workspaceMemory.files 缺失或非法');
+    }
+    for (const [name, value] of Object.entries(filesRaw as Record<string, unknown>)) {
+      if (typeof value !== 'string') {
+        throw new ArchiveParseError(`归档 workspaceMemory.files["${name}"] 不是字符串`);
+      }
+    }
+    workspaceMemory = {
+      workdir: typeof ws.workdir === 'string' && ws.workdir !== '' ? ws.workdir : null,
+      files: { ...(filesRaw as Record<string, string>) },
+    };
+  }
+
   return {
     format: ARCHIVE_FORMAT,
     formatVersion: root.formatVersion,
@@ -225,6 +281,7 @@ export function parseArchive(text: string): NanoworkArchive {
       events: eventsRaw as Record<string, SessionEvent[]>,
     },
     cloud: (cloudRaw ?? null) as CloudExport | null,
+    workspaceMemory,
   };
 }
 
@@ -234,7 +291,10 @@ export function parseArchive(text: string): NanoworkArchive {
  * `sessions` / `cloud` 段本期不回写：
  * - `sessions`：会话事件流的落地要走 `EventStore` 的写队列与分片解析，本模块是纯逻辑、
  *   不碰 IO；硬写会绕过去重与索引，落出孤儿文件；
- * - `cloud`：它是**云端副本**，回写本机等于把服务端数据当本机权威（本批不提供导入 UI）。
+ * - `cloud`：它是**云端副本**，回写本机等于把服务端数据当本机权威。
+ * - `workspaceMemory`：需要**文件系统 IO**（`platform.memoryFiles`），而本模块是纯逻辑；
+ *   且它必须落**接收方自己当前的工作区**（归档里的 `workdir` 在另一台机器上不存在），
+ *   这个「落到哪」的判断属于调用方。
  *
  * `write` 由调用方注入（通常是 `(k, v) => platform.storage.set(k, v)`），故往返用例
  * 不需要真存储。

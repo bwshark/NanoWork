@@ -76,6 +76,7 @@ function sampleArchiveText(): string {
       sessionsMeta: [],
       sessionEvents: {},
       cloud: null,
+      workspaceMemory: null,
     },
     { exportedAt: new Date().toISOString(), deviceId: null, account: null },
   );

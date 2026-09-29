@@ -15,6 +15,8 @@ import {
   workspaceMemoryDirPath,
 } from '@/lib/workspaceMemory';
 import { hashContent } from '@/lib/workspaceKey';
+// 归一化 / 正文提取的实现在纯模块 `memoryMerge`（本文件要用，同时转出给既有调用方）
+import { normalizeForDedup, parseEntryBodies } from '@/lib/memoryMerge';
 // `workspaceKeyFor` / `DEFAULT_WORKSPACE_KEY` 已搬去 workspaceKey.ts（主进程做旧数据
 // 懒迁移时要算同一个 key，而主进程 import 不了渲染层的 platform）。这里转出，
 // 让既有 `from '@/lib/memory'` 的引用继续可用。
@@ -291,45 +293,11 @@ export function composeMemoryForInjection(
 }
 
 /**
- * 归一化文本，用于「这是不是同一句话的另一种写法」的**机械**比对。
- *
- * 只做无信息损失的三件事：去全部空白、去标点与 Markdown 装饰符、统一小写。
- * 不做同义词替换、不做语序调整、不做前缀词剥离——那三件事都需要理解语义，
- * 规则化去做必然误判（见下方 `isSameStatement` 的实测说明）。
+ * 归一化 / 正文提取的实现已迁到 `@/lib/memoryMerge`——那里还要做段落级 LWW，
+ * 且必须是**纯模块**（同步层与单测要直接调它，而本文件 import 了 `@/platform`）。
+ * 此处转出，让既有 `from '@/lib/memory'` 的引用继续可用。
  */
-export function normalizeForDedup(text: string): string {
-  return (text ?? '')
-    .replace(/[\s\u3000]+/g, '')
-    .replace(/[。，、；：！？""''「」『』（）【】《》〈〉…—·,.!?;:'"()<>[\]{}/\\|~`@#$%^&*+=_-]/g, '')
-    .toLowerCase();
-}
-
-/** 记忆全文里各条目的**正文**（引用块格式与手写 Markdown 都支持） */
-export function parseEntryBodies(text: string): string[] {
-  const src = (text ?? '').trim();
-  if (src === '') return [];
-
-  // 条目之间以空行分隔；引用块自身是单段，手写 Markdown 的 `## ` 段同理。
-  const blocks = src
-    .split(/\n\s*\n/)
-    .map((b) => b.trim())
-    .filter((b) => b !== '');
-
-  const bodies: string[] = [];
-  for (const block of blocks) {
-    const kept: string[] = [];
-    for (const raw of block.split('\n')) {
-      // 元信息行不进正文：去重标记、`[时间] 来自「来源」`、Markdown 标题
-      if (/^>\s*<!--\s*SUMMARY:/.test(raw)) continue;
-      if (/^>\s*\[\d{4}-\d{2}-\d{2}T/.test(raw)) continue;
-      if (/^#{1,6}\s+/.test(raw)) continue;
-      kept.push(raw.replace(/^>\s?/, ''));
-    }
-    const body = kept.join('\n').trim();
-    if (body !== '') bodies.push(body);
-  }
-  return bodies;
-}
+export { normalizeForDedup, parseEntryBodies } from '@/lib/memoryMerge';
 
 /** 一条 `append` 的结果；调用方可以忽略，测试与「记忆页」用它区分原因 */
 export type MemoryAppendOutcome = 'written' | 'skipped-empty' | 'skipped-duplicate';

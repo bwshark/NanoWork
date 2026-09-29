@@ -13,6 +13,7 @@ import { describe, expect, it } from 'vitest';
 import {
   ARCHIVE_FORMAT,
   ARCHIVE_FORMAT_VERSION,
+  ARCHIVE_LOCAL_KEYS,
   ArchiveParseError,
   applyArchive,
   archiveFileName,
@@ -20,6 +21,8 @@ import {
   parseArchive,
 } from '@/lib/accountArchive';
 import type { NanoworkArchive } from '@/lib/accountArchive';
+import { PROMPT_KEY_PREFIX } from '@/lib/constants';
+import { PROMPT_SLOTS } from '@/lib/promptCatalog';
 
 /** 一段带换行与 CJK 的文本 + 一段 JSON 文本——两类最容易在往返中变形的值。 */
 const LOCAL: Record<string, string> = {
@@ -36,6 +39,7 @@ function baseArchive(overrides: Partial<NanoworkArchive> = {}): NanoworkArchive 
       sessionsMeta: [],
       sessionEvents: {},
       cloud: null,
+      workspaceMemory: null,
     },
     { exportedAt: '2026-09-28T12:00:00.000Z', deviceId: 'dev-1', account: null },
   );
@@ -123,5 +127,70 @@ describe('archiveFileName：文件名格式', () => {
   it('nanowork-export-YYYYMMDD-HHmmss.json', () => {
     const name = archiveFileName(new Date(2026, 8, 28, 9, 5, 3));
     expect(name).toBe('nanowork-export-20260928-090503.json');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────
+// 批次 6b：归档 v2（判据 J-9 / J-11）
+// ─────────────────────────────────────────────────────────────────────
+
+describe('J-9：v2 归档含提示词模板与工作区记忆', () => {
+  it('提示词模板进了导出 key 表（按 PROMPT_SLOTS 枚举）', () => {
+    const keys = ARCHIVE_LOCAL_KEYS.filter((k) => k.startsWith(PROMPT_KEY_PREFIX));
+    expect(keys.length).toBe(PROMPT_SLOTS.length);
+    expect(keys).toContain(`${PROMPT_KEY_PREFIX}mode.ask`);
+  });
+
+  it('工作区记忆进了新段；版本为 2', () => {
+    const archive = buildArchive(
+      {
+        local: LOCAL,
+        sessionsMeta: [],
+        sessionEvents: {},
+        cloud: null,
+        workspaceMemory: { workdir: 'D:/proj', files: { 'MEMORY.md': '# 记忆' } },
+      },
+      { exportedAt: '2026-09-29T12:00:00.000Z', deviceId: 'dev-1', account: null },
+    );
+    expect(archive.formatVersion).toBe(2);
+    expect(archive.workspaceMemory?.files['MEMORY.md']).toBe('# 记忆');
+
+    // 往返：正文逐字节不变
+    const parsed = parseArchive(JSON.stringify(archive));
+    expect(parsed.workspaceMemory?.files['MEMORY.md']).toBe('# 记忆');
+    expect(parsed.workspaceMemory?.workdir).toBe('D:/proj');
+  });
+});
+
+describe('J-11：版本与 workspaceMemory 段的边界', () => {
+  it('版本高于本端上限 → ArchiveParseError（不静默丢字段）', () => {
+    expect(ARCHIVE_FORMAT_VERSION).toBe(2);
+    const future = JSON.stringify({ ...baseArchive(), formatVersion: 99 });
+    expect(() => parseArchive(future)).toThrow(ArchiveParseError);
+  });
+
+  it('v1 归档（无 workspaceMemory 段）仍可解析 → null', () => {
+    const v1 = { ...baseArchive(), formatVersion: 1 };
+    const { workspaceMemory: _omitted, ...withoutWs } = v1;
+    const parsed = parseArchive(JSON.stringify(withoutWs));
+    expect(parsed.formatVersion).toBe(1);
+    expect(parsed.workspaceMemory).toBeNull();
+  });
+
+  it('workspaceMemory.files 的值非字符串 → 拒绝（不返回半个归档）', () => {
+    const bad = {
+      ...baseArchive(),
+      workspaceMemory: { workdir: 'D:/proj', files: { 'MEMORY.md': 42 } },
+    };
+    expect(() => parseArchive(JSON.stringify(bad))).toThrow(ArchiveParseError);
+  });
+
+  it('workspaceMemory 段不是对象 / files 缺失 → 拒绝', () => {
+    expect(() =>
+      parseArchive(JSON.stringify({ ...baseArchive(), workspaceMemory: 'nope' })),
+    ).toThrow(ArchiveParseError);
+    expect(() =>
+      parseArchive(JSON.stringify({ ...baseArchive(), workspaceMemory: { workdir: null } })),
+    ).toThrow(ArchiveParseError);
   });
 });

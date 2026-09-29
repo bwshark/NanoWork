@@ -40,7 +40,13 @@ export type SyncCollection =
   | 'skillOverrides'
   | 'settings'
   | 'sessionMeta'
-  | 'sessionEvents';
+  | 'sessionEvents'
+  // 批次 6b 的 C 类文件型资产：**刻意不登记进 `syncRegistry`**——它们的读取是异步的，
+  // 走独立的 `FileAssetsAdapter`（与 `sessionEvents` 同款裁决）。列在这里只是为了
+  // 约束拼写（引擎不依赖这张联合类型做运行时分发）。
+  | 'memoryUser'
+  | 'identityFiles'
+  | 'promptOverrides';
 
 /** 一次变更：`collection` 名 + 该实体的完整负载（已过 `spec.payload` 裁剪）。 */
 export interface SyncChange {
@@ -192,6 +198,20 @@ export const EVENT_CURSOR_STORAGE_KEY = 'nanowork.sync.eventCursor';
  * 时 scope 归一到 `''`，与事件水位的归一规则一致。
  */
 export const CONFLICT_SNAPSHOT_STORAGE_KEY = 'nanowork.sync.conflict';
+
+/**
+ * C 类文件型资产的同步元数据存储 key（批次 6b）。
+ *
+ * 与 `CONFLICT_SNAPSHOT_STORAGE_KEY` 同款：值是**字符串 JSON**，形状
+ * `Record<userId, Record<'<collection>:<id>', {hash, rev, updatedAt, updatedBy}>>`
+ * （外层按账户分片，理由同上面两条）。已登记 `electron/storageRoutes.ts`
+ * （`<userData>/file-assets-sync.json`）：**必须能被「清空数据」带走**——否则清空后
+ * `rev` / `updatedAt` 归零而资产本体还在，下一轮会被远端静默覆盖。
+ *
+ * 元数据**不是**资产本身：资产正文仍在 `~/.nanowork/MEMORY.md` 等各自的落点里，
+ * 这里只存「上次同步时它长什么样」。
+ */
+export const FILE_ASSETS_STORAGE_KEY = 'nanowork.sync.fileAssets';
 
 /**
  * 云端导出的账户元信息（`GET /api/account/export` 的 `user` 段，批次 6a）。

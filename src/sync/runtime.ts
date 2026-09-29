@@ -37,6 +37,7 @@ import { useSessionsStore } from '@/stores/sessionsStore';
 import { SyncClient } from './SyncClient';
 import { SyncEngine, createMemoryCursorStore } from './SyncEngine';
 import { createSessionEventStreamAdapter } from './eventStream';
+import { createFileAssetsAdapter } from './fileAssets';
 import { createStorageSyncAccount } from './syncAccount';
 import { createDefaultRegistry } from './syncRegistry';
 import { resetSyncStatus } from './useSyncStatus';
@@ -109,6 +110,9 @@ export function createSyncRuntime(opts: SyncRuntimeOptions = {}): SyncRuntime {
     cursorStore: createMemoryCursorStore(),
     // 事件流通道（批次 5）：装配适配器并注入引擎——引擎因此**不 import 任何 store**
     eventStream: createSessionEventStreamAdapter(),
+    // C 类文件型资产通道（批次 6b）：记忆 / 身份文件 / 提示词覆盖。
+    // 账户分片用同一个 `userId`——元数据必须按账户隔离（与事件水位同一条纪律）
+    fileAssets: createFileAssetsAdapter(() => account.getSession()?.userId ?? ''),
   });
 
   // ── 本地变更 → 防抖同步（§G.3）──

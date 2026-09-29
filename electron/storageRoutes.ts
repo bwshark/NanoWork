@@ -7,7 +7,7 @@ import {
   STORAGE_KEYS,
   USER_MEMORY_KEY,
 } from '../src/lib/constants';
-import { CONFLICT_SNAPSHOT_STORAGE_KEY } from '../src/sync/types';
+import { CONFLICT_SNAPSHOT_STORAGE_KEY, FILE_ASSETS_STORAGE_KEY } from '../src/sync/types';
 
 /**
  * 渲染层持久化 key → 磁盘落点 的路由表（Electron 主进程专用）。
@@ -144,6 +144,11 @@ const RUNTIME_FILES: Record<string, FileEntry> = {
   // 登记的意义：它会进 `knownRouteFiles()` → 「清空数据」能带走它；未登记则会掉进
   // `misc/` 兜底，清空数据时留下一个过期的冲突快照文件。
   [CONFLICT_SNAPSHOT_STORAGE_KEY]: { rel: 'sync-conflicts.json', format: 'json' },
+  // C 类文件型资产的同步元数据（批次 6b）：值同样是**字符串 JSON**
+  // （`Record<userId, Record<assetKey, {hash, rev, updatedAt, updatedBy}>>`），理由同上。
+  // 登记的意义：清空数据时会一并带走——不登记则元数据残留，而资产本体已被清掉，
+  // 下一轮 hydrate 会拿「旧 hash + 空内容」误判为「本机刚改过」。
+  [FILE_ASSETS_STORAGE_KEY]: { rel: 'file-assets-sync.json', format: 'json' },
 };
 
 /** ① 产品自有目录 `~/.nanowork/` */

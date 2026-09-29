@@ -14,6 +14,8 @@ import {
   buildArchive,
   parseArchive,
 } from '@/lib/accountArchive';
+import type { ArchiveWorkspaceMemory } from '@/lib/accountArchive';
+import { MemoryService } from '@/lib/memory';
 import type { SessionMeta, SessionEvent } from '@/types/event';
 import { getEventStore } from '@/events';
 import { isEventStreamSession, toMetaFromEntity, useSessionsStore } from '@/stores/sessionsStore';
@@ -46,6 +48,31 @@ function formatSyncedAt(iso: string | null): string {
   if (Number.isNaN(ts)) return iso;
   return new Date(ts).toLocaleString();
 }
+
+  /**
+   * 收集**当前工作区**的记忆文件全集（批次 6b）。
+   *
+   * 读不到（Web 端无文件系统 / 还没有工作区 / 目录为空）一律返回 `null`——导出不该
+   * 因为这一段失败，它只是「本机备份」的一部分。
+   *
+   * 只导**当前**工作区而不是全部已知工作区：归档是「此刻这台机器的状态」的快照，
+   * 把历史工作区全塞进来会让导入时的落点变得无法解释。
+   */
+  async function collectWorkspaceMemory(): Promise<ArchiveWorkspaceMemory | null> {
+    try {
+      const workdir = MemoryService.resolveWorkspaceDir();
+      const names = await MemoryService.listFiles(workdir);
+      if (names.length === 0) return null;
+      const files: Record<string, string> = {};
+      for (const name of names) {
+        const text = await MemoryService.readFile(workdir, name);
+        if (typeof text === 'string') files[name] = text;
+      }
+      return Object.keys(files).length > 0 ? { workdir, files } : null;
+    } catch {
+      return null;
+    }
+  }
 
 export function AccountSection() {
   const navigate = useNavigate();
@@ -148,8 +175,12 @@ export function AccountSection() {
         }
       }
 
+      // 工作区记忆（批次 6b，6a 的 D4 已知偏差 #2）：**只进归档、不进跨端同步**——
+      // 工作区由路径标识而路径每台机器不同（无跨端身份），且它落在用户项目目录里。
+      const workspaceMemory = await collectWorkspaceMemory();
+
       const archive = buildArchive(
-        { local, sessionsMeta: metas, sessionEvents, cloud },
+        { local, sessionsMeta: metas, sessionEvents, cloud, workspaceMemory },
         {
           exportedAt: new Date().toISOString(),
           deviceId,
@@ -200,9 +231,22 @@ export function AccountSection() {
       const report = await applyArchive(arch, (key, value) =>
         platform.storage.set(key, value),
       );
+
+      // 工作区记忆：写进**本机当前工作区**（D4-3）。归档里的 `workdir` 在另一台机器上
+      // 根本不存在，照抄它等于拿一台机器的路径去写另一台机器——与批次 5「拉来的事件流
+      // 落接收方自己的分片」同一条结论。
+      let wsCount = 0;
+      if (arch.workspaceMemory) {
+        const workdir = MemoryService.resolveWorkspaceDir();
+        for (const [name, content] of Object.entries(arch.workspaceMemory.files)) {
+          await MemoryService.writeFile(workdir, name, content);
+          wsCount += 1;
+        }
+      }
+
       toast.success(
-        report.written > 0
-          ? `已导入 ${report.written} 项本机数据（重启后生效）`
+        report.written > 0 || wsCount > 0
+          ? `已导入 ${report.written} 项本机数据${wsCount > 0 ? ` + ${wsCount} 个工作区记忆文件` : ''}（重启后生效）`
           : '归档中无可导入的本机数据',
       );
     } catch (err) {

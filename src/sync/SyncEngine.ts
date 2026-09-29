@@ -41,6 +41,9 @@ import { setSyncStatus } from './useSyncStatus';
 import { EVENT_CURSOR_STORAGE_KEY, CONFLICT_SNAPSHOT_STORAGE_KEY, TOMBSTONE_MAX_AGE_MS } from './types';
 import type { SyncClient } from './SyncClient';
 import type { SessionEventStreamAdapter } from './eventStream';
+// 仅类型：避免 `SyncEngine` ↔ `fileAssets` 形成运行时循环（后者 import 了前者的
+// `compareVersions`，那是运行时依赖；这边只要类型，编译后即被擦除）
+import type { FileAssetsAdapter } from './fileAssets';
 import type { SyncAccount } from './syncAccount';
 import type { SyncEntityRecord, SyncRegistry } from './syncRegistry';
 import type { PullResponse, PushConflict, SyncChange, VersionStamp } from './types';
@@ -104,6 +107,15 @@ export interface SyncEngineOptions {
    * **不 import 任何 store**（不变量 2）。
    */
   eventStream?: SessionEventStreamAdapter;
+  /**
+   * C 类文件型资产通道（批次 6b）；缺省 `undefined` = 不同步记忆 / 身份文件 /
+   * 提示词覆盖（既有行为不变）。
+   *
+   * 与 `eventStream` **同款裁决**：资产的读取是异步的，塞不进 `SyncCollectionSpec`
+   * 的同步 `read()`（详见 `fileAssets.ts` 文件头）。引擎只经此适配器访问，
+   * **不 import 任何 store**（不变量 2）。
+   */
+  fileAssets?: FileAssetsAdapter;
 }
 
 const DEFAULT_DEBOUNCE_MS = 1000;
@@ -216,6 +228,13 @@ export class SyncEngine {
   private readonly onlineTarget?: Pick<Window, 'addEventListener' | 'removeEventListener'>;
   private readonly cursorStore: CursorStore;
   private readonly eventStream?: SessionEventStreamAdapter;
+  /**
+   * C 类文件型资产通道（批次 6b，可选注入）。
+   *
+   * 与 `eventStream` 并列：两者都不进 `registry`，故 `applyChange` 对它们的 collection
+   * 因「未登记」而返回 `false`——`pulled` 计数不会与各自的异步落地重复。
+   */
+  private readonly fileAssets?: FileAssetsAdapter;
 
   /**
    * **当前账户**每会话「已确保上行到服务端」的事件水位（批次 5 的 push 游标，规格 §2.1）。
@@ -268,6 +287,7 @@ export class SyncEngine {
     // 记下初始游标：账户态复位（换号 / 登出）时回到它——缺省 0 = 「`since=0` 全量拉」
     this.initialCursor = this.cursorStore.get();
     this.eventStream = options.eventStream;
+    this.fileAssets = options.fileAssets;
   }
 
   /**
@@ -451,16 +471,20 @@ export class SyncEngine {
       await this.loadConflictsIfNeeded();
       // 事件通道：首次（或换号后）同步时从 `platform.storage` 载入本账户水位（纯 LWW 跳过）
       if (this.eventStream) await this.ensureEventCursorsLoaded();
+      // C 类资产（批次 6b）：**必须在 pull 之前**水合——「内容即版本」要先于组装上行
+      // 负载生效，否则本轮 push 用的是上一轮的版本号。
+      if (this.fileAssets) await this.fileAssets.hydrate();
 
       // 1. 先 pull：把对端 / 上次同步后的变更落下来（§六 #12）
       const firstPull = await this.client.pull(this.cursorStore.get());
       pulled += this.applyPull(firstPull);
+      pulled += await this.applyPulledFileAssets(firstPull.changes);
       // 事件落地：异步，按 sessionId 分组逐会话落地；**绝不推进水位**（规格 §2.1 J1-b）
       pulledEvents += await this.applyPulledEvents(firstPull.events);
       this.cursorStore.set(firstPull.cursor);
 
-      // 2. 组装并 push
-      const changes = this.collectChanges();
+      // 2. 组装并 push（C 类资产走适配器，与 LWW 实体同批上行）
+      const changes = [...this.collectChanges(), ...(this.fileAssets?.collect() ?? [])];
       const eventBatch = await this.collectEventChanges();
       let pushed = 0;
       let pushedEvents = 0;
@@ -493,6 +517,7 @@ export class SyncEngine {
         if (response.accepted.length > 0) {
           const secondPull = await this.client.pull(this.cursorStore.get());
           pulled += this.applyPull(secondPull);
+          pulled += await this.applyPulledFileAssets(secondPull.changes);
           pulledEvents += await this.applyPulledEvents(secondPull.events);
           this.cursorStore.set(secondPull.cursor);
         }
@@ -579,6 +604,21 @@ export class SyncEngine {
     let applied = 0;
     for (const [sessionId, sessionEvents] of bySession) {
       applied += await this.eventStream.appendRemoteEvents(sessionId, sessionEvents);
+    }
+    return applied;
+  }
+
+  /**
+   * 落地 C 类资产变更（批次 6b）。
+   *
+   * 与 `applyPulledEvents` 同款：单独一步、异步。这三个 collection **未登记**进
+   * registry，故 `applyPull` 对它们返回 `false`（不计数），不会与这里重复。
+   */
+  private async applyPulledFileAssets(changes: SyncChange[]): Promise<number> {
+    if (!this.fileAssets || changes.length === 0) return 0;
+    let applied = 0;
+    for (const change of changes) {
+      applied += await this.fileAssets.apply(change);
     }
     return applied;
   }
