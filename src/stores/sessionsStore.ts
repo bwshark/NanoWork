@@ -99,11 +99,23 @@ export interface PendingApproval {
   args: Record<string, unknown>;
 }
 
-export type StreamStatus = 'idle' | 'thinking' | 'streaming' | 'tooling' | 'done';
+export type StreamStatus =
+  | 'idle'
+  | 'thinking'
+  | 'reasoning'
+  | 'streaming'
+  | 'tooling'
+  | 'done';
 
 /** 单个会话的流式上下文（仅运行时状态，不持久化） */
 export interface SessionStream {
-  /** 当前流式阶段：思考 / 流式 / 工具中 / 完成 */
+  /**
+   * 当前流式阶段：等待响应 / 深度思考 / 流式 / 工具中 / 完成。
+   *
+   * `thinking` 与 `reasoning` 刻意分开：前者是「请求已发出、首帧尚未到达」的
+   * 真空等待，后者是「模型正在回吐思考正文」。两者此前共用 `thinking`，
+   * 导致深度思考正文已在滚动、状态行却仍写着「等待模型响应」。
+   */
   status: StreamStatus;
   /**
    * 是否有可中断的进行中请求（供「停止」按钮判定）。

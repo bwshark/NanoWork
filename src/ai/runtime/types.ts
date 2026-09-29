@@ -213,8 +213,12 @@ export interface StreamHandlers {
    * 实现方不应在本回调里阻塞等待——那是 `onApprovalRequest` 的语义。
    */
   onPlan?(plan: PlanProposal): void;
-  /** 状态变化：思考 / 流式 / 工具中 / 完成 */
-  onStatus(status: 'thinking' | 'streaming' | 'tooling' | 'done'): void;
+  /**
+   * 状态变化：等待响应 / 深度思考 / 流式 / 工具中 / 完成。
+   * `thinking` 表示「首帧未到」的等待，`reasoning` 表示「思考正文正在回吐」，
+   * 二者不可合并——否则深度思考期间状态行会误报为「等待模型响应」。
+   */
+  onStatus(status: 'thinking' | 'reasoning' | 'streaming' | 'tooling' | 'done'): void;
   /** 正常结束 */
   onDone(): void;
   /** 出错 */

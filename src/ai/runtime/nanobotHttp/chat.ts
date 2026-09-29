@@ -529,8 +529,9 @@ export class NanobotClient {
 
   /**
    * 发送消息并流式接收。
-   * 事件顺序：onStatus('thinking') → onReasoning* / onProcessTool*（进度事件）→
-   * onToken* → onToolCall* → onArtifact* → onStatus('done') → onDone()。
+   * 事件顺序：onStatus('thinking') → onReasoning*（其间 onStatus('reasoning')）/
+   * onProcessTool*（进度事件）→ onToken* → onToolCall* → onArtifact* →
+   * onStatus('done') → onDone()。
    *
    * 取消语义（FR-中断）：返回的 ChatHandle.abort() 会立即终止底层 SSE；
    * fetchSSE / streamFormRequest 把中断视为正常结束（不通过 onError 上报），
@@ -677,9 +678,12 @@ export class NanobotClient {
         if (nbEvent) {
           if (nbEvent.kind === 'reasoning' && nbEvent.content) {
             handlers.onReasoning?.(nbEvent.content);
-            handlers.onStatus('thinking');
+            // 深度思考正文正在回吐 → 独立状态，区别于「首帧未到」的 thinking
+            handlers.onStatus('reasoning');
           } else if (nbEvent.kind === 'reasoning_end') {
             handlers.onReasoningEnd?.();
+            // 思考段收束：回到「等待模型响应」，等待正文首帧或下一个思考段
+            handlers.onStatus('thinking');
           } else if (nbEvent.kind === 'tool' && nbEvent.name) {
             const phase =
               nbEvent.phase === 'end' ? 'end' : nbEvent.phase === 'error' ? 'error' : 'start';

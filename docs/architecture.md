@@ -344,7 +344,7 @@ export interface StreamHandlers {
   onToken(chunk: string): void;                 // 流式文本片段
   onToolCall(ev: ToolCallEvent): void;          // 工具调用事件（含 sensitive）
   onArtifact(ev: ArtifactEvent): void;          // 富产物事件
-  onStatus(status: 'thinking' | 'streaming' | 'tooling' | 'done'): void;
+  onStatus(status: 'thinking' | 'reasoning' | 'streaming' | 'tooling' | 'done'): void;
   onDone(): void;
   onError(err: Error): void;
 }

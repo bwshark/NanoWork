@@ -38,9 +38,16 @@ interface AssistantMessageProps {
   sessionId: string;
 }
 
-/** 流式状态 → 消息底部状态行文案 */
+/**
+ * 流式状态 → 消息底部状态行文案。
+ *
+ * `reasoning` 必须与 `thinking` 分开：前者是模型正在回吐深度思考正文
+ * （用户已能看见思考在滚动），后者才是「请求已发出、首帧未到」的真空等待。
+ * 若合并，深度思考期间状态行会误报为「等待模型响应」。
+ */
 function streamStatusText(status: string): string {
   if (status === 'streaming') return '生成回复中';
+  if (status === 'reasoning') return '深度思考中';
   if (status === 'tooling') return '执行工具';
   return '等待模型响应';
 }
