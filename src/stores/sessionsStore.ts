@@ -1621,6 +1621,10 @@ export const useSessionsStore = create<SessionsState>()(
 
       // 落盘走**墓碑**：内存视图已移除，但磁盘上要留下「它被删了」这条记录
       if (target) tombstoneSessionStream(target);
+
+      // 产物随会话一起清（FR-7.2 规格 D8）：`clearSession` 此前零调用点，
+      // 于是「会话已删、产物库里还留着它的产物」，且索引只增不减。
+      useArtifactsStore.getState().clearSession(id);
     },
 
     deleteSessions: (ids) => {
@@ -1641,6 +1645,8 @@ export const useSessionsStore = create<SessionsState>()(
         return { sessions, activeId, sessionTombstones };
       });
       targets.forEach(tombstoneSessionStream);
+      // 同 deleteSession：批量删除也要带走产物（规格 D8）
+      targets.forEach((t) => useArtifactsStore.getState().clearSession(t.id));
     },
 
     /**
@@ -2205,7 +2211,7 @@ export const useSessionsStore = create<SessionsState>()(
         ...m,
         artifacts: [...(m.artifacts ?? []), artifact],
       }));
-      useArtifactsStore.getState().recordArtifact(sessionId, artifact);
+      useArtifactsStore.getState().recordArtifact(sessionId, messageId, artifact);
     },
 
     appendReasoning: (sessionId, messageId, chunk) =>

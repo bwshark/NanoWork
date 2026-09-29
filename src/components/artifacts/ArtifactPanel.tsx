@@ -13,6 +13,9 @@ import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import ViewSidebarIcon from '@mui/icons-material/ViewSidebar';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
+import CompareArrowsIcon from '@mui/icons-material/CompareArrows';
+import RestoreIcon from '@mui/icons-material/Restore';
+import VisibilityIcon from '@mui/icons-material/Visibility';
 import ImageIcon from '@mui/icons-material/Image';
 import MovieIcon from '@mui/icons-material/Movie';
 import CodeIcon from '@mui/icons-material/Code';
@@ -24,7 +27,7 @@ import { toast } from '@/components/Toast';
 import { UNBOUND_AGENT_LABEL } from '@/lib/constants';
 import { useSessionsStore } from '@/stores/sessionsStore';
 import { useAgentsStore } from '@/stores/agentsStore';
-import { useArtifactsStore } from '@/stores/artifactsStore';
+import { resolveArtifactContent, useArtifactsStore } from '@/stores/artifactsStore';
 import { useSessionUiStore } from '@/stores/sessionUiStore';
 import { useDefaultWorkspacePath } from '@/stores/storageInfoStore';
 import { platform } from '@/platform';
@@ -78,6 +81,8 @@ export function ArtifactPanel() {
   const sessions = useSessionsStore((s) => s.sessions);
   const agents = useAgentsStore((s) => s.agents);
   const bySession = useArtifactsStore((s) => s.bySession);
+  const bodies = useArtifactsStore((s) => s.bodies);
+  const index = useArtifactsStore((s) => s.index);
 
   const session = useMemo(
     () => sessions.find((s) => s.id === sessionId),
@@ -100,6 +105,46 @@ export function ArtifactPanel() {
   const [artifactsOpen, setArtifactsOpen] = useState(true);
   /** 正在预览的产物 */
   const [preview, setPreview] = useState<Artifact | null>(null);
+  /**
+   * 引用去 content 入库（彻底去重）：预览前从 `bodies` 按索引里的 contentHash 回填正文。
+   * `index` 缺条目（极旧数据）或 `bodies` 未命中时回落内联 `artifact.content`。
+   */
+  const previewResolved = preview
+    ? (() => {
+        const hash = index[preview.id]?.contentHash;
+        const content = hash
+          ? resolveArtifactContent(hash, bodies, preview.content)
+          : preview.content;
+        return { ...preview, content };
+      })()
+    : null;
+
+  /** FR-7.4 版本历史：展开/收起 + 对比目标 */
+  const [versionOpen, setVersionOpen] = useState(false);
+  const [compare, setCompare] = useState<{ bHash: string; bLabel: string } | null>(null);
+
+  const entry = preview ? index[preview.id] : undefined;
+  /** 版本列表：优先用 `versions` 完整历史，旧数据（无 `versions`）退化为单版本 */
+  const versionList = useMemo(() => {
+    if (!entry) return [];
+    if (Array.isArray(entry.versions) && entry.versions.length > 0) return entry.versions;
+    return [
+      { version: entry.version ?? 1, contentHash: entry.contentHash, createdAt: entry.createdAt, title: entry.title },
+    ];
+  }, [entry]);
+
+  /** 把某版本的 `contentHash` 还原成可渲染的 `Artifact`（正文从 `bodies` 池回填） */
+  const resolveVersion = (hash: string, title?: string): Artifact | null => {
+    if (!preview) return null;
+    return { ...preview, content: resolveArtifactContent(hash, bodies, ''), title: title ?? preview.title };
+  };
+
+  /** FR-7.4 回退：把当前产物恢复到历史版本的正文（新开一版，旧正文仍留 `bodies`） */
+  const onRollback = (v: { version: number; contentHash: string; title?: string }) => {
+    if (!preview) return;
+    useArtifactsStore.getState().rollbackToVersion(preview.id, v.contentHash, v.title);
+    toast.success(`已回退到 v${v.version}，并新增当前版本`);
+  };
 
   if (!open) return null;
 
@@ -314,8 +359,129 @@ export function ArtifactPanel() {
             {preview ? shortTime(preview.createdAt) : ''}
           </Typography>
         </Box>
-        <Box sx={{ p: 2, maxHeight: '70vh', overflow: 'auto' }}>
-          {preview && <ArtifactRenderer artifact={preview} />}
+        <Box sx={{ p: 2, maxHeight: '62vh', overflow: 'auto' }}>
+          {previewResolved && <ArtifactRenderer artifact={previewResolved} />}
+        </Box>
+
+        {/* 版本历史（FR-7.4）：列表 + 预览 / 对比 / 回退 */}
+        <Divider />
+        <Box sx={{ px: 1.5, py: 0.75 }}>
+          <GroupHeader
+            label={`版本历史 (${versionList.length})`}
+            open={versionOpen}
+            onToggle={() => setVersionOpen((v) => !v)}
+          />
+          <Collapse in={versionOpen} timeout={180} unmountOnExit>
+            <Box sx={{ pb: 0.5, maxHeight: '26vh', overflowY: 'auto' }}>
+              {versionList.map((v) => {
+                const isCurrent = preview ? index[preview.id]?.contentHash === v.contentHash : false;
+                return (
+                  <Box
+                    key={v.version}
+                    sx={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 0.5,
+                      px: 0.5,
+                      py: 0.4,
+                      borderRadius: 1,
+                      '&:hover': { bgcolor: 'action.hover' },
+                    }}
+                  >
+                    <Box sx={{ flex: 1, minWidth: 0 }}>
+                      <Typography noWrap sx={{ fontSize: 12.5, color: 'text.primary' }}>
+                        v{v.version}
+                        {v.title ? ` · ${v.title}` : ''}
+                        {isCurrent ? ' · 当前' : ''}
+                      </Typography>
+                      <Typography sx={{ fontSize: 11, color: 'text.secondary' }}>
+                        {shortTime(v.createdAt)}
+                      </Typography>
+                    </Box>
+                    <Tooltip title="预览此版本" placement="bottom">
+                      <IconButton
+                        size="small"
+                        sx={{ p: 0.4 }}
+                        onClick={() => {
+                          const resolved = resolveVersion(v.contentHash, v.title);
+                          if (resolved) setPreview(resolved);
+                        }}
+                      >
+                        <VisibilityIcon sx={{ fontSize: 16 }} />
+                      </IconButton>
+                    </Tooltip>
+                    <Tooltip title="与当前版本对比" placement="bottom">
+                      <IconButton
+                        size="small"
+                        sx={{ p: 0.4 }}
+                        onClick={() => setCompare({ bHash: v.contentHash, bLabel: `v${v.version}` })}
+                      >
+                        <CompareArrowsIcon sx={{ fontSize: 16 }} />
+                      </IconButton>
+                    </Tooltip>
+                    <Tooltip title="回退到此版本" placement="bottom">
+                      <IconButton size="small" sx={{ p: 0.4 }} onClick={() => onRollback(v)}>
+                        <RestoreIcon sx={{ fontSize: 16 }} />
+                      </IconButton>
+                    </Tooltip>
+                  </Box>
+                );
+              })}
+            </Box>
+          </Collapse>
+        </Box>
+      </Dialog>
+
+      {/* 版本对比（FR-7.4）：左 = 当前版本，右 = 所选历史版本 */}
+      <Dialog
+        open={!!compare}
+        onClose={() => setCompare(null)}
+        maxWidth="lg"
+        fullWidth
+        PaperProps={{ sx: { borderRadius: 2 } }}
+      >
+        <Box
+          sx={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 1,
+            px: 2,
+            py: 1.25,
+            borderBottom: '1px solid',
+            borderColor: 'divider',
+          }}
+        >
+          <CompareArrowsIcon sx={{ fontSize: 16, color: 'text.secondary' }} />
+          <Typography noWrap sx={{ fontSize: 13, fontWeight: 500, flex: 1, minWidth: 0 }}>
+            版本对比 · 当前 vs {compare?.bLabel}
+          </Typography>
+          <Typography sx={{ fontSize: 11.5, color: 'text.secondary', flexShrink: 0 }}>
+            {preview ? shortTime(preview.createdAt) : ''}
+          </Typography>
+        </Box>
+        <Box sx={{ p: 2, maxHeight: '72vh', overflow: 'auto' }}>
+          <Box
+            sx={{
+              display: 'grid',
+              gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' },
+              gap: 2,
+            }}
+          >
+            <Box>
+              <Typography sx={{ fontSize: 12, color: 'text.secondary', mb: 0.5 }}>当前版本</Typography>
+              {previewResolved && <ArtifactRenderer artifact={previewResolved} />}
+            </Box>
+            <Box>
+              <Typography sx={{ fontSize: 12, color: 'text.secondary', mb: 0.5 }}>
+                {compare?.bLabel}
+              </Typography>
+              {compare &&
+                (() => {
+                  const resolved = resolveVersion(compare.bHash);
+                  return resolved ? <ArtifactRenderer artifact={resolved} /> : null;
+                })()}
+            </Box>
+          </Box>
         </Box>
       </Dialog>
     </>

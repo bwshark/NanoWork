@@ -181,6 +181,23 @@
 > **#21 于 2026-09-28 批次 4 处理**（服务端 `updatedAt` 归一「只实现一半」）；**#22 / #23 于 2026-09-28 批次 5 处理**——**#22** 是 m6 文档自身三处「照文档写就会写错」（设备号 tie-break 不可实现 / 并集不丢的粒度 / push 水位语义），按批次 4 先例加勘误；**#23** 是**代码缺陷**（客户端同步的账户态缺账户维度：pull 游标与事件水位换号不重置/不隔离），登记在此是因为**两份同步文档都没写「账户变化必须复位」**这条语义。**#23 由 QA 独立复现（写临时用例证明后删除）后触发修复，两条回归用例均「先红后绿」。** **#24 于 2026-09-28 批次 6a 处理**（m6 未反映 6a 落地与范围勘误：§七 批次 6 行拆 6a ✅ / 6b ⏭ / 产物 ⛔划出，§2.3 处置两行补裁决，§5.4 加 GC 落地勘误，§六#13 标记闭合）。**#25 于 2026-09-29 处理**——补齐 6a 显式登记的 D7 已知偏差（导入 UI：`platform.pickFile` + 「导入归档」按钮，数据主权至此闭环）。**#26 于 2026-09-29 处理**——测试工具链的**双 vite 冲突**（`vitest 4` 嵌套 `vite 8` 与根 `vite 5` 并存 → 121 文件全红）；**这条与业务逻辑无关，属环境故障**，登记在此是因为它「看起来像自己改坏了代码」，排查成本很高。
 >
 > **#27 于 2026-09-29 批次 6b 登记**——C 类文件型资产的段落级 LWW 有一条**照 PRD 写就会写错**的地方：PRD §19.3 写「按 `##` 分块比较 `modified_at`」，但本仓记忆绝大多数是 `MemoryService.append` 产出的**引用块**（`> [ISO] …`），按 `## ` 切会整批漏掉；且只做「段并集」会让**删除与清空传播不了**（整份覆盖语义下旧段被对端填回来 = 功能回归），必须配套**段级墓碑**（由 `diff(上次已知段键, 当前段)` 得出）。已在 `docs/batch-6b-file-assets-spec.md` §2 写明口径与「为什么必须有墓碑」。
+>
+> **#28 于 2026-09-29 处理（FR-7.2 产物索引，M4/P0）**——三条「照 PRD 写就会写错」：
+> ① PRD §17.1 的 `artifact-index/<id>.json` 样例**不含 `content`**，看似暗示「内容外置、按 hash 去重」；
+> 但本仓的产物**已内联在消息里**并进了事件流（`sessionsStore.handleArtifact` → `updateMessage`），
+> 真做内容寻址要同时改 `ArtifactRenderer` 的取内容方式与 `ArtifactEvent` 形态——故裁决为
+> **索引只存元数据、内容本体不动**，不重复建第二份真相。
+> ② `artifactsStore` 的 `clearSession` / `clearAll` **此前零调用点** → 会话删了产物还留在产物库，
+> 且索引只增不减；本期把 `deleteSession` / `deleteSessions` 接上。
+> ③ `contentHash` 只能**同步**纯 TS 实现：渲染层拿不到 `node:crypto`，`crypto.subtle.digest` 是异步的，
+> 而入库点是同步 reducer。落 `src/lib/contentHash.ts`（`sha256:<hex>`），即 6b 规格 §5 指定的跨批契约点
+> （FR-7.3 的 `file-history/<hash>.bak` 复用同一函数，避免出现两套寻址；**不得**与 djb2 `hashContent` 混用）。
+> 落地规格 `docs/fr-7-2-artifact-index-spec.md`。**产物同步本身仍未开工**（另立批次）。
+>
+> **#29 于 2026-09-29 处理（FR-7.2 彻底去重升级 + FR-7.3 文件级回滚，M4/P0）**：
+> ① FR-7.2 原「内容本体不动」裁决被本批**升级为内容池 `bodies` 彻底去重**：`recordArtifact` 按 `contentHash` 只存一份正文进 `bodies`，`bySession` 只留引用（`content:''`），渲染前 `resolveArtifactContent(entry.contentHash, bodies, fallback)` 回填（image/video 正文为空不进池、回落 `url`）——**闭合了原「内容本体仍跨会话重复」的已知偏差 #4**。旧内联正文走 `merge` 迁移搬池（不可用 `onRehydrateStorage`：同步 rehydrate 会引用未赋值的 `useArtifactsStore` 常量 → TDZ 崩溃）。
+> ② FR-7.3 文件级回滚已落：落点仅客户端记忆写点（用户级 `MEMORY.md` + 工作区记忆目录）；引擎侧 workspace 文件因 nanobot 只读不可改，单列 follow-up。封装 `src/lib/fileBackup.ts`（`snapshotBeforeWrite` 写前快照旧正文 + 记时间线 + 最佳努力吞错），平台抽象 `FileBackup`（`put(<hash>,正文)`→`file-history/<hash>.bak`、`get` 读回）复用既有 IPC `file-backup:put/get`（**无需重建 cjs**）；时间线元数据 key `STORAGE_KEYS.fileBackups`（`nanowork.fileBackups`）已登记进 `electron/storageRoutes.ts` 的 `RUNTIME_FILES`→`file-backups.json`，主进程**已重建 `main.cjs`**。`MemoryService` 五写入口（save/writeFile/append/removeFile/clear）挂 prebackup；记忆页加「历史快照 / 回滚到此处」UI（回滚自身触发 prebackup，可再撤销）。Web 端 `fileBackup` 为 no-op → 时间线恒空、UI 禁用。
+> 落地规格 `docs/artifact-content-dedup-spec.md`、`docs/fr-7-3-file-rollback-spec.md`。
 ---
 
 ## 十、检查清单（提交前自检）

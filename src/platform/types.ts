@@ -1,4 +1,4 @@
-import type { McpToolInfo, Skill } from '@/types';
+import type { ArtifactIndexEntry, McpToolInfo, Skill } from '@/types';
 import type { PluginInstallResult, PluginScanResult } from '@/types/plugin';
 import type {
   SessionEvent,
@@ -478,12 +478,64 @@ export interface WorkspaceMemoryFiles {
   migrateLegacy(workdir: string | null): Promise<string[]>;
 }
 
+/**
+ * 产物索引的**目录后端**（`<userData>/artifact-index/<id>.json`，FR-7.2）。
+ *
+ * ## 为什么不复用 `storage`
+ *
+ * 与 `WorkspaceMemoryFiles` 同因：这是「一个目录、若干按 id 命名的文件」，
+ * `storage` 的「一个 key 一个文件」契约表达不了；更关键的是它**不是权威**——
+ * 产物索引的权威是 store 索引切片（Web 端没有文件系统也要能检索），这里只是
+ * Electron 的**单向镜像**（写下去供诊断 / 迁移 / 未来的产物同步取用）。
+ *
+ * ## 契约
+ *
+ * - **单向**：只有 `put` / `remove`，**没有读**——本批没有任何回读入口，
+ *   不提供就不会有人误把它当第二权威；
+ * - **失败可容忍**：镜像写失败不影响入库（调用方 `.catch()` 静默），
+ *   索引切片才是权威；
+ * - **web 端是 no-op**：无文件系统，两个方法都直接 resolve。
+ */
+export interface ArtifactIndexFiles {
+  /** 写入/覆盖单条索引（按 `entry.id` 命名）；Web 端 no-op */
+  put(entry: ArtifactIndexEntry): Promise<void>;
+  /** 删除单条索引（幂等）；Web 端 no-op */
+  remove(id: string): Promise<void>;
+}
+
+/**
+ * 内容寻址文件备份（FR-7.3 文件级回滚）。
+ *
+ * ## 与 `ArtifactIndexFiles` 同层
+ *
+ * 也是「一个 key（这里是 `hash`）一个文件」的目录后端，落点 `<userData>/file-history/
+ * <hash>.bak`（Electron）；但它是**回滚锚点**，不是索引。Web 端同样是 no-op。
+ *
+ * ## 契约
+ *
+ * - **内容寻址**：`put(hash, content)` 按 `hash` 命名文件；同 hash 即同内容，天然幂等
+ *   （主进程 `file-backup:put` 对已存在文件直接跳过）；
+ * - **失败可容忍**：调用方（MemoryService prebackup）应 `try/catch` 包住，备份失败
+ *   绝不影响真实写入；
+ * - **web 端是 no-op**：`get` 返回 `null`，记忆页据此禁用回滚 UI。
+ */
+export interface FileBackup {
+  /** 写入/覆盖一份内容寻址备份；Web 端 no-op */
+  put(hash: string, content: string): Promise<void>;
+  /** 读取备份；不支持时返回 null */
+  get(hash: string): Promise<string | null>;
+}
+
 /** 平台适配实现（web / electron） */
 export interface PlatformAdapter {
   env: 'web' | 'electron';
   storage: StorageAdapter;
   /** 工作区记忆的目录后端（落点见 `WorkspaceMemoryFiles`） */
   memoryFiles: WorkspaceMemoryFiles;
+  /** 产物索引的目录后端（Electron 单向镜像，落点见 `ArtifactIndexFiles`） */
+  artifactIndex: ArtifactIndexFiles;
+  /** 内容寻址文件备份（FR-7.3 文件级回滚，落点见 `FileBackup`） */
+  fileBackup: FileBackup;
   notify(title: string, body: string): void;
   /**
    * 写入文本文件（用于导出记忆、nanobot 配置片段等）。
@@ -1008,6 +1060,12 @@ export interface ElectronAPI {
   memoryRemoveAll(workdir: string | null): Promise<number>;
   /** 旧单文件落点的懒迁移（幂等）；返回本次新写入的文件名 */
   memoryMigrateLegacy(workdir: string | null): Promise<string[]>;
+  // —— 产物索引（`<userData>/artifact-index/<id>.json`，FR-7.2）——
+  // 单向镜像：只有写与删，**没有读**（权威在 store 索引切片，见 ArtifactIndexFiles）。
+  /** 写入/覆盖单条产物索引 */
+  artifactIndexPut(entry: ArtifactIndexEntry): Promise<void>;
+  /** 删除单条产物索引（幂等） */
+  artifactIndexRemove(id: string): Promise<void>;
   /** 启动 nanobot 网关子进程（桌面端自动拉起） */
   nanobotStart(): Promise<boolean>;
   /** 停止 nanobot 网关子进程 */

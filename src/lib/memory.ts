@@ -15,6 +15,7 @@ import {
   workspaceMemoryDirPath,
 } from '@/lib/workspaceMemory';
 import { hashContent } from '@/lib/workspaceKey';
+import { fileKeyOf, snapshotBeforeWrite } from '@/lib/fileBackup';
 // 归一化 / 正文提取的实现在纯模块 `memoryMerge`（本文件要用，同时转出给既有调用方）
 import { normalizeForDedup, parseEntryBodies } from '@/lib/memoryMerge';
 // `workspaceKeyFor` / `DEFAULT_WORKSPACE_KEY` 已搬去 workspaceKey.ts（主进程做旧数据
@@ -665,12 +666,15 @@ class MemoryServiceImpl {
     workdir?: string | null,
   ): Promise<void> {
     if (scope === 'user') {
+      // 写前快照（FR-7.3）：用户级记忆是单文件，覆盖前备份旧正文
+      const old = await platform.storage.get<string>(USER_MEMORY_KEY);
+      await snapshotBeforeWrite(fileKeyOf('user', null, CURATED_MEMORY_FILE), old ?? null, 'overwrite');
       await platform.storage.set(USER_MEMORY_KEY, fullText ?? '');
       this.writeVersionValue += 1;
       return;
     }
     // 工作区级 = 写精炼记忆那一份（`MEMORY.md`）。空内容的处理（等于删掉这一份）
-    // 与版本号递增都在 writeFile 里，一条规则一处实现。
+    // 与版本号递增、写前快照都在 writeFile 里，一条规则一处实现。
     await this.writeFile(workdir, CURATED_MEMORY_FILE, fullText ?? '');
     // 递增放在写入**完成之后**：先递增会让并发读取拿到「新版本 + 旧内容」的快照，
     // 而那个快照会被后续判定为有效，于是永久停在旧内容上。
@@ -689,12 +693,21 @@ class MemoryServiceImpl {
    */
   async clear(scope: MemoryScope = 'workspace', workdir?: string | null): Promise<void> {
     if (scope === 'user') {
+      // 写前快照（FR-7.3）：清空前备份旧正文，op=delete
+      const old = await platform.storage.get<string>(USER_MEMORY_KEY);
+      await snapshotBeforeWrite(fileKeyOf('user', null, CURATED_MEMORY_FILE), old ?? null, 'delete');
       await platform.storage.set(USER_MEMORY_KEY, '');
       this.writeVersionValue += 1;
       return;
     }
     const dir = this.resolveDir(workdir);
     await this.ensureMigrated(dir);
+    // 写前快照（FR-7.3）：清空前逐个备份被删文件的旧正文，op=delete
+    const names = await platform.memoryFiles.list(dir);
+    for (const name of names) {
+      const old = await platform.memoryFiles.read(dir, name);
+      await snapshotBeforeWrite(fileKeyOf('workspace', dir, name), old ?? null, 'delete');
+    }
     await platform.memoryFiles.removeAll(dir);
     this.writeVersionValue += 1;
   }
@@ -735,6 +748,9 @@ class MemoryServiceImpl {
     const dir = this.resolveDir(workdir);
     await this.ensureMigrated(dir);
     const text = content ?? '';
+    // 写前快照（FR-7.3）：覆盖/删除前备份旧正文（op=overwrite；空内容走 remove 也覆盖）
+    const old = await platform.memoryFiles.read(dir, name);
+    await snapshotBeforeWrite(fileKeyOf('workspace', dir, name), old ?? null, 'overwrite');
     if (text.trim() === '') {
       await platform.memoryFiles.remove(dir, name);
     } else {
@@ -746,6 +762,9 @@ class MemoryServiceImpl {
   /** 删除某个记忆文件（幂等；记忆页的「删除这一份」用） */
   async removeFile(workdir: string | null | undefined, name: string): Promise<void> {
     const dir = this.resolveDir(workdir);
+    // 写前快照（FR-7.3）：删除前备份旧正文，op=delete
+    const old = await platform.memoryFiles.read(dir, name);
+    await snapshotBeforeWrite(fileKeyOf('workspace', dir, name), old ?? null, 'delete');
     await platform.memoryFiles.remove(dir, name);
     this.writeVersionValue += 1;
   }
@@ -801,9 +820,13 @@ class MemoryServiceImpl {
     const block = this.formatBlock(trimmed, source, at, marker);
 
     if (scope === 'user') {
+      // 写前快照（FR-7.3）：追加前备份旧正文（op=append），直接写盘避免与 save 内
+      // 的 overwrite 快照重复
+      await snapshotBeforeWrite(fileKeyOf('user', null, CURATED_MEMORY_FILE), existing ?? null, 'append');
       const next =
         existing.trim() === '' ? block : `${existing.replace(/\s+$/, '')}\n\n${block}`;
-      await this.save(`${next}\n`, 'user');
+      await platform.storage.set(USER_MEMORY_KEY, `${next}\n`);
+      this.writeVersionValue += 1;
       return 'written';
     }
 
@@ -812,6 +835,8 @@ class MemoryServiceImpl {
     const dir = this.resolveDir(workdir);
     const name = dailyMemoryFileName(at);
     const current = (await platform.memoryFiles.read(dir, name)) ?? '';
+    // 写前快照（FR-7.3）：追加前备份当日文件的旧正文，op=append
+    await snapshotBeforeWrite(fileKeyOf('workspace', dir, name), current || null, 'append');
     const next =
       current.trim() === '' ? block : `${current.replace(/\s+$/, '')}\n\n${block}`;
     await platform.memoryFiles.write(dir, name, `${next}\n`);

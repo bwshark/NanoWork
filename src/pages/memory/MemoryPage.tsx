@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Box,
   Button,
@@ -14,6 +14,8 @@ import {
 import PersonOutlineIcon from '@mui/icons-material/PersonOutline';
 import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
 import InsertDriveFileOutlinedIcon from '@mui/icons-material/InsertDriveFileOutlined';
+import HistoryIcon from '@mui/icons-material/History';
+import RestoreIcon from '@mui/icons-material/Restore';
 import { MemoryService, memoryDiskPath } from '@/lib/memory';
 import {
   CURATED_MEMORY_FILE,
@@ -25,6 +27,8 @@ import { dirBasename } from '@/lib/workspaceLabel';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { platform } from '@/platform';
 import { toast } from '@/components/Toast';
+import { fileKeyOf, getBackupContent } from '@/lib/fileBackup';
+import { useFileBackupStore, type BackupEntry } from '@/stores/fileBackupStore';
 import type { MemoryScope, MemoryScopeSummary } from '@/types';
 
 /**
@@ -72,6 +76,8 @@ export function MemoryPage({ embedded = false }: { embedded?: boolean }) {
   const [summaries, setSummaries] = useState<MemoryScopeSummary[]>([]);
   /** 危险操作的待确认项（null = 无弹窗） */
   const [pendingConfirm, setPendingConfirm] = useState<'clear' | 'removeFile' | null>(null);
+  /** 回滚到某版本的待确认项（null = 无弹窗） */
+  const [pendingRollback, setPendingRollback] = useState<BackupEntry | null>(null);
   /** 每次成功写盘后自增，驱动文件列表与正文重读 */
   const [reloadToken, setReloadToken] = useState(0);
 
@@ -201,6 +207,25 @@ export function MemoryPage({ embedded = false }: { embedded?: boolean }) {
       '删除失败',
     );
 
+  /**
+   * 回滚到某个历史版本（FR-7.3）。
+   *
+   * 从内容寻址备份读回旧正文，写回当前文件；写回**本身触发 prebackup**（MemoryService
+   * 写路径已接），所以回滚是可再撤销的——不会把用户锁死在一个旧版本上。
+   * 备份丢失（Web 端无落点 / 文件被清）时显式报错。
+   */
+  const rollbackTo = (entry: BackupEntry) =>
+    runAction(
+      async () => {
+        const content = await getBackupContent(entry.hash);
+        if (content === null) throw new Error('该版本备份已丢失');
+        if (scope === 'user') await MemoryService.save(content, 'user');
+        else await MemoryService.writeFile(undefined, file, content);
+      },
+      '已回滚到所选版本',
+      '回滚失败',
+    );
+
   /** 清空 / 删除的确认文案里要不要带上落点：Web 端没有文件系统，那句人话塞进路径位置读着别扭 */
   const hasRealPath = platform.env === 'electron';
   const clearMessage =
@@ -217,6 +242,25 @@ export function MemoryPage({ embedded = false }: { embedded?: boolean }) {
   const fileLabel = (name: string): string => {
     const base = isDailyMemoryFileName(name) ? name.replace(/\.md$/i, '') : name;
     return name === today ? `${base} · 今天` : base;
+  };
+
+  // —— 文件级回滚（FR-7.3）——
+  const rollbackSupported = platform.env === 'electron';
+  const fileKey =
+    scope === 'user'
+      ? fileKeyOf('user', null, CURATED_MEMORY_FILE)
+      : fileKeyOf('workspace', workspaceDir, file);
+  const snapshotsRaw = useFileBackupStore((s) => s.timeline[fileKey] ?? []);
+  /** 时间线按 at 倒序（最新在前） */
+  const snapshots = useMemo(
+    () => [...snapshotsRaw].sort((a, b) => b.at.localeCompare(a.at)),
+    [snapshotsRaw],
+  );
+  /** 操作类型 → 时间线展示文案 */
+  const OP_LABEL: Record<'overwrite' | 'append' | 'delete', string> = {
+    overwrite: '覆盖前',
+    append: '追加前',
+    delete: '删除前',
   };
 
   return (
@@ -396,6 +440,49 @@ export function MemoryPage({ embedded = false }: { embedded?: boolean }) {
         </Stack>
       </Paper>
 
+      {/* 文件级回滚（FR-7.3）：当前文件被改写/删除前的历史快照 */}
+      <Paper variant="outlined" sx={{ p: 2, mt: 2, bgcolor: 'background.paper' }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+          <HistoryIcon sx={{ fontSize: 16, color: 'text.secondary' }} />
+          <Typography sx={{ fontSize: 13, fontWeight: 600 }}>历史快照</Typography>
+          <Typography sx={{ fontSize: 11, color: 'text.secondary' }}>
+            {scope === 'user' ? '用户级 MEMORY.md' : file}
+          </Typography>
+        </Box>
+        {!rollbackSupported ? (
+          <Typography sx={{ fontSize: 12, color: 'text.secondary' }}>
+            文件级回滚仅桌面端支持（Web 端无本地备份落点）。
+          </Typography>
+        ) : snapshots.length === 0 ? (
+          <Typography sx={{ fontSize: 12, color: 'text.secondary' }}>
+            暂无快照。保存或自动沉淀改写这份文件后，这里会出现可回滚的历史版本。
+          </Typography>
+        ) : (
+          <Stack spacing={0.75}>
+            {snapshots.map((s) => (
+              <Box
+                key={`${s.hash}:${s.at}`}
+                sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}
+              >
+                <Chip size="small" variant="outlined" label={OP_LABEL[s.op]} />
+                <Typography sx={{ fontSize: 12, color: 'text.secondary' }}>
+                  {s.at.replace('T', ' ').slice(0, 19)}
+                </Typography>
+                <Box sx={{ flex: 1 }} />
+                <Button
+                  size="small"
+                  startIcon={<RestoreIcon sx={{ fontSize: 15 }} />}
+                  onClick={() => setPendingRollback(s)}
+                  disabled={busy}
+                >
+                  回滚到此处
+                </Button>
+              </Box>
+            ))}
+          </Stack>
+        )}
+      </Paper>
+
       <ConfirmDialog
         open={pendingConfirm !== null}
         danger
@@ -412,6 +499,25 @@ export function MemoryPage({ embedded = false }: { embedded?: boolean }) {
           setPendingConfirm(null);
           if (kind === 'removeFile') void removeCurrentFile();
           else void clearAll();
+        }}
+      />
+
+      <ConfirmDialog
+        open={pendingRollback !== null}
+        title="回滚到历史版本"
+        message={
+          pendingRollback
+            ? `将把「${scope === 'user' ? '用户级 MEMORY.md' : file}」恢复到 ${pendingRollback.at
+                .replace('T', ' ')
+                .slice(0, 19)} 的版本（${OP_LABEL[pendingRollback.op]}）。当前内容会作为新快照保留，可再撤销。`
+            : ''
+        }
+        confirmText="回滚"
+        onCancel={() => setPendingRollback(null)}
+        onConfirm={() => {
+          const entry = pendingRollback;
+          setPendingRollback(null);
+          if (entry) void rollbackTo(entry);
         }}
       />
     </Box>

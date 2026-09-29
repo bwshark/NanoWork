@@ -149,6 +149,12 @@ const RUNTIME_FILES: Record<string, FileEntry> = {
   // 登记的意义：清空数据时会一并带走——不登记则元数据残留，而资产本体已被清掉，
   // 下一轮 hydrate 会拿「旧 hash + 空内容」误判为「本机刚改过」。
   [FILE_ASSETS_STORAGE_KEY]: { rel: 'file-assets-sync.json', format: 'json' },
+  // 文件级回滚时间线元数据（FR-7.3）：纯渲染层运行时状态（`Record<fileKey, BackupEntry[]>`），
+  // 值是字符串 JSON，故 json 路由。真正的备份正文由 IPC `file-backup:put` 落
+  // `<userData>/file-history/<hash>.bak`，与这份时间线元数据是两件事（见 fileBackup.ts）。
+  // 登记意义：进 `knownRouteFiles()` → 「清空数据」能一并带走；未登记则掉进 misc 兜底，
+  // 且违反「STORAGE_KEYS 全部显式登记」的不变量（storageRoutes 单测会直接红）。
+  [STORAGE_KEYS.fileBackups]: { rel: 'file-backups.json', format: 'json' },
 };
 
 /** ① 产品自有目录 `~/.nanowork/` */

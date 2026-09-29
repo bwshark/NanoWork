@@ -122,7 +122,7 @@ export function ArtifactRenderer({ artifact }: ArtifactRendererProps) {
           style={oneDark}
           language={artifact.language ?? 'text'}
           PreTag="div"
-          customStyle={{ borderRadius: 8, fontSize: 13 }}
+          customStyle={{ borderRadius: 8, fontSize: 13, maxWidth: '100%', overflowX: 'auto' }}
         >
           {artifact.content}
         </SyntaxHighlighter>

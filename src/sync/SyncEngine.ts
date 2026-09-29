@@ -44,6 +44,8 @@ import type { SessionEventStreamAdapter } from './eventStream';
 // 仅类型：避免 `SyncEngine` ↔ `fileAssets` 形成运行时循环（后者 import 了前者的
 // `compareVersions`，那是运行时依赖；这边只要类型，编译后即被擦除）
 import type { FileAssetsAdapter } from './fileAssets';
+// 仅类型：产物同步适配器（批次 6，与 `fileAssets` / `eventStream` 同款裁决，不进 registry）
+import type { ArtifactsAdapter } from './artifacts';
 import type { SyncAccount } from './syncAccount';
 import type { SyncEntityRecord, SyncRegistry } from './syncRegistry';
 import type { PullResponse, PushConflict, SyncChange, VersionStamp } from './types';
@@ -116,6 +118,15 @@ export interface SyncEngineOptions {
    * **不 import 任何 store**（不变量 2）。
    */
   fileAssets?: FileAssetsAdapter;
+  /**
+   * 产物同步通道（批次 6，FR-7.2 索引 + `bodies` 内容池的**内容寻址同步**）；
+   * 缺省 `undefined` = 不同步产物索引 / 内容池（既有行为不变）。
+   *
+   * 与 `fileAssets` **同款裁决**：产物有两个维度（索引条目 = LWW 实体、内容池 = 内容
+   * 寻址 blob），都塞不进 `SyncCollectionSpec` 的同步 `read()`（详见 `artifacts.ts`
+   * 文件头）。引擎只经此适配器访问 store，**不 import 任何 store**（不变量 2）。
+   */
+  artifacts?: ArtifactsAdapter;
 }
 
 const DEFAULT_DEBOUNCE_MS = 1000;
@@ -235,6 +246,14 @@ export class SyncEngine {
    * 因「未登记」而返回 `false`——`pulled` 计数不会与各自的异步落地重复。
    */
   private readonly fileAssets?: FileAssetsAdapter;
+  /**
+   * 产物同步通道（批次 6，可选注入）。
+   *
+   * 与 `eventStream` / `fileAssets` 并列：三者都不进 `registry`，故 `applyChange`
+   * 对它们的 collection 因「未登记」而返回 `false`——`pulled` 计数不会与各自的异步
+   * 落地重复。
+   */
+  private readonly artifacts?: ArtifactsAdapter;
 
   /**
    * **当前账户**每会话「已确保上行到服务端」的事件水位（批次 5 的 push 游标，规格 §2.1）。
@@ -288,6 +307,7 @@ export class SyncEngine {
     this.initialCursor = this.cursorStore.get();
     this.eventStream = options.eventStream;
     this.fileAssets = options.fileAssets;
+    this.artifacts = options.artifacts;
   }
 
   /**
@@ -474,17 +494,25 @@ export class SyncEngine {
       // C 类资产（批次 6b）：**必须在 pull 之前**水合——「内容即版本」要先于组装上行
       // 负载生效，否则本轮 push 用的是上一轮的版本号。
       if (this.fileAssets) await this.fileAssets.hydrate();
+      // 产物同步（批次 6）：同样必须在 pull 之前水合——`collect()` 阶段要补 `updatedBy`
+      // 设备 id（store 的同步写入动作拿不到异步的 deviceId），未水合则 `collect()` 返回空。
+      if (this.artifacts) await this.artifacts.hydrate();
 
       // 1. 先 pull：把对端 / 上次同步后的变更落下来（§六 #12）
       const firstPull = await this.client.pull(this.cursorStore.get());
       pulled += this.applyPull(firstPull);
       pulled += await this.applyPulledFileAssets(firstPull.changes);
+      pulled += await this.applyPulledArtifacts(firstPull.changes);
       // 事件落地：异步，按 sessionId 分组逐会话落地；**绝不推进水位**（规格 §2.1 J1-b）
       pulledEvents += await this.applyPulledEvents(firstPull.events);
       this.cursorStore.set(firstPull.cursor);
 
       // 2. 组装并 push（C 类资产走适配器，与 LWW 实体同批上行）
-      const changes = [...this.collectChanges(), ...(this.fileAssets?.collect() ?? [])];
+      const changes = [
+        ...this.collectChanges(),
+        ...(this.fileAssets?.collect() ?? []),
+        ...(this.artifacts?.collect() ?? []),
+      ];
       const eventBatch = await this.collectEventChanges();
       let pushed = 0;
       let pushedEvents = 0;
@@ -518,6 +546,7 @@ export class SyncEngine {
           const secondPull = await this.client.pull(this.cursorStore.get());
           pulled += this.applyPull(secondPull);
           pulled += await this.applyPulledFileAssets(secondPull.changes);
+          pulled += await this.applyPulledArtifacts(secondPull.changes);
           pulledEvents += await this.applyPulledEvents(secondPull.events);
           this.cursorStore.set(secondPull.cursor);
         }
@@ -619,6 +648,22 @@ export class SyncEngine {
     let applied = 0;
     for (const change of changes) {
       applied += await this.fileAssets.apply(change);
+    }
+    return applied;
+  }
+
+  /**
+   * 落地产物同步变更（批次 6）。
+   *
+   * 与 `applyPulledFileAssets` 同款：单独一步、异步。这两个 collection（artifactIndex /
+   * artifactBodies）**未登记**进 registry，故 `applyPull` 对它们返回 `false`（不计数），
+   * 不会与这里重复。
+   */
+  private async applyPulledArtifacts(changes: SyncChange[]): Promise<number> {
+    if (!this.artifacts || changes.length === 0) return 0;
+    let applied = 0;
+    for (const change of changes) {
+      applied += await this.artifacts.apply(change);
     }
     return applied;
   }

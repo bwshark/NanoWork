@@ -144,6 +144,8 @@ export const STORAGE_KEYS = {
   mcp: 'nanowork.mcp',
   tasks: 'nanowork.tasks',
   artifacts: 'nanowork.artifacts',
+  /** 文件级回滚时间线（FR-7.3）：`Record<fileKey, {hash, at, op}[]>` */
+  fileBackups: 'nanowork.fileBackups',
   channels: 'nanowork.channels',
 } as const;
 

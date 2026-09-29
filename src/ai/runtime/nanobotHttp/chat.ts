@@ -119,6 +119,30 @@ export class NanobotClient {
   private readonly healthSupport = new Map<string, boolean>();
 
   /**
+   * 引擎正挂起等待用户裁决的批准请求：id → 登记时刻（FR-1.5）。
+   *
+   * 引擎此时阻塞在 `before_execute_tool` 里，SSE 上**一个字节都不会有**——这段
+   * 静默是「人在思考」，不是链路故障。只要集合里有**未过期**的挂起请求，静默超时
+   * 就只重新布防、不开火（详见 `sendMessage` 的 timer 逻辑），否则用户盯着授权
+   * 弹窗想两分钟，流就被我们自己掐了（引擎侧要等自己的超时才判拒，宽松得多）。
+   *
+   * 记时刻而不是只存 id：裁决可能永远不回来（用户中途中断、引擎进程被杀），
+   * 过期即作废，免得一个陈旧 id 永久抑制所有会话的静默超时。
+   *
+   * 粒度是「客户端级」而非「会话级」：裁决事件本身不带会话标识，而误判方向
+   * 偏保守（宁可少杀一次超时）是可接受的取舍。
+   */
+  private readonly pendingApprovals = new Map<string, number>();
+
+  /**
+   * 等裁决时允许的最长静默。
+   *
+   * 引擎侧的裁决等待默认 300s（超时按拒绝处理），这里取 3 倍余量：既覆盖
+   * 「用户慢慢看」，也不至于让一个再也不回来的裁决把链路判死能力永久关掉。
+   */
+  private static readonly APPROVAL_WAIT_MAX_MS = 900_000;
+
+  /**
    * 归一化 endpoint 并做开发态代理改写。
    * 开发模式下访问默认本地网关时改走 Vite dev server 代理，避免浏览器 CORS 拦截。
    */
@@ -374,6 +398,8 @@ export class NanobotClient {
    *
    * 404 表示请求已超时 / 已被取消 / 已裁决过：必须抛错让 UI 如实提示
    * 「该授权已失效」，吞掉会误导用户以为工具已放行。
+   *
+   * 副作用：把该请求从 `pendingApprovals` 摘掉，让静默超时恢复正常计时。
    */
   async respondApproval(
     requestId: string,
@@ -381,44 +407,124 @@ export class NanobotClient {
     reason?: string,
   ): Promise<void> {
     const { endpoint } = this.getConfig();
-    const res = await fetch(
-      `${endpoint}/tool-approvals/${encodeURIComponent(requestId)}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...this.authHeaders() },
-        body: JSON.stringify({
-          decision,
-          ...(reason && reason.trim() !== '' ? { reason } : {}),
-        }),
-      },
-    );
-    if (!res.ok) {
-      throw new Error(
-        res.status === 404
-          ? '该工具调用已失效（可能已超时或被取消），请重新发起'
-          : `回传工具裁决失败：HTTP ${res.status} ${res.statusText}`,
+    try {
+      const res = await fetch(
+        `${endpoint}/tool-approvals/${encodeURIComponent(requestId)}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...this.authHeaders() },
+          body: JSON.stringify({
+            decision,
+            ...(reason && reason.trim() !== '' ? { reason } : {}),
+          }),
+        },
       );
+      if (!res.ok) {
+        throw new Error(
+          res.status === 404
+            ? '该工具调用已失效（可能已超时或被取消），请重新发起'
+            : `回传工具裁决失败：HTTP ${res.status} ${res.statusText}`,
+        );
+      }
+    } finally {
+      // 无论成没成都摘掉挂起标记：404 说明引擎已自行超时判拒，网络失败时引擎
+      // 也会在自身超时后继续——留着会让这个 id 永久抑制静默超时（内存与语义双漏）。
+      this.pendingApprovals.delete(requestId);
     }
   }
 
   /**
-   * 计算本次流式请求的硬超时。
+   * 静默超时（idle timeout）参数。
    *
-   * 纯文本请求沿用 120s；携带文件时按附件总体积追加额度（网关侧要解码、解析文档、
-   * 再交给模型处理，几十 MB 的 PDF/DOCX 往往远超 120s）。固定 120s 会让大文件任务
-   * 在流中途被掐断，表现为「对话突然断了、消息停在半截」，而服务端其实还在正常跑。
+   * 判据是**「多久收不到任何字节算链路已死」**，而不是「整轮请求最多跑多久」。
+   * 早期实现按总时长掐表（固定 120s），一轮里工具调用多、模型输出长的任务会在
+   * 流**正常推进**时被客户端单方面 abort——用户看到「超时：超过 120 秒仍未返回
+   * 完整结果」，而网关其实还在跑（「写个小游戏并保存到本地」就会撞上）。
+   * 产品要求长任务支持小时级运行，因此计时器改为**每次收到数据即归零**：
+   * 只要链路一直在动，请求就可以一直跑下去。
+   *
+   * 基准 120s 覆盖「单次工具执行 + 一次模型往返」的常规静默；带附件时按体积追加
+   * 额度（网关要解码、解析文档再交给模型，几十 MB 的 PDF/DOCX 往往远超 120s）。
+   *
+   * 唯一的例外见 `pendingApprovals`：等用户裁决时链路本来就是静默的。
    */
-  private resolveTimeout(req: ChatRequest): number {
-    const base = 120_000;
-    const perMb = 60_000;
-    const max = 600_000;
+  private static readonly IDLE_BASE_MS = 120_000;
+  private static readonly IDLE_PER_MB_MS = 60_000;
+  private static readonly IDLE_MAX_MS = 600_000;
+
+  /**
+   * 计算本次请求的静默额度（连续多久收不到任何字节即判定断链）。
+   *
+   * - 首字节前：这段额度用来容忍网关排队、解析附件的时间；
+   * - 流展开后：用来容忍两次事件之间的间隔（模型思考、单次工具执行）。
+   *
+   * 两种情形共用一份额度是有意为之：附件只有在「交给模型之前」才需要额外时间，
+   * 而那时正好落在首字节前，所以按体积追加一次即可，无需两套参数。
+   */
+  private resolveIdleWindow(req: ChatRequest): number {
     // content 为 base64，解码后体积约为其长度的 3/4
     const bytes = (req.files ?? []).reduce(
       (sum, f) => sum + Math.floor(((f.content?.length ?? 0) * 3) / 4),
       0,
     );
-    if (bytes === 0) return base;
-    return Math.min(max, base + Math.ceil(bytes / (1024 * 1024)) * perMb);
+    if (bytes === 0) return NanobotClient.IDLE_BASE_MS;
+    return Math.min(
+      NanobotClient.IDLE_MAX_MS,
+      NanobotClient.IDLE_BASE_MS +
+        Math.ceil(bytes / (1024 * 1024)) * NanobotClient.IDLE_PER_MB_MS,
+    );
+  }
+
+  /**
+   * 是否仍有「有效期内」的挂起裁决，并顺手清理过期条目。
+   *
+   * 拆成独立方法而不是内联在 timer 里：清理是**副作用**，需要有名字、有注释，
+   * 也需要被单测的语义覆盖（见 `pendingApprovals`）。
+   */
+  private hasFreshApprovalWait(): boolean {
+    const now = Date.now();
+    for (const [id, registeredAt] of this.pendingApprovals) {
+      if (now - registeredAt >= NanobotClient.APPROVAL_WAIT_MAX_MS) {
+        this.pendingApprovals.delete(id);
+      }
+    }
+    return this.pendingApprovals.size > 0;
+  }
+
+  /**
+   * 静默超时的报错文案。
+   *
+   * 「还没开口」与「说到一半断了」必须分开说：前者多半是网关还在排队 / 处理，
+   * 重试即可能成功；后者说明链路中途断了，已收到的内容是残缺的。
+   * 另外**只有**带附件的轮次才提附件——无附件时提示「附件越大网关处理越久」
+   * 只会让用户一头雾水（这正是报障截图里的那句）。
+   *
+   * 注意判据是「是否解析出过负载」而非「是否收到过字节」：网关会先回响应头再
+   * 长时间思考，只按字节判断会把「迟迟不出第一个字」误报成「已收到部分结果」。
+   */
+  private timeoutMessage(info: {
+    /** 是否已解析出过内容（决定是「还没开口」还是「说到一半」） */
+    gotContent: boolean;
+    /** 距离最后一次收到数据的静默时长 */
+    silentMs: number;
+    /** 本轮是否带附件（决定重试建议） */
+    hasFiles: boolean;
+  }): string {
+    const silentS = Math.max(1, Math.round(info.silentMs / 1000));
+    if (info.gotContent) {
+      return (
+        `响应超时：已收到部分结果，但此后 ${silentS} 秒无新数据。` +
+        (info.hasFiles
+          ? '可重试，或先压缩 / 拆分附件再发送。'
+          : '可重试；若反复超时请检查网关是否正常。')
+      );
+    }
+    return (
+      `响应超时：${silentS} 秒内网关没有返回任何内容。` +
+      (info.hasFiles
+        ? '网关可能仍在解码 / 解析附件，可重试或先压缩、拆分附件再发送。'
+        : '网关可能仍在处理，可重试；若反复超时请检查网关是否正常。')
+    );
   }
 
   /**
@@ -432,27 +538,64 @@ export class NanobotClient {
    *
    * 超时与手动 abort 的区别：手动 abort 静默结束；超时则必须通过 onError 显式报错，
    * 否则用户只看到消息停在半截、界面毫无提示，会误以为程序崩了。
+   *
+   * 超时是**静默超时**而非总时长上限：每收到一次数据（响应头 / 任意字节，含
+   * keep-alive 帧）计时器就归零，因此长任务只要网关还在持续输出就不会被打断，
+   * 只有连续 `resolveIdleWindow()` 毫秒毫无动静才判定链路已死。
+   * 唯一例外是引擎挂起等用户裁决的那段静默（见 `pendingApprovals`）。
    */
   sendMessage(req: ChatRequest, handlers: StreamHandlers): ChatHandle {
     const controller = new AbortController();
-    const timeoutMs = this.resolveTimeout(req);
-    // 用可控 timer 代替 AbortSignal.timeout：需要区分中断来源
+    const idleWindow = this.resolveIdleWindow(req);
+    const hasFiles = (req.files?.length ?? 0) > 0;
+
+    // 用可控 timer 代替 AbortSignal.timeout：既需要区分中断来源，也需要能在
+    // 每次收到数据后归零（见类内 IDLE_* 常量说明）。
     let timedOut = false;
-    const timer = setTimeout(() => {
-      timedOut = true;
-      controller.abort();
-    }, timeoutMs);
+    // 是否解析出过真实内容：只影响超时文案（「说到一半断了」vs「还没开口」）
+    let gotContent = false;
+    // 计时基准：还没收到任何数据时是「请求发出时刻」，收到过之后是「最后一次收到数据的时刻」
+    let idleSince = Date.now();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    /** 重新武装计时器（幂等：先清掉旧的那一个） */
+    const arm = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        // 引擎挂起等人裁决时链路本来就是静的（见 pendingApprovals）：只重新布防。
+        // 但「等人」是有期限的——过期条目先清掉，避免一个再也不回来的裁决
+        // 把这条链路的判死能力永久关掉。
+        if (this.hasFreshApprovalWait()) {
+          arm();
+          return;
+        }
+        timedOut = true;
+        controller.abort();
+      }, idleWindow);
+    };
+    /** 收到任何数据（响应头 / 任意字节，含 keep-alive 帧）：归零静默计时 */
+    const touch = () => {
+      idleSince = Date.now();
+      arm();
+    };
+    /** 解析出一条真实负载（内容 / 工具 / 计划事件）：说明网关已经开口 */
+    const noteContent = () => {
+      gotContent = true;
+    };
+    arm();
 
     // 不抛错的 done：避免外部 await 误判；真正的错误由 onError 透传
-    const done = this.runStream(req, handlers, controller.signal)
+    const done = this.runStream(req, handlers, controller.signal, touch, noteContent)
       .catch(() => undefined)
       .finally(() => {
         clearTimeout(timer);
         if (timedOut) {
           handlers.onError(
             new Error(
-              `响应超时：超过 ${Math.round(timeoutMs / 1000)} 秒仍未返回完整结果。` +
-              '附件越大网关处理越久，可重试或压缩/拆分文件后再试。',
+              this.timeoutMessage({
+                gotContent,
+                silentMs: Date.now() - idleSince,
+                hasFiles,
+              }),
             ),
           );
         }
@@ -464,11 +607,19 @@ export class NanobotClient {
     };
   }
 
-  /** 流式请求的实际执行体；与 ChatHandle 解耦。signal 中断由 fetchSSE/streamFormRequest 内部识别为正常结束。 */
+  /**
+   * 流式请求的实际执行体；与 ChatHandle 解耦。signal 中断由 fetchSSE/streamFormRequest 内部识别为正常结束。
+   *
+   * - `onActivity`：传输层每次收到数据（响应头 / 任意字节）时回调，用于静默超时计时；
+   * - `onPayload`：解析出一条真实负载时回调（内容 / 工具 / 计划事件），仅用于让
+   *   超时文案区分「说到一半断了」与「还没开口」（见 `sendMessage`）。
+   */
   private async runStream(
     req: ChatRequest,
     handlers: StreamHandlers,
     signal: AbortSignal,
+    onActivity: () => void,
+    onPayload: () => void,
   ): Promise<void> {
     if (signal.aborted) return;
     const { endpoint } = this.getConfig();
@@ -510,6 +661,10 @@ export class NanobotClient {
         const delta = json.choices?.[0]?.delta;
         if (!delta) return;
 
+        // 帧结构合法 = 网关已经「开口」：超时文案据此区分断链与未响应。
+        // 放在 delta 判空之后而不是 onChunk 开头：解析失败的脏帧不算开口。
+        onPayload();
+
         // 1) 文本流
         if (delta.content) {
           fullText += delta.content;
@@ -540,8 +695,11 @@ export class NanobotClient {
           } else if (nbEvent.kind === 'approval_request' && nbEvent.id) {
             // 引擎已阻塞在工具执行前等裁决：把请求交给上层弹窗，
             // 裁决经 respondApproval() 走 POST /v1/tool-approvals/{id} 送回。
+            // 同时登记为「挂起中」——这段静默不算链路故障（见 pendingApprovals）。
+            const approvalId = String(nbEvent.id);
+            this.pendingApprovals.set(approvalId, Date.now());
             handlers.onApprovalRequest?.({
-              id: String(nbEvent.id),
+              id: approvalId,
               tool: String(nbEvent.tool ?? ''),
               args: nbEvent.args ?? {},
               ...(nbEvent.call_id ? { callId: String(nbEvent.call_id) } : {}),
@@ -588,10 +746,20 @@ export class NanobotClient {
 
     if (useForm) {
       // 文件流：复用 fetch 解析（fetchSSE 当前面向 JSON body，此处独立实现以保证兼容）
-      await this.streamFormRequest(streamUrl, requestInit, onChunk, handlers, signal);
+      await this.streamFormRequest(
+        streamUrl,
+        requestInit,
+        onChunk,
+        handlers,
+        signal,
+        onActivity,
+      );
     } else {
-      await fetchSSE(streamUrl, requestInit as never, onChunk, (err) =>
-        handlers.onError(err),
+      await fetchSSE(
+        streamUrl,
+        { ...requestInit, onActivity } as never,
+        onChunk,
+        (err) => handlers.onError(err),
       );
     }
 
@@ -613,6 +781,7 @@ export class NanobotClient {
    *  注意：nanobot 在 multipart 文件上传场景下会返回完整 JSON（非 SSE 流），
    *  这里通过 Content-Type 判断，兼容两种形态。
    *  signal 触发 abort 时静默结束，不再走 onError 通道。
+   *  `onActivity` 交由 fetchSSE 同款语义：响应头到达与每次读到字节都回调。
    */
   private async streamFormRequest(
     url: string,
@@ -620,10 +789,13 @@ export class NanobotClient {
     onMessage: (data: string) => void,
     handlers: StreamHandlers,
     signal: AbortSignal,
+    onActivity: () => void,
   ): Promise<void> {
     if (signal.aborted) return;
     try {
       const response = await fetch(url, init);
+      // 服务端已应答即视为链路活跃（大附件的网关解析耗时落在这一段之前）
+      onActivity();
       if (signal.aborted) return;
       if (!response.ok) {
         throw new Error(`SSE 请求失败：HTTP ${response.status} ${response.statusText}`);
@@ -639,7 +811,7 @@ export class NanobotClient {
         return;
       }
 
-      await readSSEStream(response.body.getReader(), signal, onMessage);
+      await readSSEStream(response.body.getReader(), signal, onMessage, onActivity);
     } catch (err) {
       // 中断造成的 AbortError 视作正常结束
       if (signal.aborted) return;

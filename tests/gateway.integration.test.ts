@@ -10,6 +10,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NanobotClient } from '@/ai/runtime/nanobotHttp/chat';
+import type { ChatRequest, StreamHandlers } from '@/ai/runtime/types';
 import { useSettingsStore } from '@/stores/settingsStore';
 
 // 合法 SSE：每个事件以「双换行」结束（`data: {...}\n\n`）。
@@ -430,5 +431,336 @@ describe('NanobotClient 逐条批准通道 (FR-1.5)', () => {
     );
 
     await expect(client.respondApproval('appr-gone', 'allow')).rejects.toThrow(/已失效/);
+  });
+});
+
+/**
+ * 长任务与静默超时（idle timeout）。
+ *
+ * 回归问题：客户端原先按**总时长**掐表（固定 120s），像「帮我写一个俄罗斯方块
+ * 小游戏，保存在本地」这种多轮工具调用的任务，流明明在正常推进，也会在第 120
+ * 秒被客户端单方面 abort，界面弹「响应超时：超过 120 秒仍未返回完整结果」。
+ *
+ * 现在的语义是静默超时：任何一次数据到达（含 keep-alive 注释帧）都把计时器归零，
+ * 只有连续 idleWindow 收不到任何字节才判定断链。用假定时器推进时间去验证，
+ * 免得测试真的等上几分钟。
+ */
+describe('NanobotClient 长任务与静默超时', () => {
+  let client: NanobotClient;
+  const encoder = new TextEncoder();
+
+  /** 可手动喂数据的响应体流；signal 中断时让 read() 抛错（与真实 fetch 的 abort 行为一致） */
+  interface ControllableStream {
+    response: Response;
+    /** 推入原始 SSE 文本（可以是 keep-alive 注释帧） */
+    push: (raw: string) => void;
+    /** 推入一条 `delta.content` 帧 */
+    pushContent: (content: string) => void;
+    close: () => void;
+  }
+
+  function controllableStream(signal?: AbortSignal): ControllableStream {
+    let ctrl!: ReadableStreamDefaultController<Uint8Array>;
+    const body = new ReadableStream<Uint8Array>({
+      start(c) {
+        ctrl = c;
+      },
+    });
+    // 真实 fetch 在 signal abort 时会让挂起的 read() 抛 AbortError；假流必须同样中断，
+    // 否则超时后 read() 永不返回，超时用例会一直等不到 handle.done。
+    signal?.addEventListener('abort', () => {
+      try {
+        ctrl.error(new DOMException('Aborted', 'AbortError'));
+      } catch {
+        // 流已关闭 / 已出错：忽略
+      }
+    });
+    return {
+      response: {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        body,
+        headers: {
+          get: (name: string) =>
+            name.toLowerCase() === 'content-type'
+              ? 'text/event-stream; charset=utf-8'
+              : null,
+        },
+        async text() {
+          return '';
+        },
+        async json() {
+          return {};
+        },
+      } as unknown as Response,
+      push: (raw) => ctrl.enqueue(encoder.encode(raw)),
+      pushContent: (content) =>
+        ctrl.enqueue(
+          encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n\n`),
+        ),
+      close: () => ctrl.close(),
+    };
+  }
+
+  /**
+   * 替换 fetch 为「可手动喂数据」的流。
+   * `stream()` 在请求建立后即可取用（假 fetch 在第一个微任务前就同步返回了响应）。
+   */
+  function stubStreamFetch(): { stream: () => ControllableStream } {
+    let current: ControllableStream | undefined;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, init: RequestInit) => {
+        current = controllableStream(init.signal ?? undefined);
+        return current.response;
+      }),
+    );
+    return {
+      stream: () => {
+        if (!current) throw new Error('请求尚未建立：假 fetch 还没被调用');
+        return current;
+      },
+    };
+  }
+
+  /** 假定时器下清空微任务队列（被测链路的 fetch / read 全是微任务，只有超时用宏任务） */
+  async function flush(): Promise<void> {
+    await vi.advanceTimersByTimeAsync(0);
+    for (let i = 0; i < 8; i += 1) await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+  }
+
+  /** 收集回调，避免每个用例重复写十行空实现 */
+  function collect(): { seen: { tokens: string[]; errors: string[]; done: number }; handlers: StreamHandlers } {
+    const seen = { tokens: [] as string[], errors: [] as string[], done: 0 };
+    const handlers: StreamHandlers = {
+      onToken: (t) => seen.tokens.push(t),
+      onToolCall: () => undefined,
+      onArtifact: () => undefined,
+      onStatus: () => undefined,
+      onDone: () => {
+        seen.done += 1;
+      },
+      onError: (e) => seen.errors.push(e.message),
+    };
+    return { seen, handlers };
+  }
+
+  /** 用户报障的原话：无附件的纯文本长任务 */
+  const LONG_TASK_REQ: ChatRequest = {
+    agentId: 'a',
+    messages: [{ role: 'user', content: '帮我写一个俄罗斯方块小游戏，保存在本地。' }],
+    stream: true,
+    sessionId: 's1',
+  };
+
+  beforeEach(() => {
+    useSettingsStore.getState().setSettings({
+      gatewayEndpoint: 'http://127.0.0.1:8765/v1',
+      apiToken: '',
+    });
+    client = new NanobotClient();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('流持续有数据时，总时长数倍于基准窗口也不会被掐断', async () => {
+    const fake = stubStreamFetch();
+    const { seen, handlers } = collect();
+    const startedAt = Date.now();
+    const handle = client.sendMessage(LONG_TASK_REQ, handlers);
+
+    // 每 90 秒喂一帧，累计 630 秒：是 120s 基准窗口的 5 倍多。
+    // 旧实现（总时长固定 120s）必然在第 120 秒 abort；新实现只要链路在动就一直跑。
+    for (let i = 0; i < 7; i += 1) {
+      await vi.advanceTimersByTimeAsync(90_000);
+      fake.stream().pushContent(`t${i}`);
+      await flush();
+    }
+    fake.stream().push('data: [DONE]\n\n');
+    fake.stream().close();
+    await handle.done;
+
+    expect(Date.now() - startedAt).toBeGreaterThan(600_000);
+    expect(seen.errors).toEqual([]);
+    expect(seen.done).toBe(1);
+    expect(seen.tokens).toEqual(['t0', 't1', 't2', 't3', 't4', 't5', 't6']);
+  });
+
+  it('流中途静默超过窗口即判定断链：报错并保留已收到的内容', async () => {
+    const fake = stubStreamFetch();
+    const { seen, handlers } = collect();
+    const handle = client.sendMessage(LONG_TASK_REQ, handlers);
+
+    await flush();
+    fake.stream().pushContent('半截回答');
+    await flush();
+    expect(seen.tokens.join('')).toBe('半截回答');
+
+    // 此后毫无动静：超过基准窗口即 abort，并通过 onError 如实报错
+    await vi.advanceTimersByTimeAsync(121_000);
+    await handle.done;
+
+    expect(seen.errors).toHaveLength(1);
+    expect(seen.errors[0]).toContain('已收到部分结果');
+    expect(seen.errors[0]).toContain('无新数据');
+    // 无附件的场景不该再提示「附件越大网关处理越久」
+    expect(seen.errors[0]).not.toContain('附件');
+    expect(seen.done).toBe(0);
+  });
+
+  it('网关只回了响应头、始终没有内容：文案是「没返回任何内容」而非「已收到部分结果」', async () => {
+    // 真实网关会先 prepare() 写出响应头，再长时间思考——此时链路有过字节，
+    // 但其实一个字都没产出。文案必须以「有没有负载」为准，否则会误导用户去
+    // 检查「残缺的半截回答」。
+    const fake = stubStreamFetch();
+    const { seen, handlers } = collect();
+    const handle = client.sendMessage(LONG_TASK_REQ, handlers);
+
+    await flush();
+    expect(fake.stream()).toBeTruthy();
+    await vi.advanceTimersByTimeAsync(121_000);
+    await handle.done;
+
+    expect(seen.errors).toHaveLength(1);
+    expect(seen.errors[0]).toContain('没有返回任何内容');
+    expect(seen.errors[0]).not.toContain('已收到部分结果');
+    expect(seen.errors[0]).not.toContain('附件');
+  });
+
+  it('keep-alive 注释帧不产生事件，但同样算链路活跃', async () => {
+    const fake = stubStreamFetch();
+    const { seen, handlers } = collect();
+    const handle = client.sendMessage(LONG_TASK_REQ, handlers);
+
+    await flush();
+    for (let i = 0; i < 5; i += 1) {
+      await vi.advanceTimersByTimeAsync(90_000);
+      fake.stream().push(': keep-alive\n\n');
+      await flush();
+    }
+    expect(seen.errors).toEqual([]);
+    // 注释帧不该被当成内容透传给 UI
+    expect(seen.tokens).toEqual([]);
+
+    fake.stream().pushContent('终于来了');
+    fake.stream().push('data: [DONE]\n\n');
+    fake.stream().close();
+    await handle.done;
+
+    expect(seen.tokens.join('')).toBe('终于来了');
+    expect(seen.done).toBe(1);
+  });
+
+  it('等用户裁决期间的长静默不算断链（引擎本就挂起等人）', async () => {
+    const fake = stubStreamFetch();
+    const { seen, handlers } = collect();
+    const approvals: string[] = [];
+    handlers.onApprovalRequest = (r) => approvals.push(r.id);
+    const handle = client.sendMessage(LONG_TASK_REQ, handlers);
+
+    await flush();
+    const stream = fake.stream();
+    stream.push(
+      `data: ${JSON.stringify({
+        choices: [
+          {
+            delta: {
+              nanobot_event: {
+                kind: 'approval_request',
+                id: 'appr-1',
+                tool: 'write_file',
+                args: { path: 'tetris.html' },
+              },
+            },
+          },
+        ],
+      })}\n\n`,
+    );
+    await flush();
+    expect(approvals).toEqual(['appr-1']);
+
+    // 用户盯着授权弹窗想了 5 分钟：链路上一个字节都没有。
+    // 这段静默是人的思考时间，绝不能按断链处理（引擎自己还要等更久才判拒）。
+    await vi.advanceTimersByTimeAsync(300_000);
+    expect(seen.errors).toEqual([]);
+
+    // 裁决回传后引擎继续输出（respondApproval 走的是另一次 POST，与流无关）
+    await client.respondApproval('appr-1', 'allow');
+    stream.pushContent('已写入 tetris.html');
+    stream.push('data: [DONE]\n\n');
+    stream.close();
+    await handle.done;
+
+    expect(seen.errors).toEqual([]);
+    expect(seen.tokens.join('')).toBe('已写入 tetris.html');
+  });
+
+  it('挂起裁决过期后静默超时恢复生效（陈旧 id 不会永久关掉判死）', async () => {
+    const fake = stubStreamFetch();
+    const { seen, handlers } = collect();
+    handlers.onApprovalRequest = () => undefined;
+    const handle = client.sendMessage(LONG_TASK_REQ, handlers);
+
+    await flush();
+    const stream = fake.stream();
+    stream.push(
+      `data: ${JSON.stringify({
+        choices: [
+          {
+            delta: {
+              nanobot_event: {
+                kind: 'approval_request',
+                id: 'appr-stale',
+                tool: 'write_file',
+                args: {},
+              },
+            },
+          },
+        ],
+      })}\n\n`,
+    );
+    await flush();
+
+    // 睡过「等裁决」的宽限期（15 分钟）后，这条链路重新接受判死——
+    // 否则一个再也不回来的裁决会把所有会话的静默超时永久关掉。
+    await vi.advanceTimersByTimeAsync(1_000_000);
+    await handle.done;
+
+    expect(seen.errors).toHaveLength(1);
+    expect(seen.errors[0]).toContain('无新数据');
+  });
+
+  it('带附件时静默额度按体积扩容（1MB ≈ 180s，不再是固定 120s）', async () => {
+    const fake = stubStreamFetch();
+    const { seen, handlers } = collect();
+    // 1MB 附件：base64 长度 4/3 倍（且取 4 的整数倍，保证 atob 可解码）
+    const file = {
+      name: 'big.bin',
+      content: 'A'.repeat(1_398_100),
+      mimeType: 'application/octet-stream',
+    };
+    const handle = client.sendMessage({ ...LONG_TASK_REQ, files: [file] }, handlers);
+
+    await flush();
+    fake.stream().pushContent('开始处理');
+    await flush();
+
+    // 静默 150s：超过 120s 基准，但在 1MB 附件扩容出的 180s 额度内
+    await vi.advanceTimersByTimeAsync(150_000);
+    expect(seen.errors).toEqual([]);
+
+    fake.stream().push('data: [DONE]\n\n');
+    fake.stream().close();
+    await handle.done;
+
+    expect(seen.done).toBe(1);
+    expect(seen.tokens.join('')).toBe('开始处理');
   });
 });

@@ -2595,6 +2595,43 @@ ipcMain.handle('dialog:pickFile', async () => {
   }
 });
 
+// —— 产物索引镜像（FR-7.2：`<userData>/artifact-index/<id>.json`）——
+// 单向镜像：只有写与删。权威在渲染层的 store 索引切片，这里落一份可人工查看的
+// 副本（诊断 / 迁移 / 未来的产物同步取用）。故**写失败只记日志不抛**——抛回去
+// 会让渲染层的入库流程跟着失败，而入库才是正事。
+const ARTIFACT_INDEX_DIR = join(STORAGE_ROOTS.electronUserData, 'artifact-index');
+
+/** `id` 只做单段文件名用；含分隔符 / 空值一律拒绝，避免写出目录外的文件 */
+function safeArtifactIndexFile(id: unknown): string | null {
+  if (typeof id !== 'string' || id === '') return null;
+  if (id.includes('/') || id.includes('\\') || id.includes('..')) return null;
+  if (!/^[A-Za-z0-9._-]+$/.test(id)) return null;
+  return join(ARTIFACT_INDEX_DIR, `${id}.json`);
+}
+
+ipcMain.handle('artifactIndex:put', async (_e, entry: unknown) => {
+  const id = (entry as { id?: unknown } | null)?.id;
+  const filePath = safeArtifactIndexFile(id);
+  if (!filePath) return;
+  try {
+    await fs.mkdir(ARTIFACT_INDEX_DIR, { recursive: true });
+    await fs.writeFile(filePath, JSON.stringify(entry, null, 2), 'utf-8');
+  } catch (err) {
+    console.error('[artifactIndex:put] 写入索引镜像失败：', err);
+  }
+});
+
+ipcMain.handle('artifactIndex:remove', async (_e, id: string) => {
+  const filePath = safeArtifactIndexFile(id);
+  if (!filePath) return;
+  try {
+    // 幂等：文件本来就不存在也算删完了
+    await fs.rm(filePath, { force: true });
+  } catch (err) {
+    console.error('[artifactIndex:remove] 删除索引镜像失败：', err);
+  }
+});
+
 // ——— 系统 shell 桥（侧边栏「在资源管理器打开」）———
 ipcMain.handle('shell:openPath', async (_e, path: string) => {
   const normalized = join(path);

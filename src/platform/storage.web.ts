@@ -6,7 +6,13 @@ import {
 } from '@/lib/workspaceMemory';
 import { workspaceKeyFor } from '@/lib/workspaceKey';
 import { MEMORY_KEY_PREFIX } from '@/lib/constants';
-import type { StorageAdapter, WorkspaceMemoryFiles } from './types';
+import type { ArtifactIndexEntry } from '@/types';
+import type {
+  ArtifactIndexFiles,
+  FileBackup,
+  StorageAdapter,
+  WorkspaceMemoryFiles,
+} from './types';
 
 /**
  * Web 存储适配器：使用浏览器 localStorage。
@@ -246,4 +252,36 @@ export async function webWriteTextFile(path: string, content: string): Promise<v
   document.body.removeChild(a);
   // 释放需稍候，确保下载已触发
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+/**
+ * 产物索引的 Web 后端：**no-op**。
+ *
+ * Web 端没有文件系统，`artifact-index/` 落不下去。这不影响功能——产物索引的
+ * 权威是 store 索引切片（随 `artifacts.json` 持久化），镜像只是 Electron 的额外副本。
+ */
+export class WebArtifactIndexFiles implements ArtifactIndexFiles {
+  put(_entry: ArtifactIndexEntry): Promise<void> {
+    return Promise.resolve();
+  }
+
+  remove(_id: string): Promise<void> {
+    return Promise.resolve();
+  }
+}
+
+/**
+ * 内容寻址文件备份的 Web 后端：**no-op**。
+ *
+ * Web 端没有文件系统，`file-history/` 落不下去，`get` 返回 `null`。记忆页据此
+ * 禁用回滚 UI 并提示「仅桌面端支持文件级回滚」。
+ */
+export class WebFileBackup implements FileBackup {
+  put(_hash: string, _content: string): Promise<void> {
+    return Promise.resolve();
+  }
+
+  get(_hash: string): Promise<string | null> {
+    return Promise.resolve(null);
+  }
 }

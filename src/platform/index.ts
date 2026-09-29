@@ -1,13 +1,20 @@
 import { createJSONStorage, type StateStorage } from 'zustand/middleware';
 import { electronBridge, isElectron, webPlatformOs } from './env';
 import {
+  WebArtifactIndexFiles,
+  WebFileBackup,
   WebStorageAdapter,
   WebWorkspaceMemoryFiles,
   webPickDirectory,
   webPickFile,
   webWriteTextFile,
 } from './storage.web';
-import { ElectronStorageAdapter, ElectronWorkspaceMemoryFiles } from './storage.electron';
+import {
+  ElectronArtifactIndexFiles,
+  ElectronFileBackup,
+  ElectronStorageAdapter,
+  ElectronWorkspaceMemoryFiles,
+} from './storage.electron';
 import { notify } from './notification';
 import type {
   AppInfo,
@@ -49,6 +56,14 @@ export const platform: PlatformAdapter = {
   memoryFiles: isElectron()
     ? new ElectronWorkspaceMemoryFiles()
     : new WebWorkspaceMemoryFiles(),
+  // 产物索引（FR-7.2）：与 storage 并列的目录后端，Electron 落到
+  // `<userData>/artifact-index/<id>.json`，Web 端是 no-op（权威在 store 索引切片）
+  artifactIndex: isElectron()
+    ? new ElectronArtifactIndexFiles()
+    : new WebArtifactIndexFiles(),
+  // 内容寻址文件备份（FR-7.3）：Electron 落 `<userData>/file-history/<hash>.bak`，
+  // Web 端 no-op（无文件系统，回滚 UI 据此禁用）
+  fileBackup: isElectron() ? new ElectronFileBackup() : new WebFileBackup(),
   notify,
   writeTextFile: (path: string, content: string) => {
     if (isElectron() && storage instanceof ElectronStorageAdapter) {

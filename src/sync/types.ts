@@ -46,7 +46,13 @@ export type SyncCollection =
   // 约束拼写（引擎不依赖这张联合类型做运行时分发）。
   | 'memoryUser'
   | 'identityFiles'
-  | 'promptOverrides';
+  | 'promptOverrides'
+  // 产物同步（批次 6）：索引条目（LWW 实体，键 = id）+ 内容池（内容寻址 blob，键 =
+  // contentHash）。与 C 类资产同款：**刻意不登记进 `syncRegistry`**——内容池的读取 /
+  // 合并语义特殊（内容寻址、不可变），硬套 LWW 的同步 `read()` 会撒谎。走独立的
+  // `ArtifactsAdapter`（与 `FileAssetsAdapter` / `SessionEventStreamAdapter` 并列）。
+  | 'artifactIndex'
+  | 'artifactBodies';
 
 /** 一次变更：`collection` 名 + 该实体的完整负载（已过 `spec.payload` 裁剪）。 */
 export interface SyncChange {

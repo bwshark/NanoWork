@@ -31,7 +31,7 @@ export function MarkdownView({ content, sx }: MarkdownViewProps) {
                   style={oneDark}
                   language={match[1]}
                   PreTag="div"
-                  customStyle={{ borderRadius: 8, fontSize: 13 }}
+                  customStyle={{ borderRadius: 8, fontSize: 13, maxWidth: '100%', overflowX: 'auto' }}
                 >
                   {String(children).replace(/\n$/, '')}
                 </SyntaxHighlighter>

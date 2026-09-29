@@ -95,6 +95,14 @@ body {
 .md-body {
   line-height: 1.7;
   font-size: 14px;
+  /* 长串（URL/路径/base64/长 token）强制折行，避免撑出整页横向滚动条。
+     overflow-wrap 与 word-break 均为可继承属性，会一并作用于行内 <code> 等子元素。 */
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.md-body img {
+  max-width: 100%;
+  height: auto;
 }
 .md-body h1,
 .md-body h2,
@@ -115,14 +123,30 @@ body {
   width: 100%;
   margin: 8px 0;
   font-size: 13px;
+  /* 表格整体在自身内部横向滚动，避免宽表格撑破消息气泡 */
+  display: block;
+  overflow-x: auto;
+  max-width: 100%;
 }
 .md-body th,
 .md-body td {
   border: 1px solid var(--table-border);
   padding: 6px 10px;
   text-align: left;
+  /* 单元格内长单词/路径允许强制折行，配合 fixed/auto 布局都不撑列 */
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 .md-body pre {
   border-radius: 8px;
   margin: 8px 0;
+  /* 代码块横向滚动限制在自身容器内，不撑开消息气泡 */
+  overflow-x: auto;
+  max-width: 100%;
+}
+/* MarkdownView 中 pre 组件被覆写为 <>{children}</>，代码块实际渲染为
+   SyntaxHighlighter 的 <div>；上面的 .md-body pre 不会命中，因此这里兜底：
+   限制任意直接子块级元素不超出消息列宽度。 */
+.md-body > div {
+  max-width: 100%;
 }

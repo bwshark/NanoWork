@@ -52,6 +52,8 @@ const api: ElectronAPI = {
   memoryRemoveAll: (workdir: string | null) => ipcRenderer.invoke('memory:removeAll', workdir),
   memoryMigrateLegacy: (workdir: string | null) =>
     ipcRenderer.invoke('memory:migrate', workdir),
+  artifactIndexPut: (entry: unknown) => ipcRenderer.invoke('artifactIndex:put', entry),
+  artifactIndexRemove: (id: string) => ipcRenderer.invoke('artifactIndex:remove', id),
   nanobotStart: () => ipcRenderer.invoke('nanobot:start'),
   nanobotStop: () => ipcRenderer.invoke('nanobot:stop'),
   nanobotStatus: () => ipcRenderer.invoke('nanobot:status'),

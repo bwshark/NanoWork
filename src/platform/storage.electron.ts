@@ -1,5 +1,11 @@
-import type { Skill } from '@/types';
-import type { ElectronAPI, StorageAdapter, WorkspaceMemoryFiles } from './types';
+import type { ArtifactIndexEntry, Skill } from '@/types';
+import type {
+  ArtifactIndexFiles,
+  ElectronAPI,
+  FileBackup,
+  StorageAdapter,
+  WorkspaceMemoryFiles,
+} from './types';
 
 /**
  * Electron 存储适配器：通过 window.electronAPI 桥接主进程。
@@ -97,5 +103,52 @@ export class ElectronWorkspaceMemoryFiles implements WorkspaceMemoryFiles {
 
   migrateLegacy(workdir: string | null): Promise<string[]> {
     return this.api().memoryMigrateLegacy(workdir);
+  }
+}
+
+/**
+ * 产物索引的 Electron 后端：镜像到 `<userData>/artifact-index/<id>.json`。
+ *
+ * 单向、失败可容忍——权威在 store 索引切片，这里只是落一份可人工查看的副本。
+ */
+export class ElectronArtifactIndexFiles implements ArtifactIndexFiles {
+  private api(): ElectronAPI {
+    const api = window.electronAPI;
+    if (!api) {
+      throw new Error('electronAPI 未注入，无法写入产物索引');
+    }
+    return api;
+  }
+
+  put(entry: ArtifactIndexEntry): Promise<void> {
+    return this.api().artifactIndexPut(entry);
+  }
+
+  remove(id: string): Promise<void> {
+    return this.api().artifactIndexRemove(id);
+  }
+}
+
+/**
+ * 内容寻址文件备份的 Electron 后端：桥接到 `window.electronAPI.putFileBackup` /
+ * `getFileBackup`（主进程写 `<userData>/file-history/<hash>.bak`）。
+ *
+ * 失败可容忍：prebackup 调用方自行 `try/catch`，备份失败不阻断真实写入。
+ */
+export class ElectronFileBackup implements FileBackup {
+  private api(): ElectronAPI {
+    const api = window.electronAPI;
+    if (!api) {
+      throw new Error('electronAPI 未注入，无法写入文件备份');
+    }
+    return api;
+  }
+
+  put(hash: string, content: string): Promise<void> {
+    return this.api().putFileBackup(hash, content);
+  }
+
+  get(hash: string): Promise<string | null> {
+    return this.api().getFileBackup(hash);
   }
 }

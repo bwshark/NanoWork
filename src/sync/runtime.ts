@@ -34,10 +34,12 @@ import { useChannelsStore } from '@/stores/channelsStore';
 import { useSkillsStore } from '@/stores/skillsStore';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { useSessionsStore } from '@/stores/sessionsStore';
+import { useArtifactsStore } from '@/stores/artifactsStore';
 import { SyncClient } from './SyncClient';
 import { SyncEngine, createMemoryCursorStore } from './SyncEngine';
 import { createSessionEventStreamAdapter } from './eventStream';
 import { createFileAssetsAdapter } from './fileAssets';
+import { createArtifactsAdapter } from './artifacts';
 import { createStorageSyncAccount } from './syncAccount';
 import { createDefaultRegistry } from './syncRegistry';
 import { resetSyncStatus } from './useSyncStatus';
@@ -90,6 +92,7 @@ const SUBSCRIBED_STORES: Array<{
   useSkillsStore,
   useSettingsStore,
   useSessionsStore,
+  useArtifactsStore,
 ];
 
 /** 装配一个同步运行时（不入单例；单例用 `initSyncRuntime`）。 */
@@ -113,6 +116,9 @@ export function createSyncRuntime(opts: SyncRuntimeOptions = {}): SyncRuntime {
     // C 类文件型资产通道（批次 6b）：记忆 / 身份文件 / 提示词覆盖。
     // 账户分片用同一个 `userId`——元数据必须按账户隔离（与事件水位同一条纪律）
     fileAssets: createFileAssetsAdapter(() => account.getSession()?.userId ?? ''),
+    // 产物同步通道（批次 6）：索引条目（LWW 实体）+ 内容池（内容寻址 blob）。
+    // 引擎因此**不 import 任何 store**（不变量 2）；store 的本地写入直接经适配器可见。
+    artifacts: createArtifactsAdapter(),
   });
 
   // ── 本地变更 → 防抖同步（§G.3）──

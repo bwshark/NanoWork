@@ -13,10 +13,21 @@ export interface SSEOptions {
   headers?: Record<string, string>;
   body?: string;
   signal?: AbortSignal;
+  /**
+   * 活跃信号：链路上每有一点动静（响应头到达、读到任何字节）就回调一次。
+   *
+   * 供调用方做**静默超时**判定——长任务的总时长可以任意长，只要数据一直在
+   * 流动就不该被判死；反之连续收不到任何字节才说明链路断了。
+   * 判定必须落在字节层而不是事件层：`data:` 负载之间的 keep-alive 注释帧
+   * 不产生事件，却恰好是「对端还活着」的证据（见 nanobotHttp/chat.ts）。
+   */
+  onActivity?: SSEActivityHandler;
 }
 
 export type SSEMessageHandler = (data: string) => void;
 export type SSEErrorHandler = (error: Error) => void;
+/** 活跃信号回调（无参、无返回，仅表示「链路还在动」） */
+export type SSEActivityHandler = () => void;
 
 /**
  * 标准 SSE 缓冲解析：按事件边界（双换行）分割，收集每个事件内所有 `data:` 行，
@@ -57,17 +68,23 @@ export function isSSEDone(payload: string): boolean {
 /**
  * 消费 ReadableStream 并逐条回调 SSE 数据事件。
  * 流结束时会自动处理尾部未完整数据，避免最后一条消息被丢弃。
+ *
+ * `onActivity` 在**每次读到字节**时回调（在解析之前），因此 keep-alive 注释帧、
+ * 被丢弃的脏帧同样算「链路活着」——调用方的静默超时据此归零。
  */
 export async function readSSEStream(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   signal: AbortSignal | undefined,
   onMessage: (payload: string) => void,
+  onActivity?: SSEActivityHandler,
 ): Promise<void> {
   const decoder = new TextDecoder();
   let buffer = '';
   while (true) {
     if (signal?.aborted) return;
     const { done, value } = await reader.read();
+    // 字节层活跃信号：先于 done 判断，让调用方在任何读到数据的时刻都能重新计时
+    if (value && value.length > 0) onActivity?.();
     if (done) {
       // 流自然结束：追加一个事件边界，尝试消费缓冲区里的尾部数据
       const { events } = parseSSEBuffer(buffer + '\n\n');
@@ -95,6 +112,9 @@ export async function readSSEStream(
  *
  * 中断语义：当 `options.signal` 已 `aborted` 或在请求进行中触发 abort，
  * 本函数**不再**调用 `onError`，视为调用方主动取消的正常结束。
+ *
+ * `options.onActivity`：响应头到达与每次读到字节都回调一次，
+ * 供调用方做静默超时（见 `SSEOptions.onActivity`）。
  */
 export async function fetchSSE(
   url: string,
@@ -114,6 +134,10 @@ export async function fetchSSE(
       signal: options.signal,
     });
 
+    // 服务端已应答（哪怕随后 4xx）：这说明链路通，静默计时从这里重新起算——
+    // 否则「首字节前的等待」会与「首字节后的静默」共用同一个死线。
+    options.onActivity?.();
+
     if (response.status === 204 || response.status === 205) {
       return;
     }
@@ -125,7 +149,7 @@ export async function fetchSSE(
       throw new Error('SSE 响应缺少 body 流');
     }
 
-    await readSSEStream(response.body.getReader(), options.signal, onMessage);
+    await readSSEStream(response.body.getReader(), options.signal, onMessage, options.onActivity);
   } catch (err) {
     if (options.signal?.aborted) return;
     if (err instanceof DOMException && err.name === 'AbortError') return;

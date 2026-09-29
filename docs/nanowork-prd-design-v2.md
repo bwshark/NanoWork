@@ -364,7 +364,7 @@ V1 的方案是把 cron 镜像进本地 `nanobot` 的 `jobs.json`（已实现）
 | 编号 | 名称 | 优先级 | 现状 | 环境 | 验收标准 |
 |---|---|---|---|---|---|
 | FR-7.1 | 富产物渲染 | P0 | ✅ | both | html / svg / 图片 / mermaid / 代码 / md / 视频 渲染 + 下载（已实现） |
-| FR-7.2 | 产物索引 | **P0** | 🟡 | both | 产物按会话 / 时间归档可检索（`artifactsStore` 已有）；**补**：独立索引（对齐 WorkBuddy `artifact-index/`），跨会话检索与去重 |
+| FR-7.2 | 产物索引 | **P0** | ✅ | both | 产物按会话 / 时间归档可检索（`artifactsStore` 已有）；**补**：独立索引（对齐 WorkBuddy `artifact-index/`），跨会话检索与去重 |
 | FR-7.3 | **文件级回滚** | **P0** | ⬜ | electron | 每次写类工具执行前建立快照；可按会话 / 按步回滚到任意 `commitSeq`；实现对齐 WorkBuddy 的 `file-history/` + `*.file-rollback.ndjson` |
 | FR-7.4 | 产物版本 | P1 | ⬜ | both | 同源产物多版本可对比与回退 |
 | FR-7.5 | 人机双写 | P2 | ⬜ | both | 产物内可圈选局部让 AI 改写，改动留版本（V2） |
@@ -2297,6 +2297,19 @@ export interface ChannelDescriptor {
 ```
 
 `contentHash` 保证同内容不重复入库；`previousVersion` 是 FR-7.4 版本链的基础。
+
+> **落地状态（2026-09-29，FR-7.2 已落）**：规格见 `docs/fr-7-2-artifact-index-spec.md`。
+> 三处与本节的差异是**有意**的，都已写进规格决策表：
+> - 索引条目**不含 `content`**：内容本体仍随消息 / `bySession` 存，索引只承载检索与
+>   去重所需的元数据（若做「内容池按 hash 去重 + 索引存引用」，要同时改 `ArtifactRenderer`
+>   的取内容方式与 `ArtifactEvent` 的形态，成本与风险都不成比例）。
+> - **`version` / `previousVersion` 未落**：它们是 FR-7.4（P1）版本链的事，不做半条链。
+> - `artifact-index/` 是**单向镜像**（只有写与删，没有回读）：权威在 store 索引切片，
+>   因为 Web 端没有文件系统，索引必须两端都能用。
+>
+> `contentHash` 用的是 `sha256:<hex>`（`src/lib/contentHash.ts`），**不是** `workspaceKey.ts`
+> 里的 djb2 `hashContent`——后者只用于段键与变更检测。这条是跨批契约：FR-7.3 的
+> `file-history/<hash>.bak` 与未来的产物同步复用同一个函数（见 6b 规格 §5）。
 
 ## 17.2 文件回滚（FR-7.3）
 
