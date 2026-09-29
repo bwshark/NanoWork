@@ -1,4 +1,10 @@
-/** 富产物类型（FR-007） */
+/**
+ * 富产物类型（FR-007 + 文件产物）。
+ *
+ * `file` 与其余 7 种**来源不同**：其余 7 种由回复文本里的围栏代码块启发式提取
+ * （内容即产物），`file` 由**工具调用**推导（`write_file` / `edit` / `apply_patch`
+ * 真正落到磁盘的文件）——它的身份是**路径**而不是内容。
+ */
 export type ArtifactType =
   | 'html'
   | 'svg'
@@ -6,21 +12,43 @@ export type ArtifactType =
   | 'mermaid'
   | 'code'
   | 'markdown'
-  | 'video';
+  | 'video'
+  | 'file';
+
+/** 文件产物的变更性质：本会话新建 / 改写既有文件 */
+export type ArtifactChange = 'created' | 'modified';
 
 /** 富产物（可被 ArtifactRenderer 渲染） */
 export interface Artifact {
   id: string;
   type: ArtifactType;
   title?: string;
-  /** 文本类内容；video 为外链 url */
+  /** 文本类内容；video 为外链 url；file 为写入时的正文快照（改写类工具拿不到全文则为空串） */
   content: string;
-  /** code 高亮语言 */
+  /** code 高亮语言（file 由扩展名推断） */
   language?: string;
   /** image / video 外链 url */
   url?: string;
   /** 创建时间 ISO 8601 UTC */
   createdAt: string;
+  /**
+   * 文件产物的绝对路径（**幂等身份**：同路径再次写入 = 同一产物升一版）。
+   *
+   * 以分隔符归一后的原文为准，展示与「在资源管理器打开」都用它。
+   */
+  path?: string;
+  /** 文件产物的字节数（正文快照可得时算 UTF-8 字节长；`edit` 拿不到全文时为 undefined） */
+  size?: number;
+  /** 文件产物的变更性质（created=本会话新建 / modified=改写既有文件） */
+  change?: ArtifactChange;
+  /**
+   * 文件产物的**事件级内容指纹**（仅正文不可得的改写类工具设置，值取工具事件 id）。
+   *
+   * 存在的唯一理由：`edit` / `apply_patch` 只能看到改动片段、看不到改写后的全文，
+   * 若以空正文参与内容寻址，多次改写会算出同一个 hash 而被误判为「内容没变」
+   * ——变更链就断了。用事件 id 兜底后，每次改写都稳定推进一版。
+   */
+  fingerprint?: string;
 }
 
 /**

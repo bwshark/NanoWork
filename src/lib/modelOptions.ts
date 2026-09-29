@@ -7,13 +7,20 @@
  * 数」，而这类错位**不会报错**，只会让模型在某个长度上莫名截断。
  *
  * ⚠️ `ENGINE_DEFAULT_*` 必须与引擎 `nanobot/config/schema.py::ModelPresetConfig` 的字段
- * 默认值逐字一致（`max_tokens: int = 8192`、`context_window_tokens: int = 200_000`、
+ * 默认值逐字一致（`max_tokens: int = 32_768`、`context_window_tokens: int = 200_000`、
  * `temperature: float = 0.1`）。改引擎默认值要回来同步这里，否则「使用提供商默认值」
  * 会写下一个引擎并不认为默认的数字。
  */
 
-/** 引擎 preset 的默认输出上限（tokens） */
-export const ENGINE_DEFAULT_MAX_TOKENS = 8_192;
+/**
+ * 引擎 preset 的默认输出上限（tokens）。
+ *
+ * 2026-09-29 由 8192 提到 32768：8192 不足以承载「一次性写出一整个文件」这类工具调用——
+ * 实测一份单文件小游戏的 `write_file` 参数在 25186 字符（≈8k token）处被截断，参数成为
+ * 非法 JSON，工具被引擎拒绝执行，且失败被伪装成了「已完成」。提高预算与 `write_file`
+ * 的分片写入（`append=true`）是两条独立的兜底。
+ */
+export const ENGINE_DEFAULT_MAX_TOKENS = 32_768;
 
 /** 引擎 preset 的默认上下文窗口（tokens） */
 export const ENGINE_DEFAULT_CONTEXT_WINDOW_TOKENS = 200_000;
@@ -37,14 +44,15 @@ export const ENGINE_DEFAULT_TEMPERATURE = 0.1;
 export const DEFAULT_REASONING_EFFORT = 'medium';
 
 /**
- * 输出上限的快捷档位（16K / 32K / 64K）。
+ * 输出上限的快捷档位（16K / 64K / 128K）。
  *
- * ⚠️ **刻意不含 8192**：它就是引擎默认值，做成档位会得到一个「永远无法保持选中」的
- * 按钮——点击后落盘 8192，回读时被 `normalizeTokenLimit` 归一成 `null`，下次打开
- * 显示的是「使用提供商默认值」而不是刚点的 8K。用户会以为自己的选择被吞了。
- * 而它本来也不需要单独存在：想表达 8K 就是「使用提供商默认值」（今日两者同值）。
+ * ⚠️ **刻意不含 32K**：它就是引擎默认值，做成档位会得到一个「永远无法保持选中」的
+ * 按钮——点击后落盘 32768，回读时被 `normalizeTokenLimit` 归一成 `null`，下次打开
+ * 显示的是「使用提供商默认值」而不是刚点的 32K。用户会以为自己的选择被吞了。
+ * 而它本来也不需要单独存在：想表达 32K 就是「使用提供商默认值」（今日两者同值）。
+ * 需要 32K 时手写输入框里敲 `32K` 仍然可用（`parseTokenLimitInput` 不依赖这份表）。
  */
-export const MAX_TOKENS_OPTIONS = [16_384, 32_768, 65_536] as const;
+export const MAX_TOKENS_OPTIONS = [16_384, 65_536, 131_072] as const;
 
 /**
  * 上下文窗口的快捷档位（32K / 64K / 128K / 256K）。

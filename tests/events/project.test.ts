@@ -242,6 +242,22 @@ describe('projectMessages：一条 message 事件一条消息', () => {
     expect(messages[1].aborted).toBe(true);
   });
 
+  it('引擎侧中断（interrupted）与用户中断（aborted）必须分开复原', () => {
+    // 两者在界面上是不同文案（已中断 / 已停止）、在上下文重建与记忆写入上的处置也不同，
+    // 合并成一个字段会让「上游断流」看起来像用户自己按了停止。
+    const f = makeFactory();
+    const path = [
+      f.message({ messageId: 'a1', role: 'assistant', content: '半截', interrupted: true }),
+      f.message({ messageId: 'a2', role: 'assistant', content: '半截', aborted: true }),
+    ];
+
+    const messages = projectMessages(path);
+    expect(messages[0].interrupted).toBe(true);
+    expect(messages[0].aborted).toBeUndefined();
+    expect(messages[1].aborted).toBe(true);
+    expect(messages[1].interrupted).toBeUndefined();
+  });
+
   it('附件 kind 非法时降级为 other；缺 size/mime 补安全默认', () => {
     const f = makeFactory();
     const path = [

@@ -36,7 +36,7 @@
  * 一律以 `@/types/event` 直达，避免 barrel 歧义与误用。
  */
 
-import type { ArtifactType } from './artifact';
+import type { ArtifactChange, ArtifactType } from './artifact';
 import type { Role } from './message';
 import type { PlanVerdict } from './message';
 
@@ -174,6 +174,8 @@ export interface MessageEvent extends BaseEvent {
   durationMs?: number;
   /** 助手回合被用户中断（仅 assistant） */
   aborted?: boolean;
+  /** 助手回合因引擎侧异常（断流 / 报错 / 迭代上限）未正常收尾（仅 assistant） */
+  interrupted?: boolean;
 }
 /** 模型思考片段；同一段思考会追加多条，末条 `done=true` 收尾 */
 export interface ReasoningEvent extends BaseEvent, MessageScoped {
@@ -260,7 +262,11 @@ export interface PlanDecisionEvent extends BaseEvent, MessageScoped {
  * **V1 自包含内容**：设计文档原设想「事件只存引用、内容进 `artifact-index/`」，
  * 但该索引属 R7 / M4 范围尚未落地。在它可用之前，事件内联 `content`——
  * 否则刷新后消息气泡里的内联产物会整块消失（旧实现是随会话快照持久化的，
- * 不能倒退）。`path` / `size` / `mime` 留给索引落地后的引用式写法。
+ * 不能倒退）。
+ *
+ * `path` / `size` / `change` 原先作为「索引落地后的引用式写法」留位，现由
+ * **文件产物**（工具写出的文件）启用：它们的身份就是路径，正文对改写类工具
+ * 不可得，因此必须把路径与变更性质随事件落盘，刷新后卡片才能原样恢复。
  */
 export interface ArtifactEvent extends BaseEvent, MessageScoped {
   type: 'artifact';
@@ -276,9 +282,14 @@ export interface ArtifactEvent extends BaseEvent, MessageScoped {
   language?: string;
   /** image / video 外链 url */
   url?: string;
-  /** 落盘引用（artifact-index 落地后启用；V1 不使用） */
+  /** 文件产物的绝对路径 */
   path?: string;
+  /** 文件产物的字节数（正文快照不可得时缺省） */
   size?: number;
+  /** 文件产物的变更性质（created / modified） */
+  change?: ArtifactChange;
+  /** 文件产物的事件级内容指纹（正文不可得的改写类工具，见 `Artifact.fingerprint`） */
+  fingerprint?: string;
   mime?: string;
 }
 
@@ -339,7 +350,11 @@ export interface ModeChangeEvent extends BaseEvent {
  */
 export interface SessionEndEvent extends BaseEvent {
   type: 'session-end';
-  reason?: 'done' | 'error' | 'aborted';
+  /**
+   * 本轮结果。`interrupted` 与 `aborted` 必须分开：前者是引擎侧异常结束
+   * （断流 / 报错 / 迭代上限），后者是用户主动停止——重放与统计要把它们分开算。
+   */
+  reason?: 'done' | 'error' | 'aborted' | 'interrupted';
 }
 
 /** 事件联合（判别字段为 `type`） */

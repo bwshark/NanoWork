@@ -3,6 +3,7 @@ import { persist } from 'zustand/middleware';
 import { platform, zustandStorage } from '@/platform';
 import { STORAGE_KEYS } from '@/lib/constants';
 import { artifactContentHash, buildIndexEntry } from '@/lib/artifactIndex';
+import { isFileArtifact } from '@/lib/fileArtifact';
 import type { Artifact, ArtifactIndexEntry, ArtifactVersionMeta, SyncTombstones } from '@/types';
 
 interface ArtifactsState {
@@ -44,6 +45,10 @@ interface ArtifactsState {
    * - 同 `id` 且内容相同：重放再确认（标题变化则同步更新，不升版本）；
    * - 同 `id` 内容不同：**升一版**（FR-7.4 同源产物多版本）；
    * - 新 `id`：新建（含 LWW 四元数据 + `version: 1` + 初始 `versions`）。
+   *
+   * **文件产物**（`type: 'file'`）复用同一套：其 `id` 由路径派生，于是「同一个文件
+   * 被再写一次」自然落到「同 id 升一版」——`version > 1` 即「变更」。唯一的差别是
+   * 不参与按内容的同会话去重（见实现处注释）。
    */
   recordArtifact: (sessionId: string, messageId: string, artifact: Artifact) => void;
   /** FR-7.4：用户显式把 `artifactId` 编辑成新内容 → 升一版（内容相同则忽略） */
@@ -176,10 +181,16 @@ export const useArtifactsStore = create<ArtifactsState>()(
 
         // 新产物：入库去重（规格 D3）——**同会话内**已有相同内容 → 跳过。
         // 判据走索引而不是逐个重算 `bySession` 里每条的 hash——索引就是去重的权威。
-        const duplicated = Object.values(get().index).some(
-          (e) => e.sessionId === sessionId && e.contentHash === hash,
-        );
-        if (duplicated) return;
+        //
+        // **文件产物不走这条去重**：它的身份是路径而不是内容，两个文件完全可能内容
+        // 相同（模板 / 复制），按内容去重会把第二个文件整条吞掉。同路径的重复写入
+        // 已由上面的 `existing` 分支（升版）处理，不会重复入库。
+        if (!isFileArtifact(artifact)) {
+          const duplicated = Object.values(get().index).some(
+            (e) => e.sessionId === sessionId && e.contentHash === hash,
+          );
+          if (duplicated) return;
+        }
 
         const list = get().bySession[sessionId] ?? [];
         // `id` 去重是既有行为（同一个产物事件重放时不重复入库），保留

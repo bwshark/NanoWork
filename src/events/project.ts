@@ -335,6 +335,12 @@ export function projectMessages(path: readonly SessionEvent[]): Message[] {
           content: ev.content,
           ...(ev.language ? { language: ev.language } : {}),
           ...(ev.url ? { url: ev.url } : {}),
+          // 文件产物的引用式字段：路径 / 体积 / 变更性质 / 内容指纹
+          // （缺任一项都会让刷新后的卡片与实时视图不一致）
+          ...(ev.path ? { path: ev.path } : {}),
+          ...(ev.size !== undefined ? { size: ev.size } : {}),
+          ...(ev.change ? { change: ev.change } : {}),
+          ...(ev.fingerprint ? { fingerprint: ev.fingerprint } : {}),
           createdAt: toIso(ev.timestamp),
         });
         artifacts.set(ev.messageId, list);
@@ -372,6 +378,7 @@ export function projectMessages(path: readonly SessionEvent[]): Message[] {
       createdAt: ev.createdAt ?? toIso(ev.timestamp),
       ...(ev.durationMs !== undefined ? { durationMs: ev.durationMs } : {}),
       ...(ev.aborted ? { aborted: true } : {}),
+      ...(ev.interrupted ? { interrupted: true } : {}),
     });
   }
 

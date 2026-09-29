@@ -328,6 +328,33 @@ describe('事件投影等价性：实时增量视图 ≡ 批量重放投影', ()
     expect(replayed.messages.find((m) => m.role === 'assistant')?.aborted).toBe(true);
   });
 
+  it('引擎侧中断的回合：interrupted 随事件复原，且不会被记成 aborted', async () => {
+    // 断流 / 引擎报错 / 撞上迭代上限走的是这一条：内容收下了，但本轮没走完。
+    // 它必须与「用户按了停止」分开——否则重放后界面会把上游故障说成用户操作。
+    vi.spyOn(NanobotClient.prototype, 'probe').mockResolvedValue('connected');
+    vi.spyOn(NanobotClient.prototype, 'sendMessage').mockImplementation(
+      (_req, handlers: StreamHandlers): ChatHandle => {
+        handlers.onStatus('streaming');
+        handlers.onToken('我先创建游戏文件');
+        handlers.onInterrupted?.('engine_error');
+        return { done: Promise.resolve(), abort: () => undefined };
+      },
+    );
+
+    const session = useSessionsStore.getState().createSession('agent-test', '断流会话');
+    await useSessionsStore.getState().send('帮我写一个俄罗斯方块小游戏', session.id);
+    await settle(session.id);
+
+    const live = useSessionsStore.getState().sessions.find((s) => s.id === session.id)!;
+    const replayed = await replay(session.id);
+
+    const liveAssistant = live.messages.find((m) => m.role === 'assistant')!;
+    expect(liveAssistant.interrupted).toBe(true);
+    expect(liveAssistant.aborted).toBeUndefined();
+    expect(stripVolatile(replayed.messages)).toEqual(stripVolatile(live.messages));
+    expect(replayed.messages.find((m) => m.role === 'assistant')?.interrupted).toBe(true);
+  });
+
   it('附件元信息跨重放保留；dataUrl 为视图态、刻意不入事件流（V1 缺口）', async () => {
     mockPlainTurn();
     const image: Attachment = {

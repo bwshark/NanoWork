@@ -14,13 +14,45 @@ import { contentHash } from '@/lib/contentHash';
 import type { Artifact, ArtifactIndexEntry, ArtifactType, SyncMeta } from '@/types';
 
 /**
+ * 产物类型 → 中文标签。
+ *
+ * 产物库的筛选器与产物面板的列表行共用同一份，避免两处各自维护一套译名
+ * （「文档」与「Markdown」混用是最容易出现的漂移）。
+ */
+export const ARTIFACT_TYPE_LABELS: Record<ArtifactType, string> = {
+  html: 'HTML',
+  svg: 'SVG',
+  image: '图片',
+  mermaid: '流程图',
+  code: '代码',
+  markdown: '文档',
+  video: '视频',
+  file: '文件',
+};
+
+/**
  * 产物的内容寻址哈希。
+ *
+ * 三种身份来源，按优先级取第一个可用者：
+ * 1. `content`（围栏产物 / `write_file` 的文件正文）——常规路径；
+ * 2. `fingerprint`（文件产物的**事件级**指纹）：`edit` / `apply_patch` 拿不到改写后的
+ *    全文，若以空正文参与寻址，多次改写会算出同一个 hash 而被 `recordArtifact` 判成
+ *    「内容没变」→ 变更链断裂。指纹（工具事件 id）保证每次改写稳定推进一版；
+ * 3. `url`（外链类 image / video 的身份，见下）；
+ * 4. `path`（无正文、无外链的文件产物兜底：至少让不同文件不互相碰撞）。
  *
  * 外链类（image / video）的 `content` 是空串，此时 `url` 才是它的身份——
  * 若一律哈希 `content`，所有图片会算出同一个值而被误判为重复。
  */
 export function artifactContentHash(artifact: Artifact): string {
-  const body = artifact.content && artifact.content !== '' ? artifact.content : (artifact.url ?? '');
+  if (artifact.fingerprint) {
+    // 指纹参与寻址前先归一化：同一次改写重放（同事件 id + 同路径）必须算出同值
+    return contentHash(`${artifact.path ?? ''}\u0000${artifact.fingerprint}`);
+  }
+  const body =
+    artifact.content && artifact.content !== ''
+      ? artifact.content
+      : (artifact.url ?? artifact.path ?? '');
   return contentHash(body);
 }
 

@@ -60,10 +60,11 @@ function describeTool(
         primaryBlue: true,
       };
     case 'edit':
+    case 'edit_file':
       return {
         icon: <EditNoteIcon sx={ICON_SX} />,
         verb: '已编辑',
-        primary: argStr(args, ['file_path', 'path']),
+        primary: argStr(args, ['path', 'file_path']),
         primaryBlue: true,
       };
     case 'list_dir':

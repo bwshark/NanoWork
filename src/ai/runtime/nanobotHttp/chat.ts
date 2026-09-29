@@ -1,5 +1,5 @@
 import { DEFAULT_TRANSCRIPTION, useSettingsStore } from '@/stores/settingsStore';
-import { fetchSSE, readSSEStream } from '@/lib/sse';
+import { fetchSSE, readSSEStream, type SSEStreamEnd } from '@/lib/sse';
 // MIME 推断统一复用附件模块的扩展名映射表（文档 / 表格 / 幻灯片 / PDF / 文本标记 /
 // 配置日志 / 图片 / 音视频），避免出现「Composer 能选、上传时却退化成 octet-stream」
 import { inferMime } from '@/lib/attachments';
@@ -544,6 +544,15 @@ export class NanobotClient {
    * keep-alive 帧）计时器就归零，因此长任务只要网关还在持续输出就不会被打断，
    * 只有连续 `resolveIdleWindow()` 毫秒毫无动静才判定链路已死。
    * 唯一例外是引擎挂起等用户裁决的那段静默（见 `pendingApprovals`）。
+   *
+   * 收尾判定共三类，顺序不可颠倒（见 `runStream` 的 2.5 步）：
+   * - 用户 abort 或静默超时 → 提前返回（后者另经 onError 报错）；
+   * - **异常结束** → `onInterrupted`，且**不**再 flush 工具调用 / 提取产物；
+   * - 其余 → 正常收尾（flush + artifact + onStatus('done') + onDone）。
+   *
+   * 「异常结束」= `finish_reason` 为 `error`/`length`，或 SSE body 提前结束而没发
+   * `[DONE]`。旧实现只看「流有没有断」而不看这两样，于是被掐断的一轮会被宣布成完成
+   * （2026-09-29 断流事故）。
    */
   sendMessage(req: ChatRequest, handlers: StreamHandlers): ChatHandle {
     const controller = new AbortController();
@@ -629,6 +638,26 @@ export class NanobotClient {
     const { headers, body, form } = this.buildRequest(req);
     const accumulator = new ToolCallAccumulator();
     let fullText = '';
+    /**
+     * 本轮是否已经通过 onError 报过错。
+     *
+     * 协议级失败（HTTP 非 2xx / body 缺失 / 帧解析失败）与「异常结束」都发生在同一次
+     * 调用里，两处都上报会让用户看到两条互相矛盾的提示（「发送失败」+「已中断」）。
+     * 有一处报过就不再叠加（见收尾处的异常结束判定）。
+     */
+    let reportedError = false;
+    const reportError = (err: Error) => {
+      reportedError = true;
+      handlers.onError(err);
+    };
+    /**
+     * 引擎在终结帧里给出的 `finish_reason`。
+     *
+     * nanobot 只在流末尾发一帧（`{delta: {}, finish_reason: ...}`），通常与 `[DONE]`
+     * 同批到达。它是「引擎承认自己失败 / 被截断」的唯一显式信号，2026-09-29 事故里
+     * 客户端从不读它，于是断流与正常收尾完全同形。
+     */
+    let finishReason: string | null = null;
 
     const requestInit: RequestInit = {
       method: 'POST',
@@ -657,9 +686,14 @@ export class NanobotClient {
               tool_calls?: unknown;
               nanobot_event?: NanobotStreamEvent;
             };
+            finish_reason?: string | null;
           }>;
         };
-        const delta = json.choices?.[0]?.delta;
+        const choice = json.choices?.[0];
+        // 终结帧按标准 OpenAI 形状**只有 finish_reason、没有 delta**：必须先取它，
+        // 再判 delta 是否存在，否则这一帧会被整体丢掉，异常结束就再也认不出来了。
+        if (typeof choice?.finish_reason === 'string') finishReason = choice.finish_reason;
+        const delta = choice?.delta;
         if (!delta) return;
 
         // 帧结构合法 = 网关已经「开口」：超时文案据此区分断链与未响应。
@@ -740,7 +774,7 @@ export class NanobotClient {
         const trimmed = data.trim();
         if (!trimmed || trimmed.startsWith(':')) return;
         console.error('[nanobotClient] SSE chunk parse error:', data, err);
-        handlers.onError(
+        reportError(
           new Error(
             `SSE 消息解析失败：${err instanceof Error ? err.message : String(err)}`,
           ),
@@ -748,27 +782,46 @@ export class NanobotClient {
       }
     };
 
+    let end: SSEStreamEnd;
     if (useForm) {
       // 文件流：复用 fetch 解析（fetchSSE 当前面向 JSON body，此处独立实现以保证兼容）
-      await this.streamFormRequest(
+      end = await this.streamFormRequest(
         streamUrl,
         requestInit,
         onChunk,
-        handlers,
+        reportError,
         signal,
         onActivity,
       );
     } else {
-      await fetchSSE(
+      end = await fetchSSE(
         streamUrl,
         { ...requestInit, onActivity } as never,
         onChunk,
-        (err) => handlers.onError(err),
+        reportError,
       );
     }
 
     // 中断后跳过 flush 与启发式提取，避免给用户「看起来正常生成」的错觉
     if (signal.aborted) return;
+
+    // 2.5) 异常结束判定——**必须先于**正常收尾，否则一次被掐断的流会被宣布成完成：
+    //   - `eof`：body 提前结束、`[DONE]` 从未出现（引擎进程被杀 / 代理断流）；
+    //   - `error`：引擎在终结帧里承认了失败；
+    //   - `length`：撞上迭代 / 输出上限，内容没写完。
+    // `reportedError` 为真说明协议级失败已经报过，不重复上报。
+    if (!reportedError) {
+      const interrupted: 'engine_error' | 'truncated' | null =
+        finishReason === 'length'
+          ? 'truncated'
+          : end === 'eof' || finishReason === 'error'
+            ? 'engine_error'
+            : null;
+      if (interrupted) {
+        handlers.onInterrupted?.(interrupted);
+        return;
+      }
+    }
 
     // 3) 流结束：flush 工具调用（done）+ 启发式提取 artifact
     const doneCalls = accumulator.flush();
@@ -791,16 +844,16 @@ export class NanobotClient {
     url: string,
     init: RequestInit,
     onMessage: (data: string) => void,
-    handlers: StreamHandlers,
+    onError: (err: Error) => void,
     signal: AbortSignal,
     onActivity: () => void,
-  ): Promise<void> {
-    if (signal.aborted) return;
+  ): Promise<SSEStreamEnd> {
+    if (signal.aborted) return 'eof';
     try {
       const response = await fetch(url, init);
       // 服务端已应答即视为链路活跃（大附件的网关解析耗时落在这一段之前）
       onActivity();
-      if (signal.aborted) return;
+      if (signal.aborted) return 'eof';
       if (!response.ok) {
         throw new Error(`SSE 请求失败：HTTP ${response.status} ${response.statusText}`);
       }
@@ -810,17 +863,20 @@ export class NanobotClient {
       // nanobot 带文件上传时回完整 JSON chat.completion（非流式），需兜底解析
       if (!contentType.includes('text/event-stream')) {
         const text = await response.text();
-        if (signal.aborted) return;
-        this.handleNonStreamResponse(text, onMessage, handlers, signal);
-        return;
+        if (signal.aborted) return 'eof';
+        this.handleNonStreamResponse(text, onMessage, onError, signal);
+        // 完整 JSON 本身就是「一个写完了的回答」，没有 [DONE] 可言 → 视为正常收尾。
+        // 若在这里回 'eof'，每一轮带附件的对话都会被误判成「已中断」。
+        return 'done';
       }
 
-      await readSSEStream(response.body.getReader(), signal, onMessage, onActivity);
+      return await readSSEStream(response.body.getReader(), signal, onMessage, onActivity);
     } catch (err) {
       // 中断造成的 AbortError 视作正常结束
-      if (signal.aborted) return;
-      if (err instanceof DOMException && err.name === 'AbortError') return;
-      handlers.onError(err instanceof Error ? err : new Error(String(err)));
+      if (signal.aborted) return 'eof';
+      if (err instanceof DOMException && err.name === 'AbortError') return 'eof';
+      onError(err instanceof Error ? err : new Error(String(err)));
+      return 'eof';
     }
   }
 
@@ -831,7 +887,7 @@ export class NanobotClient {
   private handleNonStreamResponse(
     text: string,
     onMessage: (data: string) => void,
-    handlers: StreamHandlers,
+    onError: (err: Error) => void,
     signal: AbortSignal,
   ): void {
     if (signal.aborted) return;
@@ -852,7 +908,7 @@ export class NanobotClient {
       }
     } catch (err) {
       console.error('[nanobotClient] 非流式响应解析失败:', text, err);
-      handlers.onError(
+      onError(
         new Error(
           `非流式响应解析失败：${err instanceof Error ? err.message : String(err)}`,
         ),

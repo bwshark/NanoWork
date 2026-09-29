@@ -14,6 +14,7 @@ import SearchIcon from '@mui/icons-material/Search';
 import { ArtifactRenderer } from '@/components/ArtifactRenderer';
 import { ROUTES } from '@/lib/constants';
 import {
+  ARTIFACT_TYPE_LABELS,
   buildIndexEntry,
   filterItems,
   groupByHash,
@@ -25,17 +26,7 @@ import { useSessionsStore } from '@/stores/sessionsStore';
 import { useSessionUiStore } from '@/stores/sessionUiStore';
 import type { ArtifactIndexEntry, ArtifactType } from '@/types';
 
-const TYPE_LABELS: Record<ArtifactType, string> = {
-  html: 'HTML',
-  svg: 'SVG',
-  image: '图片',
-  mermaid: '流程图',
-  code: '代码',
-  markdown: '文档',
-  video: '视频',
-};
-
-const ALL_TYPES = Object.keys(TYPE_LABELS) as ArtifactType[];
+const ALL_TYPES = Object.keys(ARTIFACT_TYPE_LABELS) as ArtifactType[];
 
 type Order = 'newest' | 'oldest';
 /** 两种组织方式互斥：按时间才能跨会话折叠，按会话则每节内不可能有重复（入库已去重） */
@@ -104,7 +95,7 @@ export function ArtifactsPage() {
 
   const renderEntryBar = (entry: ArtifactIndexEntry) => (
     <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1, flexWrap: 'wrap', gap: 1 }}>
-      <Chip size="small" label={TYPE_LABELS[entry.type] ?? entry.type} variant="outlined" />
+      <Chip size="small" label={ARTIFACT_TYPE_LABELS[entry.type] ?? entry.type} variant="outlined" />
       {entry.version && entry.version > 1 && (
         <Chip
           size="small"
@@ -159,7 +150,7 @@ export function ArtifactsPage() {
           >
             {ALL_TYPES.map((t) => (
               <ToggleButton key={t} value={t} sx={{ textTransform: 'none', fontSize: 12 }}>
-                {TYPE_LABELS[t]}
+                {ARTIFACT_TYPE_LABELS[t]}
               </ToggleButton>
             ))}
           </ToggleButtonGroup>

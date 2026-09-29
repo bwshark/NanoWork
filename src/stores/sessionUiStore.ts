@@ -9,15 +9,40 @@ import { create } from 'zustand';
  * - 搜索条与三个入口按钮都挂在 ChatHeader（会话标题右侧）；
  * - 关键词命中高亮与消息定位由 MessageStream 消费。
  */
+/** 产物面板的列表口径：全部产物 / 只看被再次编辑过的（变更） */
+export type ArtifactPanelView = 'all' | 'changes';
+
+/** 打开面板时的可选项（由消息底部卡片区 / 变更入口传入） */
+export interface ArtifactPanelOpenOptions {
+  /** 直接在面板内预览的产物 id；缺省 = 列表视图 */
+  previewId?: string;
+  /** 列表口径；缺省 `all` */
+  view?: ArtifactPanelView;
+}
+
 interface SessionUiState {
   /** 右侧产物面板是否展开 */
   artifactPanelOpen: boolean;
   /** 面板当前跟随的会话 id（未展开时为 null） */
   artifactPanelSessionId: string | null;
-  openArtifactPanel: (sessionId: string) => void;
+  /**
+   * 面板内正在预览的产物 id。
+   *
+   * 有值即进入**预览态**（列表让位给预览，顶部有返回入口）；`null` = 列表态。
+   * 由消息流里的产物卡片点击写入——「点卡片 → 右侧看内容」是产品要求的主路径，
+   * 因此它属于跨组件的 UI 态（与面板开关同源），而不是某个组件内部的 state。
+   */
+  artifactPanelPreviewId: string | null;
+  /** 面板列表口径（产物 / 变更） */
+  artifactPanelView: ArtifactPanelView;
+  openArtifactPanel: (sessionId: string, opts?: ArtifactPanelOpenOptions) => void;
   /** 再次点击同一会话的按钮则收起；换会话则直接切换 */
   toggleArtifactPanel: (sessionId: string) => void;
   closeArtifactPanel: () => void;
+  /** 在面板内切换预览的产物（传 null 回到列表） */
+  setArtifactPanelPreview: (artifactId: string | null) => void;
+  /** 切换面板列表口径（产物 / 变更） */
+  setArtifactPanelView: (view: ArtifactPanelView) => void;
 
   /** 会话内搜索条：展开时记录目标会话 id，null 表示收起 */
   searchSessionId: string | null;
@@ -56,9 +81,17 @@ interface SessionUiState {
 export const useSessionUiStore = create<SessionUiState>()((set, get) => ({
   artifactPanelOpen: false,
   artifactPanelSessionId: null,
+  artifactPanelPreviewId: null,
+  artifactPanelView: 'all',
 
-  openArtifactPanel: (sessionId) =>
-    set({ artifactPanelOpen: true, artifactPanelSessionId: sessionId }),
+  openArtifactPanel: (sessionId, opts) =>
+    set({
+      artifactPanelOpen: true,
+      artifactPanelSessionId: sessionId,
+      // 换会话时上一会话的预览 id 无意义，必须一并重置
+      artifactPanelPreviewId: opts?.previewId ?? null,
+      artifactPanelView: opts?.view ?? 'all',
+    }),
 
   toggleArtifactPanel: (sessionId) => {
     const { artifactPanelOpen, artifactPanelSessionId } = get();
@@ -67,10 +100,19 @@ export const useSessionUiStore = create<SessionUiState>()((set, get) => ({
       set({ artifactPanelOpen: false });
       return;
     }
-    set({ artifactPanelOpen: true, artifactPanelSessionId: sessionId });
+    set({
+      artifactPanelOpen: true,
+      artifactPanelSessionId: sessionId,
+      artifactPanelPreviewId: null,
+      artifactPanelView: 'all',
+    });
   },
 
   closeArtifactPanel: () => set({ artifactPanelOpen: false }),
+
+  setArtifactPanelPreview: (artifactId) => set({ artifactPanelPreviewId: artifactId }),
+
+  setArtifactPanelView: (view) => set({ artifactPanelView: view }),
 
   searchSessionId: null,
   openSearch: (sessionId) =>

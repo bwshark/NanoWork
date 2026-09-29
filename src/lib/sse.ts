@@ -24,6 +24,16 @@ export interface SSEOptions {
   onActivity?: SSEActivityHandler;
 }
 
+/**
+ * 一次 SSE 读取的结束形态——调用方据此判断「本轮是否正常收尾」。
+ *
+ * - `'done'`：读到了 `[DONE]`，对端明确宣告结束；
+ * - `'eof'`：body 先没了、`[DONE]` 从未出现。上游断流、进程被杀、代理超时都是这个形态，
+ *   而它**与正常收尾在字节上无法区分**——所以必须显式回传，不能靠调用方猜。
+ *   2026-09-29 的断流事故就是缺了这个信号：客户端把一次被掐断的流当成了正常完成。
+ */
+export type SSEStreamEnd = 'done' | 'eof';
+
 export type SSEMessageHandler = (data: string) => void;
 export type SSEErrorHandler = (error: Error) => void;
 /** 活跃信号回调（无参、无返回，仅表示「链路还在动」） */
@@ -69,6 +79,9 @@ export function isSSEDone(payload: string): boolean {
  * 消费 ReadableStream 并逐条回调 SSE 数据事件。
  * 流结束时会自动处理尾部未完整数据，避免最后一条消息被丢弃。
  *
+ * 返回值区分两种结束形态（见 `SSEStreamEnd`）：读到 `[DONE]` 回 `'done'`，
+ * body 先结束回 `'eof'`。**这是判断本轮是否正常收尾的唯一依据**，调用方不得省略。
+ *
  * `onActivity` 在**每次读到字节**时回调（在解析之前），因此 keep-alive 注释帧、
  * 被丢弃的脏帧同样算「链路活着」——调用方的静默超时据此归零。
  */
@@ -77,11 +90,11 @@ export async function readSSEStream(
   signal: AbortSignal | undefined,
   onMessage: (payload: string) => void,
   onActivity?: SSEActivityHandler,
-): Promise<void> {
+): Promise<SSEStreamEnd> {
   const decoder = new TextDecoder();
   let buffer = '';
   while (true) {
-    if (signal?.aborted) return;
+    if (signal?.aborted) return 'eof';
     const { done, value } = await reader.read();
     // 字节层活跃信号：先于 done 判断，让调用方在任何读到数据的时刻都能重新计时
     if (value && value.length > 0) onActivity?.();
@@ -89,18 +102,19 @@ export async function readSSEStream(
       // 流自然结束：追加一个事件边界，尝试消费缓冲区里的尾部数据
       const { events } = parseSSEBuffer(buffer + '\n\n');
       for (const payload of events) {
-        if (signal?.aborted) return;
-        if (isSSEDone(payload)) return;
+        if (signal?.aborted) return 'eof';
+        if (isSSEDone(payload)) return 'done';
         onMessage(payload);
       }
-      break;
+      // 尾部消化完仍没见到 [DONE]：这一轮是被掐断的，不是正常收尾
+      return 'eof';
     }
     buffer += decoder.decode(value, { stream: true });
     const { events, rest } = parseSSEBuffer(buffer);
     buffer = rest;
     for (const payload of events) {
-      if (signal?.aborted) return;
-      if (isSSEDone(payload)) return;
+      if (signal?.aborted) return 'eof';
+      if (isSSEDone(payload)) return 'done';
       onMessage(payload);
     }
   }
@@ -115,14 +129,18 @@ export async function readSSEStream(
  *
  * `options.onActivity`：响应头到达与每次读到字节都回调一次，
  * 供调用方做静默超时（见 `SSEOptions.onActivity`）。
+ *
+ * 返回值即 `readSSEStream` 的结束形态；出错路径（HTTP 非 2xx / 缺 body / 解析抛错）
+ * 一律回 `'eof'`，且已通过 `onError` 报过一次，调用方不应重复上报。
+ * `204 / 205`（网关明确表示无内容）回 `'done'`：那是「没有可读的东西」，不是链路故障。
  */
 export async function fetchSSE(
   url: string,
   options: SSEOptions,
   onMessage: SSEMessageHandler,
   onError: SSEErrorHandler,
-): Promise<void> {
-  if (options.signal?.aborted) return;
+): Promise<SSEStreamEnd> {
+  if (options.signal?.aborted) return 'eof';
   try {
     const response = await fetch(url, {
       method: options.method ?? 'POST',
@@ -139,7 +157,7 @@ export async function fetchSSE(
     options.onActivity?.();
 
     if (response.status === 204 || response.status === 205) {
-      return;
+      return 'done';
     }
 
     if (!response.ok) {
@@ -149,10 +167,16 @@ export async function fetchSSE(
       throw new Error('SSE 响应缺少 body 流');
     }
 
-    await readSSEStream(response.body.getReader(), options.signal, onMessage, options.onActivity);
+    return await readSSEStream(
+      response.body.getReader(),
+      options.signal,
+      onMessage,
+      options.onActivity,
+    );
   } catch (err) {
-    if (options.signal?.aborted) return;
-    if (err instanceof DOMException && err.name === 'AbortError') return;
+    if (options.signal?.aborted) return 'eof';
+    if (err instanceof DOMException && err.name === 'AbortError') return 'eof';
     onError(err instanceof Error ? err : new Error(String(err)));
+    return 'eof';
   }
 }

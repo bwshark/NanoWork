@@ -718,9 +718,9 @@ function ProbeStatus({ result }: { result: ModelProbeResult }) {
  * 这件事最直白的表达；档位按钮退化成**填入框里的一段文本**（`128K`），于是
  * 「当前是什么」永远只有一处读数（框里的字），不会出现「按钮选着 A、框里写着 B」。
  *
- * 档位按钮**刻意不含等于引擎默认值的数**（输出档位里没有 8K）：那种档位点下去
- * 落盘 8192、回读又被 `normalizeTokenLimit` 归一成空框，用户看到的是"我的选择被吞了"。
- * 「要 8K」= 留空（今日两者同值）。这条不变量由 `tests/modelOptions.test.ts` 守着。
+ * 档位按钮**刻意不含等于引擎默认值的数**（输出档位里没有 32K）：那种档位点下去
+ * 落盘 32768、回读又被 `normalizeTokenLimit` 归一成空框，用户看到的是"我的选择被吞了"。
+ * 「要 32K」= 留空（今日两者同值）。这条不变量由 `tests/modelOptions.test.ts` 守着。
  */
 function TokenLimitField({
   title,

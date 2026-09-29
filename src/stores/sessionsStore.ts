@@ -54,8 +54,14 @@ import { useExpertGroupsStore } from './expertGroupsStore';
 import { useSettingsStore } from './settingsStore';
 import { resolveDefaultWorkspacePath } from './storageInfoStore';
 import { useSkillsStore } from './skillsStore';
+import {
+  deriveFileArtifacts,
+  fileArtifactId,
+  findFileArtifact,
+} from '@/lib/fileArtifact';
 import type {
   Artifact,
+  ArtifactChange,
   Attachment,
   ChatMessageParam,
   MemoryState,
@@ -840,6 +846,13 @@ async function streamAssistantReply(
 
   // 本次请求的错误信息（局部捕获，避免被并发会话的全局 error 覆盖）
   let sendError: string | null = null;
+  /**
+   * 本轮是否被引擎侧异常打断（断流 / 引擎报错 / 撞上迭代上限）。
+   *
+   * 与 `sendError` 一样是**局部**捕获：并发会话的中断不该污染另一条会话的结算。
+   * 它决定结算时的 `reason`（`interrupted` 而不是 `done`）与事件落盘字段。
+   */
+  let interrupted = false;
   try {
     // 大附件先给预期：网关要解码、解析文档再交给模型，可能耗时数分钟。
     // 不给提示的话，用户面对几分钟的空白会以为「点了发送没反应」或已经卡死。
@@ -882,6 +895,15 @@ async function streamAssistantReply(
         useSessionsStore.setState({ error: err.message });
         toast.error(`发送失败：${err.message}`);
       },
+      onInterrupted: () => {
+        // 不弹 toast：这不是「发送失败」，而是「发出去了、只回来一半」。提示走消息内
+        // 常驻的警示行（见 AssistantMessage），长任务里 toast 一闪而过反而看不见。
+        interrupted = true;
+        useSessionsStore.getState().updateMessage(sessionId, assistantId, (m) => ({
+          ...m,
+          interrupted: true,
+        }));
+      },
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
@@ -914,7 +936,16 @@ async function streamAssistantReply(
       .sessions.find((s) => s.id === sessionId)
       ?.messages.find((x) => x.id === assistantId);
     const aborted = finalMsg?.aborted === true;
-    const reason = sendError ? 'error' : aborted ? 'aborted' : 'done';
+    // 局部标记与消息上的标记取或：`onInterrupted` 已经写进消息，但并发/重放路径下
+    // 局部变量才是这一轮的权威事实。
+    const wasInterrupted = interrupted || finalMsg?.interrupted === true;
+    const reason = sendError
+      ? 'error'
+      : aborted
+        ? 'aborted'
+        : wasInterrupted
+          ? 'interrupted'
+          : 'done';
 
     /**
      * 受控记忆写入（P2-A）：模型可能在本轮回答里夹带 `<memory-save>` 块。
@@ -949,6 +980,7 @@ async function streamAssistantReply(
         ...(finalMsg?.createdAt ? { createdAt: finalMsg.createdAt } : {}),
         ...(durationMs !== undefined ? { durationMs } : {}),
         ...(aborted ? { aborted: true } : {}),
+        ...(wasInterrupted ? { interrupted: true } : {}),
       }),
       f.sessionEnd({ reason }),
     ]);
@@ -2208,6 +2240,10 @@ export const useSessionsStore = create<SessionsState>()(
           content: ev.content,
           ...(ev.language ? { language: ev.language } : {}),
           ...(ev.url ? { url: ev.url } : {}),
+          ...(ev.path ? { path: ev.path } : {}),
+          ...(ev.size !== undefined ? { size: ev.size } : {}),
+          ...(ev.change ? { change: ev.change } : {}),
+          ...(ev.fingerprint ? { fingerprint: ev.fingerprint } : {}),
         }),
       );
       const artifact: Artifact = {
@@ -2217,6 +2253,10 @@ export const useSessionsStore = create<SessionsState>()(
         content: ev.content,
         ...(ev.language !== undefined ? { language: ev.language } : {}),
         ...(ev.url !== undefined ? { url: ev.url } : {}),
+        ...(ev.path !== undefined ? { path: ev.path } : {}),
+        ...(ev.size !== undefined ? { size: ev.size } : {}),
+        ...(ev.change !== undefined ? { change: ev.change } : {}),
+        ...(ev.fingerprint !== undefined ? { fingerprint: ev.fingerprint } : {}),
         createdAt: recorded ? new Date(recorded.timestamp).toISOString() : nowIso(),
       };
       get().updateMessage(sessionId, messageId, (m) => ({
@@ -2304,6 +2344,35 @@ export const useSessionsStore = create<SessionsState>()(
         }
         return { ...base, process };
       });
+
+      // 工具成功后把「真正落到磁盘的文件」登记为产物。
+      // **只认 `end`（成功）**：失败 / 被拒的写入不能凭空造出一张产物卡片
+      // （2026-09-29 事故的教训：失败被伪装成完成，界面不能跟着一起骗人）。
+      // 一次调用可能涉及多个文件（`apply_patch` 的 `edits[]`），故按数组处理。
+      if (ev.phase === 'end') {
+        const drafts = deriveFileArtifacts(ev.tool, ev.args, ev.id);
+        for (const draft of drafts) {
+          const existing = findFileArtifact(
+            useArtifactsStore.getState().bySession[sessionId] ?? [],
+            draft.path,
+          );
+          // 本会话已见过该路径 → 这是改写；改写类工具即便首次见到该路径，
+          // 也只能是「改既有文件」（不是本会话新建的）
+          const change: ArtifactChange =
+            existing || draft.op === 'edit' ? 'modified' : 'created';
+          get().handleArtifact(sessionId, messageId, {
+            id: fileArtifactId(sessionId, draft.path),
+            type: 'file',
+            title: draft.name,
+            content: draft.content,
+            path: draft.path,
+            change,
+            ...(draft.size !== undefined ? { size: draft.size } : {}),
+            ...(draft.language !== undefined ? { language: draft.language } : {}),
+            ...(draft.fingerprint !== undefined ? { fingerprint: draft.fingerprint } : {}),
+          });
+        }
+      }
     },
 
     retry: async () => {

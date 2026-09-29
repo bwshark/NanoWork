@@ -387,13 +387,13 @@ describe('添加模型 · 完全自定义', () => {
     expect(inputByAria('上下文窗口').value).toBe('128K');
     expect(pressed('上下文窗口')).toEqual(['128K']);
 
-    pickChip('单次最大输出', '32K');
+    pickChip('单次最大输出', '64K');
     await flush();
 
     click(saveButton());
     await flush();
     expect(submitted[0].contextWindowTokens).toBe(131_072);
-    expect(submitted[0].maxTokens).toBe(32_768);
+    expect(submitted[0].maxTokens).toBe(65_536);
   });
 
   it('手写 200,000 / 128K 这类写法都认（同一个解析口径）', async () => {
@@ -602,7 +602,7 @@ function managedModel(overrides: Partial<ManagedModel> = {}): ManagedModel {
     isDefault: false,
     custom: false,
     contextWindowTokens: 131_072,
-    maxTokens: 32_768,
+    maxTokens: 65_536,
     reasoningEffort: null,
     supportsTools: true,
     supportsVision: false,
@@ -623,7 +623,7 @@ describe('添加模型 · 编辑回填', () => {
     click(saveButton());
     await flush();
     expect(submitted[0].contextWindowTokens).toBe(262_144);
-    expect(submitted[0].maxTokens).toBe(32_768);
+    expect(submitted[0].maxTokens).toBe(65_536);
     expect(submitted[0].supportsVision).toBe(true);
     expect(submitted[0].customProtocol).toBe(true);
   });
@@ -653,9 +653,9 @@ describe('添加模型 · 编辑回填', () => {
     // 用户一眼能对上生效的是哪个），其余的带千分位原样显示 —— 100000 不是整数倍，
     // 写成 `97.6K` 会让人以为值被改过；逗号由 `parseTokenLimitInput` 吃掉，往返无损。
     expect(inputByAria('上下文窗口').value).toBe('100,000');
-    expect(inputByAria('单次最大输出').value).toBe('32K');
+    expect(inputByAria('单次最大输出').value).toBe('64K');
     expect(pressed('上下文窗口')).toEqual([]); // 100000 不在档位里，但值要看得见
-    expect(pressed('单次最大输出')).toEqual(['32K']); // 32768 就是那个档位，必须显示为选中
+    expect(pressed('单次最大输出')).toEqual(['64K']); // 65536 就是那个档位，必须显示为选中
     expect(checkboxByAria('图片输入').checked).toBe(true);
     expect(checkboxByAria('思考模式').checked).toBe(true);
 

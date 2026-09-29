@@ -16,6 +16,7 @@
  *   以免把「句柄管理」这种传输细节泄漏给调用方。
  */
 import type {
+  ArtifactChange,
   ArtifactType,
   ChannelConfig,
   ChannelKind,
@@ -163,7 +164,12 @@ export interface ApprovalRequestEvent {
 /** 逐条批准的裁决结果 */
 export type ApprovalDecision = 'allow' | 'deny';
 
-/** 富产物事件载荷 */
+/**
+ * 富产物事件载荷。
+ *
+ * `path` / `size` / `change` 由**文件产物**（工具写出的文件）使用：
+ * 它的身份是路径而非内容（详见 `@/types/artifact` 的 `Artifact`）。
+ */
 export interface ArtifactEvent {
   id: string;
   type: ArtifactType;
@@ -171,6 +177,14 @@ export interface ArtifactEvent {
   content: string;
   language?: string;
   url?: string;
+  /** 文件产物的绝对路径 */
+  path?: string;
+  /** 文件产物的字节数（正文快照不可得时缺省） */
+  size?: number;
+  /** 文件产物的变更性质（created / modified） */
+  change?: ArtifactChange;
+  /** 文件产物的事件级内容指纹（正文不可得的改写类工具，见 `Artifact.fingerprint`） */
+  fingerprint?: string;
 }
 
 /**
@@ -223,6 +237,23 @@ export interface StreamHandlers {
   onDone(): void;
   /** 出错 */
   onError(err: Error): void;
+  /**
+   * **异常结束**：这一轮没有正常收尾，已收到的内容是残缺的。
+   *
+   * 三种成因，用 `reason` 区分：
+   * - `engine_error`：引擎在流里报了 `finish_reason="error"`（或进程被杀、代理断流
+   *   导致 body 提前结束而没发 `[DONE]`）；
+   * - `truncated`：引擎报 `finish_reason="length"`（撞上迭代/输出上限，内容没写完）。
+   *
+   * **为什么不复用 `onError`**：`onError` 的语义是「这一轮根本没发出去 / 协议级失败」，
+   * 上层会置全局 error 并弹「发送失败」toast；而这里是「发出去了、也收到了半截，但没走完」。
+   * 混用会让长任务的中断被报成发送失败，也会让「已中断」与「发送失败」在界面上无法区分。
+   *
+   * 实现方应当把这条消息标成 `interrupted`（而不是 `aborted`——那是用户主动停止），
+   * 并按 `reason` 给出可操作的提示。旧实现没有这个契约，于是断流被当成正常完成，
+   * 界面上显示「已完成」（2026-09-29 事故）。
+   */
+  onInterrupted?(reason: 'engine_error' | 'truncated'): void;
 }
 
 /**

@@ -6,7 +6,7 @@
  * 1. `ENGINE_DEFAULT_*` 与引擎 `config/schema.py::ModelPresetConfig` 的字段默认值漂移
  *    ——用户在界面上点「使用提供商默认值」，我们写下一个引擎并不认为默认的数字，
  *    于是「默认」变成一次静默的覆盖；
- * 2. 档位列表里出现与引擎默认值相同的数——该按钮点完落盘 8192、回读又被归一成
+ * 2. 档位列表里出现与引擎默认值相同的数——该按钮点完落盘 32768、回读又被归一成
  *    `null`，永远无法保持选中，是个点了没反应的按钮；
  * 3. 回读归一把用户特意设过的值也吞掉——`262144` 必须原样回显。
  *
@@ -15,7 +15,7 @@
  * 能力声明的缺省值（`ENGINE_DEFAULT_CAPABILITIES`，与引擎字段默认值同源）。
  *
  * 引擎默认值的出处：`nanobot/nanobot/config/schema.py`
- * （`max_tokens: int = 8192`、`context_window_tokens: int = 200_000`、
+ * （`max_tokens: int = 32_768`、`context_window_tokens: int = 200_000`、
  * `supports_tools: bool = True`、`supports_vision: bool = False`、
  * `custom_protocol: bool = False`）。
  */
@@ -37,7 +37,7 @@ import {
 
 describe('引擎默认值常量：必须与 config/schema.py::ModelPresetConfig 逐字一致', () => {
   it('三个默认值', () => {
-    expect(ENGINE_DEFAULT_MAX_TOKENS).toBe(8192);
+    expect(ENGINE_DEFAULT_MAX_TOKENS).toBe(32_768);
     expect(ENGINE_DEFAULT_CONTEXT_WINDOW_TOKENS).toBe(200_000);
     expect(ENGINE_DEFAULT_TEMPERATURE).toBe(0.1);
   });
@@ -50,8 +50,8 @@ describe('引擎默认值常量：必须与 config/schema.py::ModelPresetConfig 
 });
 
 describe('档位列表：不许出现与引擎默认值相同的项', () => {
-  it('输出档位不含 8192', () => {
-    // 含了就会得到一个「永远无法保持选中」的档位：点它落盘 8192，回读归一成 null，
+  it('输出档位不含引擎默认值 32K', () => {
+    // 含了就会得到一个「永远无法保持选中」的档位：点它落盘 32768，回读归一成 null，
     // 下次打开显示「使用提供商默认值」——用户以为自己的选择被吞了
     expect(MAX_TOKENS_OPTIONS).not.toContain(ENGINE_DEFAULT_MAX_TOKENS);
   });
@@ -67,21 +67,21 @@ describe('档位列表：不许出现与引擎默认值相同的项', () => {
     }
   });
 
-  it('两列共用的只有 32K / 64K 这两个量级（其余不许重复，否则容易串台）', () => {
+  it('两列共用的只有 64K / 128K 这两个量级（其余不许重复，否则容易串台）', () => {
     const overlap = MAX_TOKENS_OPTIONS.filter((v) =>
       (CONTEXT_WINDOW_OPTIONS as readonly number[]).includes(v),
     );
-    // 32K / 64K 在两边都是有意的：窗口与输出是同一个量级上的两件事，
+    // 64K / 128K 在两边都是有意的：窗口与输出是同一个量级上的两件事，
     // 但它们分属不同的 aria 分组（`tokenChips` 按组取），选中态互不影响。
     // 这条断言锁的是「共用的就是这几个已知项」，多出来就说明有人往列表里塞了东西。
-    expect(overlap).toEqual([32_768, 65_536]);
+    expect(overlap).toEqual([65_536, 131_072]);
   });
 });
 
 describe('normalizeTokenLimit: 回读归一', () => {
   it('等于引擎默认值 → null（＝界面上的「使用提供商默认值」）', () => {
     expect(normalizeTokenLimit(200_000, ENGINE_DEFAULT_CONTEXT_WINDOW_TOKENS)).toBeNull();
-    expect(normalizeTokenLimit(8_192, ENGINE_DEFAULT_MAX_TOKENS)).toBeNull();
+    expect(normalizeTokenLimit(32_768, ENGINE_DEFAULT_MAX_TOKENS)).toBeNull();
   });
 
   it('用户特意设过的值原样保留', () => {

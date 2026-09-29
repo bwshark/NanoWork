@@ -122,7 +122,7 @@ describe('buildManaged: 引擎快照 → 设置页行模型', () => {
       sciherd: {
         model: 'Qwen3.8-Flash',
         provider: 'sciherd',
-        maxTokens: 8192,
+        maxTokens: 32768,
         contextWindowTokens: 262144,
         temperature: 0.1,
         reasoningEffort: null,
@@ -130,7 +130,7 @@ describe('buildManaged: 引擎快照 → 设置页行模型', () => {
       'deepseek-chat': {
         model: 'deepseek-chat',
         provider: 'deepseek',
-        maxTokens: 8192,
+        maxTokens: 32768,
         contextWindowTokens: 200000,
         temperature: 0.1,
         reasoningEffort: null,
@@ -155,7 +155,7 @@ describe('buildManaged: 引擎快照 → 设置页行模型', () => {
     expect(rows[1].providerKey).toBe('deepseek');
   });
 
-  it('token 上限按引擎默认值归一（200000/8192 折成 null = 使用提供商默认值）', () => {
+  it('token 上限按引擎默认值归一（200000/32768 折成 null = 使用提供商默认值）', () => {
     const rows = buildManaged(snapshot);
     // deepseek-chat 两项都等于引擎默认值 → 界面上都应显示「使用提供商默认值」
     expect(rows[1].contextWindowTokens).toBeNull();

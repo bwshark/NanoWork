@@ -259,6 +259,7 @@ export const AGENT_TOOL_CATALOG = [
   'web_fetch',
   // 写类
   'write_file',
+  'edit_file',
   'apply_patch',
   // 执行
   'exec',
@@ -277,6 +278,7 @@ export const AGENT_TOOL_LABELS: Record<string, string> = {
   web_search: '联网搜索',
   web_fetch: '抓取网页',
   write_file: '写入文件',
+  edit_file: '编辑文件',
   apply_patch: '打补丁改文件',
   exec: '执行终端命令',
   delete_file: '删除（进回收站）',

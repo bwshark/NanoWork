@@ -19,12 +19,14 @@ import { useSessionUiStore } from '@/stores/sessionUiStore';
 import { useAgentsStore } from '@/stores/agentsStore';
 import { useExpertGroupsStore } from '@/stores/expertGroupsStore';
 import { avatarGlyph, entityAvatarSx } from '@/lib/cardSx';
+import { isFileArtifact } from '@/lib/fileArtifact';
 import { digestProcess, formatDuration } from '@/lib/processDigest';
 import { toast } from '@/components/Toast';
 import { CreateTaskDialog } from '@/components/chat/CreateTaskDialog';
 import { CronTaskCard } from '@/components/chat/CronTaskCard';
 import { MarkdownView } from '@/components/MarkdownView';
 import { ArtifactRenderer } from '@/components/ArtifactRenderer';
+import { MessageArtifacts } from '@/components/artifacts/MessageArtifacts';
 import { ProcessView } from './ProcessView';
 import { ToolCallCard } from './ToolCallCard';
 import { PlanCard } from './PlanCard';
@@ -149,7 +151,13 @@ export function AssistantMessage({ message, agentId, sessionId }: AssistantMessa
     setManualProcessOpen(!processOpen);
   };
   /** 开关行文案：结束后是「已完成」——过程在这里是回溯入口，不是进行中的事 */
-  const processStateText = isStreaming ? '已处理' : message.aborted ? '已停止' : '已完成';
+  const processStateText = isStreaming
+    ? '已处理'
+    : message.aborted
+      ? '已停止'
+      : message.interrupted
+        ? '已中断'
+        : '已完成';
 
   const saveAsMemory = async () => {
     if (saving) return;
@@ -307,6 +315,22 @@ export function AssistantMessage({ message, agentId, sessionId }: AssistantMessa
         </Typography>
       )}
 
+      {/* 引擎侧中断：必须常驻可见，而不是一闪而过的 toast。
+          2026-09-29 事故里这一轮被渲染成「已完成」，用户是先发现文件不存在、
+          再回头怀疑过程序出问题——异常信号不能藏在折叠区里。这里刻意**不**依赖
+          `hasProcess`：没有过程行、甚至没有任何正文的残缺轮次同样要标出来。 */}
+      {message.interrupted && (
+        <Typography
+          sx={{
+            fontSize: 12,
+            color: 'warning.main',
+            mt: 0.5,
+          }}
+        >
+          本次响应被引擎中断，结果可能不完整，建议重发或核验产物
+        </Typography>
+      )}
+
       {isStreaming && (
         <Box
           sx={{
@@ -324,9 +348,17 @@ export function AssistantMessage({ message, agentId, sessionId }: AssistantMessa
         </Box>
       )}
 
-      {message.artifacts?.map((a) => (
-        <ArtifactRenderer key={a.id} artifact={a} />
-      ))}
+      {/* 富产物内联渲染（围栏提取：代码 / Mermaid / HTML / 文档）。
+          文件产物**不走这里**——它们在正文之后以卡片列出（见 MessageArtifacts），
+          否则一个 30KB 的 HTML 会把对话流顶掉好几屏。 */}
+      {message.artifacts
+        ?.filter((a) => !isFileArtifact(a))
+        .map((a) => (
+          <ArtifactRenderer key={a.id} artifact={a} />
+        ))}
+
+      {/* 文件产物卡片区（工具真正写到磁盘的文件）：点卡片 → 右侧面板预览 */}
+      <MessageArtifacts sessionId={sessionId} message={message} />
 
       {/* 计划清单（FR-1.5）：与正文同级而非藏在「过程」折叠里——
           它是本轮唯一需要用户做决定的东西，收起来等于没给入口 */}
