@@ -1,21 +1,39 @@
-import { useEffect, useState } from 'react';
-import { Box, Button, Typography } from '@mui/material';
+import { useState } from 'react';
+import { useEffect } from 'react';
+import { Box, Button, Dialog, DialogActions, DialogContent, DialogContentText, DialogTitle, Typography } from '@mui/material';
 import { useNavigate } from 'react-router-dom';
 import { SettingsCard, SettingsRow } from '@/components/settings/SettingsPrimitives';
 import { SyncStatusIndicator } from '@/components/SyncStatusBadge';
 import { toast } from '@/components/Toast';
 import { ROUTES } from '@/lib/constants';
 import { platform } from '@/platform';
+import {
+  ARCHIVE_LOCAL_KEYS,
+  archiveFileName,
+  applyArchive,
+  buildArchive,
+  parseArchive,
+} from '@/lib/accountArchive';
+import type { SessionMeta, SessionEvent } from '@/types/event';
+import { getEventStore } from '@/events';
+import { isEventStreamSession, toMetaFromEntity, useSessionsStore } from '@/stores/sessionsStore';
 import { useSettingsUiStore } from '@/stores/settingsUiStore';
 import { getSyncRuntime, useSyncStatus } from '@/sync';
-import type { AccountSession } from '@/sync';
+import type { AccountSession, CloudExport } from '@/sync';
 
 /**
- * 设置弹窗「账户」分区（批次 4，FR-10）。
+ * 设置弹窗「账户」分区（批次 4，FR-10）+ 数据主权（批次 6a，FR-10.6）。
  *
- * 只做三件事：展示登录态（邮箱 / 设备 ID / 上次同步 / 状态徽章）、未登录入口、
+ * 账户分区只做三件事：展示登录态（邮箱 / 设备 ID / 上次同步 / 状态徽章）、未登录入口、
  * 登出。**不手调 `engine.stop()`**——登出经 `account.logout()` → `account.subscribe`
  * 已在 runtime 内触发 `engine.stop()` + `resetSyncStatus()`，手调会漏 reset 或重复。
+ *
+ * 数据主权（批次 6a）：
+ * - 「导出全部数据」：组装本地持久化 + 会话（meta + 事件流）+ 云端副本（若已登录）为
+ *   自描述归档，写盘到 `~/.nanowork/`（Electron）或浏览器下载（Web）。**未登录仍可点**
+ *   ——只导本地段（D1 / D4）。
+ * - 「彻底删除账户」：二次确认后调 `account.deleteAccount()`（清云端 + 清本地会话，
+ *   但**不删本机业务数据**，D8）。未登录禁用。
  *
  * runtime 一律用 `getSyncRuntime()` 读取（不在这里 `initSyncRuntime`）：App 启动块
  * 已负责初始化单例；设置分区只消费，避免页面一多就各造一份 runtime。
@@ -40,6 +58,8 @@ export function AccountSection() {
   );
   const [deviceId, setDeviceId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /** 二次确认对话框（删账户） */
+  const [confirmOpen, setConfirmOpen] = useState(false);
 
   // 账户变更（登录 / 登出 / 轮换）驱动本分区重渲染
   useEffect(() => {
@@ -79,6 +99,140 @@ export function AccountSection() {
       // 只调 logout：engine.stop() + resetSyncStatus() 由 account.subscribe 触发。
       await runtime.account.logout();
       toast.success('已退出登录');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /**
+   * 导出全部数据（批次 6a，D1）。
+   *
+   * 组装顺序：本地持久化快照（可枚举的 `ARCHIVE_LOCAL_KEYS`）+ 本机会话
+   * （meta 经 `toMetaFromEntity` 派生、事件流按会话从 `getEventStore` 读取）
+   * + 云端副本（已登录时 `runtime.client.exportAccount()`，失败降级为 null）。
+   *
+   * 落盘走既有平台能力 `platform.writeTextFile`：Electron 解析相对路径到
+   * `~/.nanowork/`、Web 降级为浏览器下载（D6），无需新增、无需动 `electron/`。
+   */
+  const exportData = async (): Promise<void> => {
+    if (busy || !runtime) return;
+    setBusy(true);
+    try {
+      const local: Record<string, string> = {};
+      for (const key of ARCHIVE_LOCAL_KEYS) {
+        const raw = await platform.storage.get<string>(key);
+        if (typeof raw === 'string' && raw.length > 0) local[key] = raw;
+      }
+
+      // 会话 meta + 事件流（本地事实源）
+      const sessionsState = useSessionsStore.getState();
+      const metas: SessionMeta[] = sessionsState.sessions.map((s) =>
+        toMetaFromEntity(s as unknown as Record<string, unknown>),
+      );
+      const sessionEvents: Record<string, SessionEvent[]> = {};
+      for (const s of sessionsState.sessions) {
+        if (!isEventStreamSession(s)) continue;
+        const shard = s.streamWorkdir ?? s.workdir;
+        if (!shard) continue;
+        const evs = await getEventStore().readEvents(s.id, shard);
+        if (evs.length > 0) sessionEvents[s.id] = evs;
+      }
+
+      // 云端副本：已登录才取；失败不阻断本地导出
+      let cloud: CloudExport | null = null;
+      if (runtime.client && session) {
+        try {
+          cloud = await runtime.client.exportAccount();
+        } catch {
+          cloud = null;
+        }
+      }
+
+      const archive = buildArchive(
+        { local, sessionsMeta: metas, sessionEvents, cloud },
+        {
+          exportedAt: new Date().toISOString(),
+          deviceId,
+          account: session ? { userId: session.userId, email: session.email } : null,
+        },
+      );
+
+      await platform.writeTextFile(archiveFileName(new Date()), JSON.stringify(archive, null, 2));
+      toast.success(
+        session
+          ? '已导出本机与云端数据（归档含 API 密钥，请妥善保管）'
+          : '已导出本机数据（未登录，仅本机；归档含 API 密钥，请妥善保管）',
+      );
+    } catch (err) {
+      toast.error(`导出失败：${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /**
+   * 导入归档（批次 6a 补齐 D7 已知偏差）。
+   *
+   * 流程：`platform.pickFile()` 弹窗选 .json 并读回内容 → `parseArchive` 校验/解析
+   * → `applyArchive` 只写回 `local` 段（逐 key 调 `platform.storage.set`）。**未登录亦可点**
+   * ——导入只动本机 `local` 段，不触云端、不回写会话/云端段。
+   *
+   * 失败分支：
+   * - 用户取消（`pickFile` 返 null）：静默返回；
+   * - `ArchiveParseError`（非归档 / 版本过高 / 段非法）：友好提示，不让整页崩。
+   */
+  const importData = async (): Promise<void> => {
+    if (busy || !runtime) return;
+    setBusy(true);
+    try {
+      const picked = await platform.pickFile();
+      if (!picked) return; // 用户取消或环境不支持
+
+      let arch;
+      try {
+        arch = parseArchive(picked.content);
+      } catch (err) {
+        // parseArchive 抛 ArchiveParseError（非归档 / 版本过高 / 段非法）：友好提示，不崩页。
+        toast.error(`归档无法解析：${err instanceof Error ? err.message : String(err)}`);
+        return;
+      }
+
+      const report = await applyArchive(arch, (key, value) =>
+        platform.storage.set(key, value),
+      );
+      toast.success(
+        report.written > 0
+          ? `已导入 ${report.written} 项本机数据（重启后生效）`
+          : '归档中无可导入的本机数据',
+      );
+    } catch (err) {
+      toast.error(`导入失败：${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const requestDelete = (): void => {
+    if (!session) return;
+    setConfirmOpen(true);
+  };
+
+  /**
+   * 确认删除账户（批次 6a，D8）。
+   *
+   * 成功后 `account.deleteAccount()` 内部已走与 `logout()` 相同的本地收口
+   * （清会话 + 通知订阅者）；服务端失败时它**抛错且不清本地会话**，这里据此提示，
+   * 把「云端还在、本机以为删了」的最坏状态挡在门外。
+   */
+  const confirmDelete = async (): Promise<void> => {
+    if (!runtime) return;
+    setConfirmOpen(false);
+    setBusy(true);
+    try {
+      await runtime.account.deleteAccount();
+      toast.success('云端账户已删除，本机数据保留');
+      closeSettings();
+    } catch (err) {
+      toast.error(`删除失败：${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setBusy(false);
     }
@@ -153,33 +307,51 @@ export function AccountSection() {
         )}
       </SettingsCard>
 
-      {/*
-        ⚠️ 批次 6：以下两项属数据主权（FR-10.6），本批不实现。
-          - 「导出全部数据」→ 见 batch-6 规格
-          - 「彻底删除账户」→ 见 batch-6 规格
-        位置在此占位，避免批次 6 重新设计版面。
-      */}
       <SettingsCard
-        title="数据主权（即将开放）"
-        description="以下能力属数据主权范畴，将在后续版本提供；此处先占位，避免届时重新设计版面。"
+        title="数据主权"
+        description="导出你在 nanoWork 中的全部数据；或彻底删除云端账户与同步数据。归档含 API 密钥等凭据，请妥善保管。"
       >
         <SettingsRow
           label="导出全部数据"
-          hint="导出你在 nanoWork 中的全部数据（JSON 归档）"
+          hint="导出本地全部数据 + 云端副本（JSON 归档）。未登录时仅导本地数据"
           control={
-            <Button variant="outlined" disabled sx={{ textTransform: 'none', fontSize: 13 }}>
+            <Button
+              variant="outlined"
+              disabled={busy}
+              onClick={() => void exportData()}
+              sx={{ textTransform: 'none', fontSize: 13 }}
+            >
               导出全部数据
             </Button>
           }
         />
         <SettingsRow
-          label="彻底删除账户"
-          hint="删除云端账户与全部同步数据，不可撤销"
+          label="导入归档"
+          hint="从 .json 归档恢复本机数据（仅 local 段，未登录也可导入）"
           control={
             <Button
               variant="outlined"
+              disabled={busy}
+              onClick={() => void importData()}
+              sx={{ textTransform: 'none', fontSize: 13 }}
+            >
+              导入归档
+            </Button>
+          }
+        />
+        <SettingsRow
+          label="彻底删除账户"
+          hint={
+            session
+              ? '删除云端账户与全部同步数据（不可撤销）；本机数据保留'
+              : '未登录无需删除云端账户'
+          }
+          control={
+            <Button
               color="error"
-              disabled
+              variant="outlined"
+              disabled={busy || !session}
+              onClick={requestDelete}
               sx={{ textTransform: 'none', fontSize: 13 }}
             >
               彻底删除账户
@@ -187,6 +359,29 @@ export function AccountSection() {
           }
         />
       </SettingsCard>
+
+      <Dialog open={confirmOpen} onClose={() => setConfirmOpen(false)}>
+        <DialogTitle>彻底删除账户？</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            此操作将删除云端账户及全部同步数据（Agent、会话、设置等），不可撤销。
+            本机业务数据不会被删除。请输入确认以继续。
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setConfirmOpen(false)} sx={{ textTransform: 'none' }}>
+            取消
+          </Button>
+          <Button
+            color="error"
+            variant="contained"
+            onClick={() => void confirmDelete()}
+            sx={{ textTransform: 'none' }}
+          >
+            确认删除
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }

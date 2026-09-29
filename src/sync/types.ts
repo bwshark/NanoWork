@@ -171,3 +171,61 @@ export const SYNC_ACCOUNT_STORAGE_KEY = 'nanowork.sync.account';
  * 正确性：水位归 0 → 全量重推 → 服务端按事件 id 去重。
  */
 export const EVENT_CURSOR_STORAGE_KEY = 'nanowork.sync.eventCursor';
+
+/**
+ * `conflict` 被覆盖方快照的存储 key（批次 6a）。
+ *
+ * 与 `EVENT_CURSOR_STORAGE_KEY` 的分工：水位是「已上行的最大 seq」，快照是
+ * 「服务端判定的冲突（服务端当前落库的那一条）」。二者都是**账户态**、都走
+ * `platform.storage`、值都是字符串 JSON。差别在落点：本 key 已登记
+ * `electron/storageRoutes.ts` 的 `RUNTIME_FILES`（`<userData>/sync-conflicts.json`，
+ * json 紧凑）——这样它会进 `knownRouteFiles()`，被「清空数据」一并带走；而
+ * `nanowork.sync.eventCursor` 走未登记兜底（`misc/`），`storage:clear` 带不走。
+ *
+ * ## 值形状：`Record<userId, PushConflict[]>`（按账户分片）
+ *
+ * 快照必须**按账户隔离**：runtime 全应用复用**同一个** `SyncEngine` 实例，若值不带
+ * 账户维度，用户 A 登出、B 登录后 B 的界面会显示 A 的冲突（批次 5 水位踩过的同一个坑）。
+ * 故外层键是 `userId`，引擎只读写**当前账户**那一份分片（读-改-写，其它账户分片原样保留）。
+ *
+ * 单账户分片上限沿用引擎的 `MAX_CONFLICT_SNAPSHOTS`（50）。未登录（无 `getSession`）
+ * 时 scope 归一到 `''`，与事件水位的归一规则一致。
+ */
+export const CONFLICT_SNAPSHOT_STORAGE_KEY = 'nanowork.sync.conflict';
+
+/**
+ * 云端导出的账户元信息（`GET /api/account/export` 的 `user` 段，批次 6a）。
+ *
+ * 形状以服务端 `cloud/app/account/routes.py` 为唯一权威（与本文件其它响应类型同一条
+ * 纪律：文档与代码不一致时以代码为准）。
+ */
+export interface CloudExportUser {
+  id: string;
+  email: string;
+  createdAt: string;
+}
+
+/** 云端导出的一条实体（`items[]` 元素）。 */
+export interface CloudExportItem {
+  collection: string;
+  entity: Record<string, unknown>;
+}
+
+/**
+ * `GET /api/account/export` 的响应（批次 6a，数据主权 FR-10.6）。
+ *
+ * **新端点、不复用 `pull?since=0`**：导出是用户可见契约，需要稳定的 `format` /
+ * `formatVersion` 与账户元信息（`email` / `createdAt`），而 `pull` 两样都没有，
+ * 且其形状会随同步协议演进。
+ *
+ * `events` 是服务端 `sync_events` 的原始行数组：导出必须**无损**，故不套同步层的
+ * 领域类型（那里会对字段做裁剪），原样透传。
+ */
+export interface CloudExport {
+  format: string;
+  formatVersion: number;
+  exportedAt: string;
+  user: CloudExportUser;
+  items: CloudExportItem[];
+  events: Array<Record<string, unknown>>;
+}

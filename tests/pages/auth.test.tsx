@@ -41,6 +41,7 @@ const mocks = vi.hoisted(() => {
     logout: async () => {
       box.session = null;
     },
+    deleteAccount: async () => undefined,
     subscribe: () => () => undefined,
   };
   return { box, account, runtime: { account } as unknown };
@@ -58,7 +59,7 @@ vi.mock('@/sync', async (importOriginal) => {
 import { AuthPage } from '@/pages/auth/AuthPage';
 import { AccountSection } from '@/components/settings/sections/AccountSection';
 import { ROUTES } from '@/lib/constants';
-import { buttonByText, flush, mount, setInputValue, unmount } from '../helpers/reactMount';
+import { buttonByText, click, dialogRoot, flush, mount, setInputValue, unmount } from '../helpers/reactMount';
 
 /** 登录页挂在 Router 下（用 `useNavigate`）；`/chat` 用探针路由断言导航发生。 */
 function renderAuth(): HTMLDivElement {
@@ -132,13 +133,45 @@ describe('AccountSection', () => {
     expect(buttonByText(host, '登录 / 注册')).toBeTruthy();
   });
 
-  it('含批次 6 的数据主权占位，且均 disabled', () => {
+  it('J-F1：登录后「导出全部数据」与「彻底删除账户」均可点', () => {
+    mocks.box.session = { userId: 'u1', email: 'a@b.com', access: 'a', refresh: 'r' };
     const host = renderAccount();
     const exportBtn = buttonByText(host, '导出全部数据');
     const deleteBtn = buttonByText(host, '彻底删除账户');
-    expect(exportBtn, '「导出全部数据」占位缺失').toBeTruthy();
-    expect(deleteBtn, '「彻底删除账户」占位缺失').toBeTruthy();
-    expect(exportBtn!.disabled).toBe(true);
+    expect(exportBtn, '「导出全部数据」按钮缺失').toBeTruthy();
+    expect(deleteBtn, '「彻底删除账户」按钮缺失').toBeTruthy();
+    expect(exportBtn!.disabled).toBe(false);
+    expect(deleteBtn!.disabled).toBe(false);
+  });
+
+  it('J-F2：未登录时「导出全部数据」可点、「彻底删除账户」禁用', () => {
+    const host = renderAccount();
+    const exportBtn = buttonByText(host, '导出全部数据');
+    const deleteBtn = buttonByText(host, '彻底删除账户');
+    expect(exportBtn, '「导出全部数据」按钮缺失').toBeTruthy();
+    expect(deleteBtn, '「彻底删除账户」按钮缺失').toBeTruthy();
+    expect(exportBtn!.disabled).toBe(false);
     expect(deleteBtn!.disabled).toBe(true);
+  });
+
+  it('J-F3：彻底删除账户必须经过二次确认', async () => {
+    mocks.box.session = { userId: 'u1', email: 'a@b.com', access: 'a', refresh: 'r' };
+    const delSpy = vi.spyOn(mocks.account, 'deleteAccount');
+    const host = renderAccount();
+
+    const deleteBtn = buttonByText(host, '彻底删除账户');
+    expect(deleteBtn, '「彻底删除账户」按钮缺失').toBeTruthy();
+
+    // 点「彻底删除账户」只应弹出确认框，不能直接删
+    click(deleteBtn);
+    await flush();
+    expect(delSpy, '未二次确认就调用了删除').not.toHaveBeenCalled();
+    const confirmBtn = buttonByText(dialogRoot(), '确认删除');
+    expect(confirmBtn, '二次确认对话框未出现').toBeTruthy();
+
+    // 点「确认删除」才真正调用一次
+    click(confirmBtn);
+    await flush();
+    expect(delSpy).toHaveBeenCalledTimes(1);
   });
 });

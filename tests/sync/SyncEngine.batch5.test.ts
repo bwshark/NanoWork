@@ -68,6 +68,7 @@ function authAccount(): SyncAccount {
     },
     refresh: async () => false,
     logout: async () => undefined,
+    deleteAccount: async () => undefined,
     subscribe: () => () => undefined,
   };
 }
@@ -295,6 +296,7 @@ function switchableAccount(initialUserId: string): {
     },
     refresh: async () => false,
     logout: async () => undefined,
+    deleteAccount: async () => undefined,
     subscribe: () => () => undefined,
   };
   return { account, setUser: (next) => (userId = next) };

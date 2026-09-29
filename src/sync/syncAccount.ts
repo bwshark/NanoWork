@@ -46,6 +46,13 @@ export interface SyncAccount {
   refresh(): Promise<boolean>;
   /** 登出：尽力通知服务端，随后清空本地会话（网络失败也清） */
   logout(): Promise<void>;
+  /**
+   * 彻底删除云端账户及其全部同步数据（批次 6a，数据主权 FR-10.6）。
+   *
+   * 成功后走**与 `logout()` 相同**的本地收口（清本地会话 + 通知订阅者）；
+   * 服务端失败时**抛错且不清本地会话**（否则会出现「云端还在、本机以为删了」的最坏状态）。
+   */
+  deleteAccount(): Promise<void>;
   /** 订阅会话变更（登录 / 登出 / 轮换）；返回取消订阅函数 */
   subscribe(cb: (session: AccountSession | null) => void): () => void;
 }
@@ -182,6 +189,16 @@ function createSyncAccount(
     return (await response.json()) as T;
   };
 
+  /**
+   * 发一次 DELETE（无请求体）。删除是破坏性操作，**不复用 `post`**：后者恒带
+   * `Content-Type` 与 JSON 体，语义不符。
+   */
+  const del = (path: string, token?: string): Promise<Response> => {
+    const headers: Record<string, string> = { Accept: 'application/json' };
+    if (token) headers.Authorization = `Bearer ${token}`;
+    return fetchImpl(`${baseUrl}${path}`, { method: 'DELETE', headers });
+  };
+
   const toSession = (pair: TokenPairBody): AccountSession => ({
     userId: pair.user.id,
     email: pair.user.email,
@@ -248,6 +265,21 @@ function createSyncAccount(
       } catch {
         // 网络失败不阻断本地登出：票据终会过期，本地先断干净更重要
       }
+      await apply(null);
+    },
+
+    async deleteAccount(): Promise<void> {
+      const access = session?.access;
+      if (!access) {
+        // 未登录没有云端账户可删：明确报错，而不是静默成功骗过调用方
+        throw new SyncAuthError(401, '未登录，无法删除账户');
+      }
+      const response = await del('/api/account', access);
+      if (!response.ok) {
+        // 失败**不清会话**：让用户看到失败、保留本地状态，稍后重试
+        throw new SyncAuthError(response.status, `/api/account 失败：HTTP ${response.status}`);
+      }
+      // 成功：与 logout 相同的本地收口（清会话 + 通知订阅者）
       await apply(null);
     },
 

@@ -82,9 +82,9 @@
 
 | V1 未落项 | 耦合点 | 处置 |
 |---|---|---|
-| **FR-7.2 产物独立索引**（M4，P0） | 见 §2.2 欠账 #4：产物按内容寻址同步，而落点（②`artifacts.json`）会随 FR-7.2 重做 | 先做 FR-7.2，或把**产物同步**从 M6 划出 |
+| **FR-7.2 产物独立索引**（M4，P0） | 见 §2.2 欠账 #4：产物按内容寻址同步，而落点（②`artifacts.json`）会随 FR-7.2 重做 | ✅ **2026-09-28 批次 6a 裁决：划出本期**——产物内容寻址同步**不在本期（M6）验收范围**，待 FR-7.2（M4/P0）落地后另立；本批（6a）四项目标（数据主权 / 墓碑 GC / `conflict` 快照 / 删账户清服务端）**均不含产物**。`artifacts.json` 落点仍随 FR-7.2 重做（见 `docs/batch-6-data-sovereignty-spec.md` §0 勘误「F 划出」） |
 | **FR-3.8 版本隔离缓存**（M3，P1） | FR-3.9 要同步「会话版本引用集」，而引用集的前提是 `cache/<market>/<plugin>/<version>/` 已存在 | 先做 FR-3.8，或把**扩展态 / 版本引用同步**从 M6 划出（会话可同步字段白名单后补一项不痛） |
-| **FR-7.3 文件回滚**（M4，P0） | 与 §2.2 欠账 #3 的 C 类文件型资产（快照 / 内容寻址 / 段落级 LWW）是同一条技术线 | 不阻塞开工，但 C 类资产的**设计**要先对齐 FR-7.3 的落点，否则两套寻址方案并存 |
+| **FR-7.3 文件回滚**（M4，P0） | 与 §2.2 欠账 #3 的 C 类文件型资产（快照 / 内容寻址 / 段落级 LWW）是同一条技术线 | ✅ **2026-09-28 批次 6a 裁决：C 类文件型资产归 批次 6b**——本批（6a）只做 A 数据主权 / B 墓碑 GC / C `conflict` 快照持久化 / D 删账户清服务端；记忆段落级 LWW / 身份文件 / 提示词覆盖随 **批次 6b**（依赖 FR-7.3 落点，先对齐再开工，否则两套寻址方案并存） |
 
 其余 M3/M4/M5 余项（市场注册表、RRULE、结果回推 IM、IM 会话归档、用量报表等）与同步无交集，可并行。
 
@@ -275,6 +275,10 @@ LWW 直接比较客户端 `updatedAt` 会被「系统时间快的设备」永久
 而服务端只能按时间近似（30 天足够覆盖）。**V1 的墓碑永不清**（已就绪），M6 起才引入 GC。
 清理前必须确认 pull 的 `since` 水位机制不会让「刚 GC 的墓碑」被重新拉取为空。
 
+> ✅ **2026-09-28 批次 6a 落地**：墓碑 GC **已由服务端实现**——`cloud/app/sync/retention.py` 纯函数 `expired_tombstone_ids`（按 `deleted_at` 判超期）+ `routes.py::push` 在 `_next_seq` 之后、实体循环之前调用 `_gc_tombstones`：① 判据用 **`deleted_at`（= 删除方写入的 `deletedAt`）** 而非 `updated_at`，与客户端 30 天上行窗**同源同钟**，避开 §六 #10 的两难；② `collection == 'sessionMeta'` 的超期墓碑**级联删**对应 `sync_events`（批次 5 遗留 #7 一并闭合）。客户端 30 天上行窗此前已在批次 4/5 落（§六 #10）。
+>
+> **已知限制（写进规格，不掩盖）**：设备离线**超过 30 天**且持有该条目**存活**副本时，上线 push 会因「服务端已无该行可比对」而**复活**该条目。彻底解决需 per-device 水位或永久墓碑，**留后续批次**（m6 原设计即「30 天近似」）。判据：`cloud/tests/test_sync_gc.py` J-B1~B5（含 J-B5「GC 后 pull 不复活已删条目」）。
+
 ### 5.5 会话事件流：`streamWorkdir` 是**本机事实**，跨设备必须重定向
 
 会话元数据里 `workdir`（语义工作空间，是**声明**）同步；`streamWorkdir`（落盘分片，是**事实**）**不同步**
@@ -333,8 +337,8 @@ MVP 的裁决：**按事件 `id`（uuid）去重 + 按 `seq` 排序**，撞号�
 > #14（token 走 `platform.storage` 字符串 JSON 而**非**保险库；CORS 补 `5176`）、
 > #15（双实例夹具已落地）**均已按各自裁决实现**，逐条理由与可证伪判据见
 > `docs/batch-4-entity-wiring-spec.md`。
-> ⚠️ **#13 是唯一打折的**：`conflict` 时被覆盖方的 `client` 快照**仍在引擎内存**（上限 50，重启即失），
-> 持久化未做——「不做手工合并 UI」≠ 丢弃，语义满足；但「跨重启可追查」尚未兑现，**留待后续批次**。
+> ✅ **#13 已于 2026-09-28 批次 6a 闭合**：`conflict` 时被覆盖方的 `client` 快照**已持久化**——值形状 `Record<userId, PushConflict[]>`（按账户分片，每账户上限沿用 `MAX_CONFLICT_SNAPSHOTS` = 50）落 `nanowork.sync.conflict` → `<userData>/sync-conflicts.json`（json、紧凑，登记于 `electron/storageRoutes.ts` 的 `RUNTIME_FILES` → 进 `knownRouteFiles()`，「清空数据」能带走）。`rememberConflict()` 后**读-改-写**只替换本账户分片；`ensureAccountState()` 载入当前账户分片；`resetAccountScopedState()` **只清内存、不删盘**（切回原账户可恢复）。重启后快照仍在（见 `tests/sync/conflictSnapshot.test.ts` J-E1~E3）。「不做手工合并 UI」≠ 丢弃，语义满足。
+> （原「⚠️ 唯一打折」标记撤销：批次 5 的账户分片教训已在本批落实——值形状带 `userId` 维度，不会「A 登出、B 登录看到 A 的冲突」。）
 
 ---
 
@@ -352,7 +356,9 @@ MVP 的裁决：**按事件 `id`（uuid）去重 + 按 `seq` 排序**，撞号�
 | **3 前置欠账** | ✅ **已落（2026-09-28）**：渠道凭据保险库化（`src/lib/channelSecrets.ts` + `electron/channelSecretInjection.ts` + `channelsStore` 接线 + 启动期/UI 判据）+ 排除表落地（早于本批，2026-09-25）+ wire 泄漏收口（§2.2 #6，同日）。（**会话删除墓碑与平台边界均已提前闭合**，见 §2.2 #1 / #5；C 类资产与产物寻址随批次 6） | ✅ `channels.json` 与同步负载里**都没有** secret（保险库不可用时退化为明文，此时 `partialize` **不**剔除、界面标注「未加密」——fail-open 以保渠道可用）；**CI wire 检查的基线清零**（新增越界会被拦）；**动了 `electron/` → 已重建 `main.cjs` + `preload.cjs`**（门禁：三套 tsc + vitest **106 文件 1717 用例** + `vite build` 全绿） |
 | **4 实体接线 + 认证 UI** | ✅ **已落（2026-09-28）**：`syncRegistry` 由「只注册 `agents`」补齐到 **8 个 collection**（`agents` + `expertGroups` / `tasks` / `mcp` / `channels` / `skillOverrides` / `settings` / `sessionMeta`；**`sessionEvents` 刻意不注册**，归批次 5）；新增 `src/sync/runtime.ts`（装配 + store 订阅 + suppress/missed + 账户生命周期，单例 `getSyncRuntime` / `initSyncRuntime` / `disposeSyncRuntime`）；`settingsStore` 加 `syncMeta` 兄弟切片（v11→v12）、`sessionsStore` 加 `sessionTombstones` + 远端落地入口；`src/pages/auth/`（登录/注册，**不引入全局守卫**——local-first）+ `SyncStatusBadge`（落**侧栏底部**而非 TitleBar：后者只在 Electron 渲染）+ 设置页「账户」分区（导出/删账户为禁用占位，归批次 6）；**另修掉 §3.1 落地备注第 5 条的阻断缺口**（服务端 payload 归一 + 同版幂等跳过）。落地规格：`docs/batch-4-entity-wiring-spec.md` | ✅ 门禁①（**已自动化**，非只有真机）：`tests/sync/integration.twoDevice.test.ts` 双实例夹具（真 spawn `uvicorn` + 两套 store 快照/换装）→ A↔B **双向一致**（Agent 与会话元数据），空闲同步 `status === 'synced'` 且 `conflict === 0`；✅ 门禁②：离线改 → 联网 → **并集不丢**（`aX` 与 `aY` 同时在两端），同实体并发改按 LWW 收敛且条目不消失；**17 项变异全部「改坏 → 变红 → 还原」**——其中**新增的服务端变异**（去掉归一）会让门禁①②的 `synced` 断言**双双变红**，证明该修复是必需的而非装饰 |
 | **5 事件流追加同步** | ✅ **已落（2026-09-28）**：新增事件通道 `src/sync/eventStream.ts`（`SessionEventStreamAdapter`，**可选注入**引擎，未注入即纯 LWW 引擎；**刻意不进 `syncRegistry`**——`SyncCollectionSpec.read()` 是同步的而 `EventStore` 全异步）；服务端新增 `sync_events` 表（唯一键 `(user_id, session_id, event_id)`）**与 `sync_items` 共享同一条每用户 `server_seq` 游标**（`_next_seq` 取两表 max + 1），**扩展**既有 push/pull 各加 `events` 字段（**不新增端点**，避免第二条游标）；事件**不归一** `updatedAt`（不可改写的事实）；跨设备**只落接收方本机分片**（`streamWorkdir ?? workdir`，未知/已墓碑会话**跳过**）；去重/排序 `dedupe(by id) → sort(by (seq asc, id asc))`；**push 游标 = 每会话「推送确认水位」且只在 push 成功后推进**（pull 落地**不**推进，否则并发下丢推）。**另修两条账户态缺陷**（README §九 #23：pull 游标与事件推送水位此前**换号既不重置也不隔离** → B 登录后拉不到自己账户里的数据）。落地规格 `docs/batch-5-session-events-spec.md`；m6 文档自身三处勘误见文首横幅与 README §九 #22 | ✅ 门禁②（**事件层**验收）：`tests/sync/sessionEventsSync.test.ts` 双实例夹具**每设备一份 `EventStore`**（原夹具只有一套共享 → 不隔离就「A 追加即 B 可见」，用例失去鉴别力）→ 断网追加 N 条 → 联网后对端拿到全部 N 条且 `(seq,id)` 顺序正确；两端并发追加**并集不丢**（断言**原始数组长度 + 每 id 出现次数恰为 1**，**不用** `Set.size`——`Set` 会把重复折叠成假绿）。**QA 独立变异 15 项，13 项击穿**；另 2 项「打了不红」由 QA 自己揪出并补强：① 门禁② 原判据用 `new Set(ids).size === 6`（去重删掉后 `rawLength` 6→9 而 `unique` 仍 6，**断言照样绿**）→ 改为原始长度 + 出现次数；② 服务端「跨两表共享游标」**零覆盖**（`_next_seq` 退化成 items-only 仍全绿）→ 补 `test_pure_event_batches_advance_shared_cursor`。门禁实测：三套 tsc 0 错 + `vitest --maxWorkers=3` **118 文件 / 1787 用例** + `vite build` + 服务端 `ruff`/`pytest` **35 例**全绿；**未动 `electron/`**（水位走 `platform.storage` 未登记 key 的 `misc` 兜底）→ 无需重建产物。**已知限制**：并发分支在**投影层只显示一条链**（见 §5.5 勘误 ②）；远端事件落地后**不**重对齐本机记录器（同源限制） |
-| **6 其余欠账 + 数据主权** | C 类文件型资产（记忆段落级 LWW / 身份文件 / 提示词覆盖）；产物内容寻址；导出全部数据 / 删账户；墓碑 GC 30 天 | 段落级 LWW 有单测；导出产物可重新导入；GC 后 pull 不复活已删条目 |
+| **6a 数据主权 + 墓碑 GC + `conflict` 快照** | ✅ **已落（2026-09-28）**：A 数据主权（客户端 `buildArchive` 自描述无损归档 + 云端副本 `GET /api/account/export`）；B 墓碑 GC 30 天（服务端 `push` 入口顺路，按 `deleted_at` 判超期 + 级联删 `sessionMeta` 墓碑对应的 `sync_events`）；C `conflict` 被覆盖方快照持久化（按账户分片落 `nanowork.sync.conflict` → `sync-conflicts.json`，重启可追查）；D 删账户 `DELETE /api/account` 事务清 `sync_items`+`sync_events`+`refresh_tokens`+`users`，客户端走与 `logout()` 同路径收口。落地规格 `docs/batch-6-data-sovereignty-spec.md`。**导入 UI 已于 2026-09-29 补齐**（新增 `platform.pickFile` 平台能力 + `AccountSection`「导入归档」按钮：`pickFile` → `parseArchive` → `applyArchive` 只写回 `local` 段，未登录亦可点）→ **原 D7「不做导入 UI」已知偏差已闭合**（见规格 §6 #1） | ✅ 判据全绿：`tests/lib/accountArchive.test.ts`（J-C1~C4 往返无损/非法拒/版本拒/云缺省）、`cloud/tests/test_account.py`（J-A1~A4 导出确定+按用户隔离+删账户清全）、`cloud/tests/test_sync_gc.py`（J-B1~B5 GC 级联+按用户隔离+GC 后 pull 不复活）、`tests/sync/conflictSnapshot.test.ts`（J-E1~E3 重启仍在/账户隔离/上限）、`tests/sync/syncAccount.test.ts`（J-D1/D2）、`tests/pages/auth.test.tsx`（J-F1~F3 二次确认）、`tests/components/accountImport.test.tsx`（J-D7-1~4：合法归档逐 key 写回 / 取消不写 / 非法归档不写且不崩 / 未登录可点）；**门禁实测**：三套 tsc 0 + `vitest --maxWorkers=3` **120 文件 / 1806 用例**（其中 7 例为 `tests/electron/workspaceMemoryStore.test.ts` 的 `afterEach` 钩子超时，属全量并发资源饥饿的环境 flake，单跑 17/17 通过，与本批无关）+ `vite build` 24s 全绿 + 服务端 `ruff`/`pytest` **44 例**全绿；**动了 `electron/`（D12）→ 已重建 `main.cjs` + `preload.cjs`**（新鲜度判据通过，`sync-conflicts` 已打进产物） |
+| **6b C 类文件型资产** | ⏭ **待开工**：记忆段落级 LWW / 身份文件 / 提示词覆盖（§2.2 欠账 #3，依赖 FR-7.3 落点，先对齐再开工） | 段落级 LWW 有单测；导入/导出含工作区记忆与提示词模板 |
+| **产物内容寻址同步** | ⛔ **划出本期（2026-09-28 批次 6a 裁决）**：依赖尚未开工的 FR-7.2（M4/P0），落点 ②`artifacts.json` 会随它重做，现在做会白做（见 §2.3 处置 + `docs/batch-6-data-sovereignty-spec.md` §0「F 划出」） | （不在本期验收范围） |
 
 **门禁（沿用并扩展 `nanowork-dev-gate`）**：
 

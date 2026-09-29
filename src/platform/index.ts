@@ -4,6 +4,7 @@ import {
   WebStorageAdapter,
   WebWorkspaceMemoryFiles,
   webPickDirectory,
+  webPickFile,
   webWriteTextFile,
 } from './storage.web';
 import { ElectronStorageAdapter, ElectronWorkspaceMemoryFiles } from './storage.electron';
@@ -73,6 +74,12 @@ export const platform: PlatformAdapter = {
       return window.electronAPI!.pickDirectory();
     }
     return webPickDirectory();
+  },
+  pickFile: () => {
+    if (isElectron() && storage instanceof ElectronStorageAdapter) {
+      return window.electronAPI!.pickFile();
+    }
+    return webPickFile();
   },
   getNanobotChannels: () => {
     if (isElectron() && window.electronAPI) {

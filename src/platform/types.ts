@@ -515,6 +515,15 @@ export interface PlatformAdapter {
    */
   pickDirectory(): Promise<string | null>;
   /**
+   * 弹出系统文件选择器并读取所选文本文件内容。
+   * - electron：原生 dialog.showOpenDialog（openFile）+ 主进程 fs.readFileSync 读 UTF-8；
+   * - web：动态 `<input type=file accept=".json">` + `file.text()`。
+   * 返回 `{ name, content }`（Web 端无路径，只有文件名）；用户取消或环境不支持返回 null。
+   * 注意：Electron 端返回的是**文件内容**而非路径——与 `pickDirectory` 只返路径不同，
+   * 因为 Web 端拿不到本地路径，调用方统一消费内容即可。
+   */
+  pickFile(): Promise<{ name: string; content: string } | null>;
+  /**
    * 将 MCP Server 片段同步进 nanobot 运行时（合并写入 config.json 的
    * `tools.mcpServers`，并按需重启 serve 子进程）。
    * - electron：主进程完成合并与按需重启，返回结果；
@@ -1078,6 +1087,11 @@ export interface ElectronAPI {
   onSkillsChanged(cb: () => void): () => void;
   /** 原生目录选择对话框，返回所选目录绝对路径；取消返回 null */
   pickDirectory(): Promise<string | null>;
+  /**
+   * 原生文件选择对话框：弹窗选 .json 归档并读回内容。
+   * 返回 `{ name, content }`（content 为 UTF-8 文本）；用户取消返回 null。
+   */
+  pickFile(): Promise<{ name: string; content: string } | null>;
   // —— 插件包生命周期（FR-3.4）——
   // 只做文件系统那一半（扫 / 装 / 卸）：激活状态由引擎的 /v1/plugins 给出，
   // 不走 IPC——引擎才是权威，客户端不复刻指纹哈希。

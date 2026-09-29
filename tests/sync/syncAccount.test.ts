@@ -196,6 +196,54 @@ describe('syncAccount：登出', () => {
   });
 });
 
+describe('syncAccount：彻底删除账户（批次 6a，J-D1 / J-D2）', () => {
+  it('J-D1：204 → 清空本地会话、订阅者收到 null，且请求是 DELETE /api/account 带 Bearer', async () => {
+    const { impl, calls } = makeFetch((url) =>
+      url.endsWith('/api/account') ? jsonResponse(null, 204) : jsonResponse(pair()),
+    );
+    const account = createMemorySyncAccount({ baseUrl: 'http://x', fetchImpl: impl });
+    await account.login('u@example.com', 'pw');
+
+    const seen: Array<AccountSession | null> = [];
+    account.subscribe((s) => seen.push(s));
+
+    await account.deleteAccount();
+
+    const del = calls.find((c) => c.url === 'http://x/api/account');
+    expect(del, '未向 /api/account 发起请求').toBeTruthy();
+    // 断言方法与路径：只断言「发了一次请求」的话，把方法写成 POST 也照样绿
+    expect(del!.init.method).toBe('DELETE');
+    expect((del!.init.headers as Record<string, string>).Authorization).toBe('Bearer a1');
+
+    expect(account.getSession()).toBeNull();
+    expect(account.isAuthenticated()).toBe(false);
+    expect(seen.at(-1)).toBeNull();
+  });
+
+  it('J-D2：服务端 500 → 抛错且不清本地会话', async () => {
+    const { impl } = makeFetch((url) =>
+      url.endsWith('/api/account') ? jsonResponse({ detail: 'boom' }, 500) : jsonResponse(pair()),
+    );
+    const account = createMemorySyncAccount({ baseUrl: 'http://x', fetchImpl: impl });
+    await account.login('u@example.com', 'pw');
+
+    const error = await account.deleteAccount().catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(SyncAuthError);
+    expect((error as SyncAuthError).status).toBe(500);
+    // 云端还在 → 本机必须保留会话（最坏状态是「云端还在、本机以为删了」）
+    expect(account.getSession()).toEqual(SESSION);
+    expect(account.isAuthenticated()).toBe(true);
+  });
+
+  it('未登录时 deleteAccount 抛错且不发请求', async () => {
+    const { impl, calls } = makeFetch(() => jsonResponse(pair()));
+    const account = createMemorySyncAccount({ baseUrl: 'http://x', fetchImpl: impl });
+
+    await expect(account.deleteAccount()).rejects.toBeInstanceOf(SyncAuthError);
+    expect(calls).toHaveLength(0);
+  });
+});
+
 describe('syncAccount：持久化（字符串 JSON）', () => {
   it('storage 变体：setSession 写入字符串 JSON', async () => {
     const setSpy = vi.spyOn(platform.storage, 'set');

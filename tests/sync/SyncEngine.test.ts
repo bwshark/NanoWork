@@ -62,6 +62,7 @@ function authAccount(authed: boolean): SyncAccount {
     },
     refresh: async () => false,
     logout: async () => undefined,
+    deleteAccount: async () => undefined,
     subscribe: () => () => undefined,
   };
 }

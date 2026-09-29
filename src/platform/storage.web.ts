@@ -190,6 +190,51 @@ export async function webPickDirectory(): Promise<string | null> {
   }
 }
 
+/**
+ * Web 端文件选择：动态插入 `<input type=file accept=".json">`，监听 change，
+ * 用 `file.text()` 读取 UTF-8 内容并返回 `{ name, content }`。
+ * 用户取消 / 不支持时返回 null（UI 侧保持原状）。
+ *
+ * 与 `webPickDirectory`（File System Access API，只返目录名）不同：这里必须拿内容，
+ * 因为导入归档需要文本；Web 端拿不到本地路径，故返回形态是内容而非路径。
+ */
+export async function webPickFile(): Promise<{ name: string; content: string } | null> {
+  if (typeof document === 'undefined') return null;
+  return new Promise((resolve) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json,application/json';
+    input.style.display = 'none';
+    const cleanup = (): void => {
+      input.remove();
+    };
+    input.addEventListener('change', async () => {
+      const file = input.files?.[0];
+      if (!file) {
+        cleanup();
+        resolve(null);
+        return;
+      }
+      try {
+        const content = await file.text();
+        resolve({ name: file.name, content });
+      } catch {
+        // 读取失败按取消处理
+        resolve(null);
+      } finally {
+        cleanup();
+      }
+    });
+    // 用户关闭系统文件对话框不会触发 change：用取消钩子兜底返回 null
+    input.addEventListener('cancel', () => {
+      cleanup();
+      resolve(null);
+    });
+    document.body.appendChild(input);
+    input.click();
+  });
+}
+
 export async function webWriteTextFile(path: string, content: string): Promise<void> {
   const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
   const url = URL.createObjectURL(blob);

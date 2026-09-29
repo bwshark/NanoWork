@@ -29,6 +29,7 @@ from app.auth.models import User
 from app.db import get_session
 from app.sync.merger import VersionStamp, compare_versions, resolve
 from app.sync.models import SyncEvent, SyncItem
+from app.sync.retention import expired_tombstone_ids
 from app.timeutil import coerce_utc, iso_z, utc_now
 
 router = APIRouter(prefix="/api/sync", tags=["sync"])
@@ -145,6 +146,47 @@ def _find_event(session: Session, user_id: str, session_id: str, event_id: str) 
     ).first()
 
 
+def _gc_tombstones(session: Session, user_id: str, now: datetime) -> None:
+    """本账户超期墓碑的顺路清理（D10：挂在 push 入口，**不新增端点**）。
+
+    两点值得说明：
+
+    1. **按 `deleted_at` 判超期、不按 `updated_at`**（规格 D9 / m6 §六 #10）——
+       详见 `retention.py` 的文件头。
+    2. **级联**：超期的 `collection == 'sessionMeta'` 墓碑，其 `entity_id` 就是
+       `sessionId` → 一并删该会话的**全部** `sync_events`（D11，批次 5 遗留的
+       「已删会话事件永不清理」）。未超期的已删会话事件最多残留 30 天，对端拉到
+       会被「未知 / 已墓碑会话跳过」挡掉（批次 5 已落），无害。
+
+    只删本账户的行（`user_id` 过滤），**不触碰其他用户**（判据 J-B4）。这里**不
+    commit**：由 `push` 末尾统一提交，使「清理 + 本次写入」落在同一事务里。
+    """
+    rows = session.exec(
+        select(SyncItem).where(
+            SyncItem.user_id == user_id,
+            SyncItem.deleted_at.is_not(None),  # type: ignore[union-attr]
+        )
+    ).all()
+    expired_ids = set(expired_tombstone_ids(rows, now=now))
+    if not expired_ids:
+        return
+
+    for row in rows:
+        if row.entity_id not in expired_ids:
+            continue
+        if row.collection == "sessionMeta":
+            # `entity_id` 即 `sessionId`：级联清掉该会话的全部事件
+            event_rows = session.exec(
+                select(SyncEvent).where(
+                    SyncEvent.user_id == user_id,
+                    SyncEvent.session_id == row.entity_id,
+                )
+            ).all()
+            for event_row in event_rows:
+                session.delete(event_row)
+        session.delete(row)
+
+
 @router.post("/push", response_model=PushResponse)
 def push(
     body: PushRequest,
@@ -155,6 +197,11 @@ def push(
     conflicts: list[Conflict] = []
     accepted_events = 0
     seq = _next_seq(session, user.id)
+
+    # 顺路 GC（D10）：在**实体循环之前**清理本账户的超期墓碑（幂等）。
+    # 必须在 `_next_seq` **之后**调用：`_next_seq` 取的是本轮写入前的最大 seq，
+    # 若先删了那条 seq 最大的墓碑行，本轮的新写入会拿到更小的号 → 对端游标可能漏拉。
+    _gc_tombstones(session, user.id, utc_now())
 
     for change in body.changes:
         entity = change.entity

@@ -20,8 +20,9 @@
  */
 
 import { DEFAULT_SYNC_BASE_URL } from './types';
-import type { PullResponse, PushResponse, SyncChange } from './types';
+import type { CloudExport, PullResponse, PushResponse, SyncChange } from './types';
 import type { SessionEvent } from '@/types/event';
+import { SyncAuthError } from './syncAccount';
 
 export interface SyncClientOptions {
   /** 服务端根地址（缺省 `DEFAULT_SYNC_BASE_URL`） */
@@ -78,6 +79,32 @@ export class SyncClient {
   pull(since: number): Promise<PullResponse> {
     const query = encodeURIComponent(String(since));
     return this.request<PullResponse>('GET', `/api/sync/pull?since=${query}`);
+  }
+
+  /**
+   * 导出云端账户的全部数据（批次 6a，数据主权 FR-10.6）。
+   *
+   * `GET /api/account/export`，带 Bearer。走通用 `request`：与其他同步调用一致，
+   * 401 时先尝试刷新一次再重放。返回体形状见 `types.ts` 的 `CloudExport`。
+   */
+  exportAccount(): Promise<CloudExport> {
+    return this.request<CloudExport>('GET', '/api/account/export');
+  }
+
+  /**
+   * 彻底删除云端账户及其全部同步数据（批次 6a）。
+   *
+   * `DELETE /api/account`，带 Bearer，成功期望 `204`。**刻意不走通用 `request`**：
+   * - 不做 401 → refresh 重试——删除是破坏性操作，spec §2.5 明确把 401/403 视为
+   *   「凭据整体失效」的失败，拿旧 refresh 去换新票再删一次没有意义；
+   * - 失败抛 `SyncAuthError`（与账户模块同款错误类型），**绝不吞错**：调用方据此
+   *   区分「云端已删」与「删除失败、本机必须保留会话」。
+   */
+  async deleteAccount(): Promise<void> {
+    const response = await this.send('DELETE', '/api/account');
+    if (!response.ok) {
+      throw new SyncAuthError(response.status, `DELETE /api/account 失败：HTTP ${response.status}`);
+    }
   }
 
   /**

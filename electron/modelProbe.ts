@@ -33,6 +33,21 @@ export const DEFAULT_MODEL_PROBE_TIMEOUT_MS = 10_000;
 export type ProbeKeySource = 'request' | 'config' | null;
 
 /**
+ * 跨 realm 安全的 AbortError 判定——**只看 `name`，不看 `instanceof`**。
+ *
+ * `controller.abort()` / `AbortSignal.timeout()` 抛出的是 **DOMException**，它**不是**
+ * `Error` 的实例；jsdom 与 Node 又各持一份 `Error`，`instanceof` 跨 realm 恒为 false。
+ * 原写法 `err instanceof Error && err.name === 'AbortError'` 因此在**真实 Electron
+ * 主进程里也永远为 false**——超时被误报成「连接失败」，用户据此去查网线/防火墙/端口，
+ * 全在错误的方向上（本文件文首强调过 401 与「连不上」易混淆，这是同一类问题）。
+ */
+function isAbortError(err: unknown): boolean {
+  return (
+    typeof err === 'object' && err !== null && (err as { name?: unknown }).name === 'AbortError'
+  );
+}
+
+/**
  * 把一次失败的 HTTP 响应翻成给人看的文案。
  *
  * **401/403 必须单独措辞**：它证明「网络通的、上游答了话」，只是不认这次请求的凭据。
@@ -125,7 +140,7 @@ export async function probeModelEndpoint(args: {
       : [];
     return { ok: true, models, latencyMs, keySource: args.keySource };
   } catch (err) {
-    const aborted = err instanceof Error && err.name === 'AbortError';
+    const aborted = isAbortError(err);
     const ms = args.timeoutMs ?? DEFAULT_MODEL_PROBE_TIMEOUT_MS;
     return {
       ok: false,

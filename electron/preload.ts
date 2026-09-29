@@ -109,6 +109,7 @@ const api: ElectronAPI = {
   loadUserSkills: (workspace?: string) =>
     ipcRenderer.invoke('skills:loadUser', workspace),
   pickDirectory: () => ipcRenderer.invoke('dialog:pickDirectory'),
+  pickFile: () => ipcRenderer.invoke('dialog:pickFile'),
   // —— 插件包生命周期（FR-3.4）：只做文件系统那一半 ——
   // 激活状态走引擎的 /v1/plugins，不经 IPC——引擎才是权威。
   pluginsScan: () => ipcRenderer.invoke('plugins:scan'),

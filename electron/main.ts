@@ -1,5 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, Notification, safeStorage, shell } from 'electron';
-import { dirname, extname, join } from 'node:path';
+import { basename, dirname, extname, join } from 'node:path';
 import { promises as fs, existsSync, readFileSync, watch as fsWatch, type Dirent } from 'node:fs';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createConnection } from 'node:net';
@@ -2571,6 +2571,28 @@ ipcMain.handle('dialog:pickDirectory', async () => {
   });
   if (result.canceled || result.filePaths.length === 0) return null;
   return result.filePaths[0];
+});
+
+// —— 文件选择桥（数据主权导入，批次 6a 补齐 D7）——
+// 弹出系统原生文件选择对话框，限定 .json 归档；用户取消返回 null，
+// 否则用 fs.readFileSync 读 UTF-8 文本，连文件名一起回传（渲染层消费内容，不碰路径）。
+ipcMain.handle('dialog:pickFile', async () => {
+  const win = BrowserWindow.getFocusedWindow() ?? mainWindow;
+  const result = await dialog.showOpenDialog(win!, {
+    properties: ['openFile'],
+    filters: [{ name: 'nanoWork 归档', extensions: ['json'] }],
+    title: '选择归档文件',
+  });
+  if (result.canceled || result.filePaths.length === 0) return null;
+  const filePath = result.filePaths[0];
+  try {
+    const content = readFileSync(filePath, 'utf-8');
+    return { name: basename(filePath), content };
+  } catch (err) {
+    // 读取出错（非 UTF-8 / 权限）按取消处理：渲染层无法区分，统一静默不导入。
+    console.error('[dialog:pickFile] 读取归档失败：', err);
+    return null;
+  }
 });
 
 // ——— 系统 shell 桥（侧边栏「在资源管理器打开」）———

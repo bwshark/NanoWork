@@ -7,6 +7,7 @@ import {
   STORAGE_KEYS,
   USER_MEMORY_KEY,
 } from '../src/lib/constants';
+import { CONFLICT_SNAPSHOT_STORAGE_KEY } from '../src/sync/types';
 
 /**
  * 渲染层持久化 key → 磁盘落点 的路由表（Electron 主进程专用）。
@@ -138,6 +139,11 @@ const RUNTIME_FILES: Record<string, FileEntry> = {
   // 拒绝 + 主进程 handler 报错），而失败是静默的，只是「重启后记不住上次会话」。
   [STORAGE_KEYS.activeSession]: { rel: 'active-session.txt', format: 'text' },
   [DEVICE_ID_STORAGE_KEY]: { rel: 'device-id.txt', format: 'text' },
+  // 冲突被覆盖方快照（批次 6a）：值是**字符串 JSON**（`Record<userId, PushConflict[]>`），
+  // 故 json 路由是对的（参看上面 `activeSession` 的教训：裸文本落到 json 路由会写盘失败）。
+  // 登记的意义：它会进 `knownRouteFiles()` → 「清空数据」能带走它；未登记则会掉进
+  // `misc/` 兜底，清空数据时留下一个过期的冲突快照文件。
+  [CONFLICT_SNAPSHOT_STORAGE_KEY]: { rel: 'sync-conflicts.json', format: 'json' },
 };
 
 /** ① 产品自有目录 `~/.nanowork/` */

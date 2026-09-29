@@ -38,7 +38,7 @@ import { platform } from '@/platform';
 import type { SyncTombstones } from '@/types';
 import type { SessionEvent } from '@/types/event';
 import { setSyncStatus } from './useSyncStatus';
-import { EVENT_CURSOR_STORAGE_KEY, TOMBSTONE_MAX_AGE_MS } from './types';
+import { EVENT_CURSOR_STORAGE_KEY, CONFLICT_SNAPSHOT_STORAGE_KEY, TOMBSTONE_MAX_AGE_MS } from './types';
 import type { SyncClient } from './SyncClient';
 import type { SessionEventStreamAdapter } from './eventStream';
 import type { SyncAccount } from './syncAccount';
@@ -161,6 +161,25 @@ function withinTombstoneWindow(deletedAt: string, nowMs: number): boolean {
   return nowMs - deletedMs <= TOMBSTONE_MAX_AGE_MS;
 }
 
+/**
+ * 运行时收窄：把从存储读回的任意值校验成 `PushConflict`。
+ *
+ * 落盘分片是**脏值可达**的（手改文件 / 版本回退 / 半截写入），若不校验就把
+ * `forScope` 原样灌进内存，下游 `getConflicts()` 的消费方（UI/徽章）会拿到形状
+ * 不对的条目。宁可少一条快照，也不要把坏数据当冲突展示。
+ */
+function isPushConflict(value: unknown): value is PushConflict {
+  if (typeof value !== 'object' || value === null) return false;
+  const c = value as Record<string, unknown>;
+  return (
+    typeof c.collection === 'string' &&
+    typeof c.id === 'string' &&
+    typeof c.server === 'object' &&
+    c.server !== null &&
+    typeof c.resolution === 'string'
+  );
+}
+
 /** 在存活数组 + 墓碑表里按键找本地版本；墓碑表也不命中则返回 `null`。 */
 function findLocal(
   entities: SyncEntityRecord[],
@@ -226,7 +245,16 @@ export class SyncEngine {
   private onlineHandler: (() => void) | null = null;
   private started = false;
   private running = false;
+  /**
+   * **当前账户**的冲突快照（被服务端版本覆盖的条目），上限 `MAX_CONFLICT_SNAPSHOTS`（50）。
+   *
+   * 与 `eventSeqs` 同属「账户态」：只承载 `activeAccountScope` 对应账户的分片，账户变化时
+   * 被清空并按新账户从 `platform.storage` 重载（见 `resetAccountScopedState` /
+   * `loadConflictsIfNeeded`）。持久化形状 `Record<userId, PushConflict[]>` 见 `types.ts`。
+   */
   private readonly conflicts: PushConflict[] = [];
+  /** 内存 `conflicts` 是否已从 `platform.storage` 载入（惰性；账户变化时强制重载） */
+  private conflictsLoaded = false;
 
   constructor(options: SyncEngineOptions) {
     this.client = options.client;
@@ -304,11 +332,16 @@ export class SyncEngine {
    *
    * **账户生命周期入口调用**（`runtime.onSession` 在登录 / 登出 / 换号时）；引擎自身在每次
    * 同步前也会经 `ensureAccountState` 检测换号（双保险，见其说明）。
+   *
+   * 冲突快照（`conflicts`）走同一套生命周期：这里**只清内存、不删盘上分片**——其它账户的
+   * 快照要靠分片恢复，切回原账户时仍可看到自己的冲突记录（与事件水位同一条裁决）。
    */
   resetAccountScopedState(): void {
     this.activeAccountScope = this.eventCursorScope();
     this.eventSeqs.clear();
     this.eventCursorsLoaded = false;
+    this.conflicts.length = 0;
+    this.conflictsLoaded = false;
     this.cursorStore.set(this.initialCursor);
   }
 
@@ -339,7 +372,12 @@ export class SyncEngine {
     }, this.debounceMs);
   }
 
-  /** 已记录的内存冲突快照（副本）。持久化归批次 4。 */
+  /**
+   * 已记录的内存冲突快照（副本）。
+   *
+   * 内容由两部分合成：本次进程内新记的冲突 + 启动时从 `platform.storage` 按当前账户
+   * 分片载入的历史冲突（载入在 `syncNow` 走 `ensureAccountState` 时惰性发生）。
+   */
   getConflicts(): PushConflict[] {
     return [...this.conflicts];
   }
@@ -409,6 +447,8 @@ export class SyncEngine {
     try {
       // 账户态（pull 游标 + 事件水位）按账户隔离：换号即复位，避免沿用上一账户的游标 / 水位
       this.ensureAccountState();
+      // 冲突快照按账户隔离：首次（或换号后）进入本账户时从 `platform.storage` 载入其分片
+      await this.loadConflictsIfNeeded();
       // 事件通道：首次（或换号后）同步时从 `platform.storage` 载入本账户水位（纯 LWW 跳过）
       if (this.eventStream) await this.ensureEventCursorsLoaded();
 
@@ -444,7 +484,7 @@ export class SyncEngine {
         }
 
         for (const conflict of response.conflicts) {
-          this.rememberConflict(conflict);
+          await this.rememberConflict(conflict);
           // 冲突：服务端版本更新 → 按落地语义应用服务端这份（§六 #9 / #13）
           this.applyChange({ collection: conflict.collection, entity: conflict.server });
         }
@@ -656,10 +696,69 @@ export class SyncEngine {
     return false;
   }
 
-  private rememberConflict(conflict: PushConflict): void {
+  /**
+   * 记一条冲突快照：更新内存（上限 50）后**读-改-写**落盘（只替换当前账户分片）。
+   *
+   * 落盘失败不影响同步正确性（快照是「可追查」的附加物，不是协议事实），故吞掉异常。
+   * 上限在内存与盘上同源：`persistConflicts` 写的就是裁剪后的 `this.conflicts`。
+   */
+  private async rememberConflict(conflict: PushConflict): Promise<void> {
     this.conflicts.push(conflict);
     if (this.conflicts.length > MAX_CONFLICT_SNAPSHOTS) {
       this.conflicts.splice(0, this.conflicts.length - MAX_CONFLICT_SNAPSHOTS);
+    }
+    await this.persistConflicts();
+  }
+
+  /**
+   * 载入**当前账户**的冲突快照（惰性；账户变化时 `resetAccountScopedState` 已把
+   * `conflictsLoaded` 复位，故这里天然是「按账户各载入一次」）。
+   *
+   * 存储形状：`Record<userId, PushConflict[]>`（见 `types.ts`）——只读**当前账户**那一份
+   * 分片到内存 `conflicts`。坏值 / 存储不可用 → 当作空（与事件水位同一条容错）。
+   */
+  private async loadConflictsIfNeeded(): Promise<void> {
+    if (this.conflictsLoaded) return;
+    this.conflictsLoaded = true;
+    const scope = this.eventCursorScope();
+    try {
+      const raw = await platform.storage.get<string>(CONFLICT_SNAPSHOT_STORAGE_KEY);
+      if (typeof raw !== 'string' || raw.trim() === '') return;
+      const parsed: unknown = JSON.parse(raw);
+      if (typeof parsed !== 'object' || parsed === null) return;
+      const forScope = (parsed as Record<string, unknown>)[scope];
+      if (!Array.isArray(forScope)) return;
+      this.conflicts.length = 0;
+      for (const item of forScope) {
+        if (this.conflicts.length >= MAX_CONFLICT_SNAPSHOTS) break;
+        if (isPushConflict(item)) this.conflicts.push(item);
+      }
+    } catch {
+      // 坏值 / 存储不可用：当作空快照——丢了不影响同步正确性
+    }
+  }
+
+  /**
+   * 把**当前账户**的冲突快照写回 `platform.storage`
+   * （`Record<userId, PushConflict[]>` 的字符串 JSON）。
+   *
+   * **读-改-写**：先读回整个分片表，**只替换本账户那一份**再写回——其它账户的分片
+   * 原样保留。与事件水位同一条理由：整体覆盖会让账户来回切换时互相清掉对方的快照。
+   */
+  private async persistConflicts(): Promise<void> {
+    const scope = this.eventCursorScope();
+    const current = this.conflicts.slice();
+    try {
+      const raw = await platform.storage.get<string>(CONFLICT_SNAPSHOT_STORAGE_KEY);
+      let all: Record<string, unknown> = {};
+      if (typeof raw === 'string' && raw.trim() !== '') {
+        const parsed: unknown = JSON.parse(raw);
+        if (typeof parsed === 'object' && parsed !== null) all = parsed as Record<string, unknown>;
+      }
+      all[scope] = current;
+      await platform.storage.set(CONFLICT_SNAPSHOT_STORAGE_KEY, JSON.stringify(all));
+    } catch {
+      // 丢了不影响同步正确性（见 types.ts `CONFLICT_SNAPSHOT_STORAGE_KEY` 的说明）
     }
   }
 }
