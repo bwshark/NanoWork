@@ -8,6 +8,7 @@ function reset() {
     artifactPanelSessionId: null,
     artifactPanelTabs: [],
     artifactPanelActiveTabId: null,
+    artifactPanelFullscreen: false,
     searchSessionId: null,
     searchQuery: '',
     searchMatchCount: 0,
@@ -60,7 +61,7 @@ describe('sessionUiStore: 产物标签页', () => {
     const ui = () => useSessionUiStore.getState();
     ui().openArtifactPanel('s1', { previewId: 'a1' });
     ui().openArtifactPanel('s1', { previewId: 'a2' });
-    expect(ui().artifactPanelTabs).toEqual(['a1', 'a2']);
+    expect(ui().artifactPanelTabs.map((t) => t.id)).toEqual(['a1', 'a2']);
     expect(ui().artifactPanelActiveTabId).toBe('a2');
   });
 
@@ -69,7 +70,7 @@ describe('sessionUiStore: 产物标签页', () => {
     ui().openArtifactPanel('s1', { previewId: 'a1' });
     ui().openArtifactPanel('s1', { previewId: 'a2' });
     ui().openArtifactPanel('s1', { previewId: 'a1' });
-    expect(ui().artifactPanelTabs).toEqual(['a1', 'a2']);
+    expect(ui().artifactPanelTabs.map((t) => t.id)).toEqual(['a1', 'a2']);
     expect(ui().artifactPanelActiveTabId).toBe('a1');
   });
 
@@ -77,7 +78,7 @@ describe('sessionUiStore: 产物标签页', () => {
     const ui = () => useSessionUiStore.getState();
     ui().openArtifactPanel('s1', { previewId: 'a1' });
     ui().openArtifactPanel('s2', { previewId: 'b1' });
-    expect(ui().artifactPanelTabs).toEqual(['b1']);
+    expect(ui().artifactPanelTabs.map((t) => t.id)).toEqual(['b1']);
     expect(ui().artifactPanelActiveTabId).toBe('b1');
   });
 
@@ -86,7 +87,7 @@ describe('sessionUiStore: 产物标签页', () => {
     ui().openArtifactPanel('s1', { previewId: 'a1' });
     ui().openArtifactPanel('s1', { view: 'changes' });
     expect(ui().artifactPanelActiveTabId).toBeNull();
-    expect(ui().artifactPanelTabs).toEqual(['a1']);
+    expect(ui().artifactPanelTabs.map((t) => t.id)).toEqual(['a1']);
     expect(ui().artifactPanelView).toBe('changes');
   });
 
@@ -99,7 +100,7 @@ describe('sessionUiStore: 产物标签页', () => {
 
     ui().activateArtifactTab('never-opened');
     expect(ui().artifactPanelActiveTabId).toBe('a1');
-    expect(ui().artifactPanelTabs).toEqual(['a1', 'a2']);
+    expect(ui().artifactPanelTabs.map((t) => t.id)).toEqual(['a1', 'a2']);
   });
 
   it('关闭非当前标签不影响激活项', () => {
@@ -110,7 +111,7 @@ describe('sessionUiStore: 产物标签页', () => {
     ui().activateArtifactTab('a2');
 
     ui().closeArtifactTab('a1');
-    expect(ui().artifactPanelTabs).toEqual(['a2', 'a3']);
+    expect(ui().artifactPanelTabs.map((t) => t.id)).toEqual(['a2', 'a3']);
     expect(ui().artifactPanelActiveTabId).toBe('a2');
   });
 
@@ -131,7 +132,7 @@ describe('sessionUiStore: 产物标签页', () => {
     expect(ui().artifactPanelActiveTabId).toBe('a3');
 
     ui().closeArtifactTab('a3');
-    expect(ui().artifactPanelTabs).toEqual([]);
+    expect(ui().artifactPanelTabs.map((t) => t.id)).toEqual([]);
     expect(ui().artifactPanelActiveTabId).toBeNull();
   });
 
@@ -143,7 +144,7 @@ describe('sessionUiStore: 产物标签页', () => {
 
     ui().toggleArtifactPanel('s1');
     expect(ui().artifactPanelOpen).toBe(true);
-    expect(ui().artifactPanelTabs).toEqual(['a1']);
+    expect(ui().artifactPanelTabs.map((t) => t.id)).toEqual(['a1']);
     expect(ui().artifactPanelActiveTabId).toBe('a1');
   });
 
@@ -152,7 +153,7 @@ describe('sessionUiStore: 产物标签页', () => {
     ui().openArtifactPanel('s1', { previewId: 'a1' });
     ui().openArtifactTab('a2');
     ui().closeAllArtifactTabs();
-    expect(ui().artifactPanelTabs).toEqual([]);
+    expect(ui().artifactPanelTabs.map((t) => t.id)).toEqual([]);
     expect(ui().artifactPanelActiveTabId).toBeNull();
   });
 
@@ -161,7 +162,97 @@ describe('sessionUiStore: 产物标签页', () => {
     ui().openArtifactPanel('s1', { previewId: 'a1' });
     ui().showArtifactList();
     expect(ui().artifactPanelActiveTabId).toBeNull();
-    expect(ui().artifactPanelTabs).toEqual(['a1']);
+    expect(ui().artifactPanelTabs.map((t) => t.id)).toEqual(['a1']);
+  });
+});
+
+describe('sessionUiStore: 新建标签页（网页）与全屏', () => {
+  beforeEach(reset);
+
+  it('openWebTab 追加一个空白网页标签并激活，返回其 id', () => {
+    const ui = () => useSessionUiStore.getState();
+    ui().openArtifactPanel('s1', { previewId: 'a1' });
+    const webId = ui().openWebTab();
+
+    const tabs = ui().artifactPanelTabs;
+    expect(tabs.map((t) => t.id)).toEqual(['a1', webId]);
+    expect(tabs[1]).toMatchObject({ kind: 'web', url: '', history: [], cursor: -1 });
+    expect(ui().artifactPanelActiveTabId).toBe(webId);
+  });
+
+  it('navigateWebTab 写入历史；空地址 / 同地址一律忽略', () => {
+    const ui = () => useSessionUiStore.getState();
+    const id = ui().openWebTab();
+
+    ui().navigateWebTab(id, '  http://localhost:5176/  ');
+    ui().navigateWebTab(id, 'https://example.com');
+    ui().navigateWebTab(id, ''); // 空 → 忽略
+    ui().navigateWebTab(id, 'https://example.com'); // 同地址 → 忽略
+
+    expect(ui().artifactPanelTabs[0]).toMatchObject({
+      kind: 'web',
+      url: 'https://example.com',
+      history: ['http://localhost:5176/', 'https://example.com'],
+      cursor: 1,
+    });
+  });
+
+  it('从历史中间提交新地址 → 截断游标之后的记录（浏览器语义）', () => {
+    const ui = () => useSessionUiStore.getState();
+    const id = ui().openWebTab();
+    ui().navigateWebTab(id, 'https://a.com');
+    ui().navigateWebTab(id, 'https://b.com');
+    ui().stepWebTabHistory(id, -1); // 回到 a
+    ui().navigateWebTab(id, 'https://c.com');
+
+    expect(ui().artifactPanelTabs[0]).toMatchObject({
+      url: 'https://c.com',
+      history: ['https://a.com', 'https://c.com'],
+      cursor: 1,
+    });
+  });
+
+  it('stepWebTabHistory 越界不动（栈底 / 栈顶各试一次）', () => {
+    const ui = () => useSessionUiStore.getState();
+    const id = ui().openWebTab();
+    ui().navigateWebTab(id, 'https://a.com');
+
+    ui().stepWebTabHistory(id, -1);
+    expect(ui().artifactPanelTabs[0]).toMatchObject({ url: 'https://a.com', cursor: 0 });
+    ui().stepWebTabHistory(id, 1);
+    expect(ui().artifactPanelTabs[0]).toMatchObject({ url: 'https://a.com', cursor: 0 });
+  });
+
+  it('网页标签与产物标签同栏关闭，邻居顺位对它同样生效', () => {
+    const ui = () => useSessionUiStore.getState();
+    ui().openArtifactPanel('s1', { previewId: 'a1' });
+    const webId = ui().openWebTab();
+
+    ui().closeArtifactTab(webId);
+    expect(ui().artifactPanelTabs.map((t) => t.id)).toEqual(['a1']);
+    expect(ui().artifactPanelActiveTabId).toBe('a1');
+  });
+
+  it('全屏可切换；收起面板会一并退出全屏', () => {
+    const ui = () => useSessionUiStore.getState();
+    ui().openArtifactPanel('s1');
+    expect(ui().artifactPanelFullscreen).toBe(false);
+
+    ui().toggleArtifactPanelFullscreen();
+    expect(ui().artifactPanelFullscreen).toBe(true);
+
+    ui().closeArtifactPanel();
+    expect(ui().artifactPanelFullscreen).toBe(false);
+  });
+
+  it('换会话时网页标签一起重置（地址栏属于这一次浏览）', () => {
+    const ui = () => useSessionUiStore.getState();
+    ui().openArtifactPanel('s1');
+    const webId = ui().openWebTab();
+    ui().navigateWebTab(webId, 'https://a.com');
+
+    ui().openArtifactPanel('s2');
+    expect(ui().artifactPanelTabs).toEqual([]);
   });
 });
 

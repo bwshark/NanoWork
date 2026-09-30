@@ -123,6 +123,27 @@ storage 契约表达不了「一个目录、若干文件」）。Electron 端新
 
 ---
 
+## 4.1 收回：文件被删掉后产物必须跟着消失（2026-09-30 补）
+
+**问题**：产物记录的是「写入时的路径」，而引擎可以在之后把文件删掉。模型写完临时脚本、
+跑完 `delete_file` 自我清理是常见收尾动作（实测于 `%TEMP%/snake-test.js`），但删除信号
+当时**没有接进产物层** → 面板继续列着一张卡片，点「在资源管理器打开」报「路径不存在」。
+内容快照还在（预览看着一切正常），所以用户会坚信「文件明明存在」——这是最容易误判的一类 bug。
+
+**裁决**：把删除当成产物的**收回**，与 `clearSession` 同款语义（摘除 + 写墓碑，删除可跨端传播）。
+
+| 关注点 | 落点 | 说明 |
+|---|---|---|
+| 工具白名单 | `lib/fileArtifact.ts` 的 `DELETE_FILE_TOOLS` | 与 `FILE_WRITE_TOOLS` **分列**：写工具产出、删除工具收回，方向相反，合成一张表会让删除被当成「零产出的写调用」吞掉 |
+| 路径提取 | `lib/fileArtifact.ts` 的 `deletedFilePathFrom(tool, args)` | 非删除工具 / 缺 `path` 返回 `undefined`，调用方据此跳过 |
+| 接线 | `sessionsStore.handleProcessTool`（`phase === 'end'` 分支内） | **收回优先于登记**；先摘消息上的 `artifacts` 引用，再 `removeArtifacts` |
+| 摘除 | `artifactsStore.removeArtifacts(ids)` | 摘 `bySession` 引用 + 摘 `index` + 写 `indexTombstones`；**`bodies` 不清**（同 hash 可能被别的产物引用） |
+
+只认 `phase === 'end'`：失败的删除不能改状态（与写链路同一条纪律）。
+`bodies` 保留还有个附带好处：被删文件的正文快照仍在，用户可以在面板里预览 / 复制回来。
+
+---
+
 ## 5. 判据（可证伪）
 
 | # | 判据 |

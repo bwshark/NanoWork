@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { genId } from '@/lib/id';
 
 /**
  * 会话级辅助功能的 UI 状态（非持久化，仅运行期）。
@@ -20,19 +21,42 @@ export interface ArtifactPanelOpenOptions {
   view?: ArtifactPanelView;
 }
 
+/**
+ * 面板里的一个**标签页**。
+ *
+ * 标签栏是异构的：产物预览（`artifact`）与「+ 新建标签页」开出来的网页（`web`）混排。
+ * 因此标签不能再用裸 id 表达 —— 渲染时得知道该画产物正文还是地址栏。
+ *
+ * 网页标签自带**历史栈**：iframe 的内容窗口跨域，`contentWindow.history` 碰不得，
+ * 后退 / 前进只能自己记（地址栏是唯一的导航入口）。
+ */
+export type ArtifactPanelTab =
+  | { id: string; kind: 'artifact' }
+  | {
+      id: string;
+      kind: 'web';
+      /** 当前地址；空串 = 还没输入（就是那个写着「输入网址」的空白新标签） */
+      url: string;
+      /** 访问过的地址栈（提交新地址时截断游标之后的部分） */
+      history: string[];
+      /** 在 `history` 中的位置；-1 = 栈空 */
+      cursor: number;
+    };
+
 interface SessionUiState {
   /** 右侧产物面板是否展开 */
   artifactPanelOpen: boolean;
   /** 面板当前跟随的会话 id（未展开时为 null） */
   artifactPanelSessionId: string | null;
   /**
-   * 面板内已打开的**产物标签页**（顺序 = 打开顺序，去重）。
+   * 面板内已打开的**标签页**（顺序 = 打开顺序；产物按 id 去重）。
    *
    * 面板不再是「列表 / 预览」二态互斥，而是「常驻标签栏 + 列表」：
-   * 用户可以同时打开多个产物，靠顶部标签栏来回切。
-   * 标签是**会话级**的——换会话时上一会话的产物 id 在新会话里没有任何意义，必须整体重置。
+   * 用户可以同时打开多个产物 / 网页，靠顶部标签栏来回切。
+   * 标签是**会话级**的——换会话时上一会话的产物 id 在新会话里没有任何意义，必须整体重置
+   * （网页标签同样重置：它的地址栏属于这一次浏览）。
    */
-  artifactPanelTabs: string[];
+  artifactPanelTabs: ArtifactPanelTab[];
   /**
    * 当前激活的标签页 id；`null` = 列表视图（概览 + 产物列表）。
    *
@@ -46,16 +70,32 @@ interface SessionUiState {
   /** 再次点击同一会话的按钮则收起；换会话则直接切换 */
   toggleArtifactPanel: (sessionId: string) => void;
   closeArtifactPanel: () => void;
+  /**
+   * 面板是否**全屏**（铺满整个窗口，对话区让位）。
+   *
+   * 只动面板自己的定位（`fixed; inset: 0`），**不卸载**对话区与面板内容：
+   * 换一种布局就重建 DOM 的话，网页标签的 iframe 会白屏重载、产物正文的滚动位置全丢。
+   */
+  artifactPanelFullscreen: boolean;
   /** 打开产物标签：已开则激活，未开则追加到末尾并激活 */
   openArtifactTab: (artifactId: string) => void;
+  /** 「+ 新建标签页」：追加一个空白网页标签并激活，返回新标签 id */
+  openWebTab: () => string;
+  /** 提交网页标签的地址（写进历史栈；空串 / 与当前相同则忽略） */
+  navigateWebTab: (tabId: string, url: string) => void;
+  /** 网页标签后退 / 前进（delta = -1 / +1；越界不动） */
+  stepWebTabHistory: (tabId: string, delta: number) => void;
   /** 切到某个已打开的标签（不在标签栏里则忽略，避免凭空造出标签） */
-  activateArtifactTab: (artifactId: string) => void;
+  activateArtifactTab: (tabId: string) => void;
   /** 关闭标签；关的是当前标签则激活右邻居（无右取左），全关则回列表 */
-  closeArtifactTab: (artifactId: string) => void;
+  closeArtifactTab: (tabId: string) => void;
   /** 关闭全部标签并回到列表视图 */
   closeAllArtifactTabs: () => void;
   /** 回到列表视图（保留已打开的标签，便于再切回去） */
   showArtifactList: () => void;
+  /** 切换全屏（也可显式设值） */
+  toggleArtifactPanelFullscreen: () => void;
+  setArtifactPanelFullscreen: (fullscreen: boolean) => void;
   /** 切换面板列表口径（产物 / 变更） */
   setArtifactPanelView: (view: ArtifactPanelView) => void;
 
@@ -98,6 +138,7 @@ export const useSessionUiStore = create<SessionUiState>()((set, get) => ({
   artifactPanelSessionId: null,
   artifactPanelTabs: [],
   artifactPanelActiveTabId: null,
+  artifactPanelFullscreen: false,
   artifactPanelView: 'all',
 
   openArtifactPanel: (sessionId, opts) => {
@@ -110,7 +151,10 @@ export const useSessionUiStore = create<SessionUiState>()((set, get) => ({
     const id = opts?.previewId;
     // 点卡片（带 previewId）是**追加**语义：连点两张卡片应该得到两个标签，
     // 而不是把上一个顶掉——这正是「同时预览多个产物」的入口
-    const tabs = id && !kept.includes(id) ? [...kept, id] : kept;
+    const tabs: ArtifactPanelTab[] =
+      id !== undefined && !kept.some((t) => t.id === id)
+        ? [...kept, { id, kind: 'artifact' }]
+        : kept;
     set({
       artifactPanelOpen: true,
       artifactPanelSessionId: sessionId,
@@ -125,7 +169,8 @@ export const useSessionUiStore = create<SessionUiState>()((set, get) => ({
     const { artifactPanelOpen, artifactPanelSessionId } = get();
     // 同一会话再点一次 = 收起；不同会话则直接切过去（保持展开）
     if (artifactPanelOpen && artifactPanelSessionId === sessionId) {
-      set({ artifactPanelOpen: false });
+      // 收起时一并退出全屏：否则下次打开会毫无征兆地铺满整个窗口
+      set({ artifactPanelOpen: false, artifactPanelFullscreen: false });
       return;
     }
     // 展开（或切到另一个会话）：同会话续用标签，换会话整体重置
@@ -143,40 +188,79 @@ export const useSessionUiStore = create<SessionUiState>()((set, get) => ({
     });
   },
 
-  closeArtifactPanel: () => set({ artifactPanelOpen: false }),
+  closeArtifactPanel: () =>
+    set({ artifactPanelOpen: false, artifactPanelFullscreen: false }),
 
   openArtifactTab: (artifactId) => {
     const { artifactPanelTabs } = get();
     set({
-      artifactPanelTabs: artifactPanelTabs.includes(artifactId)
+      artifactPanelTabs: artifactPanelTabs.some((t) => t.id === artifactId)
         ? artifactPanelTabs
-        : [...artifactPanelTabs, artifactId],
+        : [...artifactPanelTabs, { id: artifactId, kind: 'artifact' }],
       artifactPanelActiveTabId: artifactId,
     });
   },
 
+  openWebTab: () => {
+    const id = `web-${genId()}`;
+    set((s) => ({
+      artifactPanelTabs: [
+        ...s.artifactPanelTabs,
+        { id, kind: 'web', url: '', history: [], cursor: -1 },
+      ],
+      artifactPanelActiveTabId: id,
+    }));
+    return id;
+  },
+
+  navigateWebTab: (tabId, url) =>
+    set((s) => ({
+      artifactPanelTabs: s.artifactPanelTabs.map((t) => {
+        if (t.id !== tabId || t.kind !== 'web') return t;
+        const next = url.trim();
+        if (next === '' || next === t.url) return t;
+        // 从历史中间提交新地址 = 开新分支：游标之后的记录丢弃（与浏览器一致）
+        const history = [...t.history.slice(0, t.cursor + 1), next];
+        return { ...t, url: next, history, cursor: history.length - 1 };
+      }),
+    })),
+
+  stepWebTabHistory: (tabId, delta) =>
+    set((s) => ({
+      artifactPanelTabs: s.artifactPanelTabs.map((t) => {
+        if (t.id !== tabId || t.kind !== 'web') return t;
+        const cursor = t.cursor + delta;
+        if (cursor < 0 || cursor >= t.history.length) return t;
+        return { ...t, cursor, url: t.history[cursor] };
+      }),
+    })),
+
   activateArtifactTab: (artifactId) => {
-    if (!get().artifactPanelTabs.includes(artifactId)) return;
+    if (!get().artifactPanelTabs.some((t) => t.id === artifactId)) return;
     set({ artifactPanelActiveTabId: artifactId });
   },
 
   closeArtifactTab: (artifactId) => {
     const { artifactPanelTabs, artifactPanelActiveTabId } = get();
-    const index = artifactPanelTabs.indexOf(artifactId);
+    const index = artifactPanelTabs.findIndex((t) => t.id === artifactId);
     if (index < 0) return;
-    const tabs = artifactPanelTabs.filter((id) => id !== artifactId);
+    const tabs = artifactPanelTabs.filter((t) => t.id !== artifactId);
     // 关的不是当前标签 → 当前标签不受影响；关的是当前标签 → 让位给右邻居（按下标对齐
     // 过滤后的数组），没有右邻居就取左邻居，一个不剩则回到列表
+    const neighbor = tabs[index] ?? tabs[index - 1] ?? null;
     const nextActive =
-      artifactPanelActiveTabId === artifactId
-        ? (tabs[index] ?? tabs[index - 1] ?? null)
-        : artifactPanelActiveTabId;
+      artifactPanelActiveTabId === artifactId ? (neighbor?.id ?? null) : artifactPanelActiveTabId;
     set({ artifactPanelTabs: tabs, artifactPanelActiveTabId: nextActive });
   },
 
   closeAllArtifactTabs: () => set({ artifactPanelTabs: [], artifactPanelActiveTabId: null }),
 
   showArtifactList: () => set({ artifactPanelActiveTabId: null }),
+
+  toggleArtifactPanelFullscreen: () =>
+    set((s) => ({ artifactPanelFullscreen: !s.artifactPanelFullscreen })),
+
+  setArtifactPanelFullscreen: (fullscreen) => set({ artifactPanelFullscreen: fullscreen }),
 
   setArtifactPanelView: (view) => set({ artifactPanelView: view }),
 

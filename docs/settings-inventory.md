@@ -22,7 +22,7 @@
 | ① | `~/.nanowork/`（用户资产） | `settings.json`、`MEMORY.md`、`memory/<ws>.md`、`SOUL/IDENTITY/USER.md`、`prompts/`、`plugins/` | 渲染层 store → 主进程按 key 路由成文件 | **可备份、可手工编辑**；「清空数据」不带走 |
 | ② | `<userData>/`（运行时） | 会话事件流 `projects/<slug>/<id>.jsonl`、索引、文件备份、回收站 | 主进程 | 数据而非配置 |
 | ③ | 引擎配置目录 | `nanowork.config.json`（网关 bin / host / port）、`config.json`（channels / mcpServers / skills 覆盖 / 定时任务） | 客户端同步写入 + 用户可直接改 | **引擎是权威**，客户端只推片段 |
-| ④ | 进程内 / 运行期 | `sessionUiStore`（产物面板开关 + **已打开的产物标签**、搜索）、`settingsUiStore`（设置弹窗开关与分区） | 渲染层 | 刷新即丢，刻意不持久化（产物面板的**宽度**更进一步，是 `ArtifactPanel` 的组件本地 state） |
+| ④ | 进程内 / 运行期 | `sessionUiStore`（产物面板开关 + **已打开的标签**（产物 / 网页）+ 全屏态、搜索）、`settingsUiStore`（设置弹窗开关与分区） | 渲染层 | 刷新即丢，刻意不持久化（产物面板的**宽度**更进一步，是 `ArtifactPanel` 的组件本地 state；网页标签的地址栏草稿同理） |
 
 `electron/storageRoutes.ts` 是 ① 的**唯一路由表**：一个 storage key 对应一个文件，
 新增持久化字段前先读该表与 `STORAGE_KEYS.plugins` 上方那条不变量注释。

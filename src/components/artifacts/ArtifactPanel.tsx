@@ -22,8 +22,12 @@ import RestoreIcon from '@mui/icons-material/Restore';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import CloseIcon from '@mui/icons-material/Close';
 import ClearAllIcon from '@mui/icons-material/ClearAll';
+import AddIcon from '@mui/icons-material/Add';
+import OpenInFullIcon from '@mui/icons-material/OpenInFull';
+import CloseFullscreenIcon from '@mui/icons-material/CloseFullscreen';
 import UnfoldLessIcon from '@mui/icons-material/UnfoldLess';
 import UnfoldMoreIcon from '@mui/icons-material/UnfoldMore';
+import LanguageIcon from '@mui/icons-material/Language';
 import ImageIcon from '@mui/icons-material/Image';
 import MovieIcon from '@mui/icons-material/Movie';
 import CodeIcon from '@mui/icons-material/Code';
@@ -32,6 +36,7 @@ import AccountTreeIcon from '@mui/icons-material/AccountTree';
 import { ArtifactRenderer } from '@/components/ArtifactRenderer';
 import { FileIcon } from './FileIcon';
 import { ArtifactPreviewBody } from './ArtifactPreviewBody';
+import { WebFrame, WebUrlBar, urlHostLabel } from './WebTabView';
 import { useArtifactActions } from './useArtifactActions';
 import { toast } from '@/components/Toast';
 import { UNBOUND_AGENT_LABEL } from '@/lib/constants';
@@ -114,6 +119,9 @@ export function ArtifactPanel() {
   const closeTab = useSessionUiStore((s) => s.closeArtifactTab);
   const closeAllTabs = useSessionUiStore((s) => s.closeAllArtifactTabs);
   const showList = useSessionUiStore((s) => s.showArtifactList);
+  const openWebTab = useSessionUiStore((s) => s.openWebTab);
+  const fullscreen = useSessionUiStore((s) => s.artifactPanelFullscreen);
+  const toggleFullscreen = useSessionUiStore((s) => s.toggleArtifactPanelFullscreen);
   const view = useSessionUiStore((s) => s.artifactPanelView);
   const setView = useSessionUiStore((s) => s.setArtifactPanelView);
 
@@ -154,6 +162,12 @@ export function ArtifactPanel() {
   // ── 宽度可拖 ──
   // `null` = 用户没拖过，跟随默认宽度（列表态窄、有标签时宽）；
   // 一旦拖过就固定住，不再随「有没有标签」跳变——用户手动定的宽度比默认值更可信
+  /**
+   * 网页标签的刷新计数：地址没变，只能靠换 `key` 让 iframe 重新加载。
+   * 状态放在面板层（而不是地址栏 / iframe 各自一份）——按钮在一行、iframe 在另一行，
+   * 两份 state 就点不动了。
+   */
+  const [webReloadKey, setWebReloadKey] = useState(0);
   const [width, setWidth] = useState<number | null>(null);
   const dragRef = useRef<{ pointerId: number; startX: number; startWidth: number } | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -202,21 +216,40 @@ export function ArtifactPanel() {
     };
   }, [dragging]);
 
-  /** 已打开的标签对应的产物引用（找不到的 id 直接不渲染：会话切换后可能残留） */
-  const openTabs = useMemo(
-    () =>
-      tabs
-        .map((id) => artifacts.find((a) => a.id === id))
-        .filter((a): a is Artifact => !!a),
-    [tabs, artifacts],
+  /**
+   * 全屏时 ESC 退出。
+   *
+   * 全屏会把面板铺满整个窗口（含自绘标题栏），鼠标只剩「退出全屏」按钮一条路，
+   * 键盘必须也能退得出去。
+   */
+  useEffect(() => {
+    if (!fullscreen) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') toggleFullscreen();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [fullscreen, toggleFullscreen]);
+
+  /** 当前激活的标签；为 null / 指向已失效的产物时面板处于列表视图 */
+  const activeTab = useMemo(
+    () => (activeTabId ? (tabs.find((t) => t.id === activeTabId) ?? null) : null),
+    [tabs, activeTabId],
   );
 
-  /** 当前激活的产物；为 null 时面板处于列表视图 */
+  /** 当前激活的产物标签对应的产物（产物被收回 / 换会话残留 → null） */
   const activeArtifact = useMemo(
-    () => (activeTabId ? (artifacts.find((a) => a.id === activeTabId) ?? null) : null),
-    [artifacts, activeTabId],
+    () =>
+      activeTab?.kind === 'artifact'
+        ? (artifacts.find((a) => a.id === activeTab.id) ?? null)
+        : null,
+    [activeTab, artifacts],
   );
-  const isPreviewing = !!activeArtifact;
+
+  /** 当前激活的网页标签（自带地址栏，占满第二行以下） */
+  const activeWebTab = activeTab?.kind === 'web' ? activeTab : null;
+
+  const isPreviewing = !!activeArtifact || !!activeWebTab;
   const entry = activeArtifact ? index[activeArtifact.id] : undefined;
 
   /**
@@ -333,20 +366,33 @@ export function ArtifactPanel() {
     <>
       <Box
         sx={{
-          position: 'relative',
-          width: effectiveWidth,
+          // 全屏 = 铺满整个窗口（连自绘标题栏一起盖住）。只换定位、**不换 DOM 结构**：
+          // 重建会让网页标签的 iframe 白屏重载、产物正文的滚动位置全丢
+          ...(fullscreen
+            ? {
+                position: 'fixed',
+                inset: 0,
+                width: '100%',
+                zIndex: (theme) => theme.zIndex.modal + 1,
+              }
+            : {
+                position: 'relative',
+                width: effectiveWidth,
+                borderLeft: '1px solid',
+                borderColor: 'divider',
+              }),
           flexShrink: 0,
           height: '100%',
           display: 'flex',
           flexDirection: 'column',
-          borderLeft: '1px solid',
-          borderColor: 'divider',
           bgcolor: 'background.paper',
           // 拖动中不挂过渡，否则宽度会跟不上指针（表现为「粘手」）
           transition: dragging ? 'none' : 'width .18s ease',
         }}
       >
-        {/* 左边缘拖宽抓手：压在 borderLeft 上，hover / 拖动时点亮一条 2px 竖线 */}
+        {/* 左边缘拖宽抓手：压在 borderLeft 上，hover / 拖动时点亮一条 2px 竖线。
+            全屏时面板已铺满窗口，没有「边缘」可拖，抓手一并撤掉 */}
+        {!fullscreen && (
         <Box
           role="separator"
           aria-orientation="vertical"
@@ -386,8 +432,9 @@ export function ArtifactPanel() {
             }}
           />
         </Box>
+        )}
 
-        {/* 第一行：常驻标签栏（☰ 产物列表 + 已打开的产物 + 关闭全部 + 收起面板） */}
+        {/* 第一行：常驻标签栏（☰ 产物列表 + 标签 + 新建 / 关闭全部 / 全屏 / 收起面板） */}
         <Box
           sx={{
             display: 'flex',
@@ -411,7 +458,7 @@ export function ArtifactPanel() {
 
           <Box
             role="tablist"
-            aria-label="已打开的产物"
+            aria-label="已打开的标签"
             sx={{
               flex: 1,
               minWidth: 0,
@@ -425,28 +472,68 @@ export function ArtifactPanel() {
               '&::-webkit-scrollbar-thumb': { bgcolor: 'divider', borderRadius: 2 },
             }}
           >
-            {openTabs.map((a) => {
-              const label = a.title?.trim() || a.path || a.id;
+            {tabs.map((tab) => {
+              const active = tab.id === activeTabId;
+              if (tab.kind === 'web') {
+                return (
+                  <WebTabChip
+                    key={tab.id}
+                    url={tab.url}
+                    active={active}
+                    onSelect={() => activateTab(tab.id)}
+                    onClose={() => closeTab(tab.id)}
+                  />
+                );
+              }
+              const artifact = artifacts.find((a) => a.id === tab.id);
+              // 产物被收回 / 换会话残留的 id：这一格不渲染（激活项自然回落到列表）
+              if (!artifact) return null;
+              const label = artifact.title?.trim() || artifact.path || artifact.id;
               return (
                 <ArtifactTab
-                  key={a.id}
+                  key={tab.id}
                   label={label}
-                  artifact={a}
-                  active={a.id === activeArtifact?.id}
-                  onSelect={() => activateTab(a.id)}
-                  onClose={() => closeTab(a.id)}
+                  artifact={artifact}
+                  active={active}
+                  onSelect={() => activateTab(tab.id)}
+                  onClose={() => closeTab(tab.id)}
                 />
               );
             })}
           </Box>
 
-          {openTabs.length > 0 && (
+          {/* 「+ 新建标签页」：开一个空白网页标签（地址栏 + iframe） */}
+          <Tooltip title="新建标签页" placement="bottom">
+            <IconButton
+              size="small"
+              aria-label="新建标签页"
+              sx={{ p: 0.4 }}
+              onClick={() => openWebTab()}
+            >
+              <AddIcon sx={{ fontSize: 18 }} />
+            </IconButton>
+          </Tooltip>
+          {tabs.length > 1 && (
             <Tooltip title="关闭全部标签" placement="bottom">
               <IconButton size="small" aria-label="关闭全部标签" sx={{ p: 0.4 }} onClick={closeAllTabs}>
                 <ClearAllIcon sx={{ fontSize: 16 }} />
               </IconButton>
             </Tooltip>
           )}
+          <Tooltip title={fullscreen ? '退出全屏' : '进入全屏'} placement="bottom">
+            <IconButton
+              size="small"
+              aria-label={fullscreen ? '退出全屏' : '进入全屏'}
+              sx={{ p: 0.4 }}
+              onClick={toggleFullscreen}
+            >
+              {fullscreen ? (
+                <CloseFullscreenIcon sx={{ fontSize: 16 }} />
+              ) : (
+                <OpenInFullIcon sx={{ fontSize: 16 }} />
+              )}
+            </IconButton>
+          </Tooltip>
           <Tooltip title="收起产物面板" placement="bottom">
             <IconButton size="small" aria-label="收起产物面板" sx={{ p: 0.4 }} onClick={closePanel}>
               <ViewSidebarIcon sx={{ fontSize: 16, transform: 'scaleX(-1)' }} />
@@ -454,9 +541,11 @@ export function ArtifactPanel() {
           </Tooltip>
         </Box>
 
-        {/* 第二行：随态切换的标题栏（正文态 = 产物名 + 文件动作；列表态 = 会话名 + 分组折叠 / 打开工作空间） */}
+        {/* 第二行：随态切换（网页标签 = 地址栏；正文态 = 产物名 + 文件动作；列表态 = 会话名 + 打开工作空间） */}
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.25, px: 1, pb: 0.6, flexShrink: 0 }}>
-          {activeArtifact ? (
+          {activeWebTab ? (
+            <WebUrlBar tab={activeWebTab} onReload={() => setWebReloadKey((k) => k + 1)} />
+          ) : activeArtifact ? (
             <>
               <Typography noWrap sx={{ flex: 1, minWidth: 0, fontSize: 12.5, fontWeight: 600, px: 0.5 }}>
                 {activeTitle}
@@ -526,7 +615,10 @@ export function ArtifactPanel() {
         </Box>
         <Divider />
 
-        {activeArtifact ? (
+        {activeWebTab ? (
+          /* ── 网页态（地址栏在上面的第二行，这里只剩页面本体） ── */
+          <WebFrame tab={activeWebTab} reloadKey={webReloadKey} />
+        ) : activeArtifact ? (
           /* ── 正文态 ── */
           <Box sx={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
             <Box sx={{ px: 1.25, pt: 1 }}>
@@ -747,7 +839,7 @@ export function ArtifactPanel() {
                           artifact={a}
                           changes={changeCountOf(index[a.id])}
                           version={index[a.id]?.version ?? 1}
-                          opened={tabs.includes(a.id)}
+                          opened={tabs.some((t) => t.kind === 'artifact' && t.id === a.id)}
                           onOpen={() => openTab(a.id)}
                           onLocate={() => actions.locate(a)}
                         />
@@ -908,6 +1000,77 @@ function ArtifactTab({
         className="artifact-tab-close"
         size="small"
         aria-label={`关闭标签 ${label}`}
+        sx={{ p: 0.2, opacity: active ? 0.75 : 0, transition: 'opacity .12s' }}
+        onClick={(e) => {
+          e.stopPropagation();
+          onClose();
+        }}
+      >
+        <CloseIcon sx={{ fontSize: 13 }} />
+      </IconButton>
+    </Box>
+  );
+}
+
+/**
+ * 标签栏里的一个**网页**标签（「+ 新建标签页」开出来的）。
+ *
+ * 地址还空着时不显示文字、只留地球图标 —— 这正是参考稿里那个空白新标签的样子；
+ * 有地址后显示主机名（整条 URL 塞进 168px 只会被截成 `https://exa…`，更没用）。
+ */
+function WebTabChip({
+  url,
+  active,
+  onSelect,
+  onClose,
+}: {
+  url: string;
+  active: boolean;
+  onSelect: () => void;
+  onClose: () => void;
+}) {
+  const label = url === '' ? '' : urlHostLabel(url);
+  const name = label === '' ? '新标签页' : label;
+  return (
+    <Box
+      role="tab"
+      tabIndex={0}
+      aria-selected={active}
+      aria-label={`切换到标签页 ${name}`}
+      onClick={onSelect}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onSelect();
+        }
+      }}
+      sx={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 0.4,
+        pl: 0.75,
+        pr: 0.25,
+        py: 0.3,
+        borderRadius: 1.25,
+        flexShrink: 0,
+        maxWidth: 168,
+        cursor: 'pointer',
+        bgcolor: active ? 'action.selected' : 'transparent',
+        color: active ? 'text.primary' : 'text.secondary',
+        '&:hover': { bgcolor: active ? 'action.selected' : 'action.hover' },
+        '&:hover .artifact-tab-close': { opacity: 1 },
+      }}
+    >
+      <LanguageIcon sx={{ fontSize: 15 }} />
+      {label !== '' && (
+        <Typography noWrap sx={{ fontSize: 12, minWidth: 0 }}>
+          {label}
+        </Typography>
+      )}
+      <IconButton
+        className="artifact-tab-close"
+        size="small"
+        aria-label={`关闭标签页 ${name}`}
         sx={{ p: 0.2, opacity: active ? 0.75 : 0, transition: 'opacity .12s' }}
         onClick={(e) => {
           e.stopPropagation();
