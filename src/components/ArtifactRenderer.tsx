@@ -22,16 +22,23 @@ const chipSx = (active: boolean) => ({
 });
 
 /**
- * HTML 产物的两种看法：**页面**（iframe 跑起来）与**源码**（高亮）。
+ * 「预览 / 源码」双视图容器（html / markdown / mermaid 共用）。
  *
- * 默认给页面 —— 产物面板的主要用途就是「看看长什么样」；要核对改动 / 复制片段再切源码。
- * 切换按钮常驻而不是折叠（旧实现是「展开预览」）：折叠版每次看效果都要多点一次，
- * 而且收起状态下完全看不出这是个页面型产物。
+ * 这三类产物都有「渲染形态」与「原文」两种看法，且都常常要来回切：看效果 → 核对或复制
+ * 原文 → 回去看效果。切换按钮因此**常驻**而不是折叠（旧实现是「展开预览 / 收起预览」，
+ * 每看一次都要多点一次，且收起状态下完全看不出这是个页面型产物）。
  *
- * 围栏 `html` 与 `.html` 文件产物共用它：两者只差正文来源（事件内联 / 磁盘回读），
- * 「看效果 / 看源码」这件事一模一样。
+ * 源码视图统一走 Prism 高亮，`language` 决定高亮规则。
  */
-function HtmlArtifactView({ html, title }: { html: string; title?: string }) {
+function DualView({
+  preview,
+  source,
+  language,
+}: {
+  preview: ReactNode;
+  source: string;
+  language: string;
+}) {
   const [mode, setMode] = useState<'preview' | 'source'>('preview');
 
   return (
@@ -42,7 +49,7 @@ function HtmlArtifactView({ html, title }: { html: string; title?: string }) {
             key={m}
             size="small"
             disableRipple
-            aria-label={m === 'preview' ? '页面预览' : '源码'}
+            aria-label={m === 'preview' ? '预览' : '源码'}
             onClick={() => setMode(m)}
             sx={chipSx(mode === m)}
           >
@@ -51,32 +58,53 @@ function HtmlArtifactView({ html, title }: { html: string; title?: string }) {
         ))}
       </Box>
       {mode === 'preview' ? (
-        <iframe
-          title={title ?? 'html 预览'}
-          // 正文来自模型或文件：只给 `allow-scripts`、**不给** `allow-same-origin`，
-          // 它就摸不到父页面的 DOM（我们只是要它把页面画出来）
-          sandbox="allow-scripts"
-          srcDoc={html}
-          style={{
-            width: '100%',
-            // 面板里要能真的用起来（小游戏这类），消息流内联时又不至于吃掉整屏
-            height: 'clamp(320px, 60vh, 720px)',
-            border: 'none',
-            borderRadius: 8,
-            background: '#fff',
-          }}
-        />
+        preview
       ) : (
         <SyntaxHighlighter
           style={oneDark}
-          language="html"
+          language={language}
           PreTag="div"
           customStyle={{ borderRadius: 8, fontSize: 13, maxWidth: '100%', overflowX: 'auto' }}
         >
-          {html}
+          {source}
         </SyntaxHighlighter>
       )}
     </Box>
+  );
+}
+
+/**
+ * html 的预览体：iframe 把页面跑起来。
+ *
+ * 正文来自模型或文件，所以只给 `allow-scripts`、**不给** `allow-same-origin`——
+ * 它摸不到父页面的 DOM（我们只是要它把页面画出来）。
+ */
+function HtmlPreview({ html, title }: { html: string; title?: string }) {
+  return (
+    <iframe
+      title={title ?? 'html 预览'}
+      sandbox="allow-scripts"
+      srcDoc={html}
+      style={{
+        width: '100%',
+        // 面板里要能真的用起来（小游戏这类），消息流内联时又不至于吃掉整屏
+        height: 'clamp(320px, 60vh, 720px)',
+        border: 'none',
+        borderRadius: 8,
+        background: '#fff',
+      }}
+    />
+  );
+}
+
+/** markdown 的双视图（文档渲染 / 原文），围栏产物与 `.md` 文件产物共用 */
+function markdownView(content: string): ReactNode {
+  return (
+    <DualView
+      language="markdown"
+      source={content}
+      preview={<MarkdownView content={content} />}
+    />
   );
 }
 
@@ -172,17 +200,34 @@ export function ArtifactRenderer({ artifact, header = true }: ArtifactRendererPr
       );
       break;
     case 'html':
-      body = <HtmlArtifactView html={artifact.content} title={artifact.title} />;
+      body = (
+        <DualView
+          language="html"
+          source={artifact.content}
+          preview={<HtmlPreview html={artifact.content} title={artifact.title} />}
+        />
+      );
       break;
     case 'mermaid':
-      body = <Mermaid code={artifact.content} />;
+      // 渲染失败时错误提示在预览里，用户可切「源码」自己看语法 —— 这正是双视图的意义
+      body = (
+        <DualView
+          language="mermaid"
+          source={artifact.content}
+          preview={<Mermaid code={artifact.content} />}
+        />
+      );
       break;
     case 'file':
       body = isHtmlArtifact(artifact) ? (
         // .html / .htm 文件同样给「页面 / 源码」两视图：它和围栏 html 只差正文来源
-        <HtmlArtifactView html={artifact.content} title={artifact.title} />
+        <DualView
+          language="html"
+          source={artifact.content}
+          preview={<HtmlPreview html={artifact.content} title={artifact.title} />}
+        />
       ) : artifact.language === 'markdown' ? (
-          <MarkdownView content={artifact.content} />
+          markdownView(artifact.content)
         ) : (
           <SyntaxHighlighter
             style={oneDark}
@@ -213,7 +258,7 @@ export function ArtifactRenderer({ artifact, header = true }: ArtifactRendererPr
       break;
     case 'markdown':
     default:
-      body = <MarkdownView content={artifact.content} />;
+      body = markdownView(artifact.content);
       break;
   }
 
