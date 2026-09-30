@@ -28,8 +28,16 @@ function entityOf(changes: SyncChange[], collection: string, id: string): Record
   return hit.entity;
 }
 
-const T_OLD = '2026-09-28T10:00:00.000Z';
-const T_NEW = '2026-09-29T10:00:00.000Z';
+/**
+ * 远端时间戳：用**相对当前时间**的偏移，不要写死日期。
+ *
+ * 本地条目由 `recordArtifact` 写入，`updatedAt` 就是「现在」；于是「远端更新 → 落地」
+ * 这条用例的前提是 `T_NEW > 现在`。写死成某个具体日期的话，过了那天本地的
+ * `updatedAt` 反而更大，LWW 判据（远端更旧 → 不落地）就把这条用例判红——
+ * 与代码无关，纯粹是时间炸弹。
+ */
+const T_OLD = new Date(Date.now() - 3_600_000).toISOString();
+const T_NEW = new Date(Date.now() + 3_600_000).toISOString();
 
 beforeEach(() => {
   // 清空 store（index / bodies / 墓碑都要清，避免跨用例串扰）

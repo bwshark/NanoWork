@@ -6,6 +6,8 @@ function reset() {
   useSessionUiStore.setState({
     artifactPanelOpen: false,
     artifactPanelSessionId: null,
+    artifactPanelTabs: [],
+    artifactPanelActiveTabId: null,
     searchSessionId: null,
     searchQuery: '',
     searchMatchCount: 0,
@@ -48,6 +50,118 @@ describe('sessionUiStore: 产物面板开关', () => {
     useSessionUiStore.getState().openArtifactPanel('s1');
     useSessionUiStore.getState().closeArtifactPanel();
     expect(useSessionUiStore.getState().artifactPanelOpen).toBe(false);
+  });
+});
+
+describe('sessionUiStore: 产物标签页', () => {
+  beforeEach(reset);
+
+  it('同一会话内连开两个产物 → 两个标签，激活的是后打开的那个', () => {
+    const ui = () => useSessionUiStore.getState();
+    ui().openArtifactPanel('s1', { previewId: 'a1' });
+    ui().openArtifactPanel('s1', { previewId: 'a2' });
+    expect(ui().artifactPanelTabs).toEqual(['a1', 'a2']);
+    expect(ui().artifactPanelActiveTabId).toBe('a2');
+  });
+
+  it('重复打开同一产物不产生重复标签，只把它激活', () => {
+    const ui = () => useSessionUiStore.getState();
+    ui().openArtifactPanel('s1', { previewId: 'a1' });
+    ui().openArtifactPanel('s1', { previewId: 'a2' });
+    ui().openArtifactPanel('s1', { previewId: 'a1' });
+    expect(ui().artifactPanelTabs).toEqual(['a1', 'a2']);
+    expect(ui().artifactPanelActiveTabId).toBe('a1');
+  });
+
+  it('换会话时标签整体重置（旧会话的产物 id 指不到任何东西）', () => {
+    const ui = () => useSessionUiStore.getState();
+    ui().openArtifactPanel('s1', { previewId: 'a1' });
+    ui().openArtifactPanel('s2', { previewId: 'b1' });
+    expect(ui().artifactPanelTabs).toEqual(['b1']);
+    expect(ui().artifactPanelActiveTabId).toBe('b1');
+  });
+
+  it('「查看所有产物」（不带 previewId）回到列表但保留已打开的标签', () => {
+    const ui = () => useSessionUiStore.getState();
+    ui().openArtifactPanel('s1', { previewId: 'a1' });
+    ui().openArtifactPanel('s1', { view: 'changes' });
+    expect(ui().artifactPanelActiveTabId).toBeNull();
+    expect(ui().artifactPanelTabs).toEqual(['a1']);
+    expect(ui().artifactPanelView).toBe('changes');
+  });
+
+  it('activateArtifactTab 只认已打开的标签，不给未打开的凭空造标签', () => {
+    const ui = () => useSessionUiStore.getState();
+    ui().openArtifactPanel('s1', { previewId: 'a1' });
+    ui().openArtifactTab('a2');
+    ui().activateArtifactTab('a1');
+    expect(ui().artifactPanelActiveTabId).toBe('a1');
+
+    ui().activateArtifactTab('never-opened');
+    expect(ui().artifactPanelActiveTabId).toBe('a1');
+    expect(ui().artifactPanelTabs).toEqual(['a1', 'a2']);
+  });
+
+  it('关闭非当前标签不影响激活项', () => {
+    const ui = () => useSessionUiStore.getState();
+    ui().openArtifactPanel('s1', { previewId: 'a1' });
+    ui().openArtifactTab('a2');
+    ui().openArtifactTab('a3');
+    ui().activateArtifactTab('a2');
+
+    ui().closeArtifactTab('a1');
+    expect(ui().artifactPanelTabs).toEqual(['a2', 'a3']);
+    expect(ui().artifactPanelActiveTabId).toBe('a2');
+  });
+
+  it('关闭当前标签 → 激活右邻居；关掉最后一个 → 回到列表视图', () => {
+    const ui = () => useSessionUiStore.getState();
+    ui().openArtifactPanel('s1', { previewId: 'a1' });
+    ui().openArtifactTab('a2');
+    ui().activateArtifactTab('a2');
+
+    ui().closeArtifactTab('a2');
+    // a2 在末尾，没有右邻居 → 取左邻居 a1
+    expect(ui().artifactPanelActiveTabId).toBe('a1');
+
+    ui().openArtifactTab('a3');
+    ui().activateArtifactTab('a1');
+    ui().closeArtifactTab('a1');
+    // a1 后面还有 a3 → 顺位交给右邻居
+    expect(ui().artifactPanelActiveTabId).toBe('a3');
+
+    ui().closeArtifactTab('a3');
+    expect(ui().artifactPanelTabs).toEqual([]);
+    expect(ui().artifactPanelActiveTabId).toBeNull();
+  });
+
+  it('同一会话收起面板再展开 → 标签仍在（判据是会话，不是面板开关）', () => {
+    const ui = () => useSessionUiStore.getState();
+    ui().openArtifactPanel('s1', { previewId: 'a1' });
+    ui().closeArtifactPanel();
+    expect(ui().artifactPanelOpen).toBe(false);
+
+    ui().toggleArtifactPanel('s1');
+    expect(ui().artifactPanelOpen).toBe(true);
+    expect(ui().artifactPanelTabs).toEqual(['a1']);
+    expect(ui().artifactPanelActiveTabId).toBe('a1');
+  });
+
+  it('closeAllArtifactTabs 清空标签并回到列表', () => {
+    const ui = () => useSessionUiStore.getState();
+    ui().openArtifactPanel('s1', { previewId: 'a1' });
+    ui().openArtifactTab('a2');
+    ui().closeAllArtifactTabs();
+    expect(ui().artifactPanelTabs).toEqual([]);
+    expect(ui().artifactPanelActiveTabId).toBeNull();
+  });
+
+  it('showArtifactList 回列表但不清标签（还能切回去）', () => {
+    const ui = () => useSessionUiStore.getState();
+    ui().openArtifactPanel('s1', { previewId: 'a1' });
+    ui().showArtifactList();
+    expect(ui().artifactPanelActiveTabId).toBeNull();
+    expect(ui().artifactPanelTabs).toEqual(['a1']);
   });
 });
 

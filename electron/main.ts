@@ -2635,7 +2635,11 @@ ipcMain.handle('artifactIndex:remove', async (_e, id: string) => {
 // ——— 系统 shell 桥（侧边栏「在资源管理器打开」）———
 ipcMain.handle('shell:openPath', async (_e, path: string) => {
   const normalized = join(path);
-  if (!existsSync(normalized)) return { ok: false, error: `路径不存在：${path}` };
+  // 产物记录的是「写入时的路径」，文件之后可能被删/被移（引擎跑完清理临时文件、
+  // 用户自己删掉）。文案要把这层可能性说出来，只说「路径不存在」会让人以为程序找错了地方。
+  if (!existsSync(normalized)) {
+    return { ok: false, error: `路径不存在（文件可能已被删除或移动）：${path}` };
+  }
   // shell.openPath 返回空字符串=成功；非空字符串为系统级错误描述
   const errorMessage = await shell.openPath(normalized);
   if (errorMessage) return { ok: false, error: errorMessage };

@@ -55,6 +55,7 @@ import { useSettingsStore } from './settingsStore';
 import { resolveDefaultWorkspacePath } from './storageInfoStore';
 import { useSkillsStore } from './skillsStore';
 import {
+  deletedFilePathFrom,
   deriveFileArtifacts,
   fileArtifactId,
   findFileArtifact,
@@ -2350,6 +2351,23 @@ export const useSessionsStore = create<SessionsState>()(
       // （2026-09-29 事故的教训：失败被伪装成完成，界面不能跟着一起骗人）。
       // 一次调用可能涉及多个文件（`apply_patch` 的 `edits[]`），故按数组处理。
       if (ev.phase === 'end') {
+        // 「收回」优先于「登记」：删除类工具成功后，那张产物卡片必须跟着消失。
+        // 否则文件已不在磁盘、卡片还列着，点「在资源管理器打开」只会得到
+        // 「路径不存在」——2026-09-30 用户报的就是这个（模型写完临时脚本、
+        // 跑完自己 `delete_file` 清理，面板却留着两张点不开的卡片）。
+        const deletedPath = deletedFilePathFrom(ev.tool, ev.args);
+        if (deletedPath !== undefined) {
+          const artifactId = fileArtifactId(sessionId, deletedPath);
+          // 两处引用都要摘：消息气泡上的卡片，以及索引切片（面板列的就是后者）
+          get().updateMessage(sessionId, messageId, (m) => {
+            const list = m.artifacts ?? [];
+            if (!list.some((a) => a.id === artifactId)) return m;
+            return { ...m, artifacts: list.filter((a) => a.id !== artifactId) };
+          });
+          useArtifactsStore.getState().removeArtifacts([artifactId]);
+          return;
+        }
+
         const drafts = deriveFileArtifacts(ev.tool, ev.args, ev.id);
         for (const draft of drafts) {
           const existing = findFileArtifact(

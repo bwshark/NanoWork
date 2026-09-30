@@ -360,6 +360,32 @@ export function findFileArtifact(
 }
 
 /**
+ * **删除类**工具（对齐 `nanobot/agent/tools/` 的删除工具注册名）。
+ *
+ * 与 `FILE_WRITE_TOOLS` 分列两张白名单，是因为两者在调用点的处理**方向相反**：
+ * 写工具产出产物（`recordArtifact`），删除工具收回产物（`removeArtifacts`）。
+ * 合成一张表的话，「删除」会被当成一次零产出的写调用被静默吞掉——于是文件已经
+ * 不在了，产物面板还留着一张卡片，点「在资源管理器打开」只会报「路径不存在」
+ * （2026-09-30 踩到：模型写完临时脚本、跑完自己 `delete_file` 清理）。
+ */
+export const DELETE_FILE_TOOLS = ['delete_file', 'remove_file'] as const;
+
+/**
+ * 一次工具调用要删掉的文件路径；不是删除工具 / 参数残缺时返回 `undefined`。
+ *
+ * 调用方拿到非空值就该把对应产物从消息引用与索引切片里一并摘掉（见
+ * `artifactsStore.removeArtifacts`）。
+ */
+export function deletedFilePathFrom(
+  tool: string,
+  args: Record<string, unknown>,
+): string | undefined {
+  const name = tool.trim().toLowerCase();
+  if (!(DELETE_FILE_TOOLS as readonly string[]).includes(name)) return undefined;
+  return strArg(args, ['path', 'file_path']);
+}
+
+/**
  * 索引条目 → 变更次数（= 版本数 - 1）。
  *
  * 优先用 `versions` 长度而非 `version` 数值：回退（`rollbackToVersion`）也会推进

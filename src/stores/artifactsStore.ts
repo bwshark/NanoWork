@@ -55,6 +55,13 @@ interface ArtifactsState {
   recordArtifactVersion: (artifactId: string, artifact: Artifact) => void;
   /** FR-7.4：把 `artifactId` 回退到历史版本 `targetHash` 的正文（新开一版，旧正文仍在 `bodies`） */
   rollbackToVersion: (artifactId: string, targetHash: string, title?: string) => void;
+  /**
+   * 摘除若干产物（引擎把对应文件删掉了）。
+   *
+   * 与 `clearSession` 同源：**摘除 + 写墓碑**（删除要能跨端传播），`bodies` 不动
+   * （同 hash 可能被别的产物引用）。留着条目只会让面板出现一张点开报错的卡片。
+   */
+  removeArtifacts: (ids: string[]) => void;
   clearSession: (sessionId: string) => void;
   clearAll: () => void;
 }
@@ -238,6 +245,38 @@ export const useArtifactsStore = create<ArtifactsState>()(
           content,
           createdAt: new Date().toISOString(),
         });
+      },
+
+      removeArtifacts: (ids) => {
+        if (ids.length === 0) return;
+        const wanted = new Set(ids);
+        // 墓碑按索引条目写；但**摘除**不依赖索引存在——旧数据的引用切片可能没有
+        // 对应条目，只删引用也要删干净，否则列表里照样留着那张卡片
+        const doomed = ids
+          .map((id) => get().index[id])
+          .filter((e): e is ArtifactIndexEntry => !!e);
+        const now = new Date().toISOString();
+        set((s) => {
+          const bySession = { ...s.bySession };
+          for (const [sessionId, list] of Object.entries(bySession)) {
+            const next = list.filter((a) => !wanted.has(a.id));
+            if (next.length !== list.length) bySession[sessionId] = next;
+          }
+          const index = { ...s.index };
+          const indexTombstones = { ...s.indexTombstones };
+          for (const e of doomed) {
+            delete index[e.id];
+            indexTombstones[e.id] = {
+              rev: (typeof e.rev === 'number' ? e.rev : 0) + 1,
+              updatedAt: now,
+              updatedBy: '',
+              deletedAt: now,
+            };
+          }
+          // `bodies` 不清：同 hash 可能被其它产物引用，误删会让对方正文消失
+          return { bySession, index, indexTombstones };
+        });
+        doomed.forEach((e) => mirrorRemove(e.id));
       },
 
       clearSession: (sessionId) => {

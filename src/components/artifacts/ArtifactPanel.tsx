@@ -1,4 +1,5 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import type { PointerEvent as ReactPointerEvent } from 'react';
 import {
   Box,
   Button,
@@ -11,7 +12,6 @@ import {
 } from '@mui/material';
 import MenuIcon from '@mui/icons-material/Menu';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
-import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import ViewSidebarIcon from '@mui/icons-material/ViewSidebar';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
@@ -20,6 +20,10 @@ import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import FolderOpenIcon from '@mui/icons-material/FolderOpen';
 import RestoreIcon from '@mui/icons-material/Restore';
 import VisibilityIcon from '@mui/icons-material/Visibility';
+import CloseIcon from '@mui/icons-material/Close';
+import ClearAllIcon from '@mui/icons-material/ClearAll';
+import UnfoldLessIcon from '@mui/icons-material/UnfoldLess';
+import UnfoldMoreIcon from '@mui/icons-material/UnfoldMore';
 import ImageIcon from '@mui/icons-material/Image';
 import MovieIcon from '@mui/icons-material/Movie';
 import CodeIcon from '@mui/icons-material/Code';
@@ -43,8 +47,14 @@ import type { Artifact, ArtifactType } from '@/types';
 
 /** 列表态宽度（与左侧 240px 侧栏对称，主内容区仍保有足够空间） */
 const PANEL_WIDTH = 300;
-/** 预览态宽度：正文（尤以代码为中心）在 300px 里几乎不可读，预览时适当放宽 */
+/** 有标签页时的默认宽度：正文（尤以代码为中心）在 300px 里几乎不可读 */
 const PREVIEW_PANEL_WIDTH = 460;
+/** 拖宽下限：再窄连文件名与代码行都保不住 */
+const MIN_PANEL_WIDTH = 260;
+/** 拖宽上限：给主内容区留出呼吸空间 */
+const MAX_PANEL_WIDTH = 1000;
+/** 拖宽时主内容区至少保留的宽度，避免把对话挤没 */
+const MIN_CONTENT_WIDTH = 320;
 /** 产物列表折叠阈值：超出部分收进「展开更多 (N)」，对齐参考稿 */
 const COLLAPSED_LIMIT = 6;
 
@@ -82,20 +92,28 @@ function shortTime(iso: string): string {
  * 右侧产物面板（会话级）。
  *
  * 由侧边栏会话行的「产物面板」入口开关，跟随 `sessionUiStore`：
- * - **列表态**：概览（会话元信息）+ 产物（文件产物用扩展名角标 + 名称 + 体积，
+ * - **标签栏**（常驻）：已打开的产物各占一个标签，可切换 / 关闭 / 全部关闭，
+ *   左侧 ☰ 回到产物列表——列表与标签并存，因此点开第二个产物不会顶掉第一个；
+ * - **列表视图**：概览（会话元信息）+ 产物（文件产物用扩展名角标 + 名称 + 体积，
  *   富产物用类型图标；超出折叠阈值收进「展开更多」）；
- * - **预览态**：由「点消息里的产物卡片」或点列表行进入，正文就地渲染
+ * - **正文视图**：由「点消息里的产物卡片」或点列表行进进入，正文就地渲染
  *   （文件产物快照为空时按需回读磁盘），并保留版本历史 / 对比 / 回退。
+ * - **宽度可拖**：左边缘 6px 抓手（hover 变 `col-resize`），拖到多宽看正文由用户定。
  *
- * 预览做成**面板内的一个态**而不是弹窗：产品要求「点卡片 → 在右侧侧边栏打开预览」，
+ * 预览做成**面板内的一态**而不是弹窗：产品要求「点卡片 → 在右侧侧边栏打开预览」，
  * 弹窗会盖住对话流，恰好违背这条路径的意图。
  */
 export function ArtifactPanel() {
   const open = useSessionUiStore((s) => s.artifactPanelOpen);
   const sessionId = useSessionUiStore((s) => s.artifactPanelSessionId);
   const closePanel = useSessionUiStore((s) => s.closeArtifactPanel);
-  const previewId = useSessionUiStore((s) => s.artifactPanelPreviewId);
-  const setPreviewId = useSessionUiStore((s) => s.setArtifactPanelPreview);
+  const tabs = useSessionUiStore((s) => s.artifactPanelTabs);
+  const activeTabId = useSessionUiStore((s) => s.artifactPanelActiveTabId);
+  const openTab = useSessionUiStore((s) => s.openArtifactTab);
+  const activateTab = useSessionUiStore((s) => s.activateArtifactTab);
+  const closeTab = useSessionUiStore((s) => s.closeArtifactTab);
+  const closeAllTabs = useSessionUiStore((s) => s.closeAllArtifactTabs);
+  const showList = useSessionUiStore((s) => s.showArtifactList);
   const view = useSessionUiStore((s) => s.artifactPanelView);
   const setView = useSessionUiStore((s) => s.setArtifactPanelView);
 
@@ -133,12 +151,73 @@ export function ArtifactPanel() {
   const [compare, setCompare] = useState<{ bHash: string; bLabel: string } | null>(null);
   const [versionHash, setVersionHash] = useState<string | null>(null);
 
-  /** 正在预览的产物（列表里的引用） */
-  const preview = useMemo(
-    () => (previewId ? (artifacts.find((a) => a.id === previewId) ?? null) : null),
-    [artifacts, previewId],
+  // ── 宽度可拖 ──
+  // `null` = 用户没拖过，跟随默认宽度（列表态窄、有标签时宽）；
+  // 一旦拖过就固定住，不再随「有没有标签」跳变——用户手动定的宽度比默认值更可信
+  const [width, setWidth] = useState<number | null>(null);
+  const dragRef = useRef<{ pointerId: number; startX: number; startWidth: number } | null>(null);
+  const [dragging, setDragging] = useState(false);
+  const effectiveWidth = width ?? (tabs.length > 0 ? PREVIEW_PANEL_WIDTH : PANEL_WIDTH);
+
+  const clampWidth = (value: number) => {
+    // 上限同时受「绝对上限」与「主内容区最小保留宽度」约束；小窗口下后者可能小于
+    // 下限，此时取下限（宁可挤主内容区也不能把面板拖成一条线）
+    const maxByViewport = Math.max(MIN_PANEL_WIDTH, window.innerWidth - MIN_CONTENT_WIDTH);
+    return Math.max(MIN_PANEL_WIDTH, Math.min(value, Math.min(MAX_PANEL_WIDTH, maxByViewport)));
+  };
+
+  const onResizeStart = (e: ReactPointerEvent<HTMLDivElement>) => {
+    dragRef.current = { pointerId: e.pointerId, startX: e.clientX, startWidth: effectiveWidth };
+    // 指针捕获：拖出抓手范围（甚至拖到 iframe 上）也不会丢事件
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+    setDragging(true);
+  };
+
+  const onResizeMove = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current;
+    if (!drag) return;
+    // 面板贴着窗口右边：指针往左拖 = 变宽，故用 startX - clientX
+    setWidth(clampWidth(drag.startWidth + (drag.startX - e.clientX)));
+  };
+
+  const onResizeEnd = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (!dragRef.current) return;
+    dragRef.current = null;
+    if (e.currentTarget.hasPointerCapture?.(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    }
+    setDragging(false);
+  };
+
+  /** 拖动期间禁掉文本选中与默认光标，否则会拖出一片蓝色选区 */
+  useEffect(() => {
+    if (!dragging) return;
+    const prevSelect = document.body.style.userSelect;
+    const prevCursor = document.body.style.cursor;
+    document.body.style.userSelect = 'none';
+    document.body.style.cursor = 'col-resize';
+    return () => {
+      document.body.style.userSelect = prevSelect;
+      document.body.style.cursor = prevCursor;
+    };
+  }, [dragging]);
+
+  /** 已打开的标签对应的产物引用（找不到的 id 直接不渲染：会话切换后可能残留） */
+  const openTabs = useMemo(
+    () =>
+      tabs
+        .map((id) => artifacts.find((a) => a.id === id))
+        .filter((a): a is Artifact => !!a),
+    [tabs, artifacts],
   );
-  const entry = preview ? index[preview.id] : undefined;
+
+  /** 当前激活的产物；为 null 时面板处于列表视图 */
+  const activeArtifact = useMemo(
+    () => (activeTabId ? (artifacts.find((a) => a.id === activeTabId) ?? null) : null),
+    [artifacts, activeTabId],
+  );
+  const isPreviewing = !!activeArtifact;
+  const entry = activeArtifact ? index[activeArtifact.id] : undefined;
 
   /**
    * 预览正文：按索引里的 `contentHash` 从内容池回填。
@@ -148,12 +227,16 @@ export function ArtifactPanel() {
    * 由 `ArtifactPreviewBody` 决定是否回读磁盘。
    */
   const previewResolved = useMemo(() => {
-    if (!preview) return null;
-    if (versionHash) return { ...preview, content: resolveArtifactContent(versionHash, bodies, '') };
-    const hash = index[preview.id]?.contentHash;
-    const content = hash ? resolveArtifactContent(hash, bodies, preview.content) : preview.content;
-    return { ...preview, content };
-  }, [preview, versionHash, index, bodies]);
+    if (!activeArtifact) return null;
+    if (versionHash) {
+      return { ...activeArtifact, content: resolveArtifactContent(versionHash, bodies, '') };
+    }
+    const hash = index[activeArtifact.id]?.contentHash;
+    const content = hash
+      ? resolveArtifactContent(hash, bodies, activeArtifact.content)
+      : activeArtifact.content;
+    return { ...activeArtifact, content };
+  }, [activeArtifact, versionHash, index, bodies]);
 
   /** 版本列表：优先用 `versions` 完整历史，旧数据（无 `versions`）退化为单版本 */
   const versionList = useMemo(() => {
@@ -164,24 +247,30 @@ export function ArtifactPanel() {
     ];
   }, [entry]);
 
+  // 换标签必须清掉上一个产物的版本态：历史预览 / 对比目标都是**产物私有**的，
+  // 留着会串到当前标签上（最典型的是对比弹窗里出现另一个文件的正文）
+  useEffect(() => {
+    setVersionHash(null);
+    setCompare(null);
+    setVersionOpen(false);
+  }, [activeTabId]);
+
   /** 把某版本的 `contentHash` 还原成可渲染的 `Artifact`（正文从内容池回填） */
   const resolveVersion = (hash: string, title?: string) => {
-    if (!preview) return null;
-    return { ...preview, content: resolveArtifactContent(hash, bodies, ''), title: title ?? preview.title };
+    if (!activeArtifact) return null;
+    return {
+      ...activeArtifact,
+      content: resolveArtifactContent(hash, bodies, ''),
+      title: title ?? activeArtifact.title,
+    };
   };
 
   /** FR-7.4 回退：把当前产物恢复到历史版本的正文（新开一版，旧正文仍留内容池） */
   const onRollback = (v: { version: number; contentHash: string; title?: string }) => {
-    if (!preview) return;
-    useArtifactsStore.getState().rollbackToVersion(preview.id, v.contentHash, v.title);
+    if (!activeArtifact) return;
+    useArtifactsStore.getState().rollbackToVersion(activeArtifact.id, v.contentHash, v.title);
     setVersionHash(null);
     toast.success(`已回退到 v${v.version}，并新增当前版本`);
-  };
-
-  /** 切换预览的产物（同时清掉历史版本预览，避免串到别的产物上） */
-  const openPreview = (id: string) => {
-    setVersionHash(null);
-    setPreviewId(id);
   };
 
   // 过滤：变更视图只留**被再次写入 / 编辑过的文件产物**（版本数 > 1）。
@@ -238,13 +327,14 @@ export function ArtifactPanel() {
     setArtifactsOpen(next);
   };
 
-  const previewTitle = preview?.title?.trim() || preview?.path || preview?.id || '';
+  const activeTitle = activeArtifact?.title?.trim() || activeArtifact?.path || activeArtifact?.id || '';
 
   return (
     <>
       <Box
         sx={{
-          width: preview ? PREVIEW_PANEL_WIDTH : PANEL_WIDTH,
+          position: 'relative',
+          width: effectiveWidth,
           flexShrink: 0,
           height: '100%',
           display: 'flex',
@@ -252,38 +342,131 @@ export function ArtifactPanel() {
           borderLeft: '1px solid',
           borderColor: 'divider',
           bgcolor: 'background.paper',
-          transition: 'width .18s ease',
+          // 拖动中不挂过渡，否则宽度会跟不上指针（表现为「粘手」）
+          transition: dragging ? 'none' : 'width .18s ease',
         }}
       >
-        {/* 顶栏：列表态 = 折叠全部 / 标题 / 打开工作空间；预览态 = 返回 / 产物名 / 操作 */}
+        {/* 左边缘拖宽抓手：压在 borderLeft 上，hover / 拖动时点亮一条 2px 竖线 */}
+        <Box
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="拖动调整产物面板宽度"
+          // 宽度值挂在 separator 上：屏幕阅读器能读到当前宽度，测试也据此断言拖拽生效
+          aria-valuenow={Math.round(effectiveWidth)}
+          aria-valuemin={MIN_PANEL_WIDTH}
+          aria-valuemax={MAX_PANEL_WIDTH}
+          onPointerDown={onResizeStart}
+          onPointerMove={onResizeMove}
+          onPointerUp={onResizeEnd}
+          onPointerCancel={onResizeEnd}
+          sx={{
+            position: 'absolute',
+            left: -3,
+            top: 0,
+            bottom: 0,
+            width: 6,
+            zIndex: 3,
+            cursor: 'col-resize',
+            touchAction: 'none',
+            '&:hover .artifact-panel-resizer': { opacity: 1 },
+            ...(dragging ? { '& .artifact-panel-resizer': { opacity: 1 } } : {}),
+          }}
+        >
+          <Box
+            className="artifact-panel-resizer"
+            sx={{
+              position: 'absolute',
+              left: 2,
+              top: 0,
+              bottom: 0,
+              width: 2,
+              bgcolor: 'primary.main',
+              opacity: 0,
+              transition: 'opacity .12s',
+            }}
+          />
+        </Box>
+
+        {/* 第一行：常驻标签栏（☰ 产物列表 + 已打开的产物 + 关闭全部 + 收起面板） */}
         <Box
           sx={{
             display: 'flex',
             alignItems: 'center',
             gap: 0.25,
-            px: 1,
-            py: 0.75,
+            px: 0.75,
+            py: 0.5,
             flexShrink: 0,
           }}
         >
-          {preview ? (
+          <Tooltip title="产物列表" placement="bottom">
+            <IconButton
+              size="small"
+              aria-label="产物列表"
+              onClick={showList}
+              sx={{ p: 0.4, ...(isPreviewing ? { color: 'text.secondary' } : { color: 'primary.main' }) }}
+            >
+              <MenuIcon sx={{ fontSize: 17 }} />
+            </IconButton>
+          </Tooltip>
+
+          <Box
+            role="tablist"
+            aria-label="已打开的产物"
+            sx={{
+              flex: 1,
+              minWidth: 0,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 0.5,
+              overflowX: 'auto',
+              // 横向滚动条压到最细：标签栏本身很矮，默认滚动条会顶掉一行
+              scrollbarWidth: 'thin',
+              '&::-webkit-scrollbar': { height: 3 },
+              '&::-webkit-scrollbar-thumb': { bgcolor: 'divider', borderRadius: 2 },
+            }}
+          >
+            {openTabs.map((a) => {
+              const label = a.title?.trim() || a.path || a.id;
+              return (
+                <ArtifactTab
+                  key={a.id}
+                  label={label}
+                  artifact={a}
+                  active={a.id === activeArtifact?.id}
+                  onSelect={() => activateTab(a.id)}
+                  onClose={() => closeTab(a.id)}
+                />
+              );
+            })}
+          </Box>
+
+          {openTabs.length > 0 && (
+            <Tooltip title="关闭全部标签" placement="bottom">
+              <IconButton size="small" aria-label="关闭全部标签" sx={{ p: 0.4 }} onClick={closeAllTabs}>
+                <ClearAllIcon sx={{ fontSize: 16 }} />
+              </IconButton>
+            </Tooltip>
+          )}
+          <Tooltip title="收起产物面板" placement="bottom">
+            <IconButton size="small" aria-label="收起产物面板" sx={{ p: 0.4 }} onClick={closePanel}>
+              <ViewSidebarIcon sx={{ fontSize: 16, transform: 'scaleX(-1)' }} />
+            </IconButton>
+          </Tooltip>
+        </Box>
+
+        {/* 第二行：随态切换的标题栏（正文态 = 产物名 + 文件动作；列表态 = 会话名 + 分组折叠 / 打开工作空间） */}
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.25, px: 1, pb: 0.6, flexShrink: 0 }}>
+          {activeArtifact ? (
             <>
-              <Tooltip title="返回产物列表" placement="bottom">
-                <IconButton size="small" sx={{ p: 0.4 }} onClick={() => setPreviewId(null)}>
-                  <ArrowBackIcon sx={{ fontSize: 17 }} />
-                </IconButton>
-              </Tooltip>
-              <Typography
-                noWrap
-                sx={{ flex: 1, minWidth: 0, fontSize: 12.5, fontWeight: 600, px: 0.5 }}
-              >
-                {previewTitle}
+              <Typography noWrap sx={{ flex: 1, minWidth: 0, fontSize: 12.5, fontWeight: 600, px: 0.5 }}>
+                {activeTitle}
               </Typography>
               <Tooltip title="在资源管理器打开" placement="bottom">
                 <IconButton
                   size="small"
+                  aria-label="在资源管理器打开"
                   sx={{ p: 0.4 }}
-                  onClick={() => actions.reveal(preview)}
+                  onClick={() => actions.reveal(activeArtifact)}
                 >
                   <FolderOpenIcon sx={{ fontSize: 16 }} />
                 </IconButton>
@@ -291,8 +474,9 @@ export function ArtifactPanel() {
               <Tooltip title="复制路径" placement="bottom">
                 <IconButton
                   size="small"
+                  aria-label="复制路径"
                   sx={{ p: 0.4 }}
-                  onClick={() => actions.copyPath(preview)}
+                  onClick={() => actions.copyPath(activeArtifact)}
                 >
                   <ContentCopyIcon sx={{ fontSize: 15 }} />
                 </IconButton>
@@ -301,8 +485,17 @@ export function ArtifactPanel() {
           ) : (
             <>
               <Tooltip title="折叠 / 展开全部分组" placement="bottom">
-                <IconButton size="small" sx={{ p: 0.4 }} onClick={toggleAll}>
-                  <MenuIcon sx={{ fontSize: 17 }} />
+                <IconButton
+                  size="small"
+                  aria-label="折叠 / 展开全部分组"
+                  sx={{ p: 0.4 }}
+                  onClick={toggleAll}
+                >
+                  {overviewOpen && artifactsOpen ? (
+                    <UnfoldLessIcon sx={{ fontSize: 16 }} />
+                  ) : (
+                    <UnfoldMoreIcon sx={{ fontSize: 16 }} />
+                  )}
                 </IconButton>
               </Tooltip>
               <Typography
@@ -319,31 +512,28 @@ export function ArtifactPanel() {
                 {session?.title ?? '会话详情'}
               </Typography>
               <Tooltip title="在资源管理器打开工作空间" placement="bottom">
-                <IconButton size="small" sx={{ p: 0.4 }} onClick={() => void openWorkspace()}>
+                <IconButton
+                  size="small"
+                  aria-label="在资源管理器打开工作空间"
+                  sx={{ p: 0.4 }}
+                  onClick={() => void openWorkspace()}
+                >
                   <OpenInNewIcon sx={{ fontSize: 16 }} />
                 </IconButton>
               </Tooltip>
             </>
           )}
-          <Tooltip title="收起产物面板" placement="bottom">
-            <IconButton size="small" sx={{ p: 0.4 }} onClick={closePanel}>
-              <ViewSidebarIcon sx={{ fontSize: 16, transform: 'scaleX(-1)' }} />
-            </IconButton>
-          </Tooltip>
         </Box>
         <Divider />
 
-        {preview ? (
-          /* ── 预览态 ── */
+        {activeArtifact ? (
+          /* ── 正文态 ── */
           <Box sx={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
             <Box sx={{ px: 1.25, pt: 1 }}>
-              {preview.path && (
-                <Tooltip title={preview.path} enterDelay={600}>
-                  <Typography
-                    noWrap
-                    sx={{ fontSize: 11.5, color: 'text.secondary' }}
-                  >
-                    {preview.path}
+              {activeArtifact.path && (
+                <Tooltip title={activeArtifact.path} enterDelay={600}>
+                  <Typography noWrap sx={{ fontSize: 11.5, color: 'text.secondary' }}>
+                    {activeArtifact.path}
                   </Typography>
                 </Tooltip>
               )}
@@ -557,7 +747,8 @@ export function ArtifactPanel() {
                           artifact={a}
                           changes={changeCountOf(index[a.id])}
                           version={index[a.id]?.version ?? 1}
-                          onOpen={() => openPreview(a.id)}
+                          opened={tabs.includes(a.id)}
+                          onOpen={() => openTab(a.id)}
                           onLocate={() => actions.locate(a)}
                         />
                       ))
@@ -626,7 +817,7 @@ export function ArtifactPanel() {
             版本对比 · 当前 vs {compare?.bLabel}
           </Typography>
           <Typography sx={{ fontSize: 11.5, color: 'text.secondary', flexShrink: 0 }}>
-            {preview ? shortTime(preview.createdAt) : ''}
+            {activeArtifact ? shortTime(activeArtifact.createdAt) : ''}
           </Typography>
         </Box>
         <Box sx={{ p: 2, maxHeight: '72vh', overflow: 'auto' }}>
@@ -659,21 +850,95 @@ export function ArtifactPanel() {
 }
 
 /**
+ * 标签栏里的一个产物标签。
+ *
+ * 用 `role="tab"` 而非 `<button>`：里面还要放一个关闭按钮，`button` 套 `button`
+ * 是非法 HTML（浏览器会拆掉内层节点）。回车 / 空格同样可选中，键盘可用性不降级。
+ */
+function ArtifactTab({
+  label,
+  artifact,
+  active,
+  onSelect,
+  onClose,
+}: {
+  label: string;
+  artifact: Artifact;
+  active: boolean;
+  onSelect: () => void;
+  onClose: () => void;
+}) {
+  const file = isFileArtifact(artifact);
+  return (
+    <Box
+      role="tab"
+      tabIndex={0}
+      aria-selected={active}
+      aria-label={`切换到产物 ${label}`}
+      onClick={onSelect}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onSelect();
+        }
+      }}
+      sx={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 0.4,
+        pl: 0.75,
+        pr: 0.25,
+        py: 0.3,
+        borderRadius: 1.25,
+        flexShrink: 0,
+        maxWidth: 168,
+        cursor: 'pointer',
+        bgcolor: active ? 'action.selected' : 'transparent',
+        color: active ? 'text.primary' : 'text.secondary',
+        '&:hover': { bgcolor: active ? 'action.selected' : 'action.hover' },
+        // 关闭按钮平时藏着，hover / 激活时才显现（标签多起来时不至于满眼 ×）
+        '&:hover .artifact-tab-close': { opacity: 1 },
+      }}
+    >
+      {file ? <FileIcon name={label} size={14} radius={3} /> : artifactIcon(artifact.type)}
+      <Typography noWrap sx={{ fontSize: 12, minWidth: 0 }}>
+        {label}
+      </Typography>
+      <IconButton
+        className="artifact-tab-close"
+        size="small"
+        aria-label={`关闭标签 ${label}`}
+        sx={{ p: 0.2, opacity: active ? 0.75 : 0, transition: 'opacity .12s' }}
+        onClick={(e) => {
+          e.stopPropagation();
+          onClose();
+        }}
+      >
+        <CloseIcon sx={{ fontSize: 13 }} />
+      </IconButton>
+    </Box>
+  );
+}
+
+/**
  * 产物列表行。
  *
  * 文件产物用扩展名角标 + 体积 / 变更信息（与消息底部卡片同源）；
  * 富产物沿用类型图标 + 版本徽章。两者共用一套行高与悬停反馈。
+ * `opened` 标记该产物已在标签栏打开（背景点亮），避免重复点开才发现。
  */
 function ArtifactRow({
   artifact,
   changes,
   version,
+  opened,
   onOpen,
   onLocate,
 }: {
   artifact: Artifact;
   changes: number;
   version: number;
+  opened: boolean;
   onOpen: () => void;
   onLocate: () => void;
 }) {
@@ -694,6 +959,7 @@ function ArtifactRow({
       role="button"
       tabIndex={0}
       aria-label={`打开产物 ${name}`}
+      aria-current={opened ? 'true' : undefined}
       onClick={onOpen}
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') {
@@ -709,6 +975,7 @@ function ArtifactRow({
         py: 0.6,
         borderRadius: 1,
         cursor: 'pointer',
+        bgcolor: opened ? 'action.selected' : 'transparent',
         '&:hover': { bgcolor: 'action.hover' },
         '&:hover .artifact-row-action': { opacity: 1 },
       }}

@@ -40,7 +40,8 @@ export function MessageArtifacts({ sessionId, message }: MessageArtifactsProps) 
   const sessionArtifacts = useArtifactsStore((s) => s.bySession[sessionId]);
   const panelOpen = useSessionUiStore((s) => s.artifactPanelOpen);
   const panelSessionId = useSessionUiStore((s) => s.artifactPanelSessionId);
-  const previewId = useSessionUiStore((s) => s.artifactPanelPreviewId);
+  // 卡片高亮跟随**当前激活的标签**：打开多个产物时，只有正被查看的那张卡片点亮
+  const activeTabId = useSessionUiStore((s) => s.artifactPanelActiveTabId);
   const actions = useArtifactActions(sessionId);
 
   const files = useMemo(
@@ -74,7 +75,7 @@ export function MessageArtifacts({ sessionId, message }: MessageArtifactsProps) 
             artifact={artifact}
             changes={changeCountOf(index[artifact.id])}
             actions={actions}
-            selected={previewing && previewId === artifact.id}
+            selected={previewing && activeTabId === artifact.id}
           />
         ))}
       </Box>

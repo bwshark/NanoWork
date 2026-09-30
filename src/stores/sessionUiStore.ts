@@ -14,7 +14,7 @@ export type ArtifactPanelView = 'all' | 'changes';
 
 /** 打开面板时的可选项（由消息底部卡片区 / 变更入口传入） */
 export interface ArtifactPanelOpenOptions {
-  /** 直接在面板内预览的产物 id；缺省 = 列表视图 */
+  /** 直接在面板内打开的产物 id（作为标签页）；缺省 = 列表视图 */
   previewId?: string;
   /** 列表口径；缺省 `all` */
   view?: ArtifactPanelView;
@@ -26,21 +26,36 @@ interface SessionUiState {
   /** 面板当前跟随的会话 id（未展开时为 null） */
   artifactPanelSessionId: string | null;
   /**
-   * 面板内正在预览的产物 id。
+   * 面板内已打开的**产物标签页**（顺序 = 打开顺序，去重）。
    *
-   * 有值即进入**预览态**（列表让位给预览，顶部有返回入口）；`null` = 列表态。
+   * 面板不再是「列表 / 预览」二态互斥，而是「常驻标签栏 + 列表」：
+   * 用户可以同时打开多个产物，靠顶部标签栏来回切。
+   * 标签是**会话级**的——换会话时上一会话的产物 id 在新会话里没有任何意义，必须整体重置。
+   */
+  artifactPanelTabs: string[];
+  /**
+   * 当前激活的标签页 id；`null` = 列表视图（概览 + 产物列表）。
+   *
    * 由消息流里的产物卡片点击写入——「点卡片 → 右侧看内容」是产品要求的主路径，
    * 因此它属于跨组件的 UI 态（与面板开关同源），而不是某个组件内部的 state。
    */
-  artifactPanelPreviewId: string | null;
+  artifactPanelActiveTabId: string | null;
   /** 面板列表口径（产物 / 变更） */
   artifactPanelView: ArtifactPanelView;
   openArtifactPanel: (sessionId: string, opts?: ArtifactPanelOpenOptions) => void;
   /** 再次点击同一会话的按钮则收起；换会话则直接切换 */
   toggleArtifactPanel: (sessionId: string) => void;
   closeArtifactPanel: () => void;
-  /** 在面板内切换预览的产物（传 null 回到列表） */
-  setArtifactPanelPreview: (artifactId: string | null) => void;
+  /** 打开产物标签：已开则激活，未开则追加到末尾并激活 */
+  openArtifactTab: (artifactId: string) => void;
+  /** 切到某个已打开的标签（不在标签栏里则忽略，避免凭空造出标签） */
+  activateArtifactTab: (artifactId: string) => void;
+  /** 关闭标签；关的是当前标签则激活右邻居（无右取左），全关则回列表 */
+  closeArtifactTab: (artifactId: string) => void;
+  /** 关闭全部标签并回到列表视图 */
+  closeAllArtifactTabs: () => void;
+  /** 回到列表视图（保留已打开的标签，便于再切回去） */
+  showArtifactList: () => void;
   /** 切换面板列表口径（产物 / 变更） */
   setArtifactPanelView: (view: ArtifactPanelView) => void;
 
@@ -81,17 +96,30 @@ interface SessionUiState {
 export const useSessionUiStore = create<SessionUiState>()((set, get) => ({
   artifactPanelOpen: false,
   artifactPanelSessionId: null,
-  artifactPanelPreviewId: null,
+  artifactPanelTabs: [],
+  artifactPanelActiveTabId: null,
   artifactPanelView: 'all',
 
-  openArtifactPanel: (sessionId, opts) =>
+  openArtifactPanel: (sessionId, opts) => {
+    const { artifactPanelSessionId, artifactPanelTabs } = get();
+    // 判据是**会话**而不是「面板是否开着」：同一会话收起面板再打开，标签应当还在
+    // （否则「点 ☰ 看列表 → 收起 → 再打开」会丢掉刚开的一堆产物）；
+    // 换了会话才重置——上一会话的产物 id 在新会话里指不到任何东西
+    const sameSession = artifactPanelSessionId === sessionId;
+    const kept = sameSession ? artifactPanelTabs : [];
+    const id = opts?.previewId;
+    // 点卡片（带 previewId）是**追加**语义：连点两张卡片应该得到两个标签，
+    // 而不是把上一个顶掉——这正是「同时预览多个产物」的入口
+    const tabs = id && !kept.includes(id) ? [...kept, id] : kept;
     set({
       artifactPanelOpen: true,
       artifactPanelSessionId: sessionId,
-      // 换会话时上一会话的预览 id 无意义，必须一并重置
-      artifactPanelPreviewId: opts?.previewId ?? null,
+      artifactPanelTabs: tabs,
+      // 无 previewId（「查看所有产物 / 变更」）→ 回列表，但保留已打开的标签
+      artifactPanelActiveTabId: id ?? null,
       artifactPanelView: opts?.view ?? 'all',
-    }),
+    });
+  },
 
   toggleArtifactPanel: (sessionId) => {
     const { artifactPanelOpen, artifactPanelSessionId } = get();
@@ -100,17 +128,55 @@ export const useSessionUiStore = create<SessionUiState>()((set, get) => ({
       set({ artifactPanelOpen: false });
       return;
     }
+    // 展开（或切到另一个会话）：同会话续用标签，换会话整体重置
+    const sameSession = artifactPanelSessionId === sessionId;
     set({
       artifactPanelOpen: true,
       artifactPanelSessionId: sessionId,
-      artifactPanelPreviewId: null,
-      artifactPanelView: 'all',
+      ...(sameSession
+        ? {}
+        : {
+            artifactPanelTabs: [],
+            artifactPanelActiveTabId: null,
+            artifactPanelView: 'all' as ArtifactPanelView,
+          }),
     });
   },
 
   closeArtifactPanel: () => set({ artifactPanelOpen: false }),
 
-  setArtifactPanelPreview: (artifactId) => set({ artifactPanelPreviewId: artifactId }),
+  openArtifactTab: (artifactId) => {
+    const { artifactPanelTabs } = get();
+    set({
+      artifactPanelTabs: artifactPanelTabs.includes(artifactId)
+        ? artifactPanelTabs
+        : [...artifactPanelTabs, artifactId],
+      artifactPanelActiveTabId: artifactId,
+    });
+  },
+
+  activateArtifactTab: (artifactId) => {
+    if (!get().artifactPanelTabs.includes(artifactId)) return;
+    set({ artifactPanelActiveTabId: artifactId });
+  },
+
+  closeArtifactTab: (artifactId) => {
+    const { artifactPanelTabs, artifactPanelActiveTabId } = get();
+    const index = artifactPanelTabs.indexOf(artifactId);
+    if (index < 0) return;
+    const tabs = artifactPanelTabs.filter((id) => id !== artifactId);
+    // 关的不是当前标签 → 当前标签不受影响；关的是当前标签 → 让位给右邻居（按下标对齐
+    // 过滤后的数组），没有右邻居就取左邻居，一个不剩则回到列表
+    const nextActive =
+      artifactPanelActiveTabId === artifactId
+        ? (tabs[index] ?? tabs[index - 1] ?? null)
+        : artifactPanelActiveTabId;
+    set({ artifactPanelTabs: tabs, artifactPanelActiveTabId: nextActive });
+  },
+
+  closeAllArtifactTabs: () => set({ artifactPanelTabs: [], artifactPanelActiveTabId: null }),
+
+  showArtifactList: () => set({ artifactPanelActiveTabId: null }),
 
   setArtifactPanelView: (view) => set({ artifactPanelView: view }),
 
