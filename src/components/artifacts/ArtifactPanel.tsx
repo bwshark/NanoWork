@@ -28,6 +28,7 @@ import CloseFullscreenIcon from '@mui/icons-material/CloseFullscreen';
 import UnfoldLessIcon from '@mui/icons-material/UnfoldLess';
 import UnfoldMoreIcon from '@mui/icons-material/UnfoldMore';
 import LanguageIcon from '@mui/icons-material/Language';
+import OpenInBrowserIcon from '@mui/icons-material/OpenInBrowser';
 import ImageIcon from '@mui/icons-material/Image';
 import MovieIcon from '@mui/icons-material/Movie';
 import CodeIcon from '@mui/icons-material/Code';
@@ -36,11 +37,12 @@ import AccountTreeIcon from '@mui/icons-material/AccountTree';
 import { ArtifactRenderer } from '@/components/ArtifactRenderer';
 import { FileIcon } from './FileIcon';
 import { ArtifactPreviewBody } from './ArtifactPreviewBody';
-import { WebFrame, WebUrlBar, urlHostLabel } from './WebTabView';
+import { WebFrame, WebUrlBar, toFileUrl, urlHostLabel } from './WebTabView';
+import type { WebTab } from './WebTabView';
 import { useArtifactActions } from './useArtifactActions';
 import { toast } from '@/components/Toast';
 import { UNBOUND_AGENT_LABEL } from '@/lib/constants';
-import { changeCountOf, formatBytes, isFileArtifact } from '@/lib/fileArtifact';
+import { changeCountOf, formatBytes, isFileArtifact, isHtmlArtifact } from '@/lib/fileArtifact';
 import { useSessionsStore } from '@/stores/sessionsStore';
 import { useAgentsStore } from '@/stores/agentsStore';
 import { useArtifactsStore, resolveArtifactContent } from '@/stores/artifactsStore';
@@ -353,6 +355,27 @@ export function ArtifactPanel() {
     if (!result.ok) toast.error(result.error ?? '打开工作空间失败');
   };
 
+  /**
+   * html 产物 → 网页标签。
+   *
+   * 正文来源决定打开方式：
+   * - 有磁盘路径且跑在桌面端 → `file://`：读到的是**磁盘最新内容**，比写入时的快照准；
+   * - 否则退回正文快照（围栏 html 只有快照；Web 端也加载不了 `file://`）。
+   */
+  const openInWebTab = (artifact: Artifact) => {
+    const label = artifact.title?.trim() || artifact.path || '未命名';
+    const fileUrl = artifact.path ? toFileUrl(artifact.path) : '';
+    if (fileUrl !== '' && platform.env === 'electron') {
+      openWebTab({ url: fileUrl, label });
+      return;
+    }
+    if (artifact.content !== '') {
+      openWebTab({ doc: artifact.content, label });
+      return;
+    }
+    toast.warning('这个 html 产物没有可渲染的正文快照');
+  };
+
   /** 折叠/展开全部分组 */
   const toggleAll = () => {
     const next = !(overviewOpen && artifactsOpen);
@@ -388,6 +411,10 @@ export function ArtifactPanel() {
           bgcolor: 'background.paper',
           // 拖动中不挂过渡，否则宽度会跟不上指针（表现为「粘手」）
           transition: dragging ? 'none' : 'width .18s ease',
+          // 拖动中把内容的指针事件全关掉：正文里的 `iframe` 是**独立文档**，
+          // 指针划过时会把 pointermove 从抓手手里接走 → 拖到一半就卡住
+          // （抓手自己用 `pointerEvents: 'auto'` 顶回来）
+          ...(dragging ? { pointerEvents: 'none' } : {}),
         }}
       >
         {/* 左边缘拖宽抓手：压在 borderLeft 上，hover / 拖动时点亮一条 2px 竖线。
@@ -414,6 +441,8 @@ export function ArtifactPanel() {
             zIndex: 3,
             cursor: 'col-resize',
             touchAction: 'none',
+            // 父级在拖动中关掉了指针事件，抓手指的是自己这一小块，要顶回来
+            pointerEvents: 'auto',
             '&:hover .artifact-panel-resizer': { opacity: 1 },
             ...(dragging ? { '& .artifact-panel-resizer': { opacity: 1 } } : {}),
           }}
@@ -478,7 +507,7 @@ export function ArtifactPanel() {
                 return (
                   <WebTabChip
                     key={tab.id}
-                    url={tab.url}
+                    tab={tab}
                     active={active}
                     onSelect={() => activateTab(tab.id)}
                     onClose={() => closeTab(tab.id)}
@@ -550,6 +579,20 @@ export function ArtifactPanel() {
               <Typography noWrap sx={{ flex: 1, minWidth: 0, fontSize: 12.5, fontWeight: 600, px: 0.5 }}>
                 {activeTitle}
               </Typography>
+              {isHtmlArtifact(activeArtifact) && (
+                <Tooltip title="在网页标签打开" placement="bottom">
+                  <IconButton
+                    size="small"
+                    aria-label="在网页标签打开"
+                    sx={{ p: 0.4 }}
+                    // 用**回填过正文**的引用：文件产物入库时 `content` 是空的（正文在内容池），
+                    // 直接传 activeArtifact 会拿到空串，网页标签只能白屏
+                    onClick={() => openInWebTab(previewResolved ?? activeArtifact)}
+                  >
+                    <OpenInBrowserIcon sx={{ fontSize: 16 }} />
+                  </IconButton>
+                </Tooltip>
+              )}
               <Tooltip title="在资源管理器打开" placement="bottom">
                 <IconButton
                   size="small"
@@ -1019,17 +1062,18 @@ function ArtifactTab({
  * 有地址后显示主机名（整条 URL 塞进 168px 只会被截成 `https://exa…`，更没用）。
  */
 function WebTabChip({
-  url,
+  tab,
   active,
   onSelect,
   onClose,
 }: {
-  url: string;
+  tab: WebTab;
   active: boolean;
   onSelect: () => void;
   onClose: () => void;
 }) {
-  const label = url === '' ? '' : urlHostLabel(url);
+  // 产物预览标签用产物名（比 `file:///D:/aa/...` 好读）；手输地址用主机名；都没有 = 空白新标签
+  const label = tab.label ?? (tab.url === '' ? '' : urlHostLabel(tab.url));
   const name = label === '' ? '新标签页' : label;
   return (
     <Box

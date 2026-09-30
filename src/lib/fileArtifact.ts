@@ -351,6 +351,16 @@ export function isFileArtifact(artifact: Artifact): boolean {
 }
 
 /** 在产物列表里按路径找文件产物（用于判定「新建 vs 改写既有文件」） */
+/**
+ * 能不能当**页面**渲染：围栏 `html` 产物，或扩展名是 html 的文件产物。
+ *
+ * 两类产物的正文来源不同（一个在事件里、一个要回读磁盘），但「看效果 / 看源码」
+ * 这件事完全一样 —— 判据收在这里，免得渲染器与面板各写一套扩展名判断。
+ */
+export function isHtmlArtifact(artifact: Artifact): boolean {
+  return artifact.type === 'html' || (artifact.type === 'file' && artifact.language === 'html');
+}
+
 export function findFileArtifact(
   artifacts: readonly Artifact[],
   path: string,

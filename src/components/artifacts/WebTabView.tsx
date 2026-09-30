@@ -59,6 +59,21 @@ export function urlHostLabel(url: string): string {
 }
 
 /**
+ * 本地绝对路径 → `file:///` URL。
+ *
+ * 只认**绝对路径**（Windows 盘符 / 已是 `file:` 协议 / Unix 的 `/x`）：相对路径在
+ * 渲染进程里没有「相对于谁」的答案，硬转会得到一个指向不明目录的地址 —— 那比报错更难查。
+ */
+export function toFileUrl(path: string): string {
+  const value = path.trim();
+  if (value === '') return '';
+  if (/^file:\/\//i.test(value)) return value;
+  if (/^[a-zA-Z]:[\\/]/.test(value)) return `file:///${value.replace(/\\/g, '/')}`;
+  if (value.startsWith('/')) return `file://${value}`;
+  return '';
+}
+
+/**
  * 网页标签的**地址栏**（挂在面板第二行的位置）。
  *
  * 与页面本体拆成两个组件，因为它们在面板里占的是**两行**：地址栏在第二行（与产物名
@@ -89,13 +104,17 @@ export function WebUrlBar({ tab, onReload }: { tab: WebTab; onReload: () => void
 
   const openExternal = () => {
     if (tab.url === '') {
-      toast.warning('地址栏还是空的');
+      // 「产物预览」模式的正文只活在面板里（没有磁盘文件 / 地址），系统浏览器打不开
+      toast.warning(tab.doc ? '这是产物预览，没有可交给系统浏览器的地址' : '地址栏还是空的');
       return;
     }
     void platform.openUrl(tab.url).then((result) => {
       if (!result.ok) toast.error(result.error ?? '无法用系统浏览器打开');
     });
   };
+
+  /** 「产物预览」模式下地址栏是空的，用占位文案说明当前看的是什么 */
+  const placeholder = tab.doc ? `产物预览：${tab.label ?? '未命名'}` : '输入网址';
 
   const btnSx = { p: 0.4 } as const;
   const iconSx = { fontSize: 16 } as const;
@@ -139,7 +158,7 @@ export function WebUrlBar({ tab, onReload }: { tab: WebTab; onReload: () => void
         <LanguageIcon sx={{ fontSize: 15, color: 'text.secondary', flexShrink: 0 }} />
         <InputBase
           value={draft}
-          placeholder="输入网址"
+          placeholder={placeholder}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'Enter') {
@@ -157,7 +176,8 @@ export function WebUrlBar({ tab, onReload }: { tab: WebTab; onReload: () => void
           size="small"
           aria-label="刷新"
           sx={btnSx}
-          disabled={tab.url === ''}
+          // 产物预览模式没有地址，但有正文快照 —— 刷新（重挂 iframe）同样有意义
+          disabled={tab.url === '' && !tab.doc}
           onClick={onReload}
         >
           <RefreshIcon sx={iconSx} />
@@ -188,7 +208,7 @@ export function WebUrlBar({ tab, onReload }: { tab: WebTab; onReload: () => void
  * （见 `sessionUiStore.navigateWebTab` / `stepWebTabHistory`）。
  */
 export function WebFrame({ tab, reloadKey }: { tab: WebTab; reloadKey: number }) {
-  if (tab.url === '') {
+  if (tab.doc === undefined && tab.url === '') {
     return (
       <Box
         sx={{
@@ -216,12 +236,17 @@ export function WebFrame({ tab, reloadKey }: { tab: WebTab; reloadKey: number })
     );
   }
 
+  // 产物预览模式：正文来自快照（围栏 html 没有磁盘文件），用 srcDoc 渲染。
+  // srcDoc 里没有 base，相对路径资源加载不到 —— 单文件 html 产物不受影响。
+  const docMode = tab.doc !== undefined;
+  const title = tab.label ?? (docMode ? '产物预览' : tab.url);
+
   return (
     <Box sx={{ flex: 1, minHeight: 0, bgcolor: '#fff' }}>
       <iframe
-        key={`${tab.url}#${reloadKey}`}
-        title={tab.url}
-        src={tab.url}
+        key={`${tab.doc ?? tab.url}#${reloadKey}`}
+        title={title}
+        {...(docMode ? { srcDoc: tab.doc } : { src: tab.url })}
         // 不给 `allow-top-navigation`：页面不能把顶层窗口导走
         sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
         style={{ width: '100%', height: '100%', border: 'none', display: 'block' }}

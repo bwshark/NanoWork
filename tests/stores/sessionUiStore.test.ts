@@ -180,6 +180,43 @@ describe('sessionUiStore: 新建标签页（网页）与全屏', () => {
     expect(ui().artifactPanelActiveTabId).toBe(webId);
   });
 
+  it('openWebTab 带 url / doc：url 进历史栈，doc 模式不带地址', () => {
+    const ui = () => useSessionUiStore.getState();
+    ui().openArtifactPanel('s1');
+    const fileTab = ui().openWebTab({ url: 'file:///D:/aa/snake.html', label: 'snake.html' });
+    const docTab = ui().openWebTab({ doc: '<html/>', label: 'inline.html' });
+
+    expect(ui().artifactPanelTabs[0]).toMatchObject({
+      id: fileTab,
+      url: 'file:///D:/aa/snake.html',
+      history: ['file:///D:/aa/snake.html'],
+      cursor: 0,
+      label: 'snake.html',
+    });
+    expect(ui().artifactPanelTabs[1]).toMatchObject({
+      id: docTab,
+      url: '',
+      doc: '<html/>',
+      label: 'inline.html',
+      cursor: -1,
+    });
+  });
+
+  it('在产物预览标签里输入真实地址 → 丢掉 doc / label（退出预览模式）', () => {
+    const ui = () => useSessionUiStore.getState();
+    const id = ui().openWebTab({ doc: '<html/>', label: 'inline.html' });
+
+    // store 只接收**最终 URL**（裸域名 → 可加载地址的归一化在地址栏那一层做）
+    ui().navigateWebTab(id, 'https://example.com');
+
+    const tab = ui().artifactPanelTabs[0];
+    expect(tab).toMatchObject({ url: 'https://example.com' });
+    if (tab.kind !== 'web') throw new Error('unreachable');
+    // 留着快照的话，刷新会又跳回那张产物预览 —— 必须一并丢掉
+    expect(tab.doc).toBeUndefined();
+    expect(tab.label).toBeUndefined();
+  });
+
   it('navigateWebTab 写入历史；空地址 / 同地址一律忽略', () => {
     const ui = () => useSessionUiStore.getState();
     const id = ui().openWebTab();

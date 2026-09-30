@@ -41,6 +41,13 @@ export type ArtifactPanelTab =
       history: string[];
       /** 在 `history` 中的位置；-1 = 栈空 */
       cursor: number;
+      /**
+       * 「产物预览」模式的文档正文（围栏 html 产物没有磁盘文件，只能把源码直接喂给
+       * iframe）。有它时优先于 `url` 渲染 —— 用户在地址栏输入真实地址后即退出这个模式。
+       */
+      doc?: string;
+      /** 展示名（`doc` 模式或 `file://` 打开时用产物文件名，比一串路径好读） */
+      label?: string;
     };
 
 interface SessionUiState {
@@ -79,8 +86,13 @@ interface SessionUiState {
   artifactPanelFullscreen: boolean;
   /** 打开产物标签：已开则激活，未开则追加到末尾并激活 */
   openArtifactTab: (artifactId: string) => void;
-  /** 「+ 新建标签页」：追加一个空白网页标签并激活，返回新标签 id */
-  openWebTab: () => string;
+  /**
+   * 「+ 新建标签页」：追加一个网页标签并激活，返回新标签 id。
+   *
+   * 不传参数 = 空白标签（用户自己输地址）；传 `url` = 直接打开；
+   * 传 `doc` = 用源码快照渲染（html 产物没有磁盘文件时的「在网页标签打开」）。
+   */
+  openWebTab: (opts?: { url?: string; doc?: string; label?: string }) => string;
   /** 提交网页标签的地址（写进历史栈；空串 / 与当前相同则忽略） */
   navigateWebTab: (tabId: string, url: string) => void;
   /** 网页标签后退 / 前进（delta = -1 / +1；越界不动） */
@@ -201,12 +213,22 @@ export const useSessionUiStore = create<SessionUiState>()((set, get) => ({
     });
   },
 
-  openWebTab: () => {
+  openWebTab: (opts) => {
     const id = `web-${genId()}`;
+    const url = opts?.url?.trim() ?? '';
+    const doc = opts?.doc ?? '';
     set((s) => ({
       artifactPanelTabs: [
         ...s.artifactPanelTabs,
-        { id, kind: 'web', url: '', history: [], cursor: -1 },
+        {
+          id,
+          kind: 'web',
+          url,
+          history: url === '' ? [] : [url],
+          cursor: url === '' ? -1 : 0,
+          ...(doc !== '' ? { doc } : {}),
+          ...(opts?.label ? { label: opts.label } : {}),
+        },
       ],
       artifactPanelActiveTabId: id,
     }));
@@ -219,9 +241,11 @@ export const useSessionUiStore = create<SessionUiState>()((set, get) => ({
         if (t.id !== tabId || t.kind !== 'web') return t;
         const next = url.trim();
         if (next === '' || next === t.url) return t;
-        // 从历史中间提交新地址 = 开新分支：游标之后的记录丢弃（与浏览器一致）
+        // 从历史中间提交新地址 = 开新分支：游标之后的记录丢弃（与浏览器一致）。
+        // 同时**丢掉 `doc` / `label`**：用户既然输入了真地址，这个标签就不再是
+        // 「某产物的预览」，留着快照会让刷新又跳回旧内容
         const history = [...t.history.slice(0, t.cursor + 1), next];
-        return { ...t, url: next, history, cursor: history.length - 1 };
+        return { id: t.id, kind: 'web', url: next, history, cursor: history.length - 1 };
       }),
     })),
 

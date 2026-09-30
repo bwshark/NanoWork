@@ -5,7 +5,80 @@ import DownloadIcon from '@mui/icons-material/Download';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import type { Artifact } from '@/types';
+import { isHtmlArtifact } from '@/lib/fileArtifact';
 import { MarkdownView } from './MarkdownView';
+
+/** 胶囊式小按钮的两种选中态（与产物面板「全部 / 变更」同一套视觉语言） */
+const chipSx = (active: boolean) => ({
+  textTransform: 'none' as const,
+  fontSize: 12,
+  minWidth: 0,
+  px: 1,
+  py: 0.25,
+  borderRadius: 999,
+  color: active ? 'primary.contrastText' : 'text.secondary',
+  bgcolor: active ? 'primary.main' : 'action.hover',
+  '&:hover': { bgcolor: active ? 'primary.main' : 'action.selected' },
+});
+
+/**
+ * HTML 产物的两种看法：**页面**（iframe 跑起来）与**源码**（高亮）。
+ *
+ * 默认给页面 —— 产物面板的主要用途就是「看看长什么样」；要核对改动 / 复制片段再切源码。
+ * 切换按钮常驻而不是折叠（旧实现是「展开预览」）：折叠版每次看效果都要多点一次，
+ * 而且收起状态下完全看不出这是个页面型产物。
+ *
+ * 围栏 `html` 与 `.html` 文件产物共用它：两者只差正文来源（事件内联 / 磁盘回读），
+ * 「看效果 / 看源码」这件事一模一样。
+ */
+function HtmlArtifactView({ html, title }: { html: string; title?: string }) {
+  const [mode, setMode] = useState<'preview' | 'source'>('preview');
+
+  return (
+    <Box>
+      <Box sx={{ display: 'flex', gap: 0.5, mb: 1 }}>
+        {(['preview', 'source'] as const).map((m) => (
+          <Button
+            key={m}
+            size="small"
+            disableRipple
+            aria-label={m === 'preview' ? '页面预览' : '源码'}
+            onClick={() => setMode(m)}
+            sx={chipSx(mode === m)}
+          >
+            {m === 'preview' ? '预览' : '源码'}
+          </Button>
+        ))}
+      </Box>
+      {mode === 'preview' ? (
+        <iframe
+          title={title ?? 'html 预览'}
+          // 正文来自模型或文件：只给 `allow-scripts`、**不给** `allow-same-origin`，
+          // 它就摸不到父页面的 DOM（我们只是要它把页面画出来）
+          sandbox="allow-scripts"
+          srcDoc={html}
+          style={{
+            width: '100%',
+            // 面板里要能真的用起来（小游戏这类），消息流内联时又不至于吃掉整屏
+            height: 'clamp(320px, 60vh, 720px)',
+            border: 'none',
+            borderRadius: 8,
+            background: '#fff',
+          }}
+        />
+      ) : (
+        <SyntaxHighlighter
+          style={oneDark}
+          language="html"
+          PreTag="div"
+          customStyle={{ borderRadius: 8, fontSize: 13, maxWidth: '100%', overflowX: 'auto' }}
+        >
+          {html}
+        </SyntaxHighlighter>
+      )}
+    </Box>
+  );
+}
 
 /** Mermaid 图渲染（懒加载 mermaid，避免 600KB+ 依赖拖慢首屏） */
 function Mermaid({ code }: { code: string }) {
@@ -70,8 +143,6 @@ interface ArtifactRendererProps {
  * （产物面板）应改走「按需回读磁盘」，不要把空正文渲染成「空文件」。
  */
 export function ArtifactRenderer({ artifact, header = true }: ArtifactRendererProps) {
-  const [open, setOpen] = useState(false);
-
   let body: ReactNode;
   switch (artifact.type) {
     case 'image':
@@ -101,36 +172,16 @@ export function ArtifactRenderer({ artifact, header = true }: ArtifactRendererPr
       );
       break;
     case 'html':
-      body = (
-        <Box>
-          <Box sx={{ mb: 1 }}>
-            <Button size="small" onClick={() => setOpen((v) => !v)}>
-              {open ? '收起预览' : '展开预览'}
-            </Button>
-          </Box>
-          {open && (
-            <iframe
-              title={artifact.title}
-              sandbox="allow-scripts"
-              srcDoc={artifact.content}
-              style={{
-                width: '100%',
-                height: 320,
-                border: 'none',
-                borderRadius: 8,
-                background: '#fff',
-              }}
-            />
-          )}
-        </Box>
-      );
+      body = <HtmlArtifactView html={artifact.content} title={artifact.title} />;
       break;
     case 'mermaid':
       body = <Mermaid code={artifact.content} />;
       break;
     case 'file':
-      body =
-        artifact.language === 'markdown' ? (
+      body = isHtmlArtifact(artifact) ? (
+        // .html / .htm 文件同样给「页面 / 源码」两视图：它和围栏 html 只差正文来源
+        <HtmlArtifactView html={artifact.content} title={artifact.title} />
+      ) : artifact.language === 'markdown' ? (
           <MarkdownView content={artifact.content} />
         ) : (
           <SyntaxHighlighter
