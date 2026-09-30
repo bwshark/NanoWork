@@ -1,7 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { AppLayout } from '@/layout/AppLayout';
 import { ToastContainer } from '@/components/Toast';
-import { PermissionDialog } from '@/components/PermissionDialog';
 import { connectionManager } from '@/ai/connectionManager';
 import { platform } from '@/platform';
 import { useSkillsStore } from '@/stores/skillsStore';
@@ -19,10 +18,14 @@ import { disposeSyncRuntime, initSyncRuntime } from '@/sync';
 import type { SyncRuntime } from '@/sync';
 
 /**
- * 顶层壳：AppLayout（侧栏 + 横幅 + Outlet）+ 全局 Toast + 权限门控弹窗。
+ * 顶层壳：AppLayout（侧栏 + 横幅 + Outlet）+ 全局 Toast。
  * 挂载时等待网关就绪（带退避重试，吸收 Python 进程冷启动空窗），
  * 并刷新本地技能目录与模型目录（来源 nanobot 配置）；
  * 桌面端还会把已保存的 IM 频道配置校准进 nanobot（幂等，无变化不重启网关）。
+ *
+ * 逐条批准卡片（ApprovalCard）**挂在会话页内**而非这里：它的定位是「覆盖
+ * 输入框」，锚点必须是聊天页那一层容器（见 ChatPage 的 `position: relative`）。
+ * 挂在这一层就得自己算「输入框在哪」，而输入框高度随可见行数变化。
  */
 export function App() {
   // 同步运行时的持有引用：`dispose()` 在卸载清理函数里调用（见下）。
@@ -128,7 +131,6 @@ export function App() {
     <>
       <AppLayout />
       <ToastContainer />
-      <PermissionDialog />
     </>
   );
 }

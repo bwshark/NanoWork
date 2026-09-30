@@ -161,8 +161,15 @@ export interface ApprovalRequestEvent {
   callId?: string;
 }
 
-/** 逐条批准的裁决结果 */
-export type ApprovalDecision = 'allow' | 'deny';
+/**
+ * 逐条批准的裁决结果。
+ *
+ * `always` = 「本会话内始终允许这个工具」。它与 `allow` 的差别只在**下次还问
+ * 不问**，不改变本次是否放行（两者都会执行）。刻意做成独立取值而不是让前端
+ * 自己记账：豁免必须由引擎持有——只有它知道下一轮同一个工具会不会再来，
+ * 也只有它能保证「换会话即失效」。
+ */
+export type ApprovalDecision = 'allow' | 'deny' | 'always';
 
 /**
  * 富产物事件载荷。
@@ -409,6 +416,8 @@ export interface AgentRuntime {
    * 执行前等待裁决，所以必须另开一次请求送回去。
    *
    * - `requestId` 取自 `ApprovalRequestEvent.id`；
+   * - `decision === 'always'` 额外让引擎在本会话内豁免该工具（见
+   *   `ApprovalDecision`）；
    * - `reason` 仅在拒绝时有意义，会被回灌给模型让它改道（可省略）；
    * - 请求已超时或被取消时抛错——调用方应据此提示「已失效」，而不是
    *   假装授权成功。

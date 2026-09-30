@@ -14,6 +14,7 @@ import { ChatHeader } from "./ChatHeader";
 import { chatColumnSx } from "./chatColumnSx";
 import { MessageStream } from "./MessageStream";
 import { Composer, type ComposerApi } from "./Composer";
+import { ApprovalCard } from "@/components/ApprovalCard";
 import {
   HERO_MODES,
   type HeroMode,
@@ -187,6 +188,10 @@ export function ChatPage() {
         height: "100%",
         flex: 1,
         bgcolor: "background.default",
+        // 审批卡片（ApprovalCard）以 `position: absolute` 覆盖输入框，锚点
+        // 就是这一层。缺了 `relative` 它会一路找到最近的定位祖先（多半是
+        // body），贴在视口底部而不是输入框上——而输入框上方还压着横幅。
+        position: "relative",
       }}
     >
       <Box
@@ -234,6 +239,11 @@ export function ChatPage() {
             variant="floating"
           />
         )}
+        {/* 逐条批准卡片：绝对定位覆盖在输入框之上（不是 Modal）。
+            挂在 Composer **之后**才有意义——早于它渲染就会被输入框盖住。
+            `readonly` 会话永远不会收到审批请求（定时任务留痕），因此与
+            上面的三个分支正交，不必再加判断。 */}
+        <ApprovalCard />
       </Box>
     </Box>
   );

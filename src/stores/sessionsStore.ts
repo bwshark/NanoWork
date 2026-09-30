@@ -335,7 +335,7 @@ interface SessionsState {
   /**
    * 裁决队首的逐条批准请求并回传引擎。
    *
-   * @param decision 允许 / 拒绝
+   * @param decision 允许 / 拒绝 / 本会话始终允许
    * @param reason 拒绝原因（可选）；引擎会回灌给模型让它改道
    *
    * 回传失败（请求已超时/已取消）时提示用户并仍出队——该请求已死，
@@ -2095,6 +2095,10 @@ export const useSessionsStore = create<SessionsState>()(
         // 请求已死（超时 / 被取消）：如实提示，不假装授权成功
         toast.error(e instanceof Error ? e.message : String(e));
       }
+      // 视图侧只认「通过 / 未通过」两态：`always` 与 `allow` 对**这次调用**的
+      // 结果完全一致（都执行），差别在引擎下一轮还问不问。把三态往视图与事件
+      // 里扩散会让工具卡片、权限日志各多出一支与本次结果无关的分叉。
+      const passed = decision !== 'deny';
       // 裁决落盘（`source: 'engine'` = 引擎侧审批回环，见 D3）。视图侧的
       // 工具卡片状态与 `permissionLog` 都由它重放出来，故一条事件足够。
       // 权限日志条目的 id / 时间取事件自身的值，使刷新前后是同一条记录
@@ -2105,7 +2109,7 @@ export const useSessionsStore = create<SessionsState>()(
           callId: head.toolCallId,
           tool: head.tool,
           args: head.args,
-          decision: decision === 'allow' ? 'approved' : 'rejected',
+          decision: passed ? 'approved' : 'rejected',
           ...(reason ? { reason } : {}),
           source: 'engine',
         }),
@@ -2114,7 +2118,7 @@ export const useSessionsStore = create<SessionsState>()(
         ...m,
         toolCalls: (m.toolCalls ?? []).map((t) =>
           t.id === head.toolCallId
-            ? { ...t, status: (decision === 'allow' ? 'approved' : 'rejected') as ToolCall['status'] }
+            ? { ...t, status: (passed ? 'approved' : 'rejected') as ToolCall['status'] }
             : t,
         ),
       }));
@@ -2126,7 +2130,7 @@ export const useSessionsStore = create<SessionsState>()(
             id: recorded?.id ?? genId(),
             tool: head.tool,
             args: head.args,
-            decision: decision === 'allow' ? 'approved' : 'rejected',
+            decision: passed ? 'approved' : 'rejected',
             at: recorded ? new Date(recorded.timestamp).toISOString() : nowIso(),
           },
         ] as PermissionLog[],

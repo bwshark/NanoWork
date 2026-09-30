@@ -14,6 +14,7 @@
  */
 
 import { act } from 'react';
+import React from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 
 let root: Root | null = null;
@@ -39,6 +40,29 @@ export function mount(node: React.ReactElement): HTMLDivElement {
   const r = root;
   act(() => {
     r.render(node);
+  });
+  return host;
+}
+
+/**
+ * 在 `React.StrictMode` 下挂载组件。
+ *
+ * ⚠️ 这不是「更严格的 render 一次」，而是**实打实的第二套渲染语义**：StrictMode
+ * 会把每次渲染跑两遍并丢掉第一遍的输出。任何「在渲染期写 ref 当哨兵」的重置手法
+ * 都会因此静默失效——第一遍写掉 ref，第二遍一看哨兵已换、直接跳过重置，于是
+ * 第一遍排队的那批 `setXxx(false)` 全部落空。
+ *
+ * 真机上 `main.tsx` 就是 StrictMode，所以**验证「换请求要清干净上一条的输入」
+ * 这类跨渲染的状态必须走这个入口**：普通 `mount` 下用例会绿，上线却是坏的。
+ */
+export function mountStrict(node: React.ReactElement): HTMLDivElement {
+  unmount();
+  host = document.createElement('div');
+  document.body.appendChild(host);
+  root = createRoot(host);
+  const r = root;
+  act(() => {
+    r.render(React.createElement(React.StrictMode, null, node));
   });
   return host;
 }
