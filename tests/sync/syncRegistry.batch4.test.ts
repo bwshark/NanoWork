@@ -394,6 +394,7 @@ function baseSettingsForRegistryTest(): Settings {
     gatewayEndpoint: 'http://127.0.0.1:8000',
     apiToken: 'secret',
     theme: 'dark',
+    processDetail: 'key',
     memoryEnabled: true,
     autoSummarize: true,
     transcription: { enabled: false, endpoint: 'http://local', model: 'whisper-1', apiToken: '', language: 'zh' },

@@ -3,7 +3,7 @@ import { DEFAULT_TRANSCRIPTION, DEFAULT_DESKTOP, useSettingsStore } from '@/stor
 import { DEFAULT_GATEWAY, STORAGE_KEYS } from '@/lib/constants';
 
 /**
- * settingsStore persist version 3 → 4 迁移测试。
+ * settingsStore persist 版本迁移测试。
  *
  * 迁移关键风险：`transcription` 是**嵌套对象**，persist 的浅合并拿不到内层默认值。
  * 老用户升级后若 settings.transcription 为 undefined，语音面板 / Composer 里
@@ -33,6 +33,7 @@ beforeEach(() => {
       gatewayEndpoint: DEFAULT_GATEWAY,
       apiToken: '',
       theme: 'dark',
+      processDetail: 'key',
       memoryEnabled: true,
       autoSummarize: false,
       transcription: DEFAULT_TRANSCRIPTION,
@@ -134,6 +135,38 @@ describe('settingsStore 迁移 v3 → v4：transcription 补齐', () => {
   });
 });
 
+describe('settingsStore 迁移 v12 → v13：processDetail 补齐', () => {
+  it('v12 数据无 processDetail：迁移后兜底为 key', async () => {
+    await rehydrateLegacy(
+      { settings: { gatewayEndpoint: DEFAULT_GATEWAY, theme: 'dark' }, status: 'offline' },
+      12,
+    );
+    expect(useSettingsStore.getState().settings.processDetail).toBe('key');
+  });
+
+  it('非法 processDetail 值：迁移后归一化为 key', async () => {
+    await rehydrateLegacy(
+      {
+        settings: { gatewayEndpoint: DEFAULT_GATEWAY, processDetail: 'verbose' },
+        status: 'offline',
+      },
+      12,
+    );
+    expect(useSettingsStore.getState().settings.processDetail).toBe('key');
+  });
+
+  it('合法 processDetail 值：迁移后原样保留，不被默认值覆盖', async () => {
+    await rehydrateLegacy(
+      {
+        settings: { gatewayEndpoint: DEFAULT_GATEWAY, processDetail: 'full' },
+        status: 'offline',
+      },
+      12,
+    );
+    expect(useSettingsStore.getState().settings.processDetail).toBe('full');
+  });
+});
+
 describe('settingsStore 迁移健壮性', () => {
   it('非法 theme 兜底为 dark', async () => {
     await rehydrateLegacy(
@@ -148,6 +181,7 @@ describe('settingsStore 迁移健壮性', () => {
     const s = useSettingsStore.getState().settings;
     expect(s.gatewayEndpoint).toBe(DEFAULT_GATEWAY);
     expect(s.transcription).toEqual(DEFAULT_TRANSCRIPTION);
+    expect(s.processDetail).toBe('key');
   });
 
   it('持久化为损坏 JSON 时不崩，回退默认设置', async () => {

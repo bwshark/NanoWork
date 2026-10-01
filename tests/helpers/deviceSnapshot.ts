@@ -115,6 +115,7 @@ export function settingsFor(defaultWorkspacePath: string): Settings {
     gatewayEndpoint: 'http://127.0.0.1:8765/v1',
     apiToken: '',
     theme: 'system',
+    processDetail: 'key',
     memoryEnabled: true,
     autoSummarize: true,
     transcription: { ...DEFAULT_TRANSCRIPTION },

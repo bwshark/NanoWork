@@ -3,8 +3,12 @@ import { SettingsCard, SettingsRow } from '@/components/settings/SettingsPrimiti
 import { StorageCard } from '@/components/settings/StorageCard';
 import { useDesktopConfig } from '@/hooks/useDesktopConfig';
 import { platform } from '@/platform';
-import { normalizeTheme, useSettingsStore } from '@/stores/settingsStore';
-import type { Settings } from '@/types';
+import {
+  normalizeProcessDetail,
+  normalizeTheme,
+  useSettingsStore,
+} from '@/stores/settingsStore';
+import type { ProcessDetailLevel, Settings } from '@/types';
 
 /**
  * 桌面端专有设置：系统托盘 / 开机自启 / Dock。
@@ -59,7 +63,7 @@ function DesktopCard() {
   );
 }
 
-/** 通用：外观主题 + 桌面端行为 */
+/** 通用：外观主题 + 对话过程 + 桌面端行为 */
 export function GeneralSection() {
   const settings = useSettingsStore((s) => s.settings);
   const setSettings = useSettingsStore((s) => s.setSettings);
@@ -91,6 +95,34 @@ export function GeneralSection() {
         />
       </SettingsCard>
 
+      {/* 对话过程：与「外观」同属「界面上看到什么」的观感偏好，且共用同一套
+          ToggleButtonGroup 控件语言，因此紧挨外观摆放；桌面端 / 存储回答的是
+          「怎么被系统唤起来 / 东西存在哪」，与观感不是一类，排在其后。 */}
+      <SettingsCard
+        title="对话过程"
+        description="控制对话中模型工作步骤的展示详略。聚焦结果只看结论；关键细节仅展示重要操作；完整过程保留全部思考与工具调用。"
+      >
+        <SettingsRow
+          label="工作步骤展示"
+          hint="出错时始终会标出失败步骤，不受本设置影响。"
+          control={
+            <ToggleButtonGroup
+              exclusive
+              size="small"
+              value={normalizeProcessDetail(settings.processDetail)}
+              onChange={(_e, value: ProcessDetailLevel | null) => {
+                if (value) setSettings({ processDetail: value });
+              }}
+              aria-label="工作步骤展示详略"
+            >
+              <ToggleButton value="result">聚焦结果</ToggleButton>
+              <ToggleButton value="key">关键细节</ToggleButton>
+              <ToggleButton value="full">完整过程</ToggleButton>
+            </ToggleButtonGroup>
+          }
+        />
+      </SettingsCard>
+
       {/* 桌面端专有：托盘 / 开机自启 / Dock；Web 端整块隐藏 */}
       {platform.env === 'electron' ? (
         <DesktopCard />
@@ -102,7 +134,7 @@ export function GeneralSection() {
 
       {/* 存储放在最后：它回答的是「东西存在哪」，属于**看和改落点**，
           与前面的「长什么样」「怎么被唤起来」不是一类；排在最后也让
-          「主题 → 桌面端行为 → 存储」形成从界面到系统再到数据的层次。 */}
+          「主题 → 对话过程 → 桌面端行为 → 存储」形成从界面到系统再到数据的层次。 */}
       <StorageCard />
     </Box>
   );

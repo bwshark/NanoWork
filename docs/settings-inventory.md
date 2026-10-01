@@ -31,13 +31,14 @@
 
 ## 二、现有配置项全量清单
 
-### 2.1 `settings.json`（`STORAGE_KEYS.settings`，zustand persist，version 10）
+### 2.1 `settings.json`（`STORAGE_KEYS.settings`，zustand persist，version 13）
 
 | 键 | 类型 | 默认值 | 界面位置 | 备注 |
 |---|---|---|---|---|
 | `gatewayEndpoint` | string | `http://127.0.0.1:18900/v1` | 连接 | 变更后重探连接 + 重拉模型目录；**本机地址会被主进程的实际端口自动对齐**（端口可能顺延，见 `nanobot:gatewayInfo`） |
 | `apiToken` | string | `''` | 连接 | 走密码输入框 |
 | `theme` | `light/dark/system` | `system` | 通用 · 外观 | 读取侧经 `normalizeTheme` 兜底 |
+| `processDetail` | `result/key/full` | `key` | 通用 · 对话过程 | 模型工作步骤的展示详略（聚焦结果 / 关键细节 / 完整过程）；读取侧经 `normalizeProcessDetail` 兜底为 `key`；**纯偏好，参与云同步**（不进 `SETTINGS_SYNC_OMIT_KEYS`） |
 | `memoryEnabled` | boolean | `true` | 记忆 | 是否把记忆块注入 system |
 | `autoSummarize` | boolean | `true` | 记忆 | v9 迁移把旧 `false` 统一抬成 `true` |
 | `transcription` | object | 见 `DEFAULT_TRANSCRIPTION` | 连接 · 语音输入 | 嵌套对象，迁移时需单独补齐内层默认值 |
@@ -50,7 +51,7 @@
 | `shortcuts` | `Partial<Record<ShortcutId,string>>` | `{}` | 快捷键 | **只存与默认不同的项**；表里没有 = 用默认，`''` = 显式禁用（两者语义不同，见下） |
 | `enabledPlugins` | `string[]?` | 未设 → 空表 | 插件 | **是「意图」不是「事实」**，激活状态权威在引擎 |
 
-迁移规则集中在 `settingsStore.migrate`（v1→v10）。**每一次加字段都要在迁移里补默认值**，
+迁移规则集中在 `settingsStore.migrate`（v1→v13）。**每一次加字段都要在迁移里补默认值**，
 嵌套对象必须单独深补一层——浅合并拿不到内层默认值，这是已经踩过两次的坑（transcription / desktop）。
 
 `shortcuts` 的三态语义值得单独记一笔：
@@ -82,7 +83,7 @@
 
 | 弹窗分区 | 承载 | WorkBuddy 对应项 |
 |---|---|---|
-| 通用 | 外观主题、桌面端（托盘常驻 / 开机自启 / Dock） | 通用（开机自启、权限、通知）+ 外观 |
+| 通用 | 外观主题、对话过程（工作步骤展示档位）、桌面端（托盘常驻 / 开机自启 / Dock） | 通用（开机自启、权限、通知）+ 外观 |
 | 快捷键 | 命令键位列表（改键 / 恢复默认 / 全部恢复默认 + 搜索）、全局唤起快捷键 | 快捷键 + 通用 · 全局唤起快捷键 |
 | 连接 | 网关 endpoint/token、语音输入（STT） | 通用 · 网络代理 |
 | 记忆 | 注入开关、自动沉淀 + 记忆正文编辑 | 记忆与进化 |

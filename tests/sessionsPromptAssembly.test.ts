@@ -52,6 +52,7 @@ function resetStores(a: Agent) {
       gatewayEndpoint: 'http://127.0.0.1:8765/v1',
       apiToken: '',
       theme: 'dark',
+      processDetail: 'key',
       memoryEnabled: true,
       autoSummarize: false,
       transcription: DEFAULT_TRANSCRIPTION,

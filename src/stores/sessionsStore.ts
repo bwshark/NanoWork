@@ -937,9 +937,24 @@ async function streamAssistantReply(
       .sessions.find((s) => s.id === sessionId)
       ?.messages.find((x) => x.id === assistantId);
     const aborted = finalMsg?.aborted === true;
+    /**
+     * **跑了一半才断**的轮次必须自报家门。
+     *
+     * 静默超时（网关在超时窗口内一个字节都没吐）走的是 `onError`，**不是**
+     * `onInterrupted`——于是这一轮既有正文、又在消息头显示成「已完成」，
+     * 而事实是最后那一步工具的结果根本没回来。2026-10-01 报障正是这个形态：
+     * 消息写着「已完成 11m52s」，最后一行却永远在转圈（客户端 120s 静默超时
+     * 掐断了一轮仍在跑 `exec` 的回合）。
+     *
+     * 判据带上「是否已经产出过东西」：把「一开口就连不上」摘出去——那种情况
+     * 没有半截结果可言，标成「被中断」反而误导（它是彻底的连接失败，走 toast）。
+     */
+    const partialError =
+      !!sendError &&
+      ((finalMsg?.content.trim().length ?? 0) > 0 || (finalMsg?.process?.length ?? 0) > 0);
     // 局部标记与消息上的标记取或：`onInterrupted` 已经写进消息，但并发/重放路径下
     // 局部变量才是这一轮的权威事实。
-    const wasInterrupted = interrupted || finalMsg?.interrupted === true;
+    const wasInterrupted = interrupted || finalMsg?.interrupted === true || partialError;
     const reason = sendError
       ? 'error'
       : aborted
@@ -1012,10 +1027,15 @@ async function streamAssistantReply(
       }
     }
 
-    if (durationMs !== undefined) {
+    if (durationMs !== undefined || wasInterrupted) {
       useSessionsStore.getState().updateMessage(sessionId, assistantId, (m) => ({
         ...m,
-        durationMs,
+        ...(durationMs !== undefined ? { durationMs } : {}),
+        // `interrupted` 必须**同时**写回内存消息，不能只写进事件负载：
+        // 事件要等下次水合才投影回视图，而用户此刻就在看这一屏。早先只有
+        // `onInterrupted` 那条路径写内存态，于是「静默超时」掐断的轮次在实时视图里
+        // 依然显示成「已完成」，刷新一下才变成「已中断」——同一个事实两种说法。
+        ...(wasInterrupted ? { interrupted: true } : {}),
       }));
     }
     // 结束（成功 / 报错 / abort）后移除该会话的流式上下文，恢复可发送状态
@@ -2055,13 +2075,22 @@ export const useSessionsStore = create<SessionsState>()(
     },
 
     handleApprovalRequest: (sessionId, messageId, req) => {
+      // 工具调用行的 id 必须**与过程时间线对齐**：引擎在 approval_request 里带的
+      // `call_id` 与 `tool` 进度事件里的 `call_id` 是同一次调用（见
+      // `ApprovalRequestEvent.callId` 的注释），事件流投影（`events/project.ts`
+      // 的 permission-decision 分支）也是直接拿 `callId` 当 ToolCall 的 id。
+      // 早先这里用的是**审批请求 id**，于是实时路径下两份记录永远对不上，
+      // 同一次 write_file 会既显示成过程行、又显示成一张卡片（2026-10-01 用户截图）。
+      // 缺 `callId` 时退回审批请求 id：老引擎 / 退化路径下两侧仍可能对不上，
+      // 宁可多渲染一张卡片，也不能把一次真实发生的调用藏起来。
+      const callId = req.callId ?? req.id;
       // 在消息上落一条 pending 行，使授权请求与过程时间线同源可见
       get().updateMessage(sessionId, messageId, (m) => ({
         ...m,
         toolCalls: [
           ...(m.toolCalls ?? []),
           {
-            id: req.id,
+            id: callId,
             tool: req.tool,
             args: req.args,
             sensitive: true,
@@ -2073,10 +2102,12 @@ export const useSessionsStore = create<SessionsState>()(
         pendingApprovals: [
           ...s.pendingApprovals,
           {
+            // `id` 是**回传裁决用的线上 id**（POST /v1/tool-approvals/{id}），
+            // 与上面那条消息记录的身份不是一回事，不能合并。
             id: req.id,
             sessionId,
             messageId,
-            toolCallId: req.id,
+            toolCallId: callId,
             tool: req.tool,
             args: req.args,
           },

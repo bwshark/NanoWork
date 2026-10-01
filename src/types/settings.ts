@@ -10,6 +10,10 @@ export type { DesktopConfig };
 // 这里只做类型引用，键位默认值与匹配逻辑都不落在 types 层
 import type { ShortcutId } from '../lib/shortcuts';
 
+// 过程展示档位是 process 域的一等值（定义在 types/process）；Settings 直接引用它，
+// 避免 settings↔process 之间出现反向依赖。
+import type { ProcessDetailLevel } from './process';
+
 /**
  * 语音转录（STT）配置：走 OpenAI 兼容的 `/audio/transcriptions`。
  * 未启用时 Composer 的语音按钮保持禁用（不申请麦克风权限）。
@@ -35,6 +39,14 @@ export interface Settings {
   apiToken: string;
   /** UI 主题偏好：浅色 / 深色 / 跟随系统 */
   theme: 'light' | 'dark' | 'system';
+  /**
+   * 「模型工作步骤」的展示详略档位（`result` 聚焦结果 / `key` 关键细节 / `full` 完整过程）。
+   *
+   * 为什么它是**纯偏好、可跨设备同步**：它只表达「我想看多少细节」，与本机环境无关
+   * （不含路径、凭据、端口），在任何一台设备上设置都同样成立——与 `theme` 同一口径，
+   * 因此**不进** `SETTINGS_SYNC_OMIT_KEYS`。
+   */
+  processDetail: ProcessDetailLevel;
   /** 是否将 MEMORY.md 以标签块注入 system prompt 末尾（默认 true） */
   memoryEnabled: boolean;
   /** 会话结束时是否自动沉淀摘要（默认 false） */

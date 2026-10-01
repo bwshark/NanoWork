@@ -65,6 +65,7 @@ function resetStores(info: StorageInfo | null = INFO) {
       gatewayEndpoint: 'http://127.0.0.1:8765/v1',
       apiToken: '',
       theme: 'dark',
+      processDetail: 'key',
       memoryEnabled: false,
       autoSummarize: false,
       transcription: DEFAULT_TRANSCRIPTION,

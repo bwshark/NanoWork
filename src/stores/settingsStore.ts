@@ -12,6 +12,7 @@ import { metaForEdit } from '@/lib/syncStamp';
 import type {
   ConnectionStatus,
   DesktopConfig,
+  ProcessDetailLevel,
   Settings,
   SyncMeta,
   TranscriptionConfig,
@@ -114,6 +115,15 @@ const DEFAULT_SETTINGS: Settings = {
   gatewayEndpoint: DEFAULT_GATEWAY,
   apiToken: '',
   theme: 'system',
+  /**
+   * 工作步骤展示档位，默认「关键细节」（`key`）。
+   *
+   * 三档里没有一档能逐像素复刻现状，只能选**扰动最小**者：`key` 保留既有主线
+   * 「流式中看到过程、结束后收起」，同时把琐碎读取收敛为一行汇总，对老用户是
+   * 唯一「向任一方向移动都成立」的中间档（`full` 会改掉「结束后收起」，
+   * `result` 会改掉「流式铺开看到动作」）。
+   */
+  processDetail: 'key',
   memoryEnabled: true,
   /**
    * 会话结束自动沉淀摘要。**默认开启**。
@@ -137,6 +147,16 @@ const DEFAULT_SETTINGS: Settings = {
 /** 合法主题偏好值；未知值兜底为深色（读取侧归一化，防止存储被手工写入非法值） */
 export function normalizeTheme(value: unknown): Settings['theme'] {
   return value === 'light' || value === 'dark' || value === 'system' ? value : 'dark';
+}
+
+/**
+ * 合法工作步骤展示档位；未知值兜底为「关键细节」（`key`）。
+ *
+ * 读取侧归一化，防止存储被手工写入非法值后在渲染层拿到未知档位——缺省与非法
+ * 都收敛到默认档，与 `normalizeTheme` 同一写法与口径。
+ */
+export function normalizeProcessDetail(value: unknown): ProcessDetailLevel {
+  return value === 'result' || value === 'key' || value === 'full' ? value : 'key';
 }
 
 /**
@@ -223,8 +243,8 @@ export const useSettingsStore = create<SettingsState>()(
     {
       name: STORAGE_KEYS.settings,
       storage: zustandStorage,
-      // v12：新增 `syncMeta` 兄弟切片（批次 4 的 settings 同步元数据）
-      version: 12,
+      // v13：新增 `processDetail`（工作步骤展示档位）
+      version: 13,
       migrate: (persistedState) => {
         const state = persistedState as Partial<SettingsState> | undefined;
         if (state?.settings?.gatewayEndpoint?.includes(':8765')) {
@@ -286,6 +306,10 @@ export const useSettingsStore = create<SettingsState>()(
           )
             ? state.settings.knownWorkspaces
             : [];
+          // v13：工作步骤展示档位。它是 settings 内部的展示偏好（非顶层切片），
+          // 老用户没有这个字段 → 上面浅合并已补默认 `key`；这里再统一过一遍归一化，
+          // 让被手工写入的非法档位收敛到 `key`，避免渲染层拿到未知档位。
+          state.settings.processDetail = normalizeProcessDetail(state.settings.processDetail);
         }
         if (state) {
           // v12：同步元数据兄弟切片。老用户没有它 → 补默认值（`rev = 0` = 从未改过）。

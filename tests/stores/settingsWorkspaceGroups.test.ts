@@ -23,6 +23,7 @@ function resetSettings() {
       gatewayEndpoint: DEFAULT_GATEWAY,
       apiToken: '',
       theme: 'dark',
+      processDetail: 'key',
       memoryEnabled: true,
       autoSummarize: false,
       transcription: DEFAULT_TRANSCRIPTION,

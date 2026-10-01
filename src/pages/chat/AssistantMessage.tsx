@@ -16,11 +16,13 @@ import { parseCronJobId } from '@/ai/cronTaskMirror';
 import { MemoryService } from '@/lib/memory';
 import { useSessionsStore, selectSessionStreamStatus } from '@/stores/sessionsStore';
 import { useSessionUiStore } from '@/stores/sessionUiStore';
+import { useSettingsStore } from '@/stores/settingsStore';
 import { useAgentsStore } from '@/stores/agentsStore';
 import { useExpertGroupsStore } from '@/stores/expertGroupsStore';
 import { avatarGlyph, entityAvatarSx } from '@/lib/cardSx';
 import { isFileArtifact } from '@/lib/fileArtifact';
 import { digestProcess, formatDuration } from '@/lib/processDigest';
+import { classifyToolCalls, isToolCallRepresentedInProcess } from '@/lib/processDetail';
 import { toast } from '@/components/Toast';
 import { CreateTaskDialog } from '@/components/chat/CreateTaskDialog';
 import { CronTaskCard } from '@/components/chat/CronTaskCard';
@@ -57,11 +59,14 @@ function streamStatusText(status: string): string {
 /**
  * 助手消息（左侧）：署名头 + 过程开关行 + 过程时间线 + 流式 Markdown + 富产物。
  *
- * 过程（深度思考标记行 + 工具执行行）的可见性跟着**对话是否还在进行**：
+ * 过程（深度思考标记行 + 工具执行行 + 工具调用卡片）的可见性：
  * - **流式中**：自动铺开，用户要看到此刻在做什么；
- * - **结束后**：整块收起，只留一行「已完成 1m12s ›」——回答才是结果，
+ * - **结束后**：默认整块收起，只留一行「已完成 1m12s ›」——回答才是结果，
  *   过程是回溯用的证据。实测里一条长任务的思考标记 + 工具行能顶掉一整屏，
- *   铺开后真正的结论被推到屏幕之外，所以完成后必须收。
+ *   铺开后真正的结论被推到屏幕之外，所以完成后默认收。
+ *
+ * 展示详略由全局档位 `settings.processDetail` 决定（聚焦结果 / 关键细节 / 完整过程）；
+ * 档位只影响**渲染**，不改 `Message.process` 的数据形态。
  *
  * 收起走 `Collapse unmountOnExit`，即**过程整块从 DOM 卸载**（含已写完的思考正文），
  * 而不是仅仅视觉隐藏；点开才重新挂载。用户手动点过之后以其选择为准，
@@ -71,8 +76,11 @@ export function AssistantMessage({ message, agentId, sessionId }: AssistantMessa
   const [hovered, setHovered] = useState(false);
   const [saving, setSaving] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
-  /** 过程开关的用户手动表态：null = 未表态，跟随「是否流式中」自动决策 */
+  /** 过程开关的用户手动表态：null = 未表态，跟随档位默认决策 */
   const [manualProcessOpen, setManualProcessOpen] = useState<boolean | null>(null);
+
+  // 展示档位：全局偏好，决定过程块渲染多少细节（以及默认展开态）
+  const tier = useSettingsStore((s) => s.settings.processDetail);
 
   // 按「所属会话」读取独立流式状态：仅该会话流式期间、且本消息是其最后一条时
   // 显示过程状态行，避免历史中断遗留的空消息被误判为思考中
@@ -135,9 +143,39 @@ export function AssistantMessage({ message, agentId, sessionId }: AssistantMessa
   // 工具调用卡片与过程行同属「执行细节」，一起挂在时间线末尾，不再单独占尾部空间
   const toolCalls = message.toolCalls ?? [];
 
+  /**
+   * 只保留**带来新信息**的工具调用卡片。
+   *
+   * 审批门控留下的工具调用与过程行是同一件事的两份记录（引擎的 `approval_request`
+   * 与 `tool` 进度事件共用同一个 `call_id`）。而写文件 / 执行命令 / MCP 调用**全是
+   * 敏感工具**，于是「write_file 敏感 已批准」会沿一条长任务垒成一堵墙——2026-10-01
+   * 用户截图里被圈出来的就是它，而过程行早已把同样的动作说成「已写入 D:/…」。
+   *
+   * 因此：**已在时间线里出现、且审批结论就是「通过」**的调用不再单独渲染卡片。
+   * 通过是正常路径，一次成功执行本身就是它的全部证据，再挂两个字只是噪声。
+   * 但「等待授权 / 被拒 / 失败」是过程行**给不出**的结论，这类卡片必须保留。
+   *
+   * ⚠️ 判据必须用**未经档位过滤**的 `processEvents`，不能顺手换成 `buildProcessRows`
+   * 的结果：过程行在不在时间线里是**事实**，与用户选了哪一档无关。用过滤后的行判定，
+   * 会让同一条消息在不同档位下时而显示卡片、时而显示过程行——「聚焦结果」档尤其明显。
+   */
+  const cardToolCalls = toolCalls.filter(
+    (t) => t.status !== 'approved' || !isToolCallRepresentedInProcess(t, processEvents),
+  );
+
+  // ToolCallCard 档位分类：pinned（折叠区外恒显）/ inline（折叠区内）
+  // 注：过程行（reasoning / tool）的档位过滤 + 聚合由 ProcessView 内部调用
+  // `buildProcessRows` 一次完成（见 design §3.5），此处不重复派生。
+  const { pinned: pinnedToolCalls, inline: inlineToolCalls } = classifyToolCalls(
+    cardToolCalls,
+    tier,
+  );
+
+  // error / running 是档位豁免项 → digest 用**过滤前**的 processEvents 与过滤后等价
+  const digest = digestProcess(processEvents);
   // 失败步数提到署名头：过程收起后失败行看不见了，
   // 而「哪一轮跑挂了」是唯一值得在头行就暴露的异常信号。
-  const failedSteps = digestProcess(processEvents).errors;
+  const failedSteps = digest.errors;
 
   // 搜索激活时强制展开过程：命中项藏在折叠区里会搜不到，也会定位不到
   const searchSessionId = useSessionUiStore((s) => s.searchSessionId);
@@ -145,9 +183,16 @@ export function AssistantMessage({ message, agentId, sessionId }: AssistantMessa
   const searchForcesOpen = searchSessionId === sessionId && searchQuery.trim() !== '';
 
   const hasProcess = processEvents.length > 0 || toolCalls.length > 0;
-  const processOpen = searchForcesOpen || (manualProcessOpen ?? isStreaming);
+  // 档位默认展开态：有失败恒开（安全优先）；full 恒开（调试诉求）；result/key 跟随流式
+  const defaultProcessOpen =
+    digest.errors > 0 ? true : tier === 'full' ? true : isStreaming;
+  // 优先级：搜索强制展开 > 用户手动表态 > 档位默认
+  const processOpen = searchForcesOpen || (manualProcessOpen ?? defaultProcessOpen);
+  // 是否可交互：result 档在既无 running 也无 error 时退化为一行不可点的静态状态文案
+  const processInteractive =
+    hasProcess && (tier !== 'result' || digest.running > 0 || digest.errors > 0);
   const toggleProcess = () => {
-    if (!hasProcess) return;
+    if (!processInteractive) return;
     setManualProcessOpen(!processOpen);
   };
   /** 开关行文案：结束后是「已完成」——过程在这里是回溯入口，不是进行中的事 */
@@ -226,20 +271,28 @@ export function AssistantMessage({ message, agentId, sessionId }: AssistantMessa
         </Typography>
       </Box>
 
-      {/* 过程开关行：流式中「已处理 33s」并自动铺开，结束后收成「已完成 1m41s ›」 */}
+      {/* 过程开关行：流式中「已处理 33s」并自动铺开，结束后收成「已完成 1m41s ›」。
+          交互语义（role/tabIndex/aria/点击）与 chevron 都由 processInteractive 决定：
+          result 档无 running/error 时它只是「已完成 + 耗时」的静态状态文案。 */}
       {hasProcess && (
         <Box
-          role="button"
-          tabIndex={0}
-          aria-expanded={processOpen}
-          aria-label={processOpen ? '收起执行过程' : '展开执行过程'}
-          onClick={toggleProcess}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' || e.key === ' ') {
-              e.preventDefault();
-              toggleProcess();
-            }
-          }}
+          role={processInteractive ? 'button' : undefined}
+          tabIndex={processInteractive ? 0 : undefined}
+          aria-expanded={processInteractive ? processOpen : undefined}
+          aria-label={
+            processInteractive ? (processOpen ? '收起执行过程' : '展开执行过程') : undefined
+          }
+          onClick={processInteractive ? toggleProcess : undefined}
+          onKeyDown={
+            processInteractive
+              ? (e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    toggleProcess();
+                  }
+                }
+              : undefined
+          }
           sx={{
             display: 'inline-flex',
             alignItems: 'center',
@@ -247,10 +300,12 @@ export function AssistantMessage({ message, agentId, sessionId }: AssistantMessa
             mb: 0.5,
             fontSize: 12.5,
             color: 'text.disabled',
-            cursor: 'pointer',
+            // 不可交互时不摆出「能点」的样子：去掉 pointer 与 hover 变色，
+            // 否则用户会以为可点却点了没反应。
+            cursor: processInteractive ? 'pointer' : 'default',
             userSelect: 'none',
             transition: 'color .15s',
-            '&:hover': { color: 'text.primary' },
+            ...(processInteractive ? { '&:hover': { color: 'text.primary' } } : {}),
           }}
         >
           {isStreaming && !elapsedText && (
@@ -265,23 +320,31 @@ export function AssistantMessage({ message, agentId, sessionId }: AssistantMessa
               · {failedSteps} 步失败
             </Box>
           )}
-          <ChevronRightIcon
-            sx={{
-              fontSize: 14,
-              transform: processOpen ? 'rotate(90deg)' : 'none',
-              transition: 'transform .15s',
-            }}
-          />
+          {processInteractive && (
+            <ChevronRightIcon
+              sx={{
+                fontSize: 14,
+                transform: processOpen ? 'rotate(90deg)' : 'none',
+                transition: 'transform .15s',
+              }}
+            />
+          )}
         </Box>
       )}
 
       <Collapse in={processOpen} unmountOnExit>
-        <ProcessView events={processEvents} live={isStreaming}>
-          {toolCalls.length > 0
-            ? toolCalls.map((t) => <ToolCallCard key={t.id} toolCall={t} />)
+        <ProcessView events={processEvents} live={isStreaming} tier={tier}>
+          {inlineToolCalls.length > 0
+            ? inlineToolCalls.map((t) => <ToolCallCard key={t.id} toolCall={t} />)
             : null}
         </ProcessView>
       </Collapse>
+
+      {/* H 行：审批 / 敏感 / 出错的 ToolCallCard 必须**恒可见**——它们是「需要用户判断
+          或授权」的信号，不能被折叠区吃掉。因此从 Collapse 内部上移到它的兄弟节点。 */}
+      {pinnedToolCalls.map((t) => (
+        <ToolCallCard key={t.id} toolCall={t} />
+      ))}
 
       {cronCardRows.map((row) => (
         <CronTaskCard key={row.id} row={row} />

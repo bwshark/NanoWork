@@ -25,6 +25,7 @@ function fullSettings(overrides: Partial<Settings> = {}): Settings {
     gatewayEndpoint: 'http://127.0.0.1:8765/v1',
     apiToken: 'secret-gateway-token',
     theme: 'dark',
+    processDetail: 'key',
     memoryEnabled: true,
     autoSummarize: true,
     transcription: {
@@ -112,6 +113,13 @@ describe('toSyncPayload：偏好要真的跟过来', () => {
       sidebarCollapsed: true,
       enabledPlugins: ['foo@bar'],
     });
+  });
+
+  it('processDetail 随偏好上行（AC10：它不是本机事实，不得进 omit 名单）', () => {
+    const payload = toSyncPayload(fullSettings({ processDetail: 'full' }));
+
+    // 防回归：将来有人误把 processDetail 加进 SETTINGS_SYNC_OMIT_KEYS 时这条会红
+    expect(payload).toHaveProperty('processDetail', 'full');
   });
 
   it('排除表逐条核对：表里列了的，负载里一个都不能有', () => {

@@ -17,6 +17,7 @@ function baseSettings(): Settings {
     gatewayEndpoint: 'http://127.0.0.1:8765/v1',
     apiToken: 'local-token',
     theme: 'dark',
+    processDetail: 'key',
     memoryEnabled: true,
     autoSummarize: true,
     transcription: {

@@ -4,6 +4,13 @@
  * 按到达顺序交错渲染：深度思考段与工具执行行交替出现。
  */
 
+/**
+ * 「模型工作步骤」的展示档位。这是**展示**约束（渲染详略），不是数据形态：
+ * 它只影响读数据之后的渲染，`Message.process` 的持久化结构永不因档位变化。
+ * 放在 process 域类型里，`Settings` 直接引用它（唯一事实源）。
+ */
+export type ProcessDetailLevel = 'result' | 'key' | 'full';
+
 /** 一段深度思考（reasoning 连续 chunk 聚合；closed 后后续 reasoning 开新段） */
 export interface ReasoningEvent {
   id: string;

@@ -1,149 +1,26 @@
-import { Children } from 'react';
-import { Box, CircularProgress, Tooltip } from '@mui/material';
-import BuildIcon from '@mui/icons-material/Build';
-import EditNoteIcon from '@mui/icons-material/EditNote';
-import FolderOpenIcon from '@mui/icons-material/FolderOpen';
-import PublicIcon from '@mui/icons-material/Public';
-import ScheduleIcon from '@mui/icons-material/Schedule';
-import SearchIcon from '@mui/icons-material/Search';
-import TerminalIcon from '@mui/icons-material/Terminal';
-import TravelExploreIcon from '@mui/icons-material/TravelExplore';
-import VisibilityIcon from '@mui/icons-material/Visibility';
+import { Children, useState } from 'react';
+import { Box, CircularProgress, Collapse, Tooltip } from '@mui/material';
+import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import { ReasoningBlock } from './ReasoningBlock';
-import type { ProcessEvent, ProcessToolRow } from '@/types';
+import { describeTool } from './toolDescribe';
+import { buildProcessRows } from '@/lib/processDetail';
+import type { AggregateRow, ProcessViewRow } from '@/lib/processDetail';
+import type { ProcessDetailLevel, ProcessEvent, ProcessToolRow } from '@/types';
 
-const ICON_SX = { fontSize: 14, color: 'text.secondary' };
-
-/** 按优先键顺序取第一个非空字符串参数，兜底取任意字符串值 */
-function argStr(args: Record<string, unknown>, keys: string[]): string | undefined {
-  for (const k of keys) {
-    const v = args[k];
-    if (typeof v === 'string' && v.trim() !== '') return v;
-  }
-  for (const v of Object.values(args)) {
-    if (typeof v === 'string' && v.trim() !== '') return v;
-  }
-  return undefined;
-}
-
-interface RowDesc {
-  icon: React.ReactNode;
-  /** 动词标签：已读取 / 已搜索 / 网页搜索 … */
-  verb: string;
-  /** 主信息（路径 / 查询 / 命令），路径类着链接蓝 */
-  primary?: string;
-  primaryBlue?: boolean;
-  /** 次信息（如搜索目录） */
-  secondary?: string;
-}
-
-/** 工具名 + 参数 → 行描述（动词映射对齐 nanobot utils/tool_hints.py）；
- * status 供少数工具（如 cron）区分「正在… / 已…」文案 */
-function describeTool(
-  tool: string,
-  args: Record<string, unknown>,
-  status?: ProcessToolRow['status'],
-): RowDesc {
-  switch (tool) {
-    case 'read_file':
-      return {
-        icon: <VisibilityIcon sx={ICON_SX} />,
-        verb: '已读取',
-        primary: argStr(args, ['path', 'file_path']),
-        primaryBlue: true,
-      };
-    case 'write_file':
-      return {
-        icon: <EditNoteIcon sx={ICON_SX} />,
-        verb: '已写入',
-        primary: argStr(args, ['path', 'file_path']),
-        primaryBlue: true,
-      };
-    case 'edit':
-    case 'edit_file':
-      return {
-        icon: <EditNoteIcon sx={ICON_SX} />,
-        verb: '已编辑',
-        primary: argStr(args, ['path', 'file_path']),
-        primaryBlue: true,
-      };
-    case 'list_dir':
-      return {
-        icon: <FolderOpenIcon sx={ICON_SX} />,
-        verb: '已浏览',
-        primary: argStr(args, ['path']),
-        primaryBlue: true,
-      };
-    case 'find_files':
-      return {
-        icon: <TravelExploreIcon sx={ICON_SX} />,
-        verb: '已查找',
-        primary: argStr(args, ['query', 'glob']),
-        secondary: argStr(args, ['path']),
-      };
-    case 'grep':
-      return {
-        icon: <SearchIcon sx={ICON_SX} />,
-        verb: '已搜索',
-        primary: argStr(args, ['pattern']),
-        secondary: argStr(args, ['path']),
-      };
-    case 'exec': {
-      const cmd = argStr(args, ['command']);
-      return {
-        icon: <TerminalIcon sx={ICON_SX} />,
-        verb: '已执行',
-        primary: cmd && cmd.length > 72 ? `${cmd.slice(0, 71)}…` : cmd,
-      };
-    }
-    case 'web_search':
-    case 'x_search':
-      return {
-        icon: <PublicIcon sx={ICON_SX} />,
-        verb: '网页搜索',
-        primary: argStr(args, ['query']),
-      };
-    case 'web_fetch':
-      return {
-        icon: <PublicIcon sx={ICON_SX} />,
-        verb: '已抓取',
-        primary: argStr(args, ['url']),
-        primaryBlue: true,
-      };
-    case 'cron': {
-      // 卡片之外的兜底描述：成功的 add 行在 AssistantMessage 已被卡片接管，
-      // 此处主要覆盖 running / error / 非 add 操作的场景。
-      const action = typeof args.action === 'string' ? args.action : '';
-      if (action === 'add') {
-        return {
-          icon: <ScheduleIcon sx={ICON_SX} />,
-          verb: status === 'running' ? '正在创建定时任务' : '已创建定时任务',
-          primary: argStr(args, ['name', 'message']),
-        };
-      }
-      return {
-        icon: <ScheduleIcon sx={ICON_SX} />,
-        verb: '定时任务',
-        primary: action || argStr(args, []),
-      };
-    }
-    default: {
-      if (tool.startsWith('mcp_')) {
-        const rest = tool.slice(4);
-        const [server, fn] = rest.includes('__') ? rest.split('__', 2) : [rest, ''];
-        return {
-          icon: <BuildIcon sx={ICON_SX} />,
-          verb: fn ? `${server}::${fn}` : tool,
-          primary: argStr(args, []),
-        };
-      }
-      return { icon: <BuildIcon sx={ICON_SX} />, verb: tool, primary: argStr(args, []) };
-    }
-  }
-}
-
-/** 工具执行行：图标 + 动词 + 主信息（路径蓝）+ 次信息 + 状态 */
-function ToolRow({ row }: { row: ProcessToolRow }) {
+/**
+ * 工具执行行：图标 + 动词 + 主信息（路径蓝）+ 次信息 + 状态。
+ *
+ * `live` 决定 `running` 行怎么落地——这是**回合是否还在进行**的事实，不是数据里的
+ * 状态。引擎只发 `start` / `end` 两个相位，结果事件可能在链路中断时永远不到；
+ * 此时数据里那条行会一直停在 `running`（事件流里确实没有结果事件，不是漏更新）。
+ * 但「回合已经结束」这件事足以判定：**它不会再执行了**。所以：
+ * - 回合仍在流式（`live`）→ 转圈，表示此刻正在跑；
+ * - 回合已结束 → 不转圈，改说「结果未返回」。
+ *
+ * 早先只看 `status === 'running'` 就转圈，于是一轮超时被打断的会话里，那行会
+ * 永远转下去（2026-10-01 用户截图：任务已停，最后一步还在转）。
+ */
+function ToolRow({ row, live }: { row: ProcessToolRow; live: boolean }) {
   const d = describeTool(row.tool, row.args, row.status);
   return (
     <Box
@@ -192,8 +69,15 @@ function ToolRow({ row }: { row: ProcessToolRow }) {
           {d.secondary}
         </Box>
       )}
-      {row.status === 'running' && (
+      {row.status === 'running' && live && (
         <CircularProgress size={9} sx={{ color: 'text.secondary', flexShrink: 0 }} />
+      )}
+      {/* 回合结束仍未拿到结果：说「未返回」而不是「失败」——工具可能已经成功执行，
+          只是结果事件没送到。把它说成失败同样是骗人。 */}
+      {row.status === 'running' && !live && (
+        <Box component="span" sx={{ color: 'warning.main', flexShrink: 0 }}>
+          结果未返回
+        </Box>
       )}
       {row.status === 'error' && (
         <Box component="span" sx={{ color: 'error.main', flexShrink: 0 }}>
@@ -205,10 +89,68 @@ function ToolRow({ row }: { row: ProcessToolRow }) {
 }
 
 /**
+ * 非关键工具的**聚合行**（「关键细节」档）：一段相邻的非关键工具行压成一行摘要，
+ * 点开才逐行铺出原始行。
+ *
+ * 复用「标记行」语言（旋转 chevron + 摘要文字，不额外引入工具图标），与
+ * `ReasoningBlock` 保持一致，以区别于工具单行。展开态用组件本地 `useState`
+ * ——它是**块内独立、不持久化**的一次性视图态（PRD §4.2），刷新即丢。
+ */
+function AggregateRowView({ row, live }: { row: AggregateRow; live: boolean }) {
+  const [open, setOpen] = useState(false);
+  const toggle = () => setOpen((v) => !v);
+  return (
+    <Box sx={{ minWidth: 0 }}>
+      <Box
+        role="button"
+        tabIndex={0}
+        aria-expanded={open}
+        aria-label={open ? `收起 ${row.summary} 明细` : `展开 ${row.summary} 明细`}
+        onClick={toggle}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            toggle();
+          }
+        }}
+        sx={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 0.4,
+          py: 0.4,
+          fontSize: 13,
+          color: 'text.secondary',
+          cursor: 'pointer',
+          userSelect: 'none',
+          '&:hover': { color: 'text.primary' },
+        }}
+      >
+        <ChevronRightIcon
+          sx={{
+            fontSize: 14,
+            transform: open ? 'rotate(90deg)' : 'none',
+            transition: 'transform .15s',
+          }}
+        />
+        <span>{row.summary}</span>
+      </Box>
+      <Collapse in={open} unmountOnExit>
+        {row.rows.map((r) => (
+          <ToolRow key={r.id} row={r} live={live} />
+        ))}
+      </Collapse>
+    </Box>
+  );
+}
+
+/**
  * 过程时间线：把**深度思考段与工具执行行按到达顺序交错**渲染成一条流。
  *
  * 顺序由数据保证（store 按 SSE 事件到达顺序 push），这里只做「按序铺开」，
  * 于是渲染结果就是模型真实的动作序列：想过一轮 → 查了两个文件 → 又想了一轮 → 再读一个文件。
+ *
+ * `tier` 决定「铺开多少」：过滤 / 聚合都交给纯函数 `buildProcessRows`，
+ * 本组件只按产出的行模型选呈现方式（思考标记 / 工具单行 / 聚合行）。
  *
  * **自己不做折叠、不设整体限高**——可见性由调用方决定（`AssistantMessage` 用
  * `Collapse unmountOnExit` 在「流式中铺开 / 结束后收起」之间切换）。
@@ -223,15 +165,24 @@ function ToolRow({ row }: { row: ProcessToolRow }) {
 export function ProcessView({
   events,
   live,
+  tier,
   children,
 }: {
   /** 已按到达顺序排好的过程事件（思考段与工具行交错） */
   events: ProcessEvent[];
   /** 所属消息是否仍在流式输出（只有流式中的最后一段思考会展开正文） */
   live: boolean;
+  /**
+   * 展示档位（**必填**）。档位决定渲染契约，缺省若给个默认值会静默退回「全量铺开」，
+   * 与本需求默认档 `key` 不一致——这是最容易被漏测的形态。因此不给默认值，
+   * 强制每个调用点在 `tsc` 阶段显式表态。
+   */
+  tier: ProcessDetailLevel;
   children?: React.ReactNode;
 }) {
-  // 末尾那段未闭合的思考才是「此刻仍在写」：只有它展开正文、转圈、自动贴底
+  // 末尾那段未闭合的思考才是「此刻仍在写」：只有它展开正文、转圈、自动贴底。
+  // 仍扫**原始 `events`**：key/full 下 reasoning 全量保留，结果与过滤后的行一致；
+  // result 档不渲染 reasoning，该值无用。
   let liveReasoningId: string | undefined;
   for (let i = events.length - 1; i >= 0; i--) {
     const ev = events[i];
@@ -241,23 +192,32 @@ export function ProcessView({
     }
   }
 
+  // 档位过滤 + 聚合（纯函数派生层）：渲染视图模型，永不写回 Message.process
+  const rows: ProcessViewRow[] = buildProcessRows(events, tier);
+
   // 用 Children.count 而不是 `!children`：调用方传 `{arr.map(...)}` 时，
   // 空数组在 JS 里是**真值**，直接判 falsy 会渲染出一个空的过程容器。
-  if (events.length === 0 && Children.count(children) === 0) return null;
+  // 判据用 `rows`（过滤后）而非 `events`：result 档可能把全部行过滤掉，
+  // 此时若仍有 children 才渲染，否则整块不出现。
+  if (rows.length === 0 && Children.count(children) === 0) return null;
 
   return (
     <Box sx={{ width: '100%', px: 0.5, pb: 0.5, minWidth: 0 }}>
-      {events.map((ev) =>
-        ev.kind === 'reasoning' ? (
-          <ReasoningBlock
-            key={ev.id}
-            content={ev.content}
-            live={live && ev.id === liveReasoningId}
-          />
-        ) : (
-          <ToolRow key={ev.id} row={ev} />
-        ),
-      )}
+      {rows.map((row) => {
+        if (row.kind === 'reasoning') {
+          return (
+            <ReasoningBlock
+              key={row.id}
+              content={row.content}
+              live={live && row.id === liveReasoningId}
+            />
+          );
+        }
+        if (row.kind === 'aggregate') {
+          return <AggregateRowView key={row.id} row={row} live={live} />;
+        }
+        return <ToolRow key={row.id} row={row} live={live} />;
+      })}
       {children}
     </Box>
   );
