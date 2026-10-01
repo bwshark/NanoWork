@@ -6,6 +6,7 @@ import { ConnectionBanner } from "./ConnectionBanner";
 import { TitleBar } from "@/components/TitleBar";
 import { ArtifactPanel } from "@/components/artifacts/ArtifactPanel";
 import { SettingsDialog } from "@/components/settings/SettingsDialog";
+import { useSyncConflictToast } from "@/components/SyncStatus";
 import { useGlobalShortcuts } from "@/hooks/useGlobalShortcuts";
 import { platform } from "@/platform";
 
@@ -15,6 +16,10 @@ export function AppLayout() {
 
   // 全局快捷键派发器：挂在布局层，整个应用生命周期只挂一次
   useGlobalShortcuts();
+
+  // 同步冲突通知：同样是应用级的一次性副作用，挂在布局层——挂进侧栏会随侧栏折叠
+  // （Electron）一起消失，那时冲突提示会静默丢掉。
+  useSyncConflictToast();
 
   // 托盘菜单「打开设置」等主进程指令 → 执行路由跳转。
   // 窗口只是被隐藏而非卸载，渲染层仍在运行，指令可即时生效。

@@ -3,7 +3,7 @@ import { useEffect } from 'react';
 import { Box, Button, Dialog, DialogActions, DialogContent, DialogContentText, DialogTitle, Typography } from '@mui/material';
 import { useNavigate } from 'react-router-dom';
 import { SettingsCard, SettingsRow } from '@/components/settings/SettingsPrimitives';
-import { SyncStatusIndicator } from '@/components/SyncStatusBadge';
+import { SyncStatusIndicator } from '@/components/SyncStatus';
 import { toast } from '@/components/Toast';
 import { ROUTES } from '@/lib/constants';
 import { platform } from '@/platform';
@@ -20,7 +20,7 @@ import type { SessionMeta, SessionEvent } from '@/types/event';
 import { getEventStore } from '@/events';
 import { isEventStreamSession, toMetaFromEntity, useSessionsStore } from '@/stores/sessionsStore';
 import { useSettingsUiStore } from '@/stores/settingsUiStore';
-import { getSyncRuntime, useSyncStatus } from '@/sync';
+import { useSyncRuntime, useSyncStatus } from '@/sync';
 import type { AccountSession, CloudExport } from '@/sync';
 
 /**
@@ -37,8 +37,12 @@ import type { AccountSession, CloudExport } from '@/sync';
  * - 「彻底删除账户」：二次确认后调 `account.deleteAccount()`（清云端 + 清本地会话，
  *   但**不删本机业务数据**，D8）。未登录禁用。
  *
- * runtime 一律用 `getSyncRuntime()` 读取（不在这里 `initSyncRuntime`）：App 启动块
+ * runtime 一律用 `useSyncRuntime()` 读取（不在这里 `initSyncRuntime`）：App 启动块
  * 已负责初始化单例；设置分区只消费，避免页面一多就各造一份 runtime。
+ *
+ * ⚠️ 用 hook 而不是 `getSyncRuntime()` 读一次：单例是**启动后异步**出现的，而本分区在
+ * 用户打开设置弹窗时才挂载——启动后一秒内打开设置的会话，读一次会拿到 `null` 并把它
+ * 固化成「未登录」（该用户在冷启动前明明已经登录了）。
  */
 
 /** ISO 时间 → 本地可读串；无则占位。 */
@@ -78,7 +82,7 @@ export function AccountSection() {
   const navigate = useNavigate();
   const closeSettings = useSettingsUiStore((s) => s.closeSettings);
   const status = useSyncStatus();
-  const runtime = getSyncRuntime();
+  const runtime = useSyncRuntime();
 
   const [session, setSession] = useState<AccountSession | null>(
     () => runtime?.account.getSession() ?? null,

@@ -20,6 +20,7 @@ import {
   conflictsWithTyping,
   eventKeyToken,
   formatBinding,
+  formatShortcutHint,
   matchBinding,
   parseBinding,
   resolveBinding,
@@ -136,6 +137,14 @@ describe('展示文案', () => {
     expect(formatBinding('Ctrl+[')).toBe('Ctrl+[');
     expect(formatBinding('Enter')).toBe('Enter');
     expect(formatBinding('')).toBe('');
+  });
+
+  it('菜单提示在 token 之间补空格（先 split 再逐个格式化）', () => {
+    expect(formatShortcutHint('Ctrl+,')).toBe('Ctrl + ,');
+    expect(formatShortcutHint('Ctrl+Shift+B')).toBe('Ctrl + Shift + B');
+    // ⚠️ 这一条是「先 split 再 format」的判据：整串 format 再按 `+` 切会把 `"+"` 切成三段
+    expect(formatShortcutHint('Ctrl+Plus')).toBe('Ctrl + "+"');
+    expect(formatShortcutHint('')).toBe('');
   });
 });
 

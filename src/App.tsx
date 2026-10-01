@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { AppLayout } from '@/layout/AppLayout';
+import { Outlet } from 'react-router-dom';
 import { ToastContainer } from '@/components/Toast';
 import { connectionManager } from '@/ai/connectionManager';
 import { platform } from '@/platform';
@@ -18,10 +18,18 @@ import { disposeSyncRuntime, initSyncRuntime } from '@/sync';
 import type { SyncRuntime } from '@/sync';
 
 /**
- * 顶层壳：AppLayout（侧栏 + 横幅 + Outlet）+ 全局 Toast。
+ * 顶层壳：**启动副作用 + 全局 Toast**，不画布局。
+ *
+ * 布局分两路（见 `router/index.tsx`）：`<AppLayout>` 分组给带壳的页面，
+ * `/auth` 是与之平级的全屏页。这样「登录页无侧栏」是**路由结构**决定的，
+ * 而不是靠 CSS 藏——`minHeight: '100vh'` 与弹窗层级都能照常推理。
+ *
  * 挂载时等待网关就绪（带退避重试，吸收 Python 进程冷启动空窗），
  * 并刷新本地技能目录与模型目录（来源 nanobot 配置）；
  * 桌面端还会把已保存的 IM 频道配置校准进 nanobot（幂等，无变化不重启网关）。
+ *
+ * ⚠️ **所有页面都在这棵树下面**（含 `/auth`）：这些副作用是「应用启动」而不是
+ * 「某个页面启动」。若把 `/auth` 另起一棵根组件，用户在登录页刷新就会跳过整条链。
  *
  * 逐条批准卡片（ApprovalCard）**挂在会话页内**而非这里：它的定位是「覆盖
  * 输入框」，锚点必须是聊天页那一层容器（见 ChatPage 的 `position: relative`）。
@@ -129,7 +137,8 @@ export function App() {
 
   return (
     <>
-      <AppLayout />
+      {/* 布局由各分组路由承担（`AppLayout` / 全屏页），这里只交出出口 */}
+      <Outlet />
       <ToastContainer />
     </>
   );

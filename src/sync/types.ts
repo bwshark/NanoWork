@@ -140,9 +140,14 @@ export interface VersionStamp {
 }
 
 /**
- * 同步服务端地址（本地开发缺省值）。
+ * 同步服务端地址的**出厂缺省值**（本地开发那台）。
  *
  * 与 skill §1.1 的真机启动命令一致：`uvicorn --host 127.0.0.1 --port 8910`。
+ *
+ * ⚠️ 业务代码**不要直接读这个常量**，一律用 `resolveSyncBaseUrl()`（`./baseUrl`）——
+ * 它才认 `VITE_SYNC_BASE_URL` 覆盖。这个字面量留在本文件是因为 `electron/storageRoutes.ts`
+ * 也 import 本模块，而主进程产物是 esbuild 的 **CJS**：本文件必须保持「纯常量、
+ * 不含 `import.meta`」，否则 `main.cjs` 构不出来。
  */
 export const DEFAULT_SYNC_BASE_URL = 'http://127.0.0.1:8910';
 

@@ -31,7 +31,6 @@ import GridViewIcon from "@mui/icons-material/GridView";
 import AutoFixHighIcon from "@mui/icons-material/AutoFixHigh";
 import HubIcon from "@mui/icons-material/Hub";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
-import SettingsIcon from "@mui/icons-material/Settings";
 import FolderIcon from "@mui/icons-material/Folder";
 import ExpandLessIcon from "@mui/icons-material/ExpandLess";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
@@ -61,12 +60,11 @@ import { useChannelSessionsStore } from "@/stores/channelSessionsStore";
 import { useAgentsStore } from "@/stores/agentsStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useDefaultWorkspacePath } from "@/stores/storageInfoStore";
-import { useSettingsUiStore } from "@/stores/settingsUiStore";
 import { useTaskQueryStore } from "@/stores/taskQueryStore";
 import { useTasksStore } from "@/stores/tasksStore";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { LogoIcon } from "@/components/LogoIcon";
-import { SyncStatusBadge } from "@/components/SyncStatusBadge";
+import { AccountEntry } from "@/components/AccountEntry";
 import { ChannelIcon } from "@/components/im/ChannelIcon";
 import { SessionQuickActions } from "@/components/session/SessionQuickActions";
 import { platform } from "@/platform";
@@ -119,10 +117,6 @@ export function SidebarNav() {
   const sidebarCollapsed = useSettingsStore(
     (s) => s.settings.sidebarCollapsed ?? false,
   );
-
-  /** 设置入口：打开弹窗而非跳路由，选中态跟随弹窗开合（弹窗开着 = 这一项是当前所在） */
-  const settingsOpen = useSettingsUiStore((s) => s.open);
-  const openSettings = useSettingsUiStore((s) => s.openSettings);
 
   /** 扩展分组折叠状态（默认收起） */
   const [expandOpen, setExpandOpen] = useState(false);
@@ -320,24 +314,14 @@ export function SidebarNav() {
         <TasksChannelsTabs />
       </Box>
 
-      {/* 底部：同步状态徽章 + 设置（打开设置弹窗，不做路由跳转）。
-          徽章放「设置」上方而非标题栏：TitleBar 只在 Electron 渲染，
-          而 Web 端同样要看同步状态，侧栏底部两平台一致。 */}
+      {/* 底部：账户入口。未登录 = 一行「登录」（去登录 / 注册页）；已登录 = 头像 +
+          掩码账号名，点开菜单里有设置 / 意见反馈 / 退出登录（见 `AccountEntry`）。
+          同步状态不在这里展示：「未登录」时它只是一句废话，而已登录时的同步状态
+          在设置 →「账户」分区里看得到（那颗指示器仍由 `SyncStatus` 提供）。 */}
       <Box
         sx={{ px: 1, pt: 1, borderTop: "1px solid", borderColor: "divider" }}
       >
-        <SyncStatusBadge />
-        <List dense disablePadding>
-          <NavRow
-            item={{ label: "设置", icon: <SettingsIcon /> }}
-            active={settingsOpen}
-            // 必须包一层：NavRow 把 onClick 转交给 MUI 的 ListItemButton，后者会带着
-            // MouseEvent 调用它。直接写 onClick={openSettings} 的话事件对象会被当成
-            // 分区 id 传进去（`(section?: X) => void` 可赋值给 `() => void`，编译期不报错），
-            // 结果是弹窗打开但右侧一片空白。
-            onClick={() => openSettings()}
-          />
-        </List>
+        <AccountEntry />
       </Box>
     </Box>
   );

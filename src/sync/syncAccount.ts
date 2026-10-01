@@ -21,7 +21,8 @@
  */
 
 import { platform } from '@/platform';
-import { DEFAULT_SYNC_BASE_URL, SYNC_ACCOUNT_STORAGE_KEY } from './types';
+import { resolveSyncBaseUrl } from './baseUrl';
+import { SYNC_ACCOUNT_STORAGE_KEY } from './types';
 import type { AccountSession } from './types';
 
 /** 账户态接口：引擎只依赖它，不直接碰网络或存储。 */
@@ -148,7 +149,8 @@ function createSyncAccount(
   persistence: Persistence,
   opts: { baseUrl?: string; fetchImpl?: typeof fetch },
 ): SyncAccount {
-  const baseUrl = (opts.baseUrl ?? DEFAULT_SYNC_BASE_URL).replace(/\/+$/, '');
+  // 地址取值一律经 `resolveSyncBaseUrl()`：它才认识 `VITE_SYNC_BASE_URL` 覆盖（见 baseUrl.ts）
+  const baseUrl = (opts.baseUrl ?? resolveSyncBaseUrl()).replace(/\/+$/, '');
   const fetchImpl = opts.fetchImpl ?? fetch;
 
   let session: AccountSession | null = null;

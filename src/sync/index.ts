@@ -6,10 +6,12 @@
  */
 
 export * from './types';
+export * from './baseUrl';
 export * from './SyncClient';
 export * from './syncAccount';
 export * from './syncRegistry';
 export * from './eventStream';
 export * from './SyncEngine';
 export * from './runtime';
+export * from './useSyncRuntime';
 export * from './useSyncStatus';

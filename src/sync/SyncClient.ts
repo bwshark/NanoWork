@@ -19,7 +19,7 @@
  * `SyncClient` 只负责「什么时候该调用它」。
  */
 
-import { DEFAULT_SYNC_BASE_URL } from './types';
+import { resolveSyncBaseUrl } from './baseUrl';
 import type { CloudExport, PullResponse, PushResponse, SyncChange } from './types';
 import type { SessionEvent } from '@/types/event';
 import { SyncAuthError } from './syncAccount';
@@ -54,7 +54,7 @@ export class SyncClient {
 
   constructor(options: SyncClientOptions) {
     // 去掉尾部斜杠：`baseUrl` 带不带 `/` 都应拼出同一个 URL，避免出现 `//api/...`
-    this.baseUrl = (options.baseUrl ?? DEFAULT_SYNC_BASE_URL).replace(/\/+$/, '');
+    this.baseUrl = (options.baseUrl ?? resolveSyncBaseUrl()).replace(/\/+$/, '');
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.getAccessToken = options.getAccessToken;
     this.refreshAccessToken = options.refreshAccessToken;

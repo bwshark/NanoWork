@@ -8,8 +8,8 @@
  * - 非法归档：`pickFile` 返回非归档文本 → `parseArchive` 抛 `ArchiveParseError`，
  *   不写存储、不崩页。
  *
- * `@/sync` 整体替换为「真 hook + 假 runtime」（`getSyncRuntime` 返回带 account 的桩），
- * 避免真起一份订阅 8 个 store 的 runtime（同 auth.test.tsx）。
+ * `@/sync` 整体替换为「真 hook + 假 runtime」（`getSyncRuntime` / `useSyncRuntime`
+ * 都返回带 account 的桩），避免真起一份订阅 8 个 store 的 runtime（同 auth.test.tsx）。
  * `@/platform` 整体替换为桩：只关心 `pickFile` 与 `storage.set`。
  */
 
@@ -58,6 +58,7 @@ vi.mock('@/sync', async (importOriginal) => {
     ...actual,
     getSyncRuntime: () => syncMocks.runtime,
     initSyncRuntime: async () => syncMocks.runtime,
+    useSyncRuntime: () => syncMocks.runtime,
   };
 });
 

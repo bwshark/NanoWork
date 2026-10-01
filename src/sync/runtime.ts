@@ -14,9 +14,10 @@
  *    `missed` 为真，补一次 `notifyLocalChange()`（保证同步窗口内的**用户改动**不丢）。
  * 2. **账户生命周期**：登录 → `engine.start()`；登出 → `engine.stop()` + `resetSyncStatus()`。
  *    订阅 `account.subscribe` 是**唯一入口**，避免「登录 UI 记一次、别处忘了」。
- * 3. **单例访问器**（`getSyncRuntime` / `initSyncRuntime` / `disposeSyncRuntime`）：
- *    runtime 订阅了 8 个 store 且持有定时器，必须**全应用一个**——否则登录页、徽章、
- *    设置页各造一个，就会有 N 份订阅与 N 条 30s 定时同步同时在跑。
+ * 3. **单例访问器**（`getSyncRuntime` / `initSyncRuntime` / `disposeSyncRuntime` /
+ *    `subscribeSyncRuntime`）：runtime 订阅了 8 个 store 且持有定时器，必须**全应用一个**
+ *    ——否则登录页、侧栏账户入口、设置页各造一个，就会有 N 份订阅与 N 条 30s 定时同步
+ *    同时在跑。`subscribeSyncRuntime` 是给**常驻 UI** 用的：它在单例出现前就已经挂载了。
  *
  * ## `suppress` 如何覆盖引擎自己的同步
  *
@@ -195,6 +196,32 @@ export function createSyncRuntime(opts: SyncRuntimeOptions = {}): SyncRuntime {
 
 let syncRuntimeSingleton: SyncRuntime | null = null;
 
+/**
+ * 单例可用性订阅：单例**出现 / 释放**时通知订阅者。
+ *
+ * 存在的理由不是「通用性」，而是一个具体的坏状态：`initSyncRuntime()` 是**异步**的
+ * （App 启动块要等设备号与会话列表就位），而侧边栏底部这种常驻 UI 的**首次渲染**
+ * 一定早于它。若只读一次 `getSyncRuntime()`，就不会再有第二次机会——冷启动时明明
+ * 已登录的用户，会一直看到「登录」入口（设置弹窗里的账户分区因为晚挂载而侥幸没事，
+ * 但只要有人在启动一秒内打开设置，同样会看到「未登录」）。
+ *
+ * 与 `useSyncStatus` 的订阅是两件事：那边订阅的是**同步状态**，这边订阅的是
+ * 「runtime 到了没」。前者在 runtime 内部，后者只能在装配层广播。
+ */
+const runtimeListeners = new Set<() => void>();
+
+function emitRuntimeChange(): void {
+  for (const listener of Array.from(runtimeListeners)) listener();
+}
+
+/** 订阅单例的可用性变化；返回取消订阅函数。 */
+export function subscribeSyncRuntime(cb: () => void): () => void {
+  runtimeListeners.add(cb);
+  return () => {
+    runtimeListeners.delete(cb);
+  };
+}
+
 /** 取当前单例；未初始化返回 `null`（UI 只读，不创建）。 */
 export function getSyncRuntime(): SyncRuntime | null {
   return syncRuntimeSingleton;
@@ -204,13 +231,18 @@ export function getSyncRuntime(): SyncRuntime | null {
  * 初始化并返回单例 runtime（幂等）：重复调用返回同一份，**不再新建**。
  *
  * 会 `await runtime.init()`（载入账户；已登录则启动调度）。App 启动块调用一次即可，
- * 其余消费方（徽章 / 设置页）一律用 `getSyncRuntime()` 取用，避免各造一份。
+ * 其余消费方（侧栏账户入口 / 设置页）一律用 `useSyncRuntime()` / `getSyncRuntime()`
+ * 取用，避免各造一份。
+ *
+ * ⚠️ 广播发生在 `init()` **之后**：`init()` 里 `account.load()` 才把已登录状态读出来，
+ * 早一步广播等于把「运行时有了但账户还没载入」暴露给订阅者。
  */
 export async function initSyncRuntime(opts: SyncRuntimeOptions = {}): Promise<SyncRuntime> {
   if (syncRuntimeSingleton) return syncRuntimeSingleton;
   const runtime = createSyncRuntime(opts);
   syncRuntimeSingleton = runtime;
   await runtime.init();
+  emitRuntimeChange();
   return runtime;
 }
 
@@ -218,4 +250,5 @@ export async function initSyncRuntime(opts: SyncRuntimeOptions = {}): Promise<Sy
 export function disposeSyncRuntime(): void {
   syncRuntimeSingleton?.dispose();
   syncRuntimeSingleton = null;
+  emitRuntimeChange();
 }

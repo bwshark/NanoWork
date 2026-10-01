@@ -234,6 +234,21 @@ export function formatBinding(binding: string): string {
   return tokens.map((token) => KEY_DISPLAY[token] ?? token).join('+');
 }
 
+/**
+ * 键位串 → 菜单里的提示文案：token 之间补空格并逐个格式化（`Ctrl+,` → `Ctrl + ,`）。
+ *
+ * 与 `formatBinding` 只差空格，但那空格不是装饰：设置页的键位是「键帽」列，`+` 紧挨着
+ * 反而像一串字符；而账户菜单右侧是一行灰色小字，`Ctrl+,` 挤在一起读不出「这是两个键」。
+ *
+ * ⚠️ 必须**先 split 再逐个 format**：`formatBinding` 会把 `Plus` 还原成带引号的 `"+"`，
+ * 先整串 format 再按 `+` 切就会把 `Ctrl+Plus` 切成三段。
+ */
+export function formatShortcutHint(binding: string): string {
+  return splitBinding(binding)
+    .map((token) => formatBinding(token))
+    .join(' + ');
+}
+
 /** 取某条命令当前生效的键位。表中没有覆盖 = 用默认；值为 `''` = 用户显式清除（禁用） */
 export function resolveBinding(
   id: ShortcutId,

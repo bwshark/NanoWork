@@ -93,10 +93,21 @@ export const ROUTES = {
    * 登录 / 注册页（批次 4，FR-10）。
    *
    * **不是受保护页**——它就是登录页本身：未登录时不拦截本地使用，只把入口收在
-   * 设置弹窗「账户」分区（或状态徽章）里；点进去才 `navigate('/auth')`。
+   * 设置弹窗「账户」分区（或侧边栏底部账户入口）里；点进去才 `navigate('/auth')`。
    */
   auth: '/auth',
 } as const;
+
+/**
+ * 意见反馈入口（侧边栏账户菜单里那一项）。
+ *
+ * 走 issue 列表页而不是自建表单：反馈要能被人跟、被回复、被关闭，issue 天生如此，
+ * 而本项目还没有收反馈的服务端。
+ *
+ * ⚠️ 与 `git remote -v` 的仓库地址是**同一份事实的两处镜像**——渲染层读不到 git
+ * 配置，只能在此声明。换仓库 / 迁移反馈渠道时两处一起改。
+ */
+export const FEEDBACK_URL = 'https://github.com/bwshark/nanowork/issues';
 
 /** 持久化存储 key 前缀集中管理 */
 export const STORAGE_KEYS = {
