@@ -48,9 +48,40 @@ Python 侧门禁**，与 `nanobot/` 分开（那里是只读参考，不得为�
 
 ## 启动
 
+> 报错 `net::ERR_CONNECTION_REFUSED` 到 `http://127.0.0.1:8910` 的根因就是**服务没起**。
+> 按下面任一方式拉起即可，并保持该终端开启（Ctrl+C 停止）。
+
+**Windows（PowerShell / Git Bash，推荐，单条命令）：**
+
 ```bash
+cd cloud
+$env:NANOWORK_CLOUD_DB_URL="sqlite:///./cloud.db"
+.venv/Scripts/python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8910
+```
+
+**Windows（cmd）：**
+
+```bat
+cd cloud
+set NANOWORK_CLOUD_DB_URL=sqlite:///./cloud.db
+.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8910
+```
+
+**macOS / Linux：**
+
+```bash
+cd cloud
 NANOWORK_CLOUD_DB_URL="sqlite:///./cloud.db" \
-  .venv/Scripts/python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8910
+  .venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8910
+```
+
+启动成功后会看到 `Uvicorn running on http://127.0.0.1:8910` 日志。
+
+**验证是否真的起来了（另开一个终端）：**
+
+```bash
+curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:8910/health
+# 期望输出 200；401 也说明已连通（只是账号密码不对）
 ```
 
 端口 **8910** 的全仓唯一出处是设计文档 §16.6（未写进代码常量，改动前先核对）。
