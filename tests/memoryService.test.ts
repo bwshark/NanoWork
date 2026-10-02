@@ -336,6 +336,29 @@ describe('looksLikeSystemError: 报错文案判定', () => {
     expect(looksLikeSystemError('502 Bad Gateway')).toBe(true);
   });
 
+  it('生产实际漏判的三类文案现在命中（回归：2026-10-01 从记忆目录捞出 6 条报错块）', () => {
+    // 上游「模型不存在」——网关把 SDK 报错原文当 delta.content 吐出来
+    expect(
+      looksLikeSystemError(
+        "Error: {'message': 'The model `sciherd` does not exist or you do not have access to it.', 'type': 'invalid_request_error', 'param': None, 'code': 'model_not_found'}",
+      ),
+    ).toBe(true);
+    expect(
+      looksLikeSystemError(
+        "Error: {'message': 'The model `sciherd` does not exist.', 'type': 'NotFoundError', 'param': 'model', 'code': 404}",
+      ),
+    ).toBe(true);
+    // 调用层失败
+    expect(looksLikeSystemError('Error calling LLM: Connection error.')).toBe(true);
+  });
+
+  it('补特征词后仍不误杀中文摘要（中文为主 + 英文术语）', () => {
+    expect(
+      looksLikeSystemError('排查「模型 does not exist」报错，结论是预设名写成了 provider 名。'),
+    ).toBe(false);
+    expect(looksLikeSystemError('网关 connection error 出现三次，已记录待办。')).toBe(false);
+  });
+
   it('中文为主的文本不命中（即便含英文术语）', () => {
     expect(looksLikeSystemError('用户在做中医药临床研究，决定本周交付 P0 修复。')).toBe(false);
     expect(looksLikeSystemError('排查 API key 配额报错，先看 provider 后台账单')).toBe(false);

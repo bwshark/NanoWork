@@ -121,6 +121,14 @@ export function isEmptySummary(s: StructuredSummary): boolean {
  *
  * 已知代价：**中文错误文案认不出来**（中文报错与中文摘要在语言上无法区分），
  * 这类漏判由 `summarize` 的 onError 通道兜底，不由本判定承担。
+ *
+ * ⚠️ 2026-10-01 补三类**真实漏判**——从生产记忆目录里捞出 6 条报错块，全都是下面这些形态：
+ * 上游「模型不存在」类（`The model \`x\` does not exist…`）、`Error calling LLM: Connection error.`、
+ * 以及网关把 Python dict repr 当 content 吐出来的 `Error: {'message': …}`。
+ * 它们**全是英文**（中文占比 0%，语言条件本就满足），漏的是特征词：原先表里没有任何一条
+ * 能命中 `does not exist` / `model_not_found` / `connection error`，而裸的 `Error` 也不算特征词。
+ * 后果不只是「少拦一条」——报错会被 `parseSummary` 整段降级成 `task` 落盘，
+ * 此后每个会话都被注入一次（正是本判定存在的理由）。
  */
 const SYSTEM_ERROR_SIGNATURES = [
   'out of quota',
@@ -140,6 +148,16 @@ const SYSTEM_ERROR_SIGNATURES = [
   'internal server error',
   'bad gateway',
   'service unavailable',
+  // 上游「模型 / 资源不存在」类：厂商 SDK 措辞各异，故并列多个形态
+  'does not exist',
+  'model_not_found',
+  'notfounderror',
+  'invalid_request_error',
+  // 调用层失败
+  'connection error',
+  'error calling llm',
+  // Python dict repr 形态（`Error: {'message': …}`）——「网关把报错当 content 吐」的典型形状
+  'error: {',
   // 报错响应常带这两个字段名，而中文摘要不会原文照抄它们
   'request id',
   'trace id',
