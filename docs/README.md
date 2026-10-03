@@ -226,6 +226,88 @@
 > 并补「投影里看得见」的断言；核心行为用例删掉 `observedAt` 变通（用 UI 的真实调用形态）。
 > 文档同步：`prd-memory-v2.md` FR-M5 + §1.2 策略行、`architecture-memory-v2.md` §4.3 过滤条件 +
 > §12 问题 1 定稿。
+>
+> **#31 于 2026-10-03 处理（记忆 v2 真机验证发现的第二处缺陷：Web 端记忆目录两个存储键不同源）**：
+> 修完 #30 后，投影里已正确写入正文、事实视图也出现了结论，但**文件编辑器仍显示空**。
+> 根因是 Web 端把同一个「记忆目录」拆成两个 localStorage key——v1 `nanowork.wsmem.*`
+> （`WebWorkspaceMemoryFiles`，`{文件名: 正文}`）与 v2 `nanowork.mem2.*`（`WebMemoryDirFiles`，
+> 带子目录的相对名），而 **`MEMORY.md` 被两边同时认领**：写路径在 v2
+> （`applyManualMemoryEdit` → `platform.memoryDirs`，投影由 `distill` 重写），
+> 读路径却有一半在 v1（`MemoryService.readFile` / `loadForInjection`）→ 保存后读回来是上一版。
+> 探针实证：保存后 v2 键里有 `MEMORY.md`，**v1 键根本不存在**，编辑器因此显示 `""`。
+> Electron 端两套能力落在**同一个真实目录**（`<workdir>/.nanowork/memory/`），所以这条裂缝
+> 只在 Web 暴露——属**记忆 v2 引入的 Web 端回归**（v2 之前 CURATED 由 `MemoryService.save` 写 v1，读写同源）。
+> 修复：把 `MEMORY.md` **收敛到 v2 一侧唯一落点**，v1 面对它转发
+> （`readCuratedProjectionText` / `writeCuratedProjectionText`：读宽回落兼容 v2 之前的历史数据，
+> 写/删时清掉 v1 侧可能残留的第二份；`removeAll` 两侧一起清且计数把 `MEMORY.md` 算上）。
+> 日期 `.md` 仍留在 v1，两者物理落点各自唯一。
+> 测试：新增 `tests/platform/webMemoryStores.test.ts`（10 例，含**证伪性**断言——把修复前「只读 v1 映射」的写法直接写进用例）；
+> `tests/memoryService.test.ts` 的落点断言由「v1 前缀存在」改为「v2 目录键存在 + v1 面可读 + v1 键下不留第二份」。
+> 真机复验 `tasks/verify-memory-v2.mjs` **26/26 全绿**；三套 tsc 全 0。
+>
+> **#32 于 2026-10-03 处理（Electron 真机报错：`storage:set` 写 `nanowork.memoryScope` 必然失败）**：
+> 用户实机日志：`Error occurred in handler for 'storage:set': [storage] key「nanowork.memoryScope」的值与
+> 落点形态不符，无法写入 …\misc\nanowork.memoryScope.json：Unexpected token 'u', "u_6fa17947348" is not valid JSON`。
+> 根因是**代码里已登记过的同一类陷阱**（见 `storageRoutes.ts` 的 ⚠️ 登记纪律与 `activeSession` 那条注释）：
+> 该 key 的值是**裸字符串** `u_<hex>`（本机用户记忆作用域），却没登记进主进程路由表 →
+> 掉进 ② `misc/` 的 **json 兜底** → json 路由会无条件 `JSON.parse` 后落盘 → 抛错，**写入整条失败**。
+> 后果极具迷惑性：不崩不报红，只是**每次启动都生成新 scope** → 上一次写的画像 / 偏好留在
+> `~/.nanowork/user-memory/<旧 scope>/` 里永远读不回来。
+> **为什么单测没拦住**：`STORAGE_KEYS` 有一条「全部显式登记」的不变量，但该 key 此前就地定义在
+> `memoryPlatformIo.ts`（不在 `STORAGE_KEYS` 里），于是**不进不变量扫描范围**；
+> 为什么真机验证也没拦住：我的 `verify-memory-v2.mjs` 跑在**浏览器**（Web 适配器把值 `JSON.stringify` 后
+> 塞 localStorage，天然合法），而这条裂缝只在 **Electron 主进程路由**上存在。
+> 修复：① key 迁进 `STORAGE_KEYS.localMemoryScope`（这样不变量自动覆盖，杜绝再犯）；
+> ② `RUNTIME_FILES` 登记 `{ rel: 'memory-scope.txt', format: 'text' }`（与 `device-id.txt` 同款）；
+> ③ 加入 `CLEAR_EXEMPT_KEYS`——它是「用户级记忆放在哪」的**指针**，数据在 ① `user-memory/<scope>/`
+> 且不在清空范围内，清掉指针不会删数据、只会让画像/偏好永远读不回来（与 `deviceId` 不同：清掉它不产生孤儿）；
+> ④ `knownRouteFiles` 的 ② 段补上豁免过滤——原先**只过滤了 ①**，豁免对运行时的 key 形同虚设（单测直接红了）。
+> 测试 `tests/electron/storageRoutes.test.ts` 新增 3 例（路由 = ② 裸文本 + `serializeRouteValue` 往返 +
+> 渲染层常量同一性 + 豁免清单），其「STORAGE_KEYS 全部显式登记」不变量现在自动覆盖该 key。
+> 已按铁律**重建 `main.cjs` / `preload.cjs`**。
+>
+> **#33 于 2026-10-03 处理（开发态日志噪声：`Request Autofill.enable failed`）**：
+> 现象是每次开发启动都往控制台刷两条 `ERROR:CONSOLE … 'Autofill.enable' wasn't found` /
+> `'Autofill.setAddresses' wasn't found`，`source` 是 `devtools://devtools/bundled/core/protocol_client/protocol_client.js`。
+> 根因：**DevTools 前端**初始化时请求 CDP 的 `Autofill.enable` / `Autofill.setAddresses`，
+> 而 Electron 的 Chromium 是裁剪版、**没有实现 Autofill 域**（Electron 30+ 普遍如此）。
+> 消息不是本项目代码发出的，但顶着 ERROR 级别、每次启动都出现，极易被当成应用报错。
+> 而此前 `electron/main.ts` 是 `if (isDev) openDevTools(...)` **无脑自动开**（且 `ELECTRON_DEV_URL`
+> 分支里还重复开了一次）——于是只要开发启动就必然出现。
+> 应用侧**没有**别的开关能抑制它（DevTools 的实验偏好存在 DevTools 自己的 localStorage 里，
+> 没有可预置的文件；社区的两条出路是「忽略」或「把 Electron 降到 28.x」）。
+> 修复：① 自动打开改为**显式开关** `NANOWORK_DEVTOOLS=1`（默认关），并删掉重复调用；
+> ② 应用菜单被 `Menu.setApplicationMenu(null)` 置空、默认 DevTools 加速键已不存在，
+> 故补一个手开入口 `F12` / `Ctrl+Shift+I` / `Cmd+Opt+I`——判据抽成纯模块
+> `electron/devtoolsShortcut.ts` 并配 7 例单测（**否定判据与肯定判据同等重要**：
+> 漏判 = 用户再也进不去 DevTools；误判 = 输入框里打一个 `i` 就弹面板）。
+> 若必须**开着** DevTools 又不想看那两条：DevTools → Settings → Experiments →
+> 取消勾选 Autofill / 表单调试相关实验 → 重启 DevTools（一次性本机偏好）。
+> ⚠️ **未做 GUI 冒烟**：本沙箱里 Electron 渲染起不来（GPU 进程反复 `exit_code=-1073741819`、
+> 加载 `dist/index.html` 报 `ERR_FAILED`），开/关 DevTools 两种配置都抓不到那两条，
+> 无法作为判据；已在产物上确认 `openDevTools` **只剩一处且被开关守卫**。
+>
+> **2026-10-03 开 M4 自动化收尾：FR-5.4（RRULE + 有效期窗口）已落**：
+> ① `TaskSchedule` 加 `{ kind:'rrule'; rrule; tz? }`（**本层表达形态**，不是引擎形态——真实调度在
+> nanobot `CronService`，前端保留规则原文是为了让用户看到自己写的那条）；
+> ② `TaskConfig` 加 `validFrom` / `validUntil`；
+> ③ 新增 `src/lib/rrule.ts`：降级纯函数 `lowerRrule` / `parseRrule` / `describeRrule`，**能降的降成
+> 单条 cron**（「每 n 天」走引擎原生 `every`），**不能降的明确拒绝并给出人话原因**
+> （序数星期 `1MO`、负 `BYMONTHDAY`、`INTERVAL>1` 的周/月/年、`COUNT=`、`BYWEEKNO` 等），
+> 配套 `tests/rrule.test.ts` **28 例**；
+> ④ 同步链路：`toNanobotSchedule` 对 rrule 降级、`computeNextRunMs(schedule, fromMs, window)`
+> 按窗口算 `nextRunAtMs`、新增 `effectiveValidityWindow`（任务级与 RRULE 自带 `UNTIL` **取更早者**）、
+> 窗口透传进 `originMetadata.validity`（引擎不消费，供排查）；
+> ⑤ 表单加「循环规则」档 + **降级结果实时回显**（与提交校验共用同一个 `lowerRrule`，
+> 不会出现「提示说可以、提交却被拒」）。
+> ⚠️ **纠正设计文档 §15.3 的一处前提错误**：原文说 `BYMONTHDAY=1,15,28` 无法用单条 cron 表达、
+> 要拆成 3 个任务——不成立，cron 的「日」字段本就支持逗号枚举。已在 §15.3 原文就地纠正，
+> 并说明为什么**不拆任务**（拆了会让「一个任务」变成 N 个 job，连带 enable/disable、删除、
+> 留痕、幂等合并全要改，收益只是覆盖几条本就罕见的规则）。
+> 两个由单测抓出来的真实缺陷：**`FREQ=MINUTELY` 曾被降成 `0 * * * *`**（每小时，差 60 倍且不报错）；
+> **rrule 的 `tz` 曾在降级时被丢掉**（会让任务在错误时区触发）。
+> **M4 剩余**：FR-5.3（运行详情页 / 成功率 / 失败分类，🟡）、FR-5.6（结果回推 outbox，⬜ **需引擎侧配合**）、
+> FR-5.8（任务级 cwds，🟡）、FR-5.5 补（自然语言 → 调度推荐）。
 ---
 
 ## 十、检查清单（提交前自检）

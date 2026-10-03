@@ -8,6 +8,7 @@ import { randomUUID } from 'node:crypto';
 import WebSocket from 'ws';
 import { parseWebuiResponseFrame } from './webuiFrames';
 import { canBindPort, resolveGatewayPort } from './gatewayPort';
+import { isDevToolsShortcut } from './devtoolsShortcut';
 import { normalizeEngineChannelAllowFrom } from './channelAllowFrom';
 import { disconnectChannelInConfig, resolveWeixinAccountPath, type DisconnectChannelKind } from './channelDisconnect';
 import {
@@ -85,6 +86,32 @@ import {
 import type { SessionMeta } from '../src/types/event';
 
 const isDev = !app.isPackaged;
+
+/**
+ * 是否**自动**打开 DevTools（默认关，`NANOWORK_DEVTOOLS=1` 才开）。
+ *
+ * 关掉它是为了消掉一条纯环境噪声：DevTools 前端初始化时会请求 CDP 的
+ * `Autofill.enable` / `Autofill.setAddresses`，而 Electron 的 Chromium 是裁剪版、
+ * **没有实现 Autofill 域**，于是每开一次面板就往控制台刷两条：
+ *
+ * ```
+ * ERROR:CONSOLE(1) "Request Autofill.enable failed. …'Autofill.enable' wasn't found"
+ *   source: devtools://devtools/bundled/core/protocol_client/protocol_client.js
+ * ```
+ *
+ * `source` 已经是 `devtools://`——**那不是本项目的代码**，但它顶着 ERROR 级别出现，
+ * 每次开发启动都能看到，极其容易被当成应用报错（实际踩过）。
+ *
+ * 应用侧**没有**别的开关能修它（DevTools 的实验偏好存在 DevTools 自己的
+ * localStorage 里，没有可预置的文件；官方口头建议是「忽略」或降 Electron 到 28.x）。
+ * 唯一可控的点就是「打不打开它」，所以默认不开；需要时：
+ * - 自动：`NANOWORK_DEVTOOLS=1 npm run electron:serve`
+ * - 手动：`F12` / `Ctrl+Shift+I`（见下面的 `before-input-event` 钩子）
+ *
+ * 若必须**开着** DevTools 又不想看那两条：DevTools → Settings → Experiments →
+ * 取消勾选 Autofill / 表单调试相关实验 → 重启 DevTools（一次性的本机偏好）。
+ */
+const autoOpenDevTools = process.env.NANOWORK_DEVTOOLS === '1';
 
 /** 两个持久化根的来源：① 用户资产取 home，② 运行时数据取 Electron userData */
 const STORAGE_ROOTS: StorageRoots = {
@@ -494,12 +521,26 @@ async function createWindow(): Promise<void> {
     },
   });
 
+  // `mainWindow` 是模块级 `let`，在闭包里会丢掉 `new` 之后的那次非空 narrowing
+  // （这也是原先 `openDevTools` 写 `mainWindow?.` 的原因）。先取一个局部引用。
+  const win = mainWindow;
+
   if (isDev) {
-    mainWindow?.webContents.openDevTools({ mode: 'detach' })
+    // —— DevTools 不再默认自动打开（见 `autoOpenDevTools` 的注释）——
+    if (autoOpenDevTools) win.webContents.openDevTools({ mode: 'detach' });
+
+    // 应用菜单被 `Menu.setApplicationMenu(null)` 置空 → Chromium 默认的
+    // 「Toggle Developer Tools」加速键随之消失。既然默认不自动开了，就必须补一个
+    // **手开入口**，否则开发态就再也进不去 DevTools。仅开发态注册，打包版无此钩子。
+    win.webContents.on('before-input-event', (_event, input) => {
+      if (input.type !== 'keyDown') return;
+      if (!isDevToolsShortcut(input)) return;
+      win.webContents.toggleDevTools();
+    });
+
     const devUrl = process.env.ELECTRON_DEV_URL;
     if (devUrl) {
       await mainWindow.loadURL(devUrl);
-      mainWindow.webContents.openDevTools({ mode: 'detach' });
     } else {
       // 默认加载 vite build 产物（electron:serve / 调试时均走此分支）
       await mainWindow.loadFile(join(__dirname, '../dist/index.html'));

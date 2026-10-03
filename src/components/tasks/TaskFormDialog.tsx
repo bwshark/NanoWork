@@ -41,6 +41,7 @@ import VerifiedUserIcon from '@mui/icons-material/VerifiedUser';
 import GppMaybeIcon from '@mui/icons-material/GppMaybe';
 import { toast } from '@/components/Toast';
 import { validateCron } from '@/lib/cron';
+import { describeRrule, lowerRrule } from '@/lib/rrule';
 import { useAgentsStore } from '@/stores/agentsStore';
 import { useSkillsStore } from '@/stores/skillsStore';
 import { describeModelId, useModelsStore } from '@/stores/modelsStore';
@@ -48,7 +49,7 @@ import type { TaskConfig, TaskSchedule, TaskStatus } from '@/types';
 import type { TaskDraft } from '@/lib/taskDraft';
 
 /** 调度类型：周期（daily/weekly/monthly）/ 按间隔 / 单次 */
-type ScheduleMode = 'periodic' | 'interval' | 'once';
+type ScheduleMode = 'periodic' | 'interval' | 'once' | 'rrule';
 
 /** 周期频率 */
 type PeriodFreq = 'daily' | 'weekly' | 'monthly';
@@ -71,6 +72,12 @@ interface UiState {
   validTo: string;
   /** 高级：直接写 cron，覆盖上方结构化设置 */
   cronOverride: string;
+  /**
+   * 循环规则原文（FR-5.4）。它是**本层的表达形态**，提交时原样存进
+   * `TaskConfig.schedule`；降级成引擎能跑的 cron / interval 是同步时做的（`src/lib/rrule.ts`）。
+   * 之所以不在这里就降级：用户下次打开表单要看到自己写的那条规则。
+   */
+  rrule: string;
   tz: string;
 }
 
@@ -103,6 +110,7 @@ const EMPTY_UI: UiState = {
   validFrom: '',
   validTo: '',
   cronOverride: '',
+  rrule: '',
   tz: '',
 };
 
@@ -162,6 +170,12 @@ function scheduleToUi(schedule?: TaskSchedule): UiState {
     return next;
   }
 
+  if (schedule.kind === 'rrule') {
+    // 循环规则**原样回显**：结构化 UI 表达不了 RRULE 的自由组合，
+    // 强行反推只会让用户看到一条自己没写过的规则
+    return { ...next, mode: 'rrule', rrule: schedule.rrule, tz: schedule.tz ?? '' };
+  }
+
   next.tz = schedule.tz ?? '';
   const matched = schedule.expr.match(/^(\d+) (\d+) (\*|\d+) (\*|\d+) (\*|\d+)$/);
   if (!matched) return { ...next, mode: 'periodic', cronOverride: schedule.expr };
@@ -201,6 +215,12 @@ function uiToSchedule(ui: UiState): TaskSchedule {
     };
   }
 
+  if (ui.mode === 'rrule') {
+    // 原样存**规则本身**（不是降级结果）：引擎形态是下发时才决定的，
+    // 而用户下次编辑要看到自己写的规则
+    return { kind: 'rrule', rrule: ui.rrule.trim(), tz };
+  }
+
   if (ui.cronOverride.trim()) {
     return { kind: 'cron', expr: ui.cronOverride.trim(), tz };
   }
@@ -217,6 +237,69 @@ function uiToSchedule(ui: UiState): TaskSchedule {
   return { kind: 'cron', expr: `${minute} ${hour} ${dom} ${month} ${dow}`, tz };
 }
 
+/**
+ * 循环规则（RRULE）输入 + **降级结果实时回显**（FR-5.4）。
+ *
+ * 这个回显不是装饰：引擎只认 cron / every / at，RRULE 是前端降级后才下发的。
+ * 用户必须能看到「我写的规则会被执行成什么」，以及**写不了的规则为什么写不了**
+ * ——设计 §15.3 明确要求「这个降级必须显式」。
+ *
+ * 与 `validateForm` 共用同一个 `lowerRrule`，因此不会出现「提示说可以、提交却被拒」
+ * 这种自相矛盾的状态（两处各判一次的写法必然会漂移）。
+ */
+function RruleField({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const text = value.trim();
+  const lowered = text === '' ? null : lowerRrule(text);
+
+  let hint: React.ReactNode;
+  if (lowered === null) {
+    hint = (
+      <Typography variant="caption" color="text.secondary">
+        示例：FREQ=MONTHLY;BYMONTHDAY=1,15,28;BYHOUR=9 —— 每月 1、15、28 日 09:00
+      </Typography>
+    );
+  } else if (!lowered.ok) {
+    hint = (
+      <Alert severity="warning" sx={{ py: 0.25 }}>
+        <Typography variant="caption">{lowered.reason}</Typography>
+      </Alert>
+    );
+  } else {
+    const as = lowered.schedule;
+    const what =
+      as.kind === 'cron'
+        ? `cron「${as.expr}」`
+        : as.kind === 'interval'
+          ? `固定间隔「每 ${as.minutes} 分钟」`
+          : '单次';
+    hint = (
+      <Alert severity="info" icon={false} sx={{ py: 0.25 }}>
+        <Typography variant="caption" color="text.secondary">
+          {describeRrule(text)} · 引擎将按 {what} 执行
+          {lowered.until ? ` · 至 ${lowered.until.slice(0, 10)}` : ''}
+          {lowered.note ? ` · ${lowered.note}` : ''}
+        </Typography>
+      </Alert>
+    );
+  }
+
+  return (
+    <Box sx={{ mb: 1.5 }}>
+      <TextField
+        size="small"
+        fullWidth
+        multiline
+        minRows={2}
+        placeholder="FREQ=MONTHLY;BYMONTHDAY=1,15,28;BYHOUR=9;BYMINUTE=0"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        InputProps={{ sx: { fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 12 } }}
+      />
+      <Box sx={{ mt: 0.5 }}>{hint}</Box>
+    </Box>
+  );
+}
+
 /** 校验表单；返回空串表示通过（文案即 toast 内容） */
 function validateForm(form: FormState): string {
   if (!form.name.trim()) return '请填写任务名称';
@@ -228,6 +311,14 @@ function validateForm(form: FormState): string {
   if (ui.mode === 'periodic' && ui.cronOverride.trim()) {
     const check = validateCron(ui.cronOverride.trim());
     if (!check.valid) return check.error ?? 'Cron 表达式不合法';
+  }
+
+  if (ui.mode === 'rrule') {
+    if (!ui.rrule.trim()) return '请填写循环规则（RRULE，如 FREQ=MONTHLY;BYMONTHDAY=1,15）';
+    // ⭐ FR-5.4 的「降级必须显式」：引擎只认 cron / every / at，降不了就必须**当场说清原因**，
+    // 而不是存下来、等到执行时静默不跑
+    const lowered = lowerRrule(ui.rrule.trim());
+    if (!lowered.ok) return `该循环规则引擎无法执行：${lowered.reason}`;
   }
 
   if (ui.validFrom && ui.validTo && ui.validFrom > ui.validTo) {
@@ -423,7 +514,10 @@ export function TaskFormDialog({
           <ToggleButton value="periodic">周期</ToggleButton>
           <ToggleButton value="interval">按间隔</ToggleButton>
           <ToggleButton value="once">单次</ToggleButton>
+          <ToggleButton value="rrule">循环规则</ToggleButton>
         </ToggleButtonGroup>
+
+        {ui.mode === 'rrule' && <RruleField value={ui.rrule} onChange={(rrule) => patchUi({ rrule })} />}
 
         {ui.mode === 'periodic' && (
           <Box sx={{ display: 'flex', gap: 1, mb: 1.5, flexWrap: 'wrap' }}>

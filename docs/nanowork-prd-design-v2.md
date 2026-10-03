@@ -251,7 +251,7 @@
 | FR-5.1 | 定时任务 CRUD         | P0     | ✅  | both     | cron / interval / once + 启停 / 删除（已实现）                                                                |
 | FR-5.2 | 任务镜像到引擎           | P0     | ✅  | electron | 合并进 `cron/jobs.json` + 热加载，无需重启网关（已实现，含托管标记）                                                         |
 | FR-5.3 | 执行留痕              | P0     | 🟡 | both     | `TaskRunRecord` 已有；**补**：运行详情页、成功率统计、失败原因分类                                                          |
-| FR-5.4 | **RFC 5545 循环规则** | **P1** | ⬜  | both     | 支持 `RRULE`（如「每月 1、15、28 日 09:00」）、`valid_from` / `valid_until` 有效期窗口（对齐 WorkBuddy `automations` 表语义） |
+| FR-5.4 | **RFC 5545 循环规则** | **P1** | 🟡  | both     | 支持 `RRULE`（如「每月 1、15、28 日 09:00」）、`valid_from` / `valid_until` 有效期窗口（对齐 WorkBuddy `automations` 表语义）。**2026-10-03 已落**：`TaskSchedule` 加 `rrule` 形态、`TaskConfig` 加 `validFrom`/`validUntil`、降级纯函数 `src/lib/rrule.ts`（含**明确拒绝**不可降级的规则）、同步链路 `computeNextRunMs` 按窗口算 `nextRunAtMs`、表单加「循环规则」档 + **降级结果实时回显**。**未做**：结果回推（FR-5.6）仍缺 |
 | FR-5.5 | 自然语言建任务           | P0     | ✅  | both     | 对话内 hover → 创建定时任务（已实现）。**补**：语义推荐调度（如「每周一早上」→ 自动生成 cron）                                            |
 | FR-5.6 | **结果回推渠道**        | **P1** | ⬜  | both     | 任务可配置推送到企微 / 微信 / 飞书；投递失败进 outbox 重试（对齐 WorkBuddy `automation_delivery_outbox`）                      |
 | FR-5.7 | Webhook / 邮件触发器   | P2     | ⬜  | both     | 除定时外支持外部事件触发（V2）                                                                                     |
@@ -2139,7 +2139,28 @@ export interface TaskConfig {
 
 **为什么保持这个架构**：调度是「长时间尺度、不能因 UI 关闭而停」的能力，放在引擎侧天然正确。前端只做配置与可视化——这是职责的正确划分。需要新增的是**结果回推**（FR-5.6）：引擎侧任务完成后，通过 `payload.deliver` 或独立的 `delivery` 配置把结果推到 IM。
 
-**RRULE 支持**：引擎侧若只认 cron，则由前端把常见 RRULE 降级展开为 cron（如 `FREQ=MONTHLY;BYMONTHDAY=1,15,28` 无法用单条 cron 表达 → 拆成 3 条 cron job 或提示用户改为 cron）。这个降级必须**显式**：UI 要告知用户「当前引擎不支持该规则，已展开为 N 条任务」。
+**RRULE 支持**：引擎侧只认 cron / every / at，因此 RRULE 由前端**降级**后下发。
+
+⚠️ **本节原文有一处前提错误（2026-10-03 实施时纠正）**：原文举 `FREQ=MONTHLY;BYMONTHDAY=1,15,28`
+「无法用单条 cron 表达 → 拆成 3 条 cron job」——**不成立**：cron 的「日」字段本来就支持逗号枚举，
+`0 9 1,15,28 * *` 就是它。真正 cron 表达不了的是**序数星期**（`BYDAY=1MO` = 每月第一个周一）、
+**负数 `BYMONTHDAY`**（月末）、**`INTERVAL>1` 的周/月/年**（「每两周」）与 **`COUNT=`**（次数）。
+这几类**拆任务也解决不了**，只能拒绝。
+
+因此落地口径是（`src/lib/rrule.ts`，纯函数 + 28 例单测）：
+
+1. **能降级的降成单条** cron；「每 n 天」这类走引擎原生的 `every`（cron 的 `*/n` 在「日」字段是
+   按「月内第几天的偏移」算的，跨月会错位）；
+2. **不能降级的明确拒绝并给出人话原因**（如「序数星期…cron 只支持『所有周一』」），
+   由表单在录入时拦住 —— 这条正是「降级必须显式」的落点，**在表单里实时回显**；
+3. **不拆任务**：拆了会让「一个任务」变成 N 个 job，enable/disable、删除、运行留痕、
+   幂等合并全都要跟着改，收益却只是覆盖几条本就罕见的规则；
+4. `UNTIL=` 不改变触发时刻，只落到窗口上界（`validUntil`）；任务级 `validUntil` 与它**取更早者**。
+
+**有效期窗口的生效点**：引擎没有窗口概念（三种 schedule 都不带），所以窗口**只在
+`computeNextRunMs` 里生效**——落在窗口外就不给出 `nextRunAtMs`，任务自然不执行。
+⚠️ 已知局限：窗口「等到 `validFrom` 之后」需要一次重新同步才会生效（引擎不会自己重算），
+目前由「打开任务页 / 应用启动」时的同步覆盖。**没有做后台定时重算**。
 
 ---
 

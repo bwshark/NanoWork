@@ -6,6 +6,7 @@ import {
 } from '@/lib/workspaceMemory';
 import {
   appendJsonlLine,
+  CURATED_MEMORY_FILE,
   isMemoryContentFileName,
   isMemoryEntryName,
   isMemoryFileName as isMemoryFileNameV2,
@@ -129,6 +130,52 @@ function writeMemoryDirV2(dirRef: MemoryDirRef, dir: Record<string, string>): vo
 }
 
 /**
+ * 精炼记忆（`MEMORY.md`）的**唯一物理落点**：v2 的目录存储（`nanowork.mem2.*`）。
+ *
+ * ## 为什么要有这条「转发」
+ *
+ * Web 端把同一个记忆目录拆成两个 localStorage key（v1 `nanowork.wsmem.*` /
+ * v2 `nanowork.mem2.*`，理由见 `WebMemoryDirFiles` 的类头注释）。拆开之后
+ * **`MEMORY.md` 被两边同时认领**：
+ * - 保存路径走 v2（`applyManualMemoryEdit` → `platform.memoryDirs`，投影由 `distill` 重写）；
+ * - 而 v1 的读路径（`MemoryService.readFile` / `loadForInjection`）仍从 `nanowork.wsmem.*` 取。
+ *
+ * 于是保存后 v1 面读回来是**上一版**。实测症状：手编保存 → toast 说已登记，投影也写对了，
+ * 但文件编辑器显示空、注入的 legacy 段落也是旧内容（v2 键里有 `MEMORY.md`，v1 键根本不存在）。
+ * Electron 端两套能力落在**同一个真实目录**，所以这条裂缝只在 Web 暴露。
+ *
+ * 处置：把 `MEMORY.md` 收敛到 v2 一侧，v1 面对它**转发**；日期 `.md` 文件仍然留在 v1，
+ * 两者的物理落点因此各自唯一。
+ */
+function readCuratedProjectionText(workdir: string | null): string | null {
+  const ref: MemoryDirRef = { kind: 'workspace', workdir };
+  const v2 = readMemoryDirV2(ref);
+  if (Object.prototype.hasOwnProperty.call(v2, CURATED_MEMORY_FILE)) {
+    return v2[CURATED_MEMORY_FILE];
+  }
+  // 读宽回落：v2 之前写入的 `MEMORY.md` 只存在于 v1 键里。只读回落，下一次写入即迁到 v2。
+  const v1 = readMemoryDir(workdir);
+  return Object.prototype.hasOwnProperty.call(v1, CURATED_MEMORY_FILE)
+    ? v1[CURATED_MEMORY_FILE]
+    : null;
+}
+
+/** 把 `MEMORY.md` 写进/删除出 v2 侧；若 v1 侧还残留同一份，一并清掉（同一个文件不留两处） */
+function writeCuratedProjectionText(workdir: string | null, content: string | null): void {
+  const ref: MemoryDirRef = { kind: 'workspace', workdir };
+  const v2 = readMemoryDirV2(ref);
+  if (content === null) delete v2[CURATED_MEMORY_FILE];
+  else v2[CURATED_MEMORY_FILE] = content;
+  writeMemoryDirV2(ref, v2);
+
+  const v1 = readMemoryDir(workdir);
+  if (Object.prototype.hasOwnProperty.call(v1, CURATED_MEMORY_FILE)) {
+    delete v1[CURATED_MEMORY_FILE];
+    writeMemoryDir(workdir, v1);
+  }
+}
+
+/**
  * Web 端的工作区记忆后端：用**一个 localStorage key 装整个目录**
  * （值是 `{ 文件名: 正文 }`）。
  *
@@ -143,11 +190,17 @@ function writeMemoryDirV2(dirRef: MemoryDirRef, dir: Record<string, string>): vo
  */
 export class WebWorkspaceMemoryFiles implements WorkspaceMemoryFiles {
   list(workdir: string | null): Promise<string[]> {
-    return Promise.resolve(sortMemoryFileNames(Object.keys(readMemoryDir(workdir))));
+    const names = new Set(Object.keys(readMemoryDir(workdir)));
+    // `MEMORY.md` 的权威落点在 v2 一侧（见 `readCuratedProjectionText`），列目录要把它带上
+    if (readCuratedProjectionText(workdir) !== null) names.add(CURATED_MEMORY_FILE);
+    return Promise.resolve(sortMemoryFileNames([...names]));
   }
 
   read(workdir: string | null, name: string): Promise<string | null> {
     if (!isMemoryFileName(name)) return Promise.resolve(null);
+    if (name === CURATED_MEMORY_FILE) {
+      return Promise.resolve(readCuratedProjectionText(workdir));
+    }
     const dir = readMemoryDir(workdir);
     return Promise.resolve(Object.prototype.hasOwnProperty.call(dir, name) ? dir[name] : null);
   }
@@ -157,6 +210,10 @@ export class WebWorkspaceMemoryFiles implements WorkspaceMemoryFiles {
     if (!isWritableMemoryFileName(name)) {
       return Promise.reject(new Error(`不允许写入该记忆文件名：${String(name)}`));
     }
+    if (name === CURATED_MEMORY_FILE) {
+      writeCuratedProjectionText(workdir, content ?? '');
+      return Promise.resolve();
+    }
     const dir = readMemoryDir(workdir);
     dir[name] = content ?? '';
     writeMemoryDir(workdir, dir);
@@ -165,6 +222,10 @@ export class WebWorkspaceMemoryFiles implements WorkspaceMemoryFiles {
 
   remove(workdir: string | null, name: string): Promise<void> {
     if (!isMemoryFileName(name)) return Promise.resolve();
+    if (name === CURATED_MEMORY_FILE) {
+      writeCuratedProjectionText(workdir, null);
+      return Promise.resolve();
+    }
     const dir = readMemoryDir(workdir);
     if (!Object.prototype.hasOwnProperty.call(dir, name)) return Promise.resolve();
     delete dir[name];
@@ -173,8 +234,12 @@ export class WebWorkspaceMemoryFiles implements WorkspaceMemoryFiles {
   }
 
   removeAll(workdir: string | null): Promise<number> {
-    const count = Object.keys(readMemoryDir(workdir)).length;
+    // 计数把 v2 侧的 `MEMORY.md` 算上：用户点「清空」在意的是「清掉了几份」，
+    // 少算一份会让人以为漏清了
+    const hasCurated = readCuratedProjectionText(workdir) !== null;
+    const count = Object.keys(readMemoryDir(workdir)).length + (hasCurated ? 1 : 0);
     writeMemoryDir(workdir, {});
+    writeCuratedProjectionText(workdir, null);
     return Promise.resolve(count);
   }
 
@@ -212,8 +277,11 @@ export class WebWorkspaceMemoryFiles implements WorkspaceMemoryFiles {
  * ## 与 `WebWorkspaceMemoryFiles`（v1）的关系
  *
  * 同一个物理「记忆目录」在 Web 端由**两个 localStorage key** 承担：
- * v1 的 `nanowork.wsmem.<key>` 存 `{ 文件名: 正文 }`（`MEMORY.md` + 日期 `.md`），
+ * v1 的 `nanowork.wsmem.<key>` 存 `{ 文件名: 正文 }`（日期 `.md`），
  * v2 的 `nanowork.mem2.<…>` 存**带子目录的相对名**（`{ 'daily/2026-09-19.jsonl': … }`）。
+ *
+ * ⚠️ **`MEMORY.md` 不在这条划分里**：它两边都认领，只落一处会读不到（2026-10-03 修）。
+ * 权威落点是**本类这一侧**（v2），v1 面对它转发——见 `readCuratedProjectionText` 的注释。
  *
  * 为什么不合并成一个 key：v1 的 `readMemoryDir` 用 `isMemoryFileName` 过滤，带 `/` 的
  * 名字会被静默丢掉，于是 v2 的事实日志在 Web 端永远读不到；而改那个过滤器就要动

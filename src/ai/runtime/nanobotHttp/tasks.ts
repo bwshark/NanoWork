@@ -25,6 +25,7 @@
  */
 import { platform } from '@/platform';
 import { nextCronRunMs } from '@/lib/cron';
+import { lowerRrule } from '@/lib/rrule';
 import type { RunQuery } from '../types';
 import type { NanobotCronRunRecord, TaskSyncResult } from '@/platform/types';
 import type { TaskConfig, TaskRunRecord, TaskSchedule } from '@/types';
@@ -78,7 +79,20 @@ export interface NanobotJob {
   deleteAfterRun: boolean;
 }
 
-/** 前端 TaskSchedule → nanobot CronSchedule */
+/**
+ * 降级失败的 RRULE 落成什么。
+ *
+ * 取「2 月 31 日」这个**永不存在的日期**，于是 croniter 永远算不出下次触发，
+ * 配合 `computeNextRunMs` 返回 null，任务是「存在但永不到期」。
+ *
+ * 为什么不在这里抛错：本函数在**同步链路**上（`buildNanobotJobsFragment` →
+ * 主进程合并 jobs.json）。同步链路上抛一个 RRULE 的错，会把**其它任务的同步一起带崩**——
+ * 一条写坏的规则不该让整批自动化停摆。真正该拦住它的是录入侧：表单必须用
+ * `lowerRrule` 先校验，用户根本存不下不可降级的规则（见 `docs/prd-tasks*.md` 的后续批次）。
+ */
+const NEVER_FIRING_CRON = '0 0 31 2 *';
+
+/** 前端 TaskSchedule → nanobot CronSchedule（`rrule` 在此降级） */
 export function toNanobotSchedule(schedule: TaskSchedule): NanobotSchedule {
   switch (schedule.kind) {
     case 'cron':
@@ -87,6 +101,20 @@ export function toNanobotSchedule(schedule: TaskSchedule): NanobotSchedule {
         expr: schedule.expr,
         ...(schedule.tz ? { tz: schedule.tz } : {}),
       };
+    case 'rrule': {
+      const lowered = lowerRrule(schedule.rrule);
+      if (!lowered.ok) {
+        console.warn(`[tasks] RRULE 无法降级，该任务将永不触发：${lowered.reason}（${schedule.rrule}）`);
+        return { kind: 'cron', expr: NEVER_FIRING_CRON, ...(schedule.tz ? { tz: schedule.tz } : {}) };
+      }
+      // 降级结果可能是 cron，也可能落到引擎原生的 interval 形态——递归一次即可，
+      // 不复制「interval → everyMs」的换算（那条规则只有一处才对）
+      const inner = toNanobotSchedule(lowered.schedule);
+      // ⚠️ tz 必须**随降级结果一起搬过去**：降级只产出「分 时 日 月 周」，
+      // 时区不在其中。漏掉它不会报错，只会让任务在错误时区触发（实测由用例抓到）。
+      // 只有 cron 有时区语义（`everyMs` 是纯间隔），所以仅对 cron 附加。
+      return schedule.tz && inner.kind === 'cron' ? { ...inner, tz: schedule.tz } : inner;
+    }
     case 'interval':
       return { kind: 'every', everyMs: schedule.minutes * 60_000 };
     case 'once':
@@ -94,17 +122,46 @@ export function toNanobotSchedule(schedule: TaskSchedule): NanobotSchedule {
   }
 }
 
+/** 有效期窗口（ISO 字符串，缺省即无界） */
+export interface ValidityWindow {
+  from?: string;
+  until?: string;
+}
+
 /**
  * 计算调度下次触发时间戳（毫秒），与引擎 _compute_next_run 语义对齐：
  * - interval：now + everyMs；
  * - once：atMs（已过期返回 null，引擎将禁用该任务）；
  * - cron：严格晚于 now 的最近匹配分钟（本地时区；指定 tz 时以引擎
- *   reload 端点的 croniter 重算为准）。
+ *   reload 端点的 croniter 重算为准）；
+ * - rrule：先降级再按上面的口径算（降级失败返回 null）。
+ *
+ * **有效期窗口**（FR-5.4）由本函数体现：下界取 `max(fromMs, validFrom)`（窗口还没到就
+ * 从窗口起点开始找），算出的时刻晚于 `validUntil`（或窗口外无解）则返回 null。
+ * 引擎本身没有窗口概念，所以这是窗口唯一的生效点。
+ *
  * @param schedule 前端调度配置
  * @param fromMs 基准时间戳（毫秒）
- * @returns 下次触发时间戳；无法计算（如单次任务已过期）返回 null
+ * @param window 有效期窗口；缺省即两侧都不限
+ * @returns 下次触发时间戳；无法计算（单次任务已过期 / 降级失败 / 落在窗口外）返回 null
  */
-export function computeNextRunMs(schedule: TaskSchedule, fromMs: number): number | null {
+export function computeNextRunMs(
+  schedule: TaskSchedule,
+  fromMs: number,
+  window: ValidityWindow = {},
+): number | null {
+  const from = Date.parse(window.from ?? '');
+  const floor = Number.isNaN(from) ? fromMs : Math.max(fromMs, from);
+  const until = Date.parse(window.until ?? '');
+  const ceiling = Number.isNaN(until) ? Number.POSITIVE_INFINITY : until;
+
+  const next = computeRaw(schedule, floor);
+  if (next === null || next > ceiling) return null;
+  return next;
+}
+
+/** 不看窗口的「原始下次触发」（窗口判定收在 `computeNextRunMs` 一处） */
+function computeRaw(schedule: TaskSchedule, fromMs: number): number | null {
   switch (schedule.kind) {
     case 'interval':
       return schedule.minutes > 0 ? fromMs + schedule.minutes * 60_000 : null;
@@ -114,7 +171,42 @@ export function computeNextRunMs(schedule: TaskSchedule, fromMs: number): number
     }
     case 'cron':
       return nextCronRunMs(schedule.expr, fromMs);
+    case 'rrule': {
+      const lowered = lowerRrule(schedule.rrule);
+      if (!lowered.ok) return null;
+      // 降级结果里若带 `UNTIL`，它是**调度自带**的上界，与任务级窗口取交集
+      return computeRaw(lowered.schedule, fromMs);
+    }
   }
+}
+
+/**
+ * 从调度里抽出「随调度一起表达的窗口下界」——目前只有 RRULE 的 `UNTIL=`
+ * （它不改变触发时刻，只限定截止）。任务级 `validUntil` 与它取**更早**的那个。
+ */
+export function untilFromSchedule(schedule: TaskSchedule): string | undefined {
+  if (schedule.kind !== 'rrule') return undefined;
+  const lowered = lowerRrule(schedule.rrule);
+  return lowered.ok ? lowered.until : undefined;
+}
+
+/**
+ * 任务的有效期窗口：**任务级窗口与调度自带窗口取交集**。
+ *
+ * 上界可能出现两处：`TaskConfig.validUntil`（用户直接填的）与 RRULE 里的 `UNTIL=`
+ * （循环规则自带的截止）。两者都要尊重，取**更早**的那个才对（否则用户写了
+ * `UNTIL=` 却被任务级窗口放宽，规则就不再是他写的规则了）。
+ */
+export function effectiveValidityWindow(task: Pick<TaskConfig, 'schedule' | 'validFrom' | 'validUntil'>): ValidityWindow {
+  const candidates = [task.validUntil, untilFromSchedule(task.schedule)].filter(
+    (v): v is string => typeof v === 'string' && v !== '',
+  );
+  const sorted = candidates.slice().sort((a, b) => Date.parse(a) - Date.parse(b));
+  const until = sorted[0];
+  return {
+    ...(task.validFrom ? { from: task.validFrom } : {}),
+    ...(until ? { until } : {}),
+  };
 }
 
 /**
@@ -128,6 +220,11 @@ export function toNanobotJob(task: TaskConfig, nowMs: number = Date.now()): Nano
     managedBy: MANAGED_BY_SMARTAGENT,
     agentId: task.agentId,
     ...(task.runOptions ? { runOptions: task.runOptions } : {}),
+    // 有效期窗口透传进元数据：引擎不消费它（它没有窗口概念），但把「这条任务当时
+    // 是按什么窗口算出来的」留在 job 上，排查「为什么这条没跑」时能一眼看到
+    ...(task.validFrom || task.validUntil
+      ? { validity: { ...(task.validFrom ? { from: task.validFrom } : {}), ...(task.validUntil ? { until: task.validUntil } : {}) } }
+      : {}),
   };
   return {
     id: task.id,
@@ -146,7 +243,7 @@ export function toNanobotJob(task: TaskConfig, nowMs: number = Date.now()): Nano
       originChatId: `cron-${task.id}`,
       originMetadata: meta,
     },
-    state: { nextRunAtMs: computeNextRunMs(task.schedule, nowMs) },
+    state: { nextRunAtMs: computeNextRunMs(task.schedule, nowMs, effectiveValidityWindow(task)) },
     createdAtMs: Date.parse(task.createdAt) || nowMs,
     updatedAtMs: nowMs,
     deleteAfterRun: task.schedule.kind === 'once',

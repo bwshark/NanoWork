@@ -15,12 +15,14 @@ import {
   type StorageRoots,
 } from '../../electron/storageRoutes';
 import {
+  IDENTITY_FILENAMES,
   IDENTITY_STORAGE_KEYS,
   MEMORY_KEY_PREFIX,
   PROMPT_KEY_PREFIX,
   STORAGE_KEYS,
   USER_MEMORY_KEY,
 } from '@/lib/constants';
+import { LOCAL_MEMORY_SCOPE_KEY } from '@/lib/memoryPlatformIo';
 
 /**
  * 持久化落点路由单测。
@@ -93,6 +95,27 @@ describe('resolveRoute：落点归属', () => {
     const id = '1234abcd-5678-4def-9012-3456789abcde';
     expect(serializeRouteValue(id, route)).toBe(id);
     expect(serializeRouteValue('', route)).toBe('');
+  });
+
+  /**
+   * 回归：`nanowork.memoryScope` 的值是**裸字符串** `u_<hex>`（本机用户记忆作用域），
+   * 曾因未登记而掉进 misc 兜底的 json 路由 → `JSON.parse('u_6fa1…')` 抛
+   * `Unexpected token 'u'` → 写入整条失败（症状：控制台 "Error occurred in handler for
+   * 'storage:set'" + 每次启动生成新 scope → 用户级画像/偏好留在旧目录读不回来）。
+   */
+  it('用户记忆作用域落 ② 的裸文本文件（值是 u_<hex>，不是 JSON）', () => {
+    const route = resolveRoute(STORAGE_KEYS.localMemoryScope, roots);
+    expect(route.filePath).toBe(join(USER_DATA, 'memory-scope.txt'));
+    expect(route.format).toBe('text');
+    expect(route.scope).toBe('runtime');
+
+    // 裸 scope id 原样落盘、原样读回——不再经过 JSON.parse
+    const scope = 'u_6fa17947348a';
+    expect(serializeRouteValue(scope, route)).toBe(scope);
+
+    // 渲染层用的是同一个常量：这条断言把「key 定义在哪」也钉住——
+    // 本次事故的成因正是它在 `memoryPlatformIo.ts` 里就地定义，绕开了本表的不变量
+    expect(LOCAL_MEMORY_SCOPE_KEY).toBe(STORAGE_KEYS.localMemoryScope);
   });
 
   it('记忆索引落 ① memory/index.json，工作区记忆落 ① memory/<ws>.md', () => {
@@ -301,6 +324,15 @@ describe('knownRouteFiles：storage:clear 的删除清单', () => {
     for (const file of knownRouteFiles(roots)) {
       expect(/\.(json|txt|md)$/.test(file)).toBe(true);
     }
+  });
+
+  it('豁免名单里的 key 不在删除清单里（身份文件 + 用户记忆作用域）', () => {
+    const files = knownRouteFiles(roots);
+    // 身份文件：清掉 SOUL.md 是「重置应用」不该有的副作用
+    expect(files).not.toContain(join(PRODUCT_DIR, IDENTITY_FILENAMES.soul));
+    // 记忆作用域：它只是指针，数据在 ① user-memory/<scope>/（不可清空）；
+    // 清掉指针不会删数据，只会让画像/偏好永远读不回来
+    expect(files).not.toContain(join(USER_DATA, 'memory-scope.txt'));
   });
 });
 

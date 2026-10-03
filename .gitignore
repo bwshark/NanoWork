@@ -58,7 +58,6 @@ temp-review-diff.txt
 # Logs
 *.log
 .vitest
-tests/
 sessions
 run/
 webui/

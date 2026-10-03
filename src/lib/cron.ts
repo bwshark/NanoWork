@@ -1,9 +1,13 @@
 /**
  * 定时任务调度校验与描述（增强项）。
  * - `validateCron`：轻量校验标准 5 段 cron 表达式（分 时 日 月 周）的格式与取值范围；
- * - `describeSchedule`：将 TaskConfig.schedule 转为人类可读的描述，供列表展示。
+ * - `describeSchedule`：将 TaskConfig.schedule 转为人类可读的描述，供列表展示；
+ * - `describeValidity`：有效期窗口（FR-5.4）的描述。
  * 纯函数、无副作用，便于单测。
  */
+
+import type { TaskSchedule } from '@/types';
+import { describeRrule } from '@/lib/rrule';
 
 /** 单字段允许形式：星号 / 星号步长 / 数字 / 区间 / 步长 / 逗号枚举，例如 星号斜杠5、1-10/2、1,15 */
 const FIELD_RE = /^(\*(\/\d+)?|\d+(-\d+)?(\/\d+)?(,\d+(-\d+)?(\/\d+)?)*)$/;
@@ -126,12 +130,7 @@ export function nextCronRunMs(expr: string, fromMs: number): number | null {
 }
 
 /** 将调度配置转为人类可读的描述 */
-export function describeSchedule(
-  schedule:
-    | { kind: 'cron'; expr: string; tz?: string }
-    | { kind: 'interval'; minutes: number }
-    | { kind: 'once'; at: string },
-): string {
+export function describeSchedule(schedule: TaskSchedule): string {
   if (schedule.kind === 'interval') {
     const m = schedule.minutes;
     if (m >= 60) {
@@ -146,5 +145,34 @@ export function describeSchedule(
       ? '单次执行'
       : `单次 · ${d.toLocaleString()} 执行`;
   }
+  if (schedule.kind === 'rrule') {
+    // RRULE 是**本层的表达形态**，展示时直接用 `describeRrule` 说人话
+    // （`FREQ=MONTHLY;BYMONTHDAY=1,15,28;BYHOUR=9` → 「每月 1,15,28 日 09:00」），
+    // 降级成 cron 是下发引擎时才做的事，不该泄漏到 UI 文案里
+    return describeRrule(schedule.rrule);
+  }
   return `Cron: ${schedule.expr}${schedule.tz ? ` (${schedule.tz})` : ''}`;
+}
+
+/**
+ * 有效期窗口的中文描述（FR-5.4）；两侧都空时返回 `''`（调用方据此不显示这一行）。
+ *
+ * 与 `describeSchedule` 分开的原因：窗口是**任务的属性**（`TaskConfig`），
+ * 不是调度的属性；混在一起会让「只在某个区间生效」这件事看起来像调度的一部分。
+ */
+export function describeValidity(validFrom?: string, validUntil?: string): string {
+  const from = validFrom ? new Date(validFrom) : null;
+  const until = validUntil ? new Date(validUntil) : null;
+  const fromOk = from !== null && !Number.isNaN(from.getTime());
+  const untilOk = until !== null && !Number.isNaN(until.getTime());
+  if (!fromOk && !untilOk) return '';
+  if (fromOk && untilOk) return `${fmtDate(from as Date)} 至 ${fmtDate(until as Date)}`;
+  if (fromOk) return `${fmtDate(from as Date)} 起`;
+  return `${fmtDate(until as Date)} 截止`;
+}
+
+/** 窗口展示用的日期格式（本地时区，精确到分钟） */
+function fmtDate(d: Date): string {
+  const pad = (n: number): string => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }

@@ -5,6 +5,7 @@ import { useSettingsStore, DEFAULT_TRANSCRIPTION, DEFAULT_DESKTOP } from '@/stor
 import { NanobotClient } from '@/ai/runtime/nanobotHttp/chat';
 import { MEMORY_KEY_PREFIX } from '@/lib/constants';
 import { WORKSPACE_MEMORY_STORAGE_PREFIX } from '@/platform/storage.web';
+import { webMemoryDirKey } from '@/lib/memoryPaths';
 import { platform } from '@/platform';
 import { DEFAULT_MEMORY_POLICY } from '@/types';
 
@@ -497,12 +498,23 @@ describe('MemoryService: 工作区解析与落盘位置 (T22)', () => {
 
     // 旧前缀是历史数据的位置，新代码不再往它下面写
     expect(window.localStorage.getItem(STORAGE_KEY)).toBeNull();
-    // 新落点：一个 key 装整个「目录」（`{ 文件名: 正文 }`）
+    // 新落点：记忆目录的 v2 面（`nanowork.mem2.ws.<key>`）。
+    // ⚠️ 精炼记忆 `MEMORY.md` 在 Web 端**只落 v2 这一处**，v1 的
+    // `nanowork.wsmem.*` 面只是转发（见 `readCuratedProjectionText`）。
+    // 早先这里断言的是 `WORKSPACE_MEMORY_STORAGE_PREFIX`（v1），
+    // 两侧不同源正是「保存后编辑器读回为空」那个缺陷的成因。
+    expect(
+      Object.keys(window.localStorage).some((k) =>
+        k.startsWith(webMemoryDirKey({ kind: 'workspace', workdir: null })),
+      ),
+    ).toBe(true);
+    // v1 面读得回来（同源），但**不该在 v1 键下留第二份**
+    expect(await platform.memoryFiles.read(null, 'MEMORY.md')).toBe('hello');
     expect(
       Object.keys(window.localStorage).some((k) =>
         k.startsWith(WORKSPACE_MEMORY_STORAGE_PREFIX),
       ),
-    ).toBe(true);
+    ).toBe(false);
   });
 });
 

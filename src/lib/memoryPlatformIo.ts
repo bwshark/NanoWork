@@ -29,11 +29,18 @@
 import { platform } from '@/platform';
 import type { MemoryDirRef } from '@/platform/types';
 import type { MemoryStoreIo } from '@/lib/memoryStore';
+import { STORAGE_KEYS } from '@/lib/constants';
 import { scopeIdFor } from '@/lib/memoryPaths';
 import { hashContent } from '@/lib/workspaceKey';
 
-/** 本地用户作用域的存储 key（**刻意不进 `settings.json`**，见文件头注释） */
-export const LOCAL_MEMORY_SCOPE_KEY = 'nanowork.memoryScope';
+/**
+ * 本地用户作用域的存储 key（**刻意不进 `settings.json`**，见文件头注释）。
+ *
+ * 定义在 `constants.ts` 的 `STORAGE_KEYS` 里（而不是就地写一个字面量）：主进程按 key
+ * 路由落点，而 `STORAGE_KEYS` 的「全部显式登记」是一条单测不变量。就地写会被漏掉——
+ * 这次就漏了，落进 `misc/` 的 json 兜底路由，裸字符串写盘必然失败。
+ */
+export const LOCAL_MEMORY_SCOPE_KEY = STORAGE_KEYS.localMemoryScope;
 
 /** 是否长得像一个由本模块生成的 scope（防手工塞进来的任意串） */
 export function isLocalMemoryScope(value: unknown): value is string {

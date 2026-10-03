@@ -158,6 +158,20 @@ export const STORAGE_KEYS = {
   /** 文件级回滚时间线（FR-7.3）：`Record<fileKey, {hash, at, op}[]>` */
   fileBackups: 'nanowork.fileBackups',
   channels: 'nanowork.channels',
+  /**
+   * 本机的**用户记忆作用域**（`u_<hex>`，记忆 v2）：决定用户级记忆落在
+   * `~/.nanowork/user-memory/<scope-id>/` 的哪一份。
+   *
+   * 值是**裸字符串**——因此在 `electron/storageRoutes.ts` 必须登记为 `text` 路由。
+   * 它曾定义在 `memoryPlatformIo.ts` 而不在本表里，于是掉进 `misc/` 的 **json 兜底**：
+   * `JSON.parse('u_6fa1…')` 必然抛错（`Unexpected token 'u'`），**写入整条失败**。
+   * 症状极具迷惑性：不崩、不报红，只是**每次启动都生成新 scope** → 上一次写的画像与
+   * 偏好留在旧目录里，永远读不回来。
+   *
+   * 放本表的意义：`STORAGE_KEYS` 全部显式登记是 `tests/electron/storageRoutes.test.ts`
+   * 的一条不变量，写在这儿才不会再有下次。
+   */
+  localMemoryScope: 'nanowork.memoryScope',
 } as const;
 
 /**

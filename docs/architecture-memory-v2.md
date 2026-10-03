@@ -742,6 +742,16 @@ getEventStore().listMetas()                          // 全部会话（含未加
 
 ## 5. 存储层改造（平台边界）
 
+> ⚠️ **Web 端的一条硬约束（2026-10-03 加，真机验证踩出来的）**：Web 把同一「记忆目录」拆成两个
+> localStorage key（v1 `nanowork.wsmem.*` / v2 `nanowork.mem2.*`），而 **`MEMORY.md` 会被两边同时认领**。
+> 它的**写**路径在 v2（投影由 `distill` 重写），而 v1 面的**读**路径（`MemoryService.readFile` /
+> `loadForInjection`）也要用同一个文件。两侧不同源的症状是「手编保存成功但编辑器读回为空、
+> 注入的 legacy 段落是旧内容」。**处置：`MEMORY.md` 在 Web 端只落 v2 一处，v1 面对它转发**
+> （`storage.web.ts` 的 `readCuratedProjectionText` / `writeCuratedProjectionText`）。
+> 日期 `.md` 仍留在 v1，两者的物理落点各自唯一。Electron 端两套能力本就是同一个真实目录，
+> 不受此约束影响——**这类不一致只有在 Web 适配层直接测才暴露**（用例见
+> `tests/platform/webMemoryStores.test.ts`）。
+
 ### 5.1 为什么不能继续用「按 workdir 定位一个目录」的契约
 
 现契约 `WorkspaceMemoryFiles` 的每个方法都是 `(workdir, ...)`：它把**存储根**与**定位方式**焊死在一起。用户级记忆需要第二个根（`~/.nanowork/user-memory/`），结构化记忆需要 `list` 之外的**原子替换**与**子目录**（`daily/`、`archive/`）。继续沿用只能靠 `workdir` 里塞伪路径，那是把「根」这个语义散进调用方。

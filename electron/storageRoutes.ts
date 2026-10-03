@@ -139,6 +139,12 @@ const RUNTIME_FILES: Record<string, FileEntry> = {
   // 拒绝 + 主进程 handler 报错），而失败是静默的，只是「重启后记不住上次会话」。
   [STORAGE_KEYS.activeSession]: { rel: 'active-session.txt', format: 'text' },
   [DEVICE_ID_STORAGE_KEY]: { rel: 'device-id.txt', format: 'text' },
+  // 本机用户记忆作用域（记忆 v2）：值是**裸字符串** `u_<hex>`，与 `device-id.txt` 同类，
+  // 必须按 text 落。它是「`activeSession` 那条教训」的第二次翻版（见上面 ⚠️ 登记纪律）：
+  // 未登记 → 掉进 `misc/` 的 json 兜底 → `JSON.parse('u_6fa1…')` 抛 `Unexpected token 'u'`
+  // → **写入整条失败**（渲染层 `storage:set` 的 handler 报错，但界面毫无提示）。
+  // 后果是每次启动都生成新 scope，上一次写的画像 / 偏好留在旧目录里读不回来。
+  [STORAGE_KEYS.localMemoryScope]: { rel: 'memory-scope.txt', format: 'text' },
   // 冲突被覆盖方快照（批次 6a）：值是**字符串 JSON**（`Record<userId, PushConflict[]>`），
   // 故 json 路由是对的（参看上面 `activeSession` 的教训：裸文本落到 json 路由会写盘失败）。
   // 登记的意义：它会进 `knownRouteFiles()` → 「清空数据」能带走它；未登记则会掉进
@@ -184,12 +190,19 @@ export function promptsDir(roots: StorageRoots): string {
  *
  * 用户级 `MEMORY.md` **不在**豁免内：它和工作区 `memory/*.md` 同类，
  * 「清空数据」把记忆清掉是既有语义。
+ *
+ * 用户记忆作用域（`memory-scope.txt`）**在**豁免内，理由与身份文件同构：它只是
+ * 「用户级记忆放在哪」的指针，而那份数据落在 ① `~/.nanowork/user-memory/<scope>/`，
+ * 不属于「可清空的存储」。指针被清掉不会删掉数据，只会让画像 / 偏好**永远读不回来**
+ * ——那是「重置应用」不该有的副作用。（与 `deviceId.txt` 不同：清掉 device id 不会
+ * 让任何既有数据变成孤儿。）
  */
 const CLEAR_EXEMPT_KEYS = new Set<string>([
   IDENTITY_STORAGE_KEYS.soul,
   IDENTITY_STORAGE_KEYS.identity,
   IDENTITY_STORAGE_KEYS.user,
   IDENTITY_STORAGE_KEYS.bootstrap,
+  STORAGE_KEYS.localMemoryScope,
 ]);
 
 /** 未登记 key 的兜底目录 `<userData>/misc/`（见 resolveRoute 第 3 级） */
@@ -338,9 +351,11 @@ export function knownRouteFiles(roots: StorageRoots): string[] {
     ...Object.entries(USER_FILES)
       .filter(([key]) => !CLEAR_EXEMPT_KEYS.has(key))
       .map(([, entry]) => join(productDir(roots), entry.rel)),
-    ...Object.values(RUNTIME_FILES).map((entry) =>
-      join(roots.electronUserData, entry.rel),
-    ),
+    // ② 同样要过豁免：身份文件都在 ①，但「用户记忆作用域」这个**指针**在 ②
+    // （与 `deviceId.txt` 并列）。漏掉这层过滤时豁免形同虚设——单测会直接红。
+    ...Object.entries(RUNTIME_FILES)
+      .filter(([key]) => !CLEAR_EXEMPT_KEYS.has(key))
+      .map(([, entry]) => join(roots.electronUserData, entry.rel)),
     join(memoryDir(roots), 'index.json'),
   ];
 }
