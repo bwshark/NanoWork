@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  Alert,
   Box,
   Button,
   Chip,
+  Divider,
   Paper,
   Stack,
   TextField,
@@ -17,6 +19,9 @@ import InsertDriveFileOutlinedIcon from '@mui/icons-material/InsertDriveFileOutl
 import HistoryIcon from '@mui/icons-material/History';
 import RestoreIcon from '@mui/icons-material/Restore';
 import { MemoryService, memoryDiskPath } from '@/lib/memory';
+import { FactListView } from '@/pages/memory/FactListView';
+import { UserMemoryEditor } from '@/pages/memory/UserMemoryEditor';
+import { applyManualMemoryEdit } from '@/lib/memoryEdit';
 import {
   CURATED_MEMORY_FILE,
   dailyMemoryFileName,
@@ -64,8 +69,23 @@ import type { MemoryScope, MemoryScopeSummary } from '@/types';
  * 内边距、`maxWidth` 与那个大标题——弹窗自己的标题栏已经写了「记忆」，再顶一个 h5
  * 就是同一句话说两遍，还会把正文挤下去。
  */
-export function MemoryPage({ embedded = false }: { embedded?: boolean }) {
+export function MemoryPage({
+  embedded = false,
+  initialView = 'facts',
+}: {
+  embedded?: boolean;
+  /**
+   * 初始视图。默认「事实」——用户想知道的是「它记住了什么」，而不是「磁盘上那份
+   * Markdown 长什么样」。
+   *
+   * 可显式传 `'files'` 的场景有两个：① 需要直接手改 Markdown 的高级用户路径；
+   * ② 只覆盖「文件编辑器」行为的测试（作用域/文件切换那组用例锁的是**串台**，
+   * 与视图切换无关，让它们显式选文件视图比让它们依赖默认值更稳）。
+   */
+  initialView?: 'facts' | 'files';
+}) {
   const [scope, setScope] = useState<MemoryScope>('workspace');
+  const [view, setView] = useState<'facts' | 'files'>(initialView);
   /** 工作区级当前编辑的文件名（用户级固定 `MEMORY.md`） */
   const [file, setFile] = useState<string>(CURATED_MEMORY_FILE);
   /** 工作区级可选文件列表（含常驻的 `MEMORY.md` 与今天的日志） */
@@ -150,10 +170,28 @@ export function MemoryPage({ embedded = false }: { embedded?: boolean }) {
 
   const save = () =>
     runAction(
-      () =>
-        scope === 'user'
-          ? MemoryService.save(text, 'user')
-          : MemoryService.writeFile(undefined, file, text),
+      async () => {
+        if (scope === 'user') {
+          // 用户级仍是单文件投影（它的 canonical 是 profile/preferences，
+          // 手编 MEMORY.md 的语义与工作区级不同，暂不补登记——见 FR-M4a 的边界）
+          await MemoryService.save(text, 'user');
+          return;
+        }
+        if (file !== CURATED_MEMORY_FILE) {
+          // 日期日志是**证据**，不是结论：直接写文件，不参与蒸馏
+          await MemoryService.writeFile(undefined, file, text);
+          return;
+        }
+        // 精炼记忆：保存 → 补登记手编段落 → 蒸馏 → 重建投影。
+        // 手编内容因此变成 `origin: 'manual'` 的事实进 canonical，不会被下次重建吃掉。
+        const result = await applyManualMemoryEdit(workspaceDir ?? null, text, new Date());
+        if (result.registered > 0) {
+          toast.success(`已保存，并将 ${result.registered} 条手写内容登记为长期记忆`);
+        }
+        if (!result.distilled) {
+          toast.error(`内容已保存，但蒸馏未完成：${result.distillError ?? '未知原因'}`);
+        }
+      },
       '记忆已保存',
       '保存失败',
     );
@@ -308,6 +346,59 @@ export function MemoryPage({ embedded = false }: { embedded?: boolean }) {
         ))}
       </ToggleButtonGroup>
 
+      <ToggleButtonGroup
+        exclusive
+        size="small"
+        value={view}
+        onChange={(_e, value: 'facts' | 'files' | null) => {
+          if (value) setView(value);
+        }}
+        aria-label="记忆视图"
+        sx={{ mb: 1.5, ml: 1 }}
+      >
+        <ToggleButton value="facts" sx={{ px: 1.5, fontSize: 12 }}>
+          记住的事实
+        </ToggleButton>
+        <ToggleButton value="files" sx={{ px: 1.5, fontSize: 12 }}>
+          文件（高级）
+        </ToggleButton>
+      </ToggleButtonGroup>
+
+      {/*
+        边界说明（FR-M36）。刻意是**静态文案**而不是面板：读引擎自己的记忆状态需要
+        新增 IPC 与一个「引擎记忆」的展示面，而本期要收口的是「谁是唯一长期记忆源」
+        这一句话——把它写清楚即可，读引擎状态的元信息面板推迟（见 plan §10.2 B-2）。
+      */}
+      <Alert severity="info" icon={false} sx={{ mb: 1.5, py: 0.5 }}>
+        <Typography variant="caption" color="text.secondary">
+          本页的客户端记忆（记忆 v2）是**唯一长期记忆源**：会话注入、跨会话召回与你在
+          设置里的开关都作用于它。引擎（nanobot）自身的工作记忆属于**单次运行内的上下文**，
+          不跨会话保留，也不由本页管理——两者不共享存储，不会互相覆盖。
+        </Typography>
+      </Alert>
+
+      {view === 'facts' ? (
+        <Paper variant="outlined" sx={{ p: 2, bgcolor: 'background.paper' }}>
+          <FactListView
+            scope={scope}
+            workdir={workspaceDir}
+            reloadToken={reloadToken}
+            onChanged={() => setReloadToken((n) => n + 1)}
+          />
+          {/*
+            用户级多一块「画像与偏好」编辑器（FR-M20 / FR-M21）。
+            它必须在这里，因为**用户是唯一入口**：本项目没有客户端工具注册通道，
+            模型不能自己写画像——界面上没有入口，那两条需求就永远不会被触发。
+          */}
+          {scope === 'user' && (
+            <>
+              <Divider sx={{ my: 2 }} />
+              <UserMemoryEditor />
+            </>
+          )}
+        </Paper>
+      ) : (
+
       <Paper variant="outlined" sx={{ p: 2, bgcolor: 'background.paper' }}>
         {current && (
           <Box
@@ -439,6 +530,7 @@ export function MemoryPage({ embedded = false }: { embedded?: boolean }) {
           </Typography>
         </Stack>
       </Paper>
+        )}
 
       {/* 文件级回滚（FR-7.3）：当前文件被改写/删除前的历史快照 */}
       <Paper variant="outlined" sx={{ p: 2, mt: 2, bgcolor: 'background.paper' }}>

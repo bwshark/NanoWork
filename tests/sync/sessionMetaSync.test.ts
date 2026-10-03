@@ -1,4 +1,4 @@
-/**
+﻿/**
  * `sessionMeta` collection：D.3 payload 白名单 / D.4 落地双写 / D.5 workdir 裁决。
  *
  * 覆盖 §I.3 变异清单：
@@ -14,6 +14,7 @@ import { createMemoryEventStore, getEventStore, __setEventStoreForTest } from '@
 import { useSettingsStore } from '@/stores/settingsStore';
 import { useSessionsStore } from '@/stores/sessionsStore';
 import type { Session, Settings } from '@/types';
+import { DEFAULT_MEMORY_POLICY } from '@/types';
 
 const DEFAULT_WS = '/local/default-ws';
 
@@ -25,6 +26,8 @@ function baseSettings(): Settings {
     processDetail: 'key',
     memoryEnabled: true,
     autoSummarize: true,
+    memoryRecall: true,
+    memoryPolicy: { ...DEFAULT_MEMORY_POLICY },
     transcription: { enabled: false, endpoint: '', model: 'whisper-1', apiToken: '', language: 'zh' },
     desktop: { closeToTray: true, hotkey: '', openAtLogin: false, showInDock: true },
     workspaceAliases: {},

@@ -3,6 +3,7 @@ import { electronBridge, isElectron, webPlatformOs } from './env';
 import {
   WebArtifactIndexFiles,
   WebFileBackup,
+  WebMemoryDirFiles,
   WebStorageAdapter,
   WebWorkspaceMemoryFiles,
   webPickDirectory,
@@ -12,6 +13,7 @@ import {
 import {
   ElectronArtifactIndexFiles,
   ElectronFileBackup,
+  ElectronMemoryDirFiles,
   ElectronStorageAdapter,
   ElectronWorkspaceMemoryFiles,
 } from './storage.electron';
@@ -56,6 +58,11 @@ export const platform: PlatformAdapter = {
   memoryFiles: isElectron()
     ? new ElectronWorkspaceMemoryFiles()
     : new WebWorkspaceMemoryFiles(),
+  // 记忆 v2 的目录后端（子目录 / 原子替换 / JSONL 追行）。与 `memoryFiles` 分开的理由
+  // 见 types.ts 的 `PlatformAdapter.memoryDirs`：v1 面与 v2 面在两端各有一组独立的
+  // 存储载体（IPC 通道 / localStorage 前缀），合成一个对象会让「v1 面写、v2 面读」
+  // 这类不一致有机会发生。
+  memoryDirs: isElectron() ? new ElectronMemoryDirFiles() : new WebMemoryDirFiles(),
   // 产物索引（FR-7.2）：与 storage 并列的目录后端，Electron 落到
   // `<userData>/artifact-index/<id>.json`，Web 端是 no-op（权威在 store 索引切片）
   artifactIndex: isElectron()

@@ -3,6 +3,8 @@ import type {
   ArtifactIndexFiles,
   ElectronAPI,
   FileBackup,
+  MemoryDirFiles,
+  MemoryDirRef,
   StorageAdapter,
   WorkspaceMemoryFiles,
 } from './types';
@@ -103,6 +105,61 @@ export class ElectronWorkspaceMemoryFiles implements WorkspaceMemoryFiles {
 
   migrateLegacy(workdir: string | null): Promise<string[]> {
     return this.api().memoryMigrateLegacy(workdir);
+  }
+}
+
+/**
+ * Electron 的记忆 v2 目录后端：一个方法一次 IPC。
+ *
+ * 与 `ElectronWorkspaceMemoryFiles`（v1）一样，适配层**不做任何路径拼接**——传的是
+ * 「存储根标识 + 单段文件名 + 可选子目录」，绝对路径与越界校验全在主进程
+ * （`electron/memoryRoutes.ts` 的 `assertInside`）。
+ */
+export class ElectronMemoryDirFiles implements MemoryDirFiles {
+  private api(): ElectronAPI {
+    const api = window.electronAPI;
+    if (!api) {
+      throw new Error('electronAPI 未注入，无法访问记忆目录');
+    }
+    return api;
+  }
+
+  listDir(dirRef: MemoryDirRef, subdir?: string): Promise<string[]> {
+    return this.api().memoryListDir(dirRef, subdir);
+  }
+
+  readDirFile(dirRef: MemoryDirRef, name: string, subdir?: string): Promise<string | null> {
+    return this.api().memoryReadDirFile(dirRef, name, subdir);
+  }
+
+  writeDirFile(
+    dirRef: MemoryDirRef,
+    name: string,
+    content: string,
+    subdir?: string,
+  ): Promise<void> {
+    return this.api().memoryWriteDirFile(dirRef, name, content, subdir);
+  }
+
+  removeDirFile(dirRef: MemoryDirRef, name: string, subdir?: string): Promise<void> {
+    return this.api().memoryRemoveDirFile(dirRef, name, subdir);
+  }
+
+  replaceDirFile(
+    dirRef: MemoryDirRef,
+    name: string,
+    content: string,
+    subdir?: string,
+  ): Promise<void> {
+    return this.api().memoryReplaceDirFile(dirRef, name, content, subdir);
+  }
+
+  appendDirLine(dirRef: MemoryDirRef, name: string, line: string, subdir?: string): Promise<void> {
+    return this.api().memoryAppendDirLine(dirRef, name, line, subdir);
+  }
+
+  readDirLines(dirRef: MemoryDirRef, name: string, subdir?: string): Promise<string[]> {
+    return this.api().memoryReadDirLines(dirRef, name, subdir);
   }
 }
 

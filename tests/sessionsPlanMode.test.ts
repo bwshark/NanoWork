@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 执行模式与计划审批的行为测试（M2 / FR-1.4 / FR-1.5）。
  *
  * 覆盖三个层面，每层回答一个问题：
@@ -24,6 +24,7 @@ import { projectSession } from '@/events/project';
 import { resetEventStream } from './helpers/eventStream';
 import type { ChatHandle, ChatRequest, PlanProposal, StreamHandlers } from '@/ai/runtime/types';
 import type { SessionEvent } from '@/types/event';
+import { DEFAULT_MEMORY_POLICY } from '@/types';
 
 let store: EventStore;
 /** 最近一次请求的 `sessionMode`（用于在 UI 之外验证「模式真的发出了」） */
@@ -46,6 +47,8 @@ function resetStores() {
       processDetail: 'key',
       memoryEnabled: false,
       autoSummarize: false,
+      memoryRecall: true,
+      memoryPolicy: { ...DEFAULT_MEMORY_POLICY },
       transcription: DEFAULT_TRANSCRIPTION,
       desktop: DEFAULT_DESKTOP,
     },

@@ -4,12 +4,24 @@ import {
   isWritableMemoryFileName,
   sortMemoryFileNames,
 } from '@/lib/workspaceMemory';
+import {
+  appendJsonlLine,
+  isMemoryContentFileName,
+  isMemoryEntryName,
+  isMemoryFileName as isMemoryFileNameV2,
+  isWritableMemoryEntryName,
+  memoryEntryName,
+  splitJsonlLines,
+  webMemoryDirKey,
+} from '@/lib/memoryPaths';
 import { workspaceKeyFor } from '@/lib/workspaceKey';
 import { MEMORY_KEY_PREFIX } from '@/lib/constants';
 import type { ArtifactIndexEntry } from '@/types';
 import type {
   ArtifactIndexFiles,
   FileBackup,
+  MemoryDirFiles,
+  MemoryDirRef,
   StorageAdapter,
   WorkspaceMemoryFiles,
 } from './types';
@@ -80,6 +92,35 @@ function readMemoryDir(workdir: string | null): Record<string, string> {
 /** 写回整个「目录」；目录空了就把 key 删掉，不留一个 `{}` 孤儿 */
 function writeMemoryDir(workdir: string | null, dir: Record<string, string>): void {
   const key = memoryDirKey(workdir);
+  if (Object.keys(dir).length === 0) {
+    window.localStorage.removeItem(key);
+    return;
+  }
+  window.localStorage.setItem(key, JSON.stringify(dir));
+}
+
+// —— 记忆 v2 的 localStorage 面（`nanowork.mem2.*`，见 WebMemoryDirFiles 的类头注释） ——
+
+/** 读出 v2 记忆目录映射（键是**带子目录的相对名**，如 `daily/2026-09-19.jsonl`） */
+function readMemoryDirV2(dirRef: MemoryDirRef): Record<string, string> {
+  try {
+    const raw = window.localStorage.getItem(webMemoryDirKey(dirRef));
+    if (raw === null) return {};
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return {};
+    const dir: Record<string, string> = {};
+    for (const [entry, content] of Object.entries(parsed as Record<string, unknown>)) {
+      if (isMemoryEntryName(entry) && typeof content === 'string') dir[entry] = content;
+    }
+    return dir;
+  } catch {
+    return {};
+  }
+}
+
+/** 写回 v2 记忆目录映射；空了就删 key（不留 `{}` 孤儿） */
+function writeMemoryDirV2(dirRef: MemoryDirRef, dir: Record<string, string>): void {
+  const key = webMemoryDirKey(dirRef);
   if (Object.keys(dir).length === 0) {
     window.localStorage.removeItem(key);
     return;
@@ -162,6 +203,114 @@ export class WebWorkspaceMemoryFiles implements WorkspaceMemoryFiles {
     writeMemoryDir(workdir, dir);
     window.localStorage.removeItem(`${MEMORY_KEY_PREFIX}${workspaceKeyFor(workdir)}`);
     return Promise.resolve([name]);
+  }
+}
+
+/**
+ * Web 端的记忆 v2 目录后端（**子目录 + canonical JSON / JSONL**）。
+ *
+ * ## 与 `WebWorkspaceMemoryFiles`（v1）的关系
+ *
+ * 同一个物理「记忆目录」在 Web 端由**两个 localStorage key** 承担：
+ * v1 的 `nanowork.wsmem.<key>` 存 `{ 文件名: 正文 }`（`MEMORY.md` + 日期 `.md`），
+ * v2 的 `nanowork.mem2.<…>` 存**带子目录的相对名**（`{ 'daily/2026-09-19.jsonl': … }`）。
+ *
+ * 为什么不合并成一个 key：v1 的 `readMemoryDir` 用 `isMemoryFileName` 过滤，带 `/` 的
+ * 名字会被静默丢掉，于是 v2 的事实日志在 Web 端永远读不到；而改那个过滤器就要动
+ * v1 的既有测试（`tests/electron/workspaceMemoryStore.test.ts` 一族的 Web 对应物）。
+ * 分开之后两面各自完整，与 Electron 端「同一目录里既有 legacy `.md` 又有新 JSON」
+ * 的形态是一致的。
+ *
+ * ## 如实说明三条降级（NFR-M9）
+ *
+ * 1. `appendDirLine` 没有追加语义：只能「读整份映射 → 改 → 写回」；
+ * 2. 同理 `replaceDirFile` 是读-改-写，**多标签页会丢更新**；
+ * 3. 没有 `fsync` 级崩溃安全，`NFR-M5` 的八个写入边界在 Web 端**不可验证**。
+ * 因此 Web 端的语义是「结构化记忆可用，原子性与崩溃恢复为 best-effort」。
+ */
+export class WebMemoryDirFiles implements MemoryDirFiles {
+  listDir(dirRef: MemoryDirRef, subdir?: string): Promise<string[]> {
+    const dir = readMemoryDirV2(dirRef);
+    const prefix = subdir ? `${subdir}/` : '';
+    const names = Object.keys(dir)
+      .filter((entry) =>
+        prefix === ''
+          ? !entry.includes('/') && isMemoryContentFileName(entry)
+          : entry.startsWith(prefix),
+      )
+      .map((entry) => (prefix === '' ? entry : entry.slice(prefix.length)))
+      // ⚠️ 这里必须用 **v2** 的文件名判据：v1 的 `isMemoryFileName` 只认 `.md`，
+      // 用它过滤会让 `daily/*.jsonl` 永远列不出来（症状是「事实写进去了，读回来 0 条」，
+      // 而 appendLine/read 都正常——实施时踩过）。
+      .filter((name) => name !== '' && !name.includes('/') && isMemoryFileNameV2(name));
+    // 与记忆 v1 的排序规则一致：`MEMORY.md` → 日期文件升序 → 其它升序
+    return Promise.resolve(sortMemoryFileNames(names));
+  }
+
+  readDirFile(dirRef: MemoryDirRef, name: string, subdir?: string): Promise<string | null> {
+    const entry = memoryEntryName(name, subdir);
+    if (!isMemoryEntryName(entry)) return Promise.resolve(null);
+    const dir = readMemoryDirV2(dirRef);
+    return Promise.resolve(
+      Object.prototype.hasOwnProperty.call(dir, entry) ? dir[entry] : null,
+    );
+  }
+
+  writeDirFile(
+    dirRef: MemoryDirRef,
+    name: string,
+    content: string,
+    subdir?: string,
+  ): Promise<void> {
+    const entry = memoryEntryName(name, subdir);
+    // 与主进程同一条能力边界：Web 端也不允许应用发明文件名
+    if (!isWritableMemoryEntryName(entry)) {
+      return Promise.reject(new Error(`不允许写入该记忆文件：${entry}`));
+    }
+    const dir = readMemoryDirV2(dirRef);
+    dir[entry] = content ?? '';
+    writeMemoryDirV2(dirRef, dir);
+    return Promise.resolve();
+  }
+
+  removeDirFile(dirRef: MemoryDirRef, name: string, subdir?: string): Promise<void> {
+    const entry = memoryEntryName(name, subdir);
+    if (!isMemoryEntryName(entry)) return Promise.resolve();
+    const dir = readMemoryDirV2(dirRef);
+    if (!Object.prototype.hasOwnProperty.call(dir, entry)) return Promise.resolve();
+    delete dir[entry];
+    writeMemoryDirV2(dirRef, dir);
+    return Promise.resolve();
+  }
+
+  /** Web 端无临时文件：退化为一次写（best-effort，见类头注释） */
+  replaceDirFile(
+    dirRef: MemoryDirRef,
+    name: string,
+    content: string,
+    subdir?: string,
+  ): Promise<void> {
+    return this.writeDirFile(dirRef, name, content, subdir);
+  }
+
+  appendDirLine(dirRef: MemoryDirRef, name: string, line: string, subdir?: string): Promise<void> {
+    const entry = memoryEntryName(name, subdir);
+    if (!isWritableMemoryEntryName(entry)) {
+      return Promise.reject(new Error(`不允许追加该记忆文件：${entry}`));
+    }
+    const dir = readMemoryDirV2(dirRef);
+    const current = Object.prototype.hasOwnProperty.call(dir, entry) ? dir[entry] : '';
+    dir[entry] = appendJsonlLine(current, line);
+    writeMemoryDirV2(dirRef, dir);
+    return Promise.resolve();
+  }
+
+  readDirLines(dirRef: MemoryDirRef, name: string, subdir?: string): Promise<string[]> {
+    const entry = memoryEntryName(name, subdir);
+    if (!isMemoryEntryName(entry)) return Promise.resolve([]);
+    const dir = readMemoryDirV2(dirRef);
+    const raw = Object.prototype.hasOwnProperty.call(dir, entry) ? dir[entry] : '';
+    return Promise.resolve(splitJsonlLines(raw));
   }
 }
 

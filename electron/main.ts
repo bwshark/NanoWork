@@ -57,12 +57,20 @@ import {
 } from './storageRoutes';
 import { fallbackMemoryDir } from './memoryRoutes';
 import {
+  appendMemoryFileLine,
   clearMemoryFiles,
   listMemoryFiles,
+  listMemoryFilesIn,
   migrateLegacyMemory,
   readMemoryFile,
+  readMemoryFileIn,
+  readMemoryFileLines,
   removeMemoryFile,
+  removeMemoryFileIn,
+  replaceMemoryFileIn,
   writeMemoryFile,
+  writeMemoryFileIn,
+  type MemoryDirRef,
 } from './workspaceMemoryStore';
 import { createEventStore } from './eventStore';
 import { CredentialVault, safeStorageCipher } from './credentialVault';
@@ -2491,6 +2499,55 @@ ipcMain.handle('memory:removeAll', async (_e, workdir: string | null) =>
 );
 ipcMain.handle('memory:migrate', async (_e, workdir: string | null) =>
   migrateLegacyMemory(workdir, STORAGE_ROOTS),
+);
+
+// —— 记忆 v2 的目录后端（两类存储根 + 子目录 + 原子替换 + JSONL 追行）——
+//
+// 与上面 `memory:*` 的差别：`dirRef` 是一个判别联合（`{kind:'workspace'|'user'}`），
+// 因此同一组 handler 既能操作 `<workdir>/.nanowork/memory/` 也能操作
+// `~/.nanowork/user-memory/<scope-id>/`。`subdir` 只允许 `daily` / `archive`。
+//
+// `dirRef` 由渲染层构造后经 IPC 传进来：它是**数据**（两个字段的普通对象），
+// 主进程一律重新解析成绝对路径并做越界断言——渲染层传什么都越不过
+// `electron/memoryRoutes.ts` 的 `assertInside`。
+ipcMain.handle(
+  'memory:listDir',
+  async (_e, dirRef: MemoryDirRef, subdir?: string) =>
+    listMemoryFilesIn(dirRef, STORAGE_ROOTS, subdir),
+);
+ipcMain.handle(
+  'memory:readDirFile',
+  async (_e, dirRef: MemoryDirRef, name: string, subdir?: string) =>
+    readMemoryFileIn(dirRef, name, STORAGE_ROOTS, subdir),
+);
+ipcMain.handle(
+  'memory:writeDirFile',
+  async (_e, dirRef: MemoryDirRef, name: string, content: string, subdir?: string) => {
+    await writeMemoryFileIn(dirRef, name, content, STORAGE_ROOTS, subdir);
+  },
+);
+ipcMain.handle(
+  'memory:removeDirFile',
+  async (_e, dirRef: MemoryDirRef, name: string, subdir?: string) => {
+    await removeMemoryFileIn(dirRef, name, STORAGE_ROOTS, subdir);
+  },
+);
+ipcMain.handle(
+  'memory:replaceDirFile',
+  async (_e, dirRef: MemoryDirRef, name: string, content: string, subdir?: string) => {
+    await replaceMemoryFileIn(dirRef, name, content, STORAGE_ROOTS, subdir);
+  },
+);
+ipcMain.handle(
+  'memory:appendDirLine',
+  async (_e, dirRef: MemoryDirRef, name: string, line: string, subdir?: string) => {
+    await appendMemoryFileLine(dirRef, name, line, STORAGE_ROOTS, subdir);
+  },
+);
+ipcMain.handle(
+  'memory:readDirLines',
+  async (_e, dirRef: MemoryDirRef, name: string, subdir?: string) =>
+    readMemoryFileLines(dirRef, name, STORAGE_ROOTS, subdir),
 );
 
 // —— 事件流桥（D2：渲染层经 window.electronAPI 调用）——

@@ -18,6 +18,7 @@ import {
   toSyncPayload,
 } from '@/lib/settingsSync';
 import type { Settings } from '@/types';
+import { DEFAULT_MEMORY_POLICY } from '@/types';
 
 /** 一份「什么都有」的设置：机器字段、凭据、偏好全占满 */
 function fullSettings(overrides: Partial<Settings> = {}): Settings {
@@ -28,6 +29,8 @@ function fullSettings(overrides: Partial<Settings> = {}): Settings {
     processDetail: 'key',
     memoryEnabled: true,
     autoSummarize: true,
+    memoryRecall: true,
+    memoryPolicy: { ...DEFAULT_MEMORY_POLICY },
     transcription: {
       enabled: true,
       endpoint: 'http://127.0.0.1:9999/v1',
@@ -107,12 +110,21 @@ describe('toSyncPayload：偏好要真的跟过来', () => {
       theme: 'dark',
       memoryEnabled: true,
       autoSummarize: true,
+      memoryRecall: true,
       promptDomain: 'code',
       promptStyle: 'style-professional',
       userCustomPrompt: '总是用中文',
       sidebarCollapsed: true,
       enabledPlugins: ['foo@bar'],
     });
+  });
+
+  it('记忆 v2 的**策略**不上行（各设备可以有自己的门槛）', () => {
+    // 与 `memoryEnabled` / `memoryRecall` 的区别：那两个是「要不要这个能力」，
+    // 是跨设备成立的**意图**；`memoryPolicy` 是「门槛定在哪」，是**本机策略**
+    // ——搬过去只会把对端调好的值覆盖掉（与 `desktop` 同一口径）。
+    const payload = toSyncPayload(fullSettings({ memoryPolicy: { ...DEFAULT_MEMORY_POLICY, retentionDays: 7 } }));
+    expect('memoryPolicy' in payload).toBe(false);
   });
 
   it('processDetail 随偏好上行（AC10：它不是本机事实，不得进 omit 名单）', () => {

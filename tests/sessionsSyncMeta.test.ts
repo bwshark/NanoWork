@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 会话同步元数据的**写入链路**（architecture-syncmeta §3.1 第 7 行 / §7.3）。
  *
  * 判据来自文档 §七 批次 3：「一条『会话重命名后 `rev` 递增』用例」。
@@ -26,6 +26,7 @@ import { waitForSessionWrites } from '@/events';
 import { resetEventStream } from './helpers/eventStream';
 import type { AppInfo, StorageInfo } from '@/platform/types';
 import type { EventStore } from '@/events';
+import { DEFAULT_MEMORY_POLICY } from '@/types';
 
 const DEVICE = 'dev-test-01';
 const DEFAULT_DIR = 'C:\\Users\\tester\\NanoWork';
@@ -66,6 +67,8 @@ function resetStores() {
       processDetail: 'key',
       memoryEnabled: false,
       autoSummarize: false,
+      memoryRecall: true,
+      memoryPolicy: { ...DEFAULT_MEMORY_POLICY },
       transcription: DEFAULT_TRANSCRIPTION,
       desktop: DEFAULT_DESKTOP,
     },

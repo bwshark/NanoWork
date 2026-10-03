@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 「两台设备」的 store 快照 / 换装（规格 §I.1 的隔离手段）。
  *
  * 本项目所有 store 都是**模块级单例**，同一进程里无法真的起两套并存的 store。
@@ -44,6 +44,7 @@ import type {
   TaskConfig,
   TaskRunRecord,
 } from '@/types';
+import { DEFAULT_MEMORY_POLICY } from '@/types';
 
 /** 一台设备在「同步相关切片」上的完整状态（深拷贝后即为隔离副本）。 */
 export interface StoreSnapshot {
@@ -118,6 +119,8 @@ export function settingsFor(defaultWorkspacePath: string): Settings {
     processDetail: 'key',
     memoryEnabled: true,
     autoSummarize: true,
+    memoryRecall: true,
+    memoryPolicy: { ...DEFAULT_MEMORY_POLICY },
     transcription: { ...DEFAULT_TRANSCRIPTION },
     desktop: { ...DEFAULT_DESKTOP },
     workspaceAliases: {},

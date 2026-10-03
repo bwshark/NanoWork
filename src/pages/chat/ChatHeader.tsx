@@ -47,7 +47,11 @@ export function ChatHeader() {
       )}
       <Box sx={{ flex: 1 }} />
       {showMemoryBar && (
-        <MemoryBar count={memoryLoaded.count} onDismiss={dismissMemoryBar} />
+        <MemoryBar
+          count={memoryLoaded.count}
+          truncated={memoryLoaded.truncated ?? 0}
+          onDismiss={dismissMemoryBar}
+        />
       )}
       {searchOpen ? (
         <ChatSearchBar />

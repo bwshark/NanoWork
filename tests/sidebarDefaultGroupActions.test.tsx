@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 侧边栏「默认工作空间」分组头的 hover 操作：更多操作 + 新建任务。
  *
  * ## 为什么这组用例必须存在
@@ -35,6 +35,7 @@ import { useSessionsStore } from '@/stores/sessionsStore';
 import { useAgentsStore } from '@/stores/agentsStore';
 import { byAria, click, flush, mount, unmount } from './helpers/reactMount';
 import type { Session } from '@/types';
+import { DEFAULT_MEMORY_POLICY } from '@/types';
 
 const DEFAULT_DIR = 'C:\\Users\\tester\\NanoWork';
 const OTHER_DIR = 'D:\\work\\ranch';
@@ -107,6 +108,8 @@ beforeEach(() => {
       processDetail: 'key',
       memoryEnabled: false,
       autoSummarize: false,
+      memoryRecall: true,
+      memoryPolicy: { ...DEFAULT_MEMORY_POLICY },
       transcription: DEFAULT_TRANSCRIPTION,
       desktop: DEFAULT_DESKTOP,
       defaultWorkspacePath: DEFAULT_DIR,

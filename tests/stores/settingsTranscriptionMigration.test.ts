@@ -1,6 +1,7 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+﻿import { beforeEach, describe, expect, it } from 'vitest';
 import { DEFAULT_TRANSCRIPTION, DEFAULT_DESKTOP, useSettingsStore } from '@/stores/settingsStore';
 import { DEFAULT_GATEWAY, STORAGE_KEYS } from '@/lib/constants';
+import { DEFAULT_MEMORY_POLICY } from '@/types';
 
 /**
  * settingsStore persist 版本迁移测试。
@@ -36,6 +37,8 @@ beforeEach(() => {
       processDetail: 'key',
       memoryEnabled: true,
       autoSummarize: false,
+      memoryRecall: true,
+      memoryPolicy: { ...DEFAULT_MEMORY_POLICY },
       transcription: DEFAULT_TRANSCRIPTION,
       desktop: DEFAULT_DESKTOP,
     },
@@ -53,6 +56,8 @@ describe('settingsStore 迁移 v3 → v4：transcription 补齐', () => {
           theme: 'dark',
           memoryEnabled: false,
           autoSummarize: true,
+          memoryRecall: true,
+          memoryPolicy: { ...DEFAULT_MEMORY_POLICY },
         },
         status: 'offline',
       },

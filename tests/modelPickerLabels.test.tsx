@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 模型选择器的文案契约：**Auto 行与任何预设行不能长得一样**。
  *
  * ## 为什么要有这组用例
@@ -34,6 +34,7 @@ import {
 import { resetEventStream } from './helpers/eventStream';
 import { click, flush, mount, unmount } from './helpers/reactMount';
 import type { ModelInfo } from '@/types';
+import { DEFAULT_MEMORY_POLICY } from '@/types';
 
 beforeEach(() => {
   vi.restoreAllMocks();
@@ -46,6 +47,8 @@ beforeEach(() => {
       processDetail: 'key',
       memoryEnabled: false,
       autoSummarize: false,
+      memoryRecall: true,
+      memoryPolicy: { ...DEFAULT_MEMORY_POLICY },
       transcription: DEFAULT_TRANSCRIPTION,
       desktop: DEFAULT_DESKTOP,
     },

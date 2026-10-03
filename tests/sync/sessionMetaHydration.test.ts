@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 补缺口用例：`applyRemoteSessionMeta` 落地远端 sessionMeta 时，**已水合会话的
  * 本机运行时状态（messages / permissionLog / messageCount）必须保留**。
  *
@@ -18,6 +18,7 @@ import { createMemoryEventStore, __setEventStoreForTest } from '@/events';
 import { useSessionsStore } from '@/stores/sessionsStore';
 import { useSettingsStore } from '@/stores/settingsStore';
 import type { Message, PermissionLog, Session, Settings } from '@/types';
+import { DEFAULT_MEMORY_POLICY } from '@/types';
 
 const NEWER = '2026-09-01T00:00:00.000Z';
 
@@ -29,6 +30,8 @@ function baseSettings(): Settings {
     processDetail: 'key',
     memoryEnabled: true,
     autoSummarize: true,
+    memoryRecall: true,
+    memoryPolicy: { ...DEFAULT_MEMORY_POLICY },
     transcription: { enabled: false, endpoint: '', model: 'whisper-1', apiToken: '', language: 'zh' },
     desktop: { closeToTray: true, hotkey: '', openAtLogin: false, showInDock: true },
     workspaceAliases: {},

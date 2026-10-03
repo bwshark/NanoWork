@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 两条推导路径的等价性测试（D2 Phase C/D 的收口）。
  *
  * ## 为什么需要它
@@ -38,6 +38,7 @@ import { projectSession } from '@/events/project';
 import { resetEventStream } from '../helpers/eventStream';
 import type { Attachment, Message } from '@/types';
 import type { ChatHandle, StreamHandlers } from '@/ai/runtime/types';
+import { DEFAULT_MEMORY_POLICY } from '@/types';
 
 let store: EventStore;
 
@@ -51,6 +52,8 @@ function resetStores() {
       processDetail: 'key',
       memoryEnabled: false,
       autoSummarize: false,
+      memoryRecall: true,
+      memoryPolicy: { ...DEFAULT_MEMORY_POLICY },
       transcription: DEFAULT_TRANSCRIPTION,
       desktop: DEFAULT_DESKTOP,
     },

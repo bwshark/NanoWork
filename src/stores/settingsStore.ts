@@ -17,6 +17,7 @@ import type {
   SyncMeta,
   TranscriptionConfig,
 } from '@/types';
+import { DEFAULT_MEMORY_POLICY, normalizeMemoryPolicy } from '@/types';
 
 interface SettingsState {
   settings: Settings;
@@ -133,6 +134,21 @@ const DEFAULT_SETTINGS: Settings = {
    * 唯一写入源（另一处手动「记住这条」要用户主动点），把它默认关掉等于默认没有记忆。
    */
   autoSummarize: true,
+  /**
+   * 跨会话召回。**默认开启**。
+   *
+   * 关闭后只注入长期记忆（`MEMORY.md` / 策展结论 / 画像 / 偏好），不检索历史会话。
+   * 默认开是因为它回答的是「上个月我们讨论过什么」这类问题——而「模型看不到就答不出来」
+   * 正是 v1 的一次真实事故（见 `prd-memory.md` §6.7）。
+   */
+  memoryRecall: true,
+  /**
+   * 记忆 v2 策略（蒸馏门槛 / 归档阈值 / 注入预算）。
+   *
+   * 与 `memoryRecall` 分开：那个是「要不要这个能力」，这里是「门槛定在哪」。
+   * 用户默认不需要碰它——所以设置页把它收在「进阶」标题下。
+   */
+  memoryPolicy: { ...DEFAULT_MEMORY_POLICY },
   transcription: DEFAULT_TRANSCRIPTION,
   desktop: DEFAULT_DESKTOP,
   workspaceAliases: {},
@@ -243,8 +259,8 @@ export const useSettingsStore = create<SettingsState>()(
     {
       name: STORAGE_KEYS.settings,
       storage: zustandStorage,
-      // v13：新增 `processDetail`（工作步骤展示档位）
-      version: 13,
+      // v14：记忆 v2 策略（蒸馏门槛 / 归档阈值 / 注入预算）
+      version: 14,
       migrate: (persistedState) => {
         const state = persistedState as Partial<SettingsState> | undefined;
         if (state?.settings?.gatewayEndpoint?.includes(':8765')) {
@@ -310,6 +326,11 @@ export const useSettingsStore = create<SettingsState>()(
           // 老用户没有这个字段 → 上面浅合并已补默认 `key`；这里再统一过一遍归一化，
           // 让被手工写入的非法档位收敛到 `key`，避免渲染层拿到未知档位。
           state.settings.processDetail = normalizeProcessDetail(state.settings.processDetail);
+          // v14：记忆 v2 策略是**嵌套对象**，浅合并同样拿不到内层默认值。不补齐的话
+          // 老用户升级后 `memoryPolicy.retentionDays` 是 undefined，而它参与日期运算
+          // ——`undefined` 会算成 NaN，门槛**静默失效**（不报错、不告警，只是「怎么都不晋升」）。
+          // 归一化同时管住区间：持久化文件可能被手工改成 `"30"` 或 `-1`。
+          state.settings.memoryPolicy = normalizeMemoryPolicy(state.settings.memoryPolicy);
         }
         if (state) {
           // v12：同步元数据兄弟切片。老用户没有它 → 补默认值（`rev = 0` = 从未改过）。

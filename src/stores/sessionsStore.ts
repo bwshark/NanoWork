@@ -1,4 +1,4 @@
-import { create } from 'zustand';
+﻿import { create } from 'zustand';
 import { platform } from '@/platform';
 import { PLACEHOLDER_TITLES, STORAGE_KEYS } from '@/lib/constants';
 import { genId } from '@/lib/id';
@@ -1069,8 +1069,33 @@ function closeOpenReasoning(m: Message, rowId?: string): Message {
   };
 }
 
+/**
+ * 取一个会话里**最后一条用户消息**的正文（跨会话召回的 query）。
+ *
+ * 为什么是「最后一条」而不是「全部历史」：召回的 query 要**自包含**——它描述「现在
+ * 想找什么」。最后一条用户消息正是这件事的最接近表达；把整个会话喂进去会让词项覆盖
+ * 整个话题域，命中率反而下降（任何一条沾边的旧会话都能匹配上）。
+ *
+ * 空会话 / 只有附件没有文字时返回 `undefined`：调用方据此跳过召回。
+ */
+function lastUserMessageOf(session: { messages?: Message[] } | undefined): string | undefined {
+  const messages = session?.messages ?? [];
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const m = messages[i];
+    if (m.role !== 'user') continue;
+    const text = (m.content ?? '').trim();
+    if (text !== '') return text;
+  }
+  return undefined;
+}
+
 /** 记忆提示状态初始值（不持久化） */
-const INITIAL_MEMORY_STATE: MemoryState = { injected: false, count: 0, dismissed: false };
+const INITIAL_MEMORY_STATE: MemoryState = {
+  injected: false,
+  count: 0,
+  truncated: 0,
+  dismissed: false,
+};
 
 /**
  * 会话流式状态选择器：供组件按会话订阅，实现「每个任务独立状态」。
@@ -1341,12 +1366,29 @@ export const useSessionsStore = create<SessionsState>()(
       // 版本在**读取之前**采样：若读取期间恰好有写入落盘，这次的正文可能不含它，
       // 记成「已包含」就会永久停在旧内容上。采早不采晚，最坏结果只是多刷一次。
       const version = MemoryService.writeVersion();
-      let loaded: { text: string; entries: number };
+      let loaded: { text: string; entries: number; truncated: number };
       try {
         // 注入**两层**（L2 用户级 + L3 工作区级）：写入侧从 P1-B 起就按内容性质分流，
         // 这里只读工作区级等于把身份类事实写进一份没人读的文件——「在 A 工作区
         // 告诉过它我叫什么，换到 B 工作区就问不出来」正是这么来的。
-        loaded = await MemoryService.loadForInjection(workdir);
+        //
+        // 2026-10-02 起本函数同时装配**记忆 v2** 的结构化部分（active 策展修订、
+        // 画像、可注入偏好、最近 N 条事实），并按预算裁剪；v1 的 legacy 正文作为
+        // 最低优先级段落继续进 prompt（`buildInjectionBlock` 的 `*LegacyText`）。
+        //
+        // 召回 query 取**本会话最后一条用户消息**：这是「按轮触发」在快照模型下的
+        // 自然落点——记忆快照本来就是每会话一次，不是每轮一次（每轮重算会让
+        // 装配路径多一个 await，破坏「send 同步进入流式态」，见 NFR-M2）。
+        // 需要更「当轮」的检索时，那条路径要单独设计（Phase 3 的后续工作）。
+        const recallQuery = useSettingsStore.getState().settings.memoryRecall
+          ? lastUserMessageOf(get().sessions.find((s) => s.id === sessionId))
+          : undefined;
+        loaded = await MemoryService.loadForInjection(
+          workdir,
+          recallQuery,
+          // 门槛与预算出自设置页（`memoryPolicy`）；解析成函数参数由 `resolveMemoryPolicy` 统一做
+          useSettingsStore.getState().settings.memoryPolicy,
+        );
       } catch {
         return;
       }
@@ -1367,6 +1409,8 @@ export const useSessionsStore = create<SessionsState>()(
         memoryLoaded: {
           injected: true,
           count: loaded.entries,
+          // 截断数要露出来：静默裁剪会让用户以为「它记住了」而模型没看到
+          truncated: loaded.truncated,
           dismissed: false,
         },
       });

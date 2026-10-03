@@ -1,12 +1,19 @@
-import { isAbsolute, join, resolve } from 'node:path';
+import { isAbsolute, join, resolve, sep } from 'node:path';
 import {
   CURATED_MEMORY_FILE,
   WORKSPACE_MEMORY_DIR,
   WORKSPACE_MEMORY_SUBDIR,
   isMemoryFileName,
 } from '../src/lib/workspaceMemory';
+import {
+  READABLE_SUBDIRS,
+  USER_MEMORY_DIR,
+  isMemoryFileName as isMemoryFileNameV2,
+  isMemorySubdirName,
+  scopeIdFor,
+} from '../src/lib/memoryPaths';
 import { DEFAULT_WORKSPACE_KEY, workspaceKeyFor } from '../src/lib/workspaceKey';
-import { memoryDir, type StorageRoots } from './storageRoutes';
+import { memoryDir, productDir, type StorageRoots } from './storageRoutes';
 
 /**
  * 工作区记忆的**路径解析与安全校验**（主进程专用，纯映射、不碰 fs）。
@@ -114,3 +121,96 @@ export function resolveCuratedMemoryFile(
  * 才不会出现「界面上能存、Electron 上存不了」这类只在某一端复现的差异。
  */
 export { isWritableMemoryFileName } from '../src/lib/workspaceMemory';
+
+// —— 记忆 v2 的路径解析（两类存储根 + 子目录） ——
+
+/**
+ * 用户级记忆的目录：`~/.nanowork/user-memory/<scope-id>/`。
+ *
+ * 刻意不落在 `~/.nanowork/MEMORY.md`（那是 v1 的单文件，**必须原地保留**：
+ * 它是跨端同步资产，改名会在其他设备上删除用户记忆，见设计 §9 / NFR-M11）。
+ */
+export function userMemoryDir(userScope: string, roots: StorageRoots): string {
+  return join(productDir(roots), USER_MEMORY_DIR, scopeIdFor(userScope));
+}
+
+/** 记忆 v2 的存储根目录（`MemoryDirRef` 的两种情形） */
+export function resolveMemoryRootDir(
+  dirRef: { kind: 'workspace'; workdir: string | null } | { kind: 'user'; userScope: string },
+  roots: StorageRoots,
+): string {
+  if (dirRef !== null && typeof dirRef === 'object' && dirRef.kind === 'user') {
+    return userMemoryDir(dirRef.userScope ?? '', roots);
+  }
+  const workdir =
+    dirRef !== null && typeof dirRef === 'object' && 'workdir' in dirRef
+      ? (dirRef.workdir ?? null)
+      : null;
+  return resolveWorkspaceMemoryDir(workdir, roots);
+}
+
+/**
+ * 断言 `target` 确实落在 `base` 之内（含 base 自身）。
+ *
+ * 用 `sep` 收尾比较而不是裸 `startsWith`：后者会让 `/a/memory-evil` 通过
+ * 「前缀是 `/a/memory`」这一检查——差一个分隔符就是一次越界写。
+ */
+function assertInside(base: string, target: string): void {
+  const b = resolve(base);
+  const t = resolve(target);
+  if (t === b) return;
+  if (t.startsWith(b.endsWith(sep) ? b : `${b}${sep}`)) return;
+  throw new Error(`记忆路径越界：${target}`);
+}
+
+/**
+ * 记忆文件（v2）的绝对路径；名字或子目录非法、解析结果越界一律**抛错**。
+ *
+ * 与 v1 的 `resolveMemoryFile` 的差别：多了 `subdir`（只允许 `daily/` 与 `archive/`）。
+ * 抛错而不是返回 null 的理由同 v1：一个「静默返回空串」的实现会让「文件名写错」
+ * 表现成「记忆是空的」。
+ */
+export function resolveMemoryFileIn(
+  dirRef: { kind: 'workspace'; workdir: string | null } | { kind: 'user'; userScope: string },
+  name: string,
+  roots: StorageRoots,
+  subdir?: string,
+): string {
+  const sub = (subdir ?? '').trim();
+  if (sub !== '') {
+    if (!isMemorySubdirName(sub) || !READABLE_SUBDIRS.includes(sub)) {
+      throw new Error(`非法记忆子目录：${sub}`);
+    }
+  }
+  if (!isMemoryFileNameV2(name)) {
+    throw new Error(`非法记忆文件名：${String(name)}`);
+  }
+  const rootDir = resolveMemoryRootDir(dirRef, roots);
+  const dir = sub === '' ? rootDir : join(rootDir, sub);
+  const target = join(dir, name);
+  // 双保险：名字与子目录都已经过白名单，这里再断言一次「解析结果确实落在根之内」。
+  // 加它是因为前一道校验的规则将来可能被放宽（比如允许更多子目录），
+  // 而那正是穿越漏洞最容易被引入的时刻。
+  assertInside(rootDir, target);
+  return target;
+}
+
+/** 记忆目录（v2）本身的绝对路径（列表 / 清空用）；子目录非法时抛错 */
+export function resolveMemoryListDir(
+  dirRef: { kind: 'workspace'; workdir: string | null } | { kind: 'user'; userScope: string },
+  roots: StorageRoots,
+  subdir?: string,
+): string {
+  const sub = (subdir ?? '').trim();
+  const rootDir = resolveMemoryRootDir(dirRef, roots);
+  if (sub === '') return rootDir;
+  if (!isMemorySubdirName(sub) || !READABLE_SUBDIRS.includes(sub)) {
+    throw new Error(`非法记忆子目录：${sub}`);
+  }
+  const dir = join(rootDir, sub);
+  assertInside(rootDir, dir);
+  return dir;
+}
+
+/** 产品目录名（v2 导入检查用；与 `storageRoutes` 的 `PRODUCT_DIR_NAME` 同值） */
+export { WORKSPACE_MEMORY_DIR as MEMORY_PRODUCT_DIR_NAME };

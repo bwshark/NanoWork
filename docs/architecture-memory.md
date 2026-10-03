@@ -1,3 +1,9 @@
+> ⚠️ **已被 v2 增量叠加（2026-10-02）**：本文描述的是**记忆 v1** 的架构。
+> 其落点取舍、两层合并注入定序、报错不落盘、注入快照失效等机制在 v2 中原样保留
+> （见 `docs/architecture-memory-v2.md` §11）；v2 的平台契约、canonical/投影分层、
+> 蒸馏与裁决事务见该文。三件套入口：`docs/prd-memory-v2.md` / `docs/architecture-memory-v2.md`
+> / `docs/plan-memory-v2.md`。
+
 # 增量架构设计：工作区文件记忆（MEMORY.md 机制）
 
 > ⚠️ **落点已变更（2026-09-19）**：工作区记忆**不再落 `~/.nanowork/memory/<key>.md`

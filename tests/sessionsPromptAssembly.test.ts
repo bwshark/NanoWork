@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 会话装配的端到端行为（M3 · 提示词与注入层）。
  *
  * 这个文件守的是「装配器真的接上了发送链路」——单独测 `assemblePromptSections`
@@ -30,6 +30,7 @@ import {
 } from '@/lib/constants';
 import type { Agent, Skill } from '@/types';
 import type { ChatHandle, ChatRequest, StreamHandlers } from '@/ai/runtime/types';
+import { DEFAULT_MEMORY_POLICY } from '@/types';
 
 let captured: ChatRequest[] = [];
 
@@ -55,6 +56,8 @@ function resetStores(a: Agent) {
       processDetail: 'key',
       memoryEnabled: true,
       autoSummarize: false,
+      memoryRecall: true,
+      memoryPolicy: { ...DEFAULT_MEMORY_POLICY },
       transcription: DEFAULT_TRANSCRIPTION,
       desktop: DEFAULT_DESKTOP,
     },

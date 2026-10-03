@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Agent 工具白名单的行为测试（M2 / FR-2.2）。
  *
  * 覆盖两个层面：
@@ -27,6 +27,7 @@ import { waitForSessionWrites } from '@/events';
 import { resetEventStream } from './helpers/eventStream';
 import type { Agent } from '@/types';
 import type { ChatHandle, ChatRequest, StreamHandlers } from '@/ai/runtime/types';
+import { DEFAULT_MEMORY_POLICY } from '@/types';
 
 let capturedRequests: ChatRequest[] = [];
 
@@ -60,6 +61,8 @@ function resetStores(a: Agent) {
       processDetail: 'key',
       memoryEnabled: false,
       autoSummarize: false,
+      memoryRecall: true,
+      memoryPolicy: { ...DEFAULT_MEMORY_POLICY },
       transcription: DEFAULT_TRANSCRIPTION,
       desktop: DEFAULT_DESKTOP,
     },

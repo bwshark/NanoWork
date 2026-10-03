@@ -13,6 +13,7 @@ export * from './task';
 export * from './model';
 export * from './skill';
 export * from './memory';
+export * from './recall';
 export * from './prompt';
 export * from './channel';
 export * from './plugin';

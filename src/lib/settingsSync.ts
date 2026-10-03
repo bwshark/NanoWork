@@ -56,6 +56,10 @@ export const SETTINGS_SYNC_OMIT_KEYS: readonly string[] = [
   'knownWorkspaces',
   'workspaceAliases',
   'hiddenSessions',
+  // 记忆 v2 策略（蒸馏门槛 / 归档阈值 / 注入预算）是**策略**而非事实：
+  // 各设备可以有自己的门槛（一台机器想「30 天才算稳定结论」，另一台想更激进），
+  // 搬过去只会把对端调好的值覆盖掉。与 `desktop` 同一口径。
+  'memoryPolicy',
 ];
 
 /**

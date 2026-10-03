@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 切换工作空间时**记录搬不搬**，以及「0 个任务的工作空间」还在不在。
  *
  * 用户报的现象：把一个任务从工作空间 bbb 切到 aaa 之后——
@@ -36,6 +36,7 @@ import type { EventStore } from '@/events';
 import type { Agent } from '@/types';
 import type { StorageInfo } from '@/platform/types';
 import type { ChatHandle, ChatRequest, StreamHandlers } from '@/ai/runtime/types';
+import { DEFAULT_MEMORY_POLICY } from '@/types';
 
 const DEFAULT_DIR = 'C:\\Users\\tester\\NanoWork';
 const BBB = 'D:\\work\\bbb';
@@ -90,6 +91,8 @@ function resetStores() {
       processDetail: 'key',
       memoryEnabled: false,
       autoSummarize: false,
+      memoryRecall: true,
+      memoryPolicy: { ...DEFAULT_MEMORY_POLICY },
       transcription: DEFAULT_TRANSCRIPTION,
       desktop: DEFAULT_DESKTOP,
       workspaceAliases: {},

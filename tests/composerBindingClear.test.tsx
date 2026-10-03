@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 输入区「当前绑定」chip 的解除能力（专家 / 专家团）。
  *
  * ## 为什么要有这组用例
@@ -35,6 +35,7 @@ import {
 } from '@/stores/settingsStore';
 import { resetEventStream } from './helpers/eventStream';
 import { click, mount, unmount } from './helpers/reactMount';
+import { DEFAULT_MEMORY_POLICY } from '@/types';
 
 const AGENT_ID = 'agent-test';
 const AGENT_NAME = '测试智能体';
@@ -49,6 +50,8 @@ beforeEach(() => {
       processDetail: 'key',
       memoryEnabled: false,
       autoSummarize: false,
+      memoryRecall: true,
+      memoryPolicy: { ...DEFAULT_MEMORY_POLICY },
       transcription: DEFAULT_TRANSCRIPTION,
       desktop: DEFAULT_DESKTOP,
     },

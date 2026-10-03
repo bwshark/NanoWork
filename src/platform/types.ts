@@ -479,6 +479,56 @@ export interface WorkspaceMemoryFiles {
 }
 
 /**
+ * 记忆存储的**根标识**（记忆 v2）。
+ *
+ * 存在的理由：v1 的每个方法都是 `(workdir, …)`，把「存储根」与「怎么定位」焊死在一起。
+ * v2 有**两类根**（跟着工作目录走的、跟着用户走的），继续用 `workdir` 表达只能靠往里
+ * 塞伪路径——那是把「根」这个语义散进调用方。故显式建一个判别联合。
+ *
+ * - `workspace`：`<workdir>/.nanowork/memory/`；`workdir` 为 `null` 表示会话没绑工作目录，
+ *   落产品目录下的兜底位置（`~/.nanowork/memory/default/`）——**与 v1 一致**；
+ * - `user`：`~/.nanowork/user-memory/<scope-id>/`；`userScope` 由 `ensureLocalUserScope()`
+ *   生成并持久化，**与登录态解耦**（详见 `docs/architecture-memory-v2.md` §4.7.0）。
+ */
+export type MemoryDirRef =
+  | { kind: 'workspace'; workdir: string | null }
+  | { kind: 'user'; userScope: string };
+
+/**
+ * 记忆目录后端的**v2 能力**（子目录 / 原子替换 / JSONL 追行）。
+ *
+ * 与 `WorkspaceMemoryFiles` 的关系：后者是 v1 的根级读写面，继续保留以兼容既有调用点与
+ * 测试；本接口补齐 v2 需要的三类能力。两者共用 `src/lib/memoryPaths.ts` 的文件名策略，
+ * 差异只在能力面，不在语义。
+ */
+export interface MemoryDirFiles {
+  /** 列出某个记忆目录（可带子目录）里的文件名；目录不存在返回空数组（正常状态，不是错误） */
+  listDir(dirRef: MemoryDirRef, subdir?: string): Promise<string[]>;
+  /** 读取单个文件（可带子目录）；不存在 / 非普通文件返回 null */
+  readDirFile(dirRef: MemoryDirRef, name: string, subdir?: string): Promise<string | null>;
+  /** 覆盖写入单个文件（可带子目录）；名字必须过写入白名单，否则抛错 */
+  writeDirFile(
+    dirRef: MemoryDirRef,
+    name: string,
+    content: string,
+    subdir?: string,
+  ): Promise<void>;
+  /** 删除单个文件（幂等） */
+  removeDirFile(dirRef: MemoryDirRef, name: string, subdir?: string): Promise<void>;
+  /** 原子替换（见 `PlatformAdapter.memoryReplaceDirFile` 的说明） */
+  replaceDirFile(
+    dirRef: MemoryDirRef,
+    name: string,
+    content: string,
+    subdir?: string,
+  ): Promise<void>;
+  /** 追加一行（JSONL） */
+  appendDirLine(dirRef: MemoryDirRef, name: string, line: string, subdir?: string): Promise<void>;
+  /** 读取整份 JSONL */
+  readDirLines(dirRef: MemoryDirRef, name: string, subdir?: string): Promise<string[]>;
+}
+
+/**
  * 产物索引的**目录后端**（`<userData>/artifact-index/<id>.json`，FR-7.2）。
  *
  * ## 为什么不复用 `storage`
@@ -530,8 +580,17 @@ export interface FileBackup {
 export interface PlatformAdapter {
   env: 'web' | 'electron';
   storage: StorageAdapter;
-  /** 工作区记忆的目录后端（落点见 `WorkspaceMemoryFiles`） */
+  /** 工作区记忆的目录后端（v1 面：`MEMORY.md` + 日期 `.md`，落点见 `WorkspaceMemoryFiles`） */
   memoryFiles: WorkspaceMemoryFiles;
+  /**
+   * 记忆目录后端（**v2 面**：子目录 / 原子替换 / JSONL 追行，见 `MemoryDirFiles`）。
+   *
+   * 与 `memoryFiles` **刻意分开两个属性**：v1 面同时被 Electron 的 `memory:*` IPC 与
+   * Web 的 `nanowork.wsmem.*` key 承载，v2 面另走一组 IPC 与 `nanowork.mem2.*` key
+   * （理由见 `src/lib/memoryPaths.ts` 的 `webMemoryDirKey`）。合成一个对象会让
+   * 「v1 面写、v2 面读」这类不一致有机会发生，且要动 v1 的既有测试。
+   */
+  memoryDirs: MemoryDirFiles;
   /** 产物索引的目录后端（Electron 单向镜像，落点见 `ArtifactIndexFiles`） */
   artifactIndex: ArtifactIndexFiles;
   /** 内容寻址文件备份（FR-7.3 文件级回滚，落点见 `FileBackup`） */
@@ -1058,8 +1117,51 @@ export interface ElectronAPI {
   memoryRemoveFile(workdir: string | null, name: string): Promise<void>;
   /** 删除该工作区全部记忆文件；返回删除个数 */
   memoryRemoveAll(workdir: string | null): Promise<number>;
-  /** 旧单文件落点的懒迁移（幂等）；返回本次新写入的文件名 */
+  /**
+   * 旧单文件落点的懒迁移（幂等）；返回本次新写入的文件名。
+   * @deprecated 记忆 v1 的能力，仅用于读旧数据；v2 新代码不要调用。
+   */
   memoryMigrateLegacy(workdir: string | null): Promise<string[]>;
+  // —— 记忆 v2 的目录后端（子目录 + 原子替换 + JSONL 追行）——
+  // 与上面那批的关系：上面是 v1 的「工作区根目录 + 单段文件名」形态，继续保留以兼容
+  // 既有调用点与测试；这一批是 v2 需要的额外能力：`MemoryDirRef` 化（工作区级 /
+  // 用户级两类存储根）、子目录（`daily/`、`archive/`）、原子替换、单行追加。
+  // 名字与子目录一律走 `src/lib/memoryPaths.ts` 的白名单（两端同一份）。
+  /** 列出某个记忆目录（可带子目录）里的文件名 */
+  memoryListDir(dirRef: MemoryDirRef, subdir?: string): Promise<string[]>;
+  /** 读取单个文件（可带子目录）；不存在返回 null */
+  memoryReadDirFile(dirRef: MemoryDirRef, name: string, subdir?: string): Promise<string | null>;
+  /** 覆盖写入单个文件（可带子目录，只走白名单） */
+  memoryWriteDirFile(
+    dirRef: MemoryDirRef,
+    name: string,
+    content: string,
+    subdir?: string,
+  ): Promise<void>;
+  /** 删除单个文件（可带子目录，幂等） */
+  memoryRemoveDirFile(dirRef: MemoryDirRef, name: string, subdir?: string): Promise<void>;
+  /**
+   * **原子替换**：写临时文件 → 落盘 → 改名覆盖目标。
+   *
+   * 与 `memoryWriteDirFile` 的唯一区别是**绝不暴露半写状态**——`curated.json` /
+   * `conflicts.json` / `profile.json` / `preferences.json` 这类 canonical 状态一旦
+   * 被读到半截 JSON，整份记忆就不可用。Web 端无临时文件，退化为一次 set（best-effort）。
+   */
+  memoryReplaceDirFile(
+    dirRef: MemoryDirRef,
+    name: string,
+    content: string,
+    subdir?: string,
+  ): Promise<void>;
+  /** 单行追加（JSONL 用）；实现侧保证单次 write，不读全文 */
+  memoryAppendDirLine(
+    dirRef: MemoryDirRef,
+    name: string,
+    line: string,
+    subdir?: string,
+  ): Promise<void>;
+  /** 读取整份 JSONL（按行返回，已去空行） */
+  memoryReadDirLines(dirRef: MemoryDirRef, name: string, subdir?: string): Promise<string[]>;
   // —— 产物索引（`<userData>/artifact-index/<id>.json`，FR-7.2）——
   // 单向镜像：只有写与删，**没有读**（权威在 store 索引切片，见 ArtifactIndexFiles）。
   /** 写入/覆盖单条产物索引 */

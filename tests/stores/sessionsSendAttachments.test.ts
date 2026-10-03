@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+﻿import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useSessionsStore } from '@/stores/sessionsStore';
 import { useSettingsStore, DEFAULT_DESKTOP } from '@/stores/settingsStore';
 import { useAgentsStore } from '@/stores/agentsStore';
@@ -7,6 +7,7 @@ import { NanobotClient } from '@/ai/runtime/nanobotHttp/chat';
 import { resetEventStream } from '../helpers/eventStream';
 import type { Attachment, Message, Session } from '@/types';
 import type { ChatHandle, ChatRequest, StreamHandlers } from '@/ai/runtime/types';
+import { DEFAULT_MEMORY_POLICY } from '@/types';
 
 /**
  * sessionsStore.send() 附件链路测试。
@@ -70,6 +71,8 @@ function resetStores() {
       processDetail: 'key',
       memoryEnabled: false,
       autoSummarize: false,
+      memoryRecall: true,
+      memoryPolicy: { ...DEFAULT_MEMORY_POLICY },
       transcription: {
         enabled: false,
         endpoint: '',

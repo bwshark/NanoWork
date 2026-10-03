@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+﻿import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useSessionsStore } from '@/stores/sessionsStore';
 import { useSettingsStore, DEFAULT_TRANSCRIPTION, DEFAULT_DESKTOP } from '@/stores/settingsStore';
 import { useAgentsStore } from '@/stores/agentsStore';
@@ -8,6 +8,7 @@ import { NanobotClient } from '@/ai/runtime/nanobotHttp/chat';
 import { resetEventStream } from './helpers/eventStream';
 import { cronRecordsToSession } from '@/lib/sessionImport';
 import type { ChatHandle, ChatRequest, StreamHandlers } from '@/ai/runtime/types';
+import { DEFAULT_MEMORY_POLICY } from '@/types';
 
 /** 重置所有相关 store 到初始态，避免用例之间跨用例串扰 */
 function resetStores() {
@@ -19,6 +20,8 @@ function resetStores() {
       processDetail: 'key',
       memoryEnabled: true,
       autoSummarize: false,
+      memoryRecall: true,
+      memoryPolicy: { ...DEFAULT_MEMORY_POLICY },
       transcription: DEFAULT_TRANSCRIPTION,
       desktop: DEFAULT_DESKTOP,
     },

@@ -1,10 +1,11 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+﻿import { beforeEach, describe, expect, it } from 'vitest';
 import {
   DEFAULT_DESKTOP,
   DEFAULT_TRANSCRIPTION,
   useSettingsStore,
 } from '@/stores/settingsStore';
 import { DEFAULT_GATEWAY } from '@/lib/constants';
+import { DEFAULT_MEMORY_POLICY } from '@/types';
 
 /**
  * 侧边栏「工作空间分组」相关的两处 settings 行为。
@@ -26,6 +27,8 @@ function resetSettings() {
       processDetail: 'key',
       memoryEnabled: true,
       autoSummarize: false,
+      memoryRecall: true,
+      memoryPolicy: { ...DEFAULT_MEMORY_POLICY },
       transcription: DEFAULT_TRANSCRIPTION,
       desktop: DEFAULT_DESKTOP,
       workspaceAliases: {},

@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 设置「通用 → 存储」：系统缓存目录 + 默认工作空间存储路径。
  *
  * ## 这组用例想钉住的三件事
@@ -32,6 +32,7 @@ import { useSessionsStore } from '@/stores/sessionsStore';
 import { useAgentsStore } from '@/stores/agentsStore';
 import { resetEventStream } from './helpers/eventStream';
 import { byAria, buttonByText, click, flush, mount, unmount } from './helpers/reactMount';
+import { DEFAULT_MEMORY_POLICY } from '@/types';
 
 /** 6.62 GB 缓存 / 300 GB 盘 / 262 GB 已用 / 38 GB 可用（对齐参考图量级） */
 const INFO: StorageInfo = {
@@ -61,6 +62,8 @@ beforeEach(() => {
       processDetail: 'key',
       memoryEnabled: false,
       autoSummarize: false,
+      memoryRecall: true,
+      memoryPolicy: { ...DEFAULT_MEMORY_POLICY },
       transcription: DEFAULT_TRANSCRIPTION,
       desktop: DEFAULT_DESKTOP,
     },

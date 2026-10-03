@@ -41,6 +41,10 @@
 | `processDetail` | `result/key/full` | `key` | 通用 · 对话过程 | 模型工作步骤的展示详略（聚焦结果 / 关键细节 / 完整过程）；读取侧经 `normalizeProcessDetail` 兜底为 `key`；**纯偏好，参与云同步**（不进 `SETTINGS_SYNC_OMIT_KEYS`） |
 | `memoryEnabled` | boolean | `true` | 记忆 | 是否把记忆块注入 system |
 | `autoSummarize` | boolean | `true` | 记忆 | v9 迁移把旧 `false` 统一抬成 `true` |
+| `memoryRecall` | boolean | `true` | 记忆 | **记忆 v2 新增**（`docs/prd-memory-v2.md` FR-M25a）：是否按本轮问题做一次跨会话召回。召回由**客户端按轮触发**（本项目没有客户端工具注册通道），关闭后只注入长期记忆。纯本地行为、不参与云同步 |
+| `memoryDistillPolicy` | object | 见 `DEFAULT_MEMORY_DISTILL_POLICY` | 记忆 · 进阶 | **记忆 v2 新增**（`docs/prd-memory-v2.md` FR-M5）：`retentionDays`(30) / `minImportance`(4) / `repeatThreshold`(2) / `supersessionRepeatThreshold`(2) / `promotableKinds`。嵌套对象，迁移需单独补齐内层默认值（与 `transcription` 同型）；**纯本地策略，不参与云同步**（进 `SETTINGS_SYNC_OMIT_KEYS`）——各设备可各自调门槛 |
+| `memoryBudget` | object | 见 `DEFAULT_MEMORY_BUDGET` | 记忆 · 进阶 | **记忆 v2 新增**（FR-M10）：`userChars`(4000) / `workspaceChars`(3000) / `recentFactLimit`(6)。同上，嵌套对象、不同步 |
+| `memoryRetentionDays` | number | `30` | 记忆 · 进阶 | **记忆 v2 新增**（FR-M33）：蒸馏年龄门槛与日志归档阈值共用口径说明；只影响本地蒸馏时序，不同步 |
 | `transcription` | object | 见 `DEFAULT_TRANSCRIPTION` | 连接 · 语音输入 | 嵌套对象，迁移时需单独补齐内层默认值 |
 | `desktop` | object | 见 `DEFAULT_DESKTOP` | 通用 · 桌面端（仅 Electron） | 与主进程 `DEFAULT_DESKTOP_CONFIG` 必须对齐；`hotkey` 的界面在**快捷键**分区 |
 | `promptDomain` / `promptStyle` | string? | 未设 → 回退内置 | 人格（正文在 `prompts/`） | Agent 级可覆盖 |

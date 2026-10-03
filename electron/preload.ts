@@ -52,6 +52,23 @@ const api: ElectronAPI = {
   memoryRemoveAll: (workdir: string | null) => ipcRenderer.invoke('memory:removeAll', workdir),
   memoryMigrateLegacy: (workdir: string | null) =>
     ipcRenderer.invoke('memory:migrate', workdir),
+  // —— 记忆 v2 的目录后端（两类存储根 + 子目录 + 原子替换 + JSONL 追行）——
+  // `dirRef` 是 `{kind:'workspace'|'user', …}` 的普通对象，可结构化克隆；
+  // 主进程重新解析绝对路径并做越界断言，渲染层传什么都越不过白名单。
+  memoryListDir: (dirRef: unknown, subdir?: string) =>
+    ipcRenderer.invoke('memory:listDir', dirRef, subdir),
+  memoryReadDirFile: (dirRef: unknown, name: string, subdir?: string) =>
+    ipcRenderer.invoke('memory:readDirFile', dirRef, name, subdir),
+  memoryWriteDirFile: (dirRef: unknown, name: string, content: string, subdir?: string) =>
+    ipcRenderer.invoke('memory:writeDirFile', dirRef, name, content, subdir),
+  memoryRemoveDirFile: (dirRef: unknown, name: string, subdir?: string) =>
+    ipcRenderer.invoke('memory:removeDirFile', dirRef, name, subdir),
+  memoryReplaceDirFile: (dirRef: unknown, name: string, content: string, subdir?: string) =>
+    ipcRenderer.invoke('memory:replaceDirFile', dirRef, name, content, subdir),
+  memoryAppendDirLine: (dirRef: unknown, name: string, line: string, subdir?: string) =>
+    ipcRenderer.invoke('memory:appendDirLine', dirRef, name, line, subdir),
+  memoryReadDirLines: (dirRef: unknown, name: string, subdir?: string) =>
+    ipcRenderer.invoke('memory:readDirLines', dirRef, name, subdir),
   artifactIndexPut: (entry: unknown) => ipcRenderer.invoke('artifactIndex:put', entry),
   artifactIndexRemove: (id: string) => ipcRenderer.invoke('artifactIndex:remove', id),
   nanobotStart: () => ipcRenderer.invoke('nanobot:start'),

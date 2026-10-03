@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 默认工作空间（设置 → 通用 → 存储）的**下发链路**测试。
  *
  * 用户报过一个具体故障：设置里写着默认工作空间是 `<home>/NanoWork`，让 Agent
@@ -28,6 +28,7 @@ import { resetEventStream } from './helpers/eventStream';
 import type { Agent } from '@/types';
 import type { StorageInfo } from '@/platform/types';
 import type { ChatHandle, ChatRequest, StreamHandlers } from '@/ai/runtime/types';
+import { DEFAULT_MEMORY_POLICY } from '@/types';
 
 const DEFAULT_DIR = 'C:\\Users\\tester\\NanoWork';
 const CUSTOM_DIR = 'D:\\dev\\my-project';
@@ -68,6 +69,8 @@ function resetStores(info: StorageInfo | null = INFO) {
       processDetail: 'key',
       memoryEnabled: false,
       autoSummarize: false,
+      memoryRecall: true,
+      memoryPolicy: { ...DEFAULT_MEMORY_POLICY },
       transcription: DEFAULT_TRANSCRIPTION,
       desktop: DEFAULT_DESKTOP,
     },

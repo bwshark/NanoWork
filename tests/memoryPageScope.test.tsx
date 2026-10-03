@@ -49,8 +49,17 @@ beforeEach(async () => {
 });
 
 describe('MemoryPage 作用域切换', () => {
+  it('顶部明示「客户端记忆是唯一长期记忆源」的边界（FR-M36）', async () => {
+    const host = mount(<MemoryPage initialView="files" />);
+    await flush();
+    // 边界必须**明示**：用户不该去猜「引擎自己的记忆算不算」。这段文案是静态的，
+    // 一旦被删掉，「谁是唯一长期记忆源」就没有任何地方说得清了。
+    expect(host.textContent).toContain('唯一长期记忆源');
+    expect(host.textContent).toContain('不跨会话保留');
+  });
+
   it('默认展示工作区级，切到用户级会重新读盘', async () => {
-    const host = mount(<MemoryPage />);
+    const host = mount(<MemoryPage initialView="files" />);
     await flush();
 
     expect(editor(host).value).toBe(WS_TEXT);
@@ -65,7 +74,7 @@ describe('MemoryPage 作用域切换', () => {
   });
 
   it('保存只写当前作用域，另一层不变', async () => {
-    const host = mount(<MemoryPage />);
+    const host = mount(<MemoryPage initialView="files" />);
     await flush();
 
     click(buttonByText(host, '用户级'));
@@ -80,7 +89,7 @@ describe('MemoryPage 作用域切换', () => {
   });
 
   it('清空只清当前作用域（需二次确认）', async () => {
-    const host = mount(<MemoryPage />);
+    const host = mount(<MemoryPage initialView="files" />);
     await flush();
 
     // 工作区级清空会删掉该工作目录下的整批记忆文件，因此必须先过一次确认对话框
@@ -96,7 +105,7 @@ describe('MemoryPage 作用域切换', () => {
   });
 
   it('切层瞬间先清空编辑框，不把上一层内容带过去', async () => {
-    const host = mount(<MemoryPage />);
+    const host = mount(<MemoryPage initialView="files" />);
     await flush();
     expect(editor(host).value).toBe(WS_TEXT);
 
@@ -111,7 +120,7 @@ describe('MemoryPage 作用域切换', () => {
   });
 
   it('两层规模概览各自独立展示', async () => {
-    const host = mount(<MemoryPage />);
+    const host = mount(<MemoryPage initialView="files" />);
     await flush();
 
     const summaries = await MemoryService.scopeSummaries();
@@ -127,7 +136,7 @@ describe('MemoryPage 作用域切换', () => {
 
 describe('MemoryPage 工作区文件切换', () => {
   it('写今天的日志不会覆盖精炼记忆', async () => {
-    const host = mount(<MemoryPage />);
+    const host = mount(<MemoryPage initialView="files" />);
     await flush();
     expect(editor(host).value).toBe(WS_TEXT);
 
@@ -155,7 +164,7 @@ describe('MemoryPage 工作区文件切换', () => {
     const today = dailyMemoryFileName();
     await MemoryService.writeFile(undefined, today, '今天已经记过的内容');
 
-    const host = mount(<MemoryPage />);
+    const host = mount(<MemoryPage initialView="files" />);
     await flush();
     expect(editor(host).value).toBe(WS_TEXT);
 
@@ -164,3 +173,4 @@ describe('MemoryPage 工作区文件切换', () => {
     expect(editor(host).value).toBe('今天已经记过的内容');
   });
 });
+

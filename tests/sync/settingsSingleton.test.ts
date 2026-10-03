@@ -1,4 +1,4 @@
-/**
+﻿/**
  * `settings` 单例：C.2 rev bump 规则 + C.4/C.5 落地浅合并与本机字段保留。
  *
  * 覆盖 §I.3 变异清单：
@@ -11,6 +11,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { createDefaultRegistry } from '@/sync/syncRegistry';
 import { useSettingsStore } from '@/stores/settingsStore';
 import type { Settings } from '@/types';
+import { DEFAULT_MEMORY_POLICY } from '@/types';
 
 function baseSettings(): Settings {
   return {
@@ -20,6 +21,8 @@ function baseSettings(): Settings {
     processDetail: 'key',
     memoryEnabled: true,
     autoSummarize: true,
+    memoryRecall: true,
+    memoryPolicy: { ...DEFAULT_MEMORY_POLICY },
     transcription: {
       enabled: false,
       endpoint: 'http://local',

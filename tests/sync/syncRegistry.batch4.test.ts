@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 批次 4：`createDefaultRegistry` 的 7 个新 collection 契约（规格 §A / §B / §C / §D）。
  *
  * 覆盖 §I.3 变异清单里属于注册表范围的行：
@@ -30,6 +30,7 @@ import type {
   SkillOverrideEntry,
   TaskConfig,
 } from '@/types';
+import { DEFAULT_MEMORY_POLICY } from '@/types';
 
 const META = { rev: 2, updatedAt: '2026-06-01T00:00:00.000Z', updatedBy: 'dev-a' };
 
@@ -397,6 +398,8 @@ function baseSettingsForRegistryTest(): Settings {
     processDetail: 'key',
     memoryEnabled: true,
     autoSummarize: true,
+    memoryRecall: true,
+    memoryPolicy: { ...DEFAULT_MEMORY_POLICY },
     transcription: { enabled: false, endpoint: 'http://local', model: 'whisper-1', apiToken: '', language: 'zh' },
     desktop: { closeToTray: true, hotkey: '', openAtLogin: false, showInDock: true },
     workspaceAliases: {},

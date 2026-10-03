@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+﻿import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { MemoryService, isEmptySummary, looksLikeSystemError, memoryDiskPath, normalizeForDedup, parseEntryBodies, parseSummary, workspaceKeyFor } from '@/lib/memory';
 import { parseMemoryDirectives, stripMemoryDirectives } from '@/lib/memoryDirective';
 import { useSettingsStore, DEFAULT_TRANSCRIPTION, DEFAULT_DESKTOP } from '@/stores/settingsStore';
@@ -6,6 +6,7 @@ import { NanobotClient } from '@/ai/runtime/nanobotHttp/chat';
 import { MEMORY_KEY_PREFIX } from '@/lib/constants';
 import { WORKSPACE_MEMORY_STORAGE_PREFIX } from '@/platform/storage.web';
 import { platform } from '@/platform';
+import { DEFAULT_MEMORY_POLICY } from '@/types';
 
 /** 重置 settings 到初始态，避免跨用例串扰 */
 function resetSettings() {
@@ -17,6 +18,8 @@ function resetSettings() {
       processDetail: 'key',
       memoryEnabled: true,
       autoSummarize: false,
+      memoryRecall: true,
+      memoryPolicy: { ...DEFAULT_MEMORY_POLICY },
       transcription: DEFAULT_TRANSCRIPTION,
       desktop: DEFAULT_DESKTOP,
     },

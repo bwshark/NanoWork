@@ -27,50 +27,14 @@
  */
 
 import { hashContent } from '@/lib/workspaceKey';
-
-/**
- * 归一化文本，用于「这是不是同一句话的另一种写法」的**机械**比对。
- *
- * 只做无信息损失的三件事：去全部空白、去标点与 Markdown 装饰符、统一小写。
- * 不做同义词替换、不做语序调整、不做前缀词剥离——那三件事都需要理解语义，
- * 规则化去做必然误判（见 `src/lib/memory.ts` 中 `isSameStatement` 的实测说明）。
- */
-export function normalizeForDedup(text: string): string {
-  return (text ?? '')
-    .replace(/[\s\u3000]+/g, '')
-    .replace(
-      /[。，、；：！？""''「」『』（）【】《》〈〉…—·,.!?;:'"()<>[\]{}/\\|~`@#$%^&*+=_-]/g,
-      '',
-    )
-    .toLowerCase();
-}
-
-/** 记忆全文里各条目的**正文**（引用块格式与手写 Markdown 都支持） */
-export function parseEntryBodies(text: string): string[] {
-  const src = (text ?? '').trim();
-  if (src === '') return [];
-
-  // 条目之间以空行分隔；引用块自身是单段，手写 Markdown 的 `## ` 段同理。
-  const blocks = src
-    .split(/\n\s*\n/)
-    .map((b) => b.trim())
-    .filter((b) => b !== '');
-
-  const bodies: string[] = [];
-  for (const block of blocks) {
-    const kept: string[] = [];
-    for (const raw of block.split('\n')) {
-      // 元信息行不进正文：去重标记、`[时间] 来自「来源」`、Markdown 标题
-      if (/^>\s*<!--\s*SUMMARY:/.test(raw)) continue;
-      if (/^>\s*\[\d{4}-\d{2}-\d{2}T/.test(raw)) continue;
-      if (/^#{1,6}\s+/.test(raw)) continue;
-      kept.push(raw.replace(/^>\s?/, ''));
-    }
-    const body = kept.join('\n').trim();
-    if (body !== '') bodies.push(body);
-  }
-  return bodies;
-}
+// 归一化与正文提取的**实现**已搬到纯判据模块 `@/lib/memoryNormalize`：记忆 v2 的纯函数族
+// （`memoryFact` / `memoryDistill` / `memoryPreference` / `memoryProject`）也要用它们，
+// 那些模块按设计必须无依赖（NFR-M1 / NFR-M12）。这里转出，既有引用零改动。
+//
+// **必须 import 再 export**：`export { x } from '…'` 不会把 `x` 引进本模块作用域，
+// 而下面的 `blockKey` 要直接调 `parseEntryBodies`。
+import { normalizeForDedup, parseEntryBodies } from '@/lib/memoryNormalize';
+export { normalizeForDedup, parseEntryBodies };
 
 /** 一个记忆段落（原始文本保留，合并后按块整体搬运） */
 export interface MemoryBlock {

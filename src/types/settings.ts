@@ -51,6 +51,25 @@ export interface Settings {
   memoryEnabled: boolean;
   /** 会话结束时是否自动沉淀摘要（默认 false） */
   autoSummarize: boolean;
+  /**
+   * 是否按本轮问题做一次**跨会话召回**（默认 true）。
+   *
+   * 召回由**客户端按轮触发**（不是模型工具）：本项目没有「客户端向模型注册工具」的
+   * 通道，加一个工具就要给引擎打补丁（见 `docs/prd-memory-v2.md` FR-M13a / FR-M25a）。
+   * 代价是每轮多一次本机检索，因此给了这个开关——关掉之后只注入长期记忆，不检索历史会话。
+   */
+  memoryRecall: boolean;
+  /**
+   * 记忆 v2 的**蒸馏门槛**（FR-M5，记忆 · 进阶）。
+   *
+   * 嵌套对象：迁移时必须**单独补齐内层默认值**（与 `transcription` 同型）——
+   * 浅合并拿不到内层，老用户升级后读 `memoryPolicy.retentionDays` 会拿到 undefined，
+   * 而它参与日期运算（`undefined` 会算成 NaN，门槛静默失效）。
+   *
+   * **不同步**：各设备可以有自己的门槛（一台机器上「30 天才算稳定结论」，
+   * 另一台想更激进的策略），它是策略而非事实。
+   */
+  memoryPolicy: import('./memory').MemoryPolicySettings;
   // —— 语音输入（STT）——
   /** 语音转录服务配置：未启用时 Composer 语音按钮禁用 */
   transcription: TranscriptionConfig;
