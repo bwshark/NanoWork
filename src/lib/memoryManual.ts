@@ -45,9 +45,13 @@ export const MANUAL_FACT_KIND = 'convention' as const;
  * 手编段落默认的重要度。
  *
  * 取 4（达到 `minImportance`）是刻意的：用户**明确写下来**的东西不该再等「重复出现 2 次」
- * 才够格晋升——那是给模型自动沉淀设的门槛。但它仍然要过 `retentionDays` 年龄门槛
- * （见 `passesPromotionGate`），所以「今天手写一条」不会立刻变成长期结论，
- * 这与 v1 的「保存为记忆」行为一致。
+ * 才够格晋升——那是给模型自动沉淀设的门槛。
+ *
+ * 它同时也**豁免 `retentionDays` 年龄门槛**（见 `memoryDistill.ts` 的 `isAgeExempt`）。
+ * 早先的实现不豁免，结果是「点保存 → 内容当场从文件里消失，要等满 30 天蒸馏才会重新
+ * 渲回来」，而 toast 还在说「已登记为长期记忆」——用户看到的是自己写的东西被静默吃掉，
+ * 与本文文件头的目标（手编不被重建吃掉）直接冲突。年龄门槛是给模型自动沉淀降噪的，
+ * 用户手打的输入已经过了「用户确认要记住」这道门。
  */
 export const MANUAL_FACT_IMPORTANCE = 4;
 

@@ -112,6 +112,10 @@ export interface CreateFactInput {
   importance?: number;
   memoryKey?: string;
   source?: FactSource;
+  /**
+   * 事实来源。**唯一的生产调用点**（`memoryEdit.ts` 的手编保存）显式传 `'manual'`，
+   * 其余情况不该依赖缺省值——见下面 `createMemoryFact` 里缺省取 `'sediment'` 的理由。
+   */
   origin?: FactOrigin;
   evidence?: string;
   /** Harness provenance（事件流 event id）。**调用方负责不把模型的提交透传进来** */
@@ -188,7 +192,13 @@ export function createMemoryFact(input: CreateFactInput, now: Date): MemoryFact 
     importance,
     ...(memoryKey ? { memoryKey } : {}),
     source: input.source ?? 'user',
-    origin: input.origin ?? 'manual',
+    // 缺省取 `'sediment'`（模型自动沉淀）而**不是** `'manual'`。
+    //
+    // `'manual'` 现在是一个**特权值**：蒸馏时豁免 `retentionDays` 年龄门槛
+    // （见 `memoryDistill.ts` 的 `isAgeExempt`），因为它是用户显式写下的输入。
+    // 让它当兜底就是 fail-open——任何忘记传 `origin` 的调用方都会静默拿到
+    // 「绕过年龄门槛」的待遇。缺省值必须是**最弱**的那个来源。
+    origin: input.origin ?? 'sediment',
     ...(evidenceRaw ? { evidence: evidenceRaw } : {}),
     ...(input.sourceEventId ? { sourceEventId: input.sourceEventId } : {}),
     observedAt,

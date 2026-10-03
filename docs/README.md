@@ -208,6 +208,24 @@
 > ① FR-7.2 原「内容本体不动」裁决被本批**升级为内容池 `bodies` 彻底去重**：`recordArtifact` 按 `contentHash` 只存一份正文进 `bodies`，`bySession` 只留引用（`content:''`），渲染前 `resolveArtifactContent(entry.contentHash, bodies, fallback)` 回填（image/video 正文为空不进池、回落 `url`）——**闭合了原「内容本体仍跨会话重复」的已知偏差 #4**。旧内联正文走 `merge` 迁移搬池（不可用 `onRehydrateStorage`：同步 rehydrate 会引用未赋值的 `useArtifactsStore` 常量 → TDZ 崩溃）。
 > ② FR-7.3 文件级回滚已落：落点仅客户端记忆写点（用户级 `MEMORY.md` + 工作区记忆目录）；引擎侧 workspace 文件因 nanobot 只读不可改，单列 follow-up。封装 `src/lib/fileBackup.ts`（`snapshotBeforeWrite` 写前快照旧正文 + 记时间线 + 最佳努力吞错），平台抽象 `FileBackup`（`put(<hash>,正文)`→`file-history/<hash>.bak`、`get` 读回）复用既有 IPC `file-backup:put/get`（**无需重建 cjs**）；时间线元数据 key `STORAGE_KEYS.fileBackups`（`nanowork.fileBackups`）已登记进 `electron/storageRoutes.ts` 的 `RUNTIME_FILES`→`file-backups.json`，主进程**已重建 `main.cjs`**。`MemoryService` 五写入口（save/writeFile/append/removeFile/clear）挂 prebackup；记忆页加「历史快照 / 回滚到此处」UI（回滚自身触发 prebackup，可再撤销）。Web 端 `fileBackup` 为 no-op → 时间线恒空、UI 禁用。
 > 落地规格 `docs/artifact-content-dedup-spec.md`、`docs/fr-7-3-file-rollback-spec.md`。
+>
+> **#30 于 2026-10-03 处理（记忆 v2 真机验证发现的缺陷：手编保存 = 内容当场消失）**：
+> 由 `tasks/verify-memory-v2.mjs`（新增真机脚本）发现。现象：文件视图写正文 → 点保存 →
+> toast 说「已保存，并将 1 条手写内容登记为长期记忆」，但**编辑器当场变空**、刷新后仍空、
+> `MEMORY.md` 落盘为 `""`。
+> 根因：`applyManualMemoryEdit` 第 ④ 步调 `store.distill(now)`，而 `distillOnce` 末尾**无条件**
+> `await writeProjection(next)`；手编事实 `observedAt = now` 过不了 `passesPromotionGate` 的
+> `retentionDays`(30 天) 年龄门槛 → 不晋升 active → 投影被重建成空，把用户刚写的正文覆盖掉。
+> 缺口在**UI 与 `observedAt` 的接缝**：`tests/memoryManualEdit.test.ts:161` 断言「不被吃掉」
+> **只在显式传 40 天前的 `observedAt` 时成立**，而 `MemoryPage.save` 从不传第 4 个参数。
+> 修复（口径由用户拍板）：① 新增 `isAgeExempt()` 集中判据，`origin === 'manual'` 豁免年龄门槛
+> （`passesPromotionGate` 与 `distillFacts` 两处门槛共用，避免判据漂移）；
+> ② `createMemoryFact` 的缺省 `origin` 由 `'manual'` 改为 `'sediment'`——特权值不能当兜底（fail-open），
+> 生产侧唯一调用点本就显式传值；
+> ③ 既有用例 `年龄门槛仍适用：手编内容当天不会立刻晋升` 改写为「手编当天立即成为 active」，
+> 并补「投影里看得见」的断言；核心行为用例删掉 `observedAt` 变通（用 UI 的真实调用形态）。
+> 文档同步：`prd-memory-v2.md` FR-M5 + §1.2 策略行、`architecture-memory-v2.md` §4.3 过滤条件 +
+> §12 问题 1 定稿。
 ---
 
 ## 十、检查清单（提交前自检）

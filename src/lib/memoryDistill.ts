@@ -209,16 +209,35 @@ export function groupFactsByDomain(facts: readonly MemoryFact[]): FactGroup[] {
 }
 
 /**
+ * 一条事实是否**豁免年龄门槛**。
+ *
+ * 唯一的豁免是 `origin === 'manual'`——用户记忆页里手打的一句话。
+ *
+ * 为什么手编不算「这一轮的临时结论」：`retentionDays` 拦的是**模型自动沉淀**的噪声
+ * （刚写下的决策当天就升格，等于把过程记录当成项目约定）。而手编是用户**显式输入**，
+ * 语义上已经过了「用户确认要记住」这道门。把它也拦下会撞上设计
+ * `architecture-memory-v2.md` §12 问题 1 的目标（手编内容**不被重建吃掉**）：
+ * 表现为「点保存 → 内容当场从文件里消失，30 天后才回来」，且 toast 还在说「已登记」。
+ *
+ * 抽成一个判据而不是在两处各写一遍条件：年龄门槛在 `passesPromotionGate` 与
+ * `distillFacts` 里各判一次，两处漂移会让「门槛过了但候选为空」这类症状极难查。
+ */
+function isAgeExempt(fact: MemoryFact): boolean {
+  return fact.origin === 'manual';
+}
+
+/**
  * 门槛判定（FR-M5）：**并且**满足三类才可晋升。
  *
  * ```
- * observedAt ≤ now - retentionDays
+ * (observedAt ≤ now - retentionDays 或 origin === 'manual')
  * AND kind ∈ promotableKinds
  * AND (importance ≥ minImportance OR 同一归一化内容出现次数 ≥ repeatThreshold)
  * ```
  *
  * 第一条件的用意不是「旧的才好」：刚写下的一条决策当天就进长期记忆，等于把「这一轮的
- * 临时结论」直接升格为项目约定。等它活过 30 天还没被推翻，才是值得留的。
+ * 临时结论」直接升格为项目约定。等它活过 30 天还没被推翻，才是值得留的。手编例外
+ * 见 `isAgeExempt`。
  */
 export function passesPromotionGate(
   facts: readonly MemoryFact[],
@@ -230,7 +249,7 @@ export function passesPromotionGate(
     (f) =>
       policy.promotableKinds.includes(f.kind) &&
       Number.isFinite(Date.parse(f.observedAt)) &&
-      Date.parse(f.observedAt) <= cutoff,
+      (isAgeExempt(f) || Date.parse(f.observedAt) <= cutoff),
   );
   if (eligible.length === 0) return false;
 
@@ -385,12 +404,15 @@ export function distillFacts(
     // `origin === 'legacy'` 的**明确排除**：它们是 v1 Markdown 段落的只读投影，
     // 已经在长期记忆里了，再晋升一次只会把「过程记录」误当「稳定结论」——
     // 而且它们的 `observedAt` 多半落成 epoch，会永远满足「够老」这一条。
+    //
+    // `origin === 'manual'` 豁免年龄门槛（见 `isAgeExempt`）：用户手写的内容必须
+    // 当场出现在投影里，否则「保存 = 内容消失」。
     const eligibleFacts = group.facts.filter(
       (f) =>
         f.origin !== 'legacy' &&
         policy.promotableKinds.includes(f.kind) &&
         Number.isFinite(Date.parse(f.observedAt)) &&
-        Date.parse(f.observedAt) <= cutoffMs,
+        (isAgeExempt(f) || Date.parse(f.observedAt) <= cutoffMs),
     );
     if (!passesPromotionGate(group.facts, policy, now)) {
       report.skipped += 1;

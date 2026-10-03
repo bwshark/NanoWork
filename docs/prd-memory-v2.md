@@ -61,7 +61,7 @@
 | 机制 | 教学实现的做法 | 为什么必须这样 |
 |---|---|---|
 | 结构化事实 | `MemoryFact` 有 `kind`（decision/convention/pitfall/outcome）、`importance`、`memory_key`、`evidence`，**不是一段自由文本** | 自由文本无法判定「值不值得记」「和哪条冲突」 |
-| 显式蒸馏策略 | `年龄 ≥ 30 天 AND kind ∈ {decision,convention,pitfall} AND (importance ≥ 4 OR 归一化重复 ≥ 2)` | **不让 LLM 决定什么值得永远记住**；模型可以被注入、会被猜测污染，promotion 必须由 harness 掌握 |
+| 显式蒸馏策略 | `(年龄 ≥ 30 天 OR origin='manual') AND kind ∈ {decision,convention,pitfall} AND (importance ≥ 4 OR 归一化重复 ≥ 2)` | **不让 LLM 决定什么值得永远记住**；模型可以被注入、会被猜测污染，promotion 必须由 harness 掌握。**手编豁免年龄门槛**（2026-10-03 定稿，见 FR-M5）：用户显式写下的一句不该等 30 天，否则「保存 → 内容当场从投影里消失」 |
 | 冲突域（`memory_key`） | key 描述「这条记忆回答哪个问题」（`runtime.python-version`），**不是答案本身** | 用答案当 key，值一变就成了另一个域，替代关系丢失，新旧版本并存 |
 | 替代门槛 | 新值必须**同时**：通过晋升门槛 + 至少 2 条独立事实确认 + 时间晚于 active 的 `last_seen` | 单条高重要度事实不足以推翻既有决策；过期证据不能回滚当前值 |
 | fail-closed 冲突 | 最优分数平局时**保留当前修订**并创建 `MemoryConflictCase` | 拿不准时不动现状，比猜错安全 |
@@ -188,7 +188,7 @@
 
 | 编号 | 名称 | 优先级 | 缺口 | 验收标准 |
 |---|---|---|---|---|
-| **FR-M5** | 显式蒸馏策略 `DistillPolicy` | P0 | G2 | 默认判据：`年龄 ≥ retentionDays(默认 30) ∧ kind ∈ {decision, convention, pitfall} ∧ (importance ≥ 4 ∨ 归一化内容重复 ≥ 2)`。`outcome` **永不自动晋升**。策略参数可配置且**可单测**；不调用模型即可验证（无 API key 可跑） |
+| **FR-M5** | 显式蒸馏策略 `DistillPolicy` | P0 | G2 | 默认判据：`(年龄 ≥ retentionDays(默认 30) ∨ origin='manual') ∧ kind ∈ {decision, convention, pitfall} ∧ (importance ≥ 4 ∨ 归一化内容重复 ≥ 2)`。`outcome` **永不自动晋升**。策略参数可配置且**可单测**；不调用模型即可验证（无 API key 可跑）。<br>**手编豁免年龄门槛（2026-10-03 定稿）**：`origin === 'manual'`（用户在记忆页手写保存）不受 `retentionDays` 约束，立即成为 active 结论。若一视同仁，用户点保存后内容会被 `distill` 重建的投影**当场覆盖成空**（实测：`MEMORY.md` = `""`），而 toast 仍显示「已登记为长期记忆」——属静默丢失。连带约定：`createMemoryFact` 的缺省 `origin` 为 `'sediment'`（**不是** `'manual'`），特权值不当兜底 |
 | **FR-M6** | 晋升为策展修订 | P0 | G2 | 通过判据的事实进入 `curated.json`，每条形成带 `revision` / `evidence_ids` / `first_seen` / `last_seen` / `status`(active·superseded) 的**修订**。重复执行 `distill()` 幂等：同输入不产生新修订、不重复合并 evidence。返回 `DistillReport`（`promoted` / `superseded` / `conflicts` / `queued_conflicts` / `stale` / `skipped`），让**拒绝晋升的原因可观察** |
 | **FR-M7** | 无 memory_key 的归并 | P0 | G2 | 缺省 key 的同类事实按 `kind + 归一化内容` 合并 evidence；**不同内容不自动互相替代**（避免把「补充」误当「更新」），分别成为独立修订 |
 | **FR-M8** | 替代门槛 | P0 | G3 | 同域新值与 active 不同内容时，**必须同时**满足：①（新值自身）通过 FR-M5 判据；② 至少 `supersessionRepeatThreshold`（默认 2）条**独立事实**确认；③ 候选最新 `observed_at` **严格晚于** active 的 `last_seen`。三条缺一即拒绝替代，记入 `stale` 或 `skipped` |

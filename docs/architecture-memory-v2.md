@@ -270,7 +270,7 @@ export function distillFacts(
 **算法（逐条对应 s10）**：
 
 ```
-1. 过滤：observedAt ≤ now - retentionDays；kind ∈ promotableKinds
+1. 过滤：observedAt ≤ now - retentionDays 或 origin === 'manual'（见下方勘误）；kind ∈ promotableKinds
 2. 分组：
    有 memoryKey → 按 `k:<memoryKey>` 建冲突域
    无 memoryKey → 按 `<kind> + normalizeForDedup(content)` 建独立键
@@ -1025,7 +1025,7 @@ writeVersion(): number;   // 组合值：`${userVersion}:${workspaceVersion}` �
 
 | # | 问题 | 推荐答案与理由 |
 |---|---|---|
-| 1 | `MEMORY.md` 是否允许用户手编？编了算不算权威？ | **允许，但明确定位为投影**。手编内容在下次 `distill` 重建时会被覆盖——除非用户在「文件视图」里显式选择「保留手工段落」。更好的默认是：手工新增内容通过「文件视图保存」时，客户端把它转成 `origin='manual'` 的**事实**写入 `daily/`（这样手编也进正式链路，不被重建吃掉）。**需在 Phase 2 定稿** |
+| 1 | `MEMORY.md` 是否允许用户手编？编了算不算权威？ | **允许，但明确定位为投影**。手编内容在下次 `distill` 重建时会被覆盖——除非用户在「文件视图」里显式选择「保留手工段落」。更好的默认是：手工新增内容通过「文件视图保存」时，客户端把它转成 `origin='manual'` 的**事实**写入 `daily/`（这样手编也进正式链路，不被重建吃掉）。**需在 Phase 2 定稿**<br>**2026-10-03 定稿（真机验证发现缺陷后）**：按上面那个「更好的默认」落地，并**追加一条硬约束**——`origin === 'manual'` 的事实**豁免** `retentionDays` 年龄门槛（`memoryDistill.ts` 的 `isAgeExempt`）。只「转成事实」不够：手编事实的 `observedAt` 是「今天」，过不了 30 天门槛 → 不会被晋升为 active → `distill` 末尾**无条件**重写投影时把用户刚写的正文覆盖成空。真机实测：点保存 → 编辑器当场变空、`MEMORY.md` 落盘为 `""`，而 toast 还在说「已登记为长期记忆」。理由：30 天门槛是给**模型自动沉淀**降噪的（刚写下的决策不算约定），而手编是用户**显式输入**，已过「用户确认要记住」这道门。连带把 `createMemoryFact` 的缺省 `origin` 由 `'manual'` 改为 `'sediment'`——特权值不能当兜底（fail-open） |
 | 2 | legacy fact（v1 段落）是否参与冲突检测？ | **参与检测、不参与晋升**。它们是用户既有资产的真实内容，忽略会漏掉真冲突；但让它们自动替代新事实风险更高 |
 | 3 | `memory_key` 由谁提供？ | **三层兜底**：① `<memory-save key="…">` 显式提供（最优）；② 客户端对常见形态（`response.language` / `runtime.*` / `editor.*`）做规则化推断；③ 派生 key（§4.1）。**不让模型自由发明 key**（会漂移成无数个域） |
 | 4 | 用户级是否也需要 `daily/*.jsonl`？ | **需要**，同构工作区级。身份类事实的**原始证据**必须留存（否则「为什么记着我叫明明」无法解释）。落 `~/.nanowork/user-memory/<scope-id>/daily/` |
