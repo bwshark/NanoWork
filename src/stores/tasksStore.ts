@@ -145,6 +145,15 @@ export const useTasksStore = create<TasksState>()(
         if (id in get().tombstones) return null;
 
         const task: TaskConfig = {
+          /*
+           * ⚠️ **先铺开草稿**：可选字段（`runOptions` / `delivery` / `validFrom` /
+           * `validUntil`，以及将来新增的）一律照搬，再由下面几行覆盖「store 自管」的键。
+           *
+           * 曾经这里逐个列举可选字段——那是**静默丢字段**的经典写法：生效区间与结果推送
+           * 都在这里被丢掉过，而且单测全绿（表单草稿是对的、同步接线也是对的，只有中间
+           * 这一段漏了），只有真机验证才现形。
+           */
+          ...partial,
           id,
           name: partial?.name ?? '新任务',
           schedule,
@@ -152,7 +161,7 @@ export const useTasksStore = create<TasksState>()(
           agentId: partial?.agentId ?? '',
           status: partial?.status ?? 'enabled',
           createdAt: nowIso(),
-          ...(partial?.runOptions ? { runOptions: partial.runOptions } : {}),
+          // 同步元数据由 store 独占（草稿不得决定版本号与墓碑状态），故排在铺开之后
           ...metaForNew(),
         };
         set((s) => ({

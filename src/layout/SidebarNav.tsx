@@ -47,6 +47,7 @@ import {
   APP_DISPLAY_SUB,
   UNBOUND_AGENT_LABEL,
 } from "@/lib/constants";
+import { channelLabel } from "@/lib/channelLabel";
 import { conversationCount, hasConversation } from "@/lib/conversation";
 import { CRON_SESSION_ID_PREFIX } from "@/lib/sessionImport";
 import { filterTasks, isFilterDefault } from "@/lib/taskQuery";
@@ -555,23 +556,6 @@ function toChannelKind(channel?: string): ChannelKind {
   return CHANNEL_KINDS.find((k) => k === head) ?? "dingtalk";
 }
 
-/** 渠道展示名（机器人分组标题） */
-function channelDisplayName(channel: string): string {
-  switch (channel.split(".")[0]) {
-    case "feishu":
-    case "lark":
-      return "飞书";
-    case "dingtalk":
-      return "钉钉";
-    case "weixin":
-      return "微信";
-    case "wecom":
-      return "企业微信";
-    default:
-      return channel;
-  }
-}
-
 /**
  * 频道列表：数据源为 nanobot 磁盘上的 IM 频道会话（gateway 实时写入）。
  * 按机器人（渠道）分组展示，组内会话按更新时间倒序；
@@ -643,7 +627,7 @@ function ChannelSessionList() {
             <Typography
               sx={{ fontSize: 12.5, fontWeight: 600, color: "text.secondary" }}
             >
-              {channelDisplayName(g.kind)}
+              {channelLabel(g.kind)}
             </Typography>
             <Typography
               sx={{ fontSize: 11, color: "text.secondary", opacity: 0.7 }}

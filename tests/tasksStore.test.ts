@@ -63,3 +63,52 @@ describe('addTask: 带 id 幂等', () => {
     expect(merged?.createdAt).toBe(first?.createdAt); // createdAt 不被重置
   });
 });
+
+describe('addTask: 新建时必须照搬草稿的可选字段（回归）', () => {
+  /*
+   * 这条守的是**静默丢字段**：新建分支曾经逐个列举可选字段，`validFrom` /
+   * `validUntil` / `delivery` 都在那里被丢掉过。它特别难发现，因为链路两头都是对的
+   * ——表单草稿带上了、同步接线也写进了 payload，只有中间落库这一跳漏了；
+   * 单测全绿，靠真机验证才现形（见 `tasks/verify-task-delivery.mjs`）。
+   *
+   * 加新的可选字段时**不需要**改这个用例：它断言的就是「照搬」这件事本身。
+   */
+  it('生效区间 / 结果推送 / 执行配置都进落库结果', () => {
+    const task = useTasksStore.getState().addTask({
+      name: '早报',
+      validFrom: '2026-10-01T00:00:00.000Z',
+      validUntil: '2026-11-01T00:00:00.000Z',
+      delivery: { targets: [{ channel: 'wecom', chatId: 'c1' }], on: 'error' },
+      runOptions: { model: 'm1', skillIds: ['s1'], fullAccess: true },
+    });
+
+    expect(task?.validFrom).toBe('2026-10-01T00:00:00.000Z');
+    expect(task?.validUntil).toBe('2026-11-01T00:00:00.000Z');
+    expect(task?.delivery).toEqual({
+      targets: [{ channel: 'wecom', chatId: 'c1' }],
+      on: 'error',
+    });
+    expect(task?.runOptions).toEqual({ model: 'm1', skillIds: ['s1'], fullAccess: true });
+
+    // 落库那份也要对，不只是返回值
+    const stored = useTasksStore.getState().tasks[0];
+    expect(stored?.delivery).toEqual({
+      targets: [{ channel: 'wecom', chatId: 'c1' }],
+      on: 'error',
+    });
+    expect(stored?.validFrom).toBe('2026-10-01T00:00:00.000Z');
+  });
+
+  it('同步元数据仍由 store 独占（草稿给的版本号与墓碑不生效）', () => {
+    const task = useTasksStore.getState().addTask({
+      name: '早报',
+      rev: 99,
+      updatedBy: '伪造设备',
+      deletedAt: '2026-01-01T00:00:00.000Z',
+    });
+
+    expect(task?.rev).toBe(1);
+    expect(task?.updatedBy).not.toBe('伪造设备');
+    expect(task?.deletedAt).toBeNull();
+  });
+});

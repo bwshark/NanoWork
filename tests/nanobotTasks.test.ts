@@ -185,3 +185,123 @@ describe('FR-5.4 有效期窗口：引擎没有窗口概念，只能由前端算
     expect('validity' in job.payload.originMetadata).toBe(false);
   });
 });
+
+// ───────────────────────── FR-5.6：结果推送（delivery） ─────────────────────────
+
+describe('FR-5.6 delivery：下发给引擎的投递配置', () => {
+  const every60 = { kind: 'interval', minutes: 60 } as const;
+
+  it('有目标时原样写进 payload.delivery', () => {
+    const job = toNanobotJob(
+      task(every60, { delivery: { targets: [{ channel: 'wecom', chatId: 'c1' }], on: 'complete' } }),
+    );
+    expect(job.payload.delivery).toEqual({
+      targets: [{ channel: 'wecom', chatId: 'c1' }],
+      on: 'complete',
+    });
+  });
+
+  it('没配置时不写键 —— payload 保持干净，幂等合并也不会在「有键但空」「没键」之间抖', () => {
+    const job = toNanobotJob(task(every60));
+    expect('delivery' in job.payload).toBe(false);
+  });
+
+  it('空目标等同于没配置（不写键）', () => {
+    const job = toNanobotJob(task(every60, { delivery: { targets: [], on: 'complete' } }));
+    expect('delivery' in job.payload).toBe(false);
+  });
+
+  it('⭐ delivery 不得碰 legacy 投递字段 —— 它们非空会让任务被引擎判为「未绑定会话」并禁用', () => {
+    const job = toNanobotJob(
+      task(every60, { delivery: { targets: [{ channel: 'wecom', chatId: 'c1' }], on: 'error' } }),
+    );
+
+    expect(job.payload.deliver).toBe(false);
+    expect(job.payload.channel).toBeNull();
+    expect(job.payload.to).toBeNull();
+    expect(job.payload.channelMeta).toEqual({});
+    // 任务仍必须绑在自己那个 api:cron-{id} 会话上（执行 / 权限 / 留痕都靠它）
+    expect(job.payload.sessionKey).toBe('api:cron-t1');
+    expect(job.payload.originChannel).toBe('api');
+    expect(job.payload.originChatId).toBe('cron-t1');
+  });
+
+  it('「仅失败时推送」这个档位原样透传', () => {
+    const job = toNanobotJob(
+      task(every60, {
+        delivery: { targets: [{ channel: 'feishu.feishu', chatId: 'ou_1' }], on: 'error' },
+      }),
+    );
+    expect(job.payload.delivery?.on).toBe('error');
+  });
+
+  it('多目标全部下发，且保持用户添加的顺序', () => {
+    const job = toNanobotJob(
+      task(every60, {
+        delivery: {
+          targets: [
+            { channel: 'wecom', chatId: 'c1' },
+            { channel: 'feishu', chatId: 'c2' },
+          ],
+          on: 'complete',
+        },
+      }),
+    );
+    expect(job.payload.delivery?.targets.map((t) => `${t.channel}:${t.chatId}`)).toEqual([
+      'wecom:c1',
+      'feishu:c2',
+    ]);
+  });
+
+  it('同步链路的实际产物（jobs.json 片段）里真的带着 delivery', () => {
+    const fragment = buildNanobotJobsFragment([
+      task(every60, { delivery: { targets: [{ channel: 'wecom', chatId: 'c1' }], on: 'error' } }),
+    ]);
+    const parsed = JSON.parse(fragment) as {
+      jobs: Array<{ payload: { delivery?: unknown } }>;
+    };
+    expect(parsed.jobs[0].payload.delivery).toEqual({
+      targets: [{ channel: 'wecom', chatId: 'c1' }],
+      on: 'error',
+    });
+  });
+});
+
+// ───────────────────────── FR-5.8：任务级工作目录 ─────────────────────────
+
+describe('FR-5.8 工作目录：写进 originMetadata.workspace_scope', () => {
+  const every60 = { kind: 'interval', minutes: 60 } as const;
+
+  it('绑定了目录 → 落成 workspace_scope.project_path', () => {
+    const job = toNanobotJob(task(every60, { workdir: 'D:\\proj\\alpha' }));
+    expect(job.payload.originMetadata.workspace_scope).toEqual({
+      project_path: 'D:\\proj\\alpha',
+    });
+  });
+
+  it('没绑定 → 不下发该键（让引擎走会话/默认作用域，而不是声明一个空作用域）', () => {
+    const job = toNanobotJob(task(every60));
+    expect('workspace_scope' in job.payload.originMetadata).toBe(false);
+  });
+
+  it('⭐ 任务的 origin 渠道必须保持 `api`：引擎只在 scoped_channels 里解析工作区作用域', () => {
+    // 改掉这一条，任务级工作目录会被**静默忽略**（不报错、回落默认目录）。
+    // 引擎侧对应 `WorkspaceScopeResolver.scoped_channels = {websocket, api}`，
+    // 并有否定用例钉住：nanobot/tests/cron/test_bound_runner_workspace.py
+    const job = toNanobotJob(task(every60, { workdir: '/home/me/proj' }));
+    expect(job.payload.originChannel).toBe('api');
+    expect(job.payload.deliver).toBe(false);
+    expect(job.payload.channel).toBeNull();
+  });
+
+  it('工作目录与结果推送可以同时配置（前者管在哪跑、后者管结果发给谁）', () => {
+    const job = toNanobotJob(
+      task(every60, {
+        workdir: '/home/me/proj',
+        delivery: { targets: [{ channel: 'wecom', chatId: 'c1' }], on: 'complete' },
+      }),
+    );
+    expect(job.payload.originMetadata.workspace_scope).toEqual({ project_path: '/home/me/proj' });
+    expect(job.payload.delivery?.targets).toEqual([{ channel: 'wecom', chatId: 'c1' }]);
+  });
+});

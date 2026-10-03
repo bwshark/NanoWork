@@ -308,6 +308,102 @@
 > **rrule 的 `tz` 曾在降级时被丢掉**（会让任务在错误时区触发）。
 > **M4 剩余**：FR-5.3（运行详情页 / 成功率 / 失败分类，🟡）、FR-5.6（结果回推 outbox，⬜ **需引擎侧配合**）、
 > FR-5.8（任务级 cwds，🟡）、FR-5.5 补（自然语言 → 调度推荐）。
+>
+> **2026-10-03 开 M4 第二片：FR-5.3（执行留痕的统计与失败分类）已收口**：
+> 新增 `src/lib/taskRunStats.ts`（纯函数）：
+> ① `classifyRunFailure` 把 `TaskRunRecord.error` 归到 **7 类 + `unknown`**。判据**取自真实文案**
+> ——引擎 `nanobot/cron/service.py` 写入的两条固定文案（`missing bound session delivery context` /
+> `missing channel/to`）与 `str(e)`，客户端的中文提示（`已中断` / `响应超时：…`）都进了用例。
+> 两条纪律：**永不吞原文**（分类只用于分组，原文照原样展示）、**fail-open 到「未知」**（认不出来
+> 不许猜——猜错类别比说「未知」更坏，会把人引到错误的排查方向）。
+> ② `summarizeRuns` / `summarizeRunsByTask`：成功率（**进行中的运行不计入分母**，因为「刚点了一下」
+> 不是任务质量信号）、平均耗时、失败分布（含样例原文）；无样本显示 `—` 而非 `0%`（两者是不同的意思）。
+> ③ 接线：运行记录页加**统计条**、每条失败记录加分类 Chip（原文保留）、任务卡片加**成功率**，
+> 并顺带把 FR-5.4 的有效期窗口显示出来（此前表单能填、列表却看不到，等于只存在于数据里）。
+> 全部指标**从 `runs` 派生，不新增存储字段**（再存一份必然过期，且会出现同一数字两处不一致）。
+> 测试：`tests/taskRunStats.test.ts` **16 例**；真机脚本 `tasks/verify-task-runs-stats.mjs`（向
+> `nanowork.tasks` 播种 4 次运行）**11/11 全绿**——注意播种值必须**双层 JSON**（`createJSONStorage`
+> 一次 + Web 适配层一次），少一层会被读成 null。
+> ⚠️ 真机脚本第一版有 4 项失败全是**定位器写错**（`text=运行次数` 向上找两层只取到一格，
+> 拿不到同级的失败 chip 行）——**断言改基于整页文本 + chip 标签**后就绿了。这类「功能好、
+> 判据错」的假红同样浪费时间，值得记。
+> **M4 剩余**：FR-5.6（结果回推 outbox，⬜ **需引擎侧配合**）、FR-5.8（任务级 cwds，🟡）、
+> FR-5.5 补（自然语言 → 调度推荐）。
+>
+> **2026-10-03 FR-5.6 可行性勘查（只读引擎，未改代码，路线待拍板）**：
+> **PRD §15.3 的 `payload.deliver` 前提是错的**——引擎 `types.py:55` 明写 `deliver`/`channel`/`to`
+> 是 *legacy delivery fields（pre-session-bound）*，`service.py:_normalize_agent_turn_job()` 加载时会把
+> 它们**迁移成 session-bound 并清空**；只有 legacy 上下文而缺 `channel`/`to` 的 job 会被**直接禁用**
+> 并写 `_UNBOUND_AGENT_JOB_REASON`（正是 FR-5.3 分类的「任务未绑定会话」）。**这条路已死。**
+> 引擎真实投递**只有一条**：`bound_runner` 按 `origin_delivery_context(job)` 取
+> `(origin_channel, origin_chat_id)` 路由，出站由 `ChannelManager._dispatch_outbound` 按渠道名取实例后
+> `_send_with_retry`（指数退避）发出；目标渠道未启用时只记 `Unknown channel` 警告、**不抛错**。
+> 引擎对外 API（`create_app` 注册的 6 条）**没有**「发消息到渠道」的端点。两条路线：
+> **A 纯客户端**——把任务 `sessionKey`/`originChannel`/`originChatId` 指向**真实 IM 会话**
+> （客户端已有 `platform.listNanobotChannelSessions()`，key 形如 `wecom:xxx`，用户从中挑目标）；
+> 引擎原生推送 + 原生重试，**关掉应用照推**。代价：任务**执行会话即该 IM 会话**，失去独立
+> `api:cron-{id}` 留痕（`getCronSession` 读不到，退化为 `run.response` 兜底），且 IM 后续消息与之共享上下文。
+> **C `[LOCAL PATCH]`**——cron payload 增 `delivery` 配置 + 投递 outbox，保留独立执行会话、完成后**另发**
+> 一份到渠道，失败进 outbox（对齐 WorkBuddy `automation_delivery_outbox`）。代价：动 `nanobot/`、需重启网关。
+> **补充勘查后确立推荐：走 C（可分期）**。原因是查出路线 A 有一处硬伤——
+> `security/workspace_access.py:158` 的 `scoped_channels = {"websocket","api"}`（**本身即一处 `[LOCAL PATCH]`**）
+> 决定了：`for_turn` 只在 channel 属于该集合时才解析 `originMetadata` 里的工作区/权限 scope，否则
+> **回落默认值**。而 `bound_runner` 构造 InboundMessage 时 **`channel` 一个值同时承担「会话键归属」与
+> 「出站路由」两件事**，A 把 channel 换成 `wecom` 就会**静默丢掉任务的工作区/权限配置** →
+> **FR-5.8（任务级 cwds）在 A 下无法实现**，想修还得再加一处 `[LOCAL PATCH]` 扩 `scoped_channels`，
+> 「零引擎改动」的卖点随之消失。此外 A 只能**单目标 + 无条件推**，表达不了 PRD §15.2 的
+> `TaskDelivery.channels[]` 与 `on: complete|error|milestone`。
+> 而 C 可写成「执行会话仍绑 `api:cron-{id}`（工作区/权限/留痕零回归）+ 只加一个**独立的投递目标字段**」，
+> 即 **C = A 的意图 + 不让渠道角色重叠**；一旦要求 channel 保持 `api`，C 严格优于 A。
+> C 第一期很小且不需新持久化：payload 加 `delivery`，`run_bound_cron_job` 写完 run record 后按条件
+> `bus.publish_outbound()`，出站复用 `_send_with_retry` 的指数退避（等价覆盖第一期 outbox 需求）。
+> 两条都**依赖目标渠道已在引擎启用**。结论已就地写入 PRD §15.3，FR-5.6 状态维持 ⬜。
+>
+> **2026-10-03 FR-5.6（结果回推）按路线 C 落地；真机验证连带抓出三处接线缺陷**：
+> **引擎四处 `[LOCAL PATCH]`**：`CronPayload.delivery`（新增 `CronDelivery`/`CronDeliveryTarget`，与
+> legacy 的 `deliver`/`channel`/`to` 完全独立）、`run_bound_cron_job(..., publish_outbound=)` 跑完按
+> `on` 另发一份、`gateway_runtime` 传 `bus.publish_outbound`（白拿 `ChannelManager._send_with_retry`
+> 的指数退避）、以及 ⭐ **`service.py::_save_store` 必须显式列出 `delivery`** —— 那是**逐字段手写
+> 序列化**，漏一个键就是引擎每次落盘**静默丢弃**（已按纪律做变异验证：去掉那一行 → 往返用例变红，
+> 且红在正确断言上）。另修 `CronJob.from_dict` 的 payload 归一（action 路径进来的裸 dict 会让投递
+> 代码拿到没有 `.targets` 的对象，而报错发生在一次已跑完的任务之后）。
+> **客户端**：`TaskConfig.delivery` + `toNanobotJob` 写 `payload.delivery`（**缺省不写键**，免得与
+> 主进程幂等合并在两态之间抖）+ `src/lib/taskDelivery.ts`（会话 key ⇄ 投递目标的**唯一**映射：
+> **第一个**冒号是分界、`unified:default` 给不出目标）+ `src/lib/channelLabel.ts` 収拢渠道展示名
+> （原先侧边栏另有一份同义实现，两处必然漂移）+ `DeliveryField` 表单区 + 卡片元信息行摘要。
+> **真机脚本 `tasks/verify-task-delivery.mjs`（两趟：纯 Web + electronAPI 桥桩）抓出三处**：
+> ① `tasksStore.addTask` 的**新建分支逐个列举可选字段** → `validFrom` / `validUntil` / `delivery`
+> **全部被静默丢弃**（表单草稿是对的、同步接线也是对的，只有中间**落库这一跳**漏了 → 单测全绿）；
+> ② 生效区间曾被**编进 cron**（`每天 09:00` + 开始日期 → `0 9 15 10 *` = 每年才跑一次）；
+> ③ 提交时省略键 → `updateTask` 是浅合并，「删掉最后一个推送目标」永远删不掉（改成**显式带 `undefined`**）。
+> 三处都已修并配可证伪用例（变异验证过会红）。**未做**：`milestone` 档位、持久化 outbox；
+> 投递**刻意不写入目标会话历史**（push 不是「在那次对话里说了一句」）。
+> ⚠️ **更正一条先前写错的判断**：勘查时把「关掉应用照推」列为路线 A 的优势 —— **不成立**。
+> 引擎网关是应用的**子进程**（表单里那句「请勿关闭客户端」就是这件事），应用退出引擎即停，
+> 定时任务与投递都不会发生；这点 A / C 完全一样。
+>
+> **2026-10-03 FR-5.8（任务级工作目录）已落 —— 纯客户端，引擎零改动**：
+> 这条链**不需要新的引擎字段**：`originMetadata` 是引擎既有的透传区，`bound_runner` 会把它
+> 原样搬成 cron turn 的 message metadata，而引擎在 turn 边界用 `WorkspaceScopeResolver.for_turn`
+> 读的正是 `workspace_scope`（`WORKSPACE_SCOPE_METADATA_KEY`）。客户端只加一句
+> `...(task.workdir ? { workspace_scope: { project_path: task.workdir } } : {})`。
+> ⚠️ **顺带钉住一条硬约束**：`for_turn` 只在 `channel ∈ {websocket, api}` 时解析作用域，
+> 否则**静默回落默认工作空间**。任务的 origin 渠道正是 `api` ⇒ 链成立；反过来，
+> **「任务级工作目录」与「让任务跑在外部 IM 会话里」互斥** —— 这正是 FR-5.6 另开 `delivery`
+> 字段、而不去改 origin 渠道的直接原因。否定用例已进代码：
+> `nanobot/tests/cron/test_bound_runner_workspace.py`（channel 换成 `wecom` → 工作目录被丢掉）。
+> 客户端零散件：`WorkdirField`（目录选择器与聊天同一入口）、`isAbsoluteWorkspacePath`
+> 在**录入侧**拦相对路径（引擎会静默吞掉那个错并回落默认目录）、`describeTaskWorkdir`
+> 负责卡片展示（**绑到默认目录 == 不绑定**，判据复用 `isSameWorkspacePath`）。
+> 真机脚本 `tasks/verify-task-workdir.mjs`（**13/13 全绿**）验的是「表单填路径 → 交给主进程的
+> jobs.json 片段里 `originMetadata.workspace_scope.project_path` 正确，且 `originChannel`
+> 仍是 `api`」。⚠️ 写这个脚本又踩两条：桥桩漏了 `loadUserSkills`（落到 Proxy 的
+> `async () => null` 兜底 → `skills.map` 抛错），以及**注释里写反引号会把 BRIDGE 模板串提前
+> 闭合**（同一个坑第二次踩，已在脚本里就地注释）。
+> ⚠️ **核实到一处既有缺口（非本次引入）**：任务的「模型 / 技能 / 权限」（`runOptions`）
+> 在引擎里**没有任何消费点**（`fullAccess` / `skillIds` 全仓零匹配）→ 那是三个**死配置**，
+> 任务实际用网关默认模型与默认工具策略跑。载体已现成（同一个 `workspace_scope` 支持
+> `access_mode` / `session_mode` / `agent_id` / `tool_allow` / `tool_deny`），但**属于独立一批，未排期**。
 ---
 
 ## 十、检查清单（提交前自检）

@@ -55,6 +55,45 @@ export interface TaskRunOptions {
   fullAccess?: boolean;
 }
 
+/**
+ * 结果推送目标（FR-5.6）：某个 IM 渠道里的一个**具体会话**。
+ *
+ * ⚠️ 光有渠道名不够——引擎投递必须知道「发到哪个会话」，所以 `chatId` 是必需的。
+ * 可选目标来自 `platform.nanobotListChannelSessions()`（引擎侧真实存在过的渠道会话），
+ * 也就是「用户与机器人在该渠道里真的说过话」的那些会话；凭空编一个 chatId 推不出去。
+ */
+export interface TaskDeliveryTarget {
+  /** 引擎侧渠道名（`wecom` / `weixin` / `feishu` / `dingtalk` …），会话 key 冒号**前**段 */
+  channel: string;
+  /** 目标会话 id，会话 key 冒号**后**段 */
+  chatId: string;
+}
+
+/**
+ * 结果推送配置（FR-5.6）。
+ *
+ * 与「任务执行会话」**刻意分离**：任务仍在自己那个 `api:cron-{id}` 会话里执行
+ * （工作区/权限/留痕一律不变），跑完再把结果**另发**一份到这些目标。
+ *
+ * ⚠️ 别把它接到引擎 `payload` 的 `deliver` / `channel` / `to` 上——那三个是
+ * **session-bound 之前的遗留字段**：引擎加载时会把它们迁移掉，且**只要非空**
+ * 就把任务判成「未绑定会话」并禁用（见 `nanobot/nanobot/cron/session_turns.py`
+ * 的 `is_bound_cron_job`）。本配置走引擎新增的 `payload.delivery`（`[LOCAL PATCH]`）。
+ */
+export interface TaskDelivery {
+  targets: TaskDeliveryTarget[];
+  /**
+   * 推送时机。
+   * - `complete`：每次执行结束都推（成功推结果、失败推失败原因）
+   * - `error`：仅失败时推
+   *
+   * ⚠️ PRD §15.2 目标模型里的 `milestone`（每个关键节点）**未实现**：它需要在
+   * 引擎侧订阅进度事件，而第一期只挂在「执行结束」这一个点上。这里刻意**不收**
+   * 该取值——声明一个不生效的档位，只会让用户以为选了就会生效。
+   */
+  on: 'complete' | 'error';
+}
+
 /** 自动化任务配置 */
 export interface TaskConfig extends SyncMetaFields {
   id: string;
@@ -74,8 +113,26 @@ export interface TaskConfig extends SyncMetaFields {
   validFrom?: string;
   /** 有效期窗口上界（ISO，**含**）。`RRULE` 里的 `UNTIL=` 会落到这里 */
   validUntil?: string;
+  /**
+   * 任务级工作目录（FR-5.8）。留空 = 跟随默认工作空间。
+   *
+   * 实现方式：写进 job 的 `originMetadata.workspace_scope.project_path`（见 `toNanobotJob`），
+   * 由引擎在**每个 turn 的会话作用域**里解析生效。
+   *
+   * ⚠️ 这条链路成立的前提是任务的 origin 渠道保持 `api`：引擎的
+   * `WorkspaceScopeResolver.scoped_channels` 只认 `{websocket, api}`，渠道不在其中时
+   * `for_turn` 会**直接回落默认工作空间**且不报错。所以「让任务跑在外部 IM 会话里」
+   * （拿 IM 渠道名当 origin channel）与「任务级工作目录」是**互斥**的 —— 这也正是结果
+   * 回推最终另开 `delivery` 字段、而不是改 origin 渠道的原因（见 §15.3）。
+   *
+   * 必须给**绝对路径**：引擎对相对路径抛错，而那个错误会被静默吞掉并回落默认值，
+   * 用户只会看到「配了目录却没生效」，所以录入侧（表单）就拦住。
+   */
+  workdir?: string;
   status: TaskStatus;
   createdAt: string;
+  /** 结果推送（FR-5.6）；缺省 = 不推送（任务结果只留在自己的执行留痕里） */
+  delivery?: TaskDelivery;
   /** 执行配置（模型/技能/权限），同步时落入 nanobot payload.originMetadata */
   runOptions?: TaskRunOptions;
 }

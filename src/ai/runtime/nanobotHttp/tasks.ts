@@ -51,6 +51,16 @@ export interface NanobotJobState {
   nextRunAtMs?: number | null;
 }
 
+/**
+ * nanobot CronDelivery 存储形态（FR-5.6，引擎侧 `[LOCAL PATCH]` 新增字段）。
+ *
+ * `chatId` 是必需的：投递必须知道「发到哪个会话」，光有渠道名推不出去。
+ */
+export interface NanobotDelivery {
+  targets: Array<{ channel: string; chatId: string }>;
+  on: 'complete' | 'error';
+}
+
 /** nanobot CronJob 存储形态（camelCase，与 CronService._save_store 对齐） */
 export interface NanobotJob {
   id: string;
@@ -71,6 +81,12 @@ export interface NanobotJob {
     originChatId: string;
     /** 透传元数据：agentId / runOptions / managedBy 托管标记 */
     originMetadata: Record<string, unknown>;
+    /**
+     * 结果推送（FR-5.6）。⚠️ 与上面那三个 legacy 字段**无关**——任务必须保持
+     * 「绑定了自己的 api:cron-{id} 会话」这个形态，推送走本字段另发一份，
+     * 借用 legacy 字段会让 `is_bound_cron_job` 判 False、任务被禁用。
+     */
+    delivery?: NanobotDelivery;
   };
   state: NanobotJobState;
   createdAtMs: number;
@@ -225,7 +241,27 @@ export function toNanobotJob(task: TaskConfig, nowMs: number = Date.now()): Nano
     ...(task.validFrom || task.validUntil
       ? { validity: { ...(task.validFrom ? { from: task.validFrom } : {}), ...(task.validUntil ? { until: task.validUntil } : {}) } }
       : {}),
+    /*
+     * 任务级工作目录（FR-5.8）：写进 `workspace_scope`。引擎是在**每个 turn 的会话作用域**
+     * 里读它的——`WorkspaceScopeResolver.for_turn` 先看 message metadata 的
+     * `workspace_scope`（`WORKSPACE_SCOPE_METADATA_KEY`），而 cron 的 `originMetadata`
+     * 会被 `bound_runner` 原样搬成该 turn 的 message metadata，所以这条链路**不需要
+     * 引擎侧新增字段**（这是 FR-5.8 能纯客户端落地的原因）。
+     *
+     * ⚠️ 引擎只在 `channel ∈ {websocket, api}` 时解析它，其余渠道**直接回落默认工作空间**
+     * 且不报错。任务的 origin channel 正是 `api`——别为了别的目的把它改成 IM 渠道名。
+     */
+    ...(task.workdir ? { workspace_scope: { project_path: task.workdir } } : {}),
   };
+  // 结果推送（FR-5.6）：只在真的有目标时才下发。空配置**不写键**——保持 payload
+  // 干净，也让主进程的幂等合并不至于在「有键但空」与「没键」两态之间来回抖。
+  const delivery =
+    task.delivery && task.delivery.targets.length > 0
+      ? {
+          targets: task.delivery.targets.map((t) => ({ channel: t.channel, chatId: t.chatId })),
+          on: task.delivery.on,
+        }
+      : undefined;
   return {
     id: task.id,
     name: task.name,
@@ -242,6 +278,7 @@ export function toNanobotJob(task: TaskConfig, nowMs: number = Date.now()): Nano
       originChannel: CRON_ORIGIN_CHANNEL,
       originChatId: `cron-${task.id}`,
       originMetadata: meta,
+      ...(delivery ? { delivery } : {}),
     },
     state: { nextRunAtMs: computeNextRunMs(task.schedule, nowMs, effectiveValidityWindow(task)) },
     createdAtMs: Date.parse(task.createdAt) || nowMs,

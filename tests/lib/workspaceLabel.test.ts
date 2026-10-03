@@ -13,6 +13,7 @@ import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_WORKSPACE_LABEL,
   dirBasename,
+  isAbsoluteWorkspacePath,
   isSameWorkspacePath,
   resolveWorkspaceLabel,
 } from '@/lib/workspaceLabel';
@@ -80,5 +81,35 @@ describe('resolveWorkspaceLabel', () => {
   it('不知道默认路径时退化为旧行为（只认别名与末级目录名）', () => {
     // 存储信息未取到（Web 端 / 启动第一帧）时走这条，不编造「默认工作空间」这个名字
     expect(resolveWorkspaceLabel(DEFAULT_DIR, undefined)).toBe('NanoWork');
+  });
+});
+
+describe('isAbsoluteWorkspacePath：任务级工作目录的录入判据（FR-5.8）', () => {
+  it('Windows 盘符与 UNC 都算绝对路径', () => {
+    expect(isAbsoluteWorkspacePath('C:\\proj\\alpha')).toBe(true);
+    expect(isAbsoluteWorkspacePath('c:/proj/alpha')).toBe(true);
+    expect(isAbsoluteWorkspacePath('\\\\server\\share')).toBe(true);
+    expect(isAbsoluteWorkspacePath('//server/share')).toBe(true);
+  });
+
+  it('POSIX 根路径算绝对路径', () => {
+    expect(isAbsoluteWorkspacePath('/home/me/proj')).toBe(true);
+  });
+
+  it('相对路径一律不算（引擎对它会静默回落默认目录，所以录入侧必须拦住）', () => {
+    expect(isAbsoluteWorkspacePath('proj/alpha')).toBe(false);
+    expect(isAbsoluteWorkspacePath('./proj')).toBe(false);
+    expect(isAbsoluteWorkspacePath('..\\proj')).toBe(false);
+    // Windows 特有的「盘符相对路径」：`C:proj` 的基准是当前目录，不是盘根
+    expect(isAbsoluteWorkspacePath('C:proj')).toBe(false);
+  });
+
+  it('空串与纯空白不算（空 = 不绑定，不是一个路径）', () => {
+    expect(isAbsoluteWorkspacePath('')).toBe(false);
+    expect(isAbsoluteWorkspacePath('   ')).toBe(false);
+  });
+
+  it('首尾空白被忽略（从别处复制路径常带一个尾空格）', () => {
+    expect(isAbsoluteWorkspacePath('  /home/me/proj  ')).toBe(true);
   });
 });

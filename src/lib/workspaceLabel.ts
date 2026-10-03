@@ -48,6 +48,29 @@ export function isSameWorkspacePath(
 }
 
 /**
+ * 是否为绝对路径。
+ *
+ * 用途：任务级工作目录（FR-5.8）必须给绝对路径 —— 引擎侧
+ * `validate_workspace_scope_payload` 对相对路径抛 `WorkspaceScopeError`，而
+ * `workspace_scope_from_metadata` 会**静默吞掉它并回落默认工作空间**。用户看到的
+ * 只是「配了目录但没生效」，无从排查。所以在录入侧就拦住。
+ *
+ * 只做**够用的形状判断**：盘符（`C:\` / `C:/`）、UNC（`\\server\share` / `//server/share`）、
+ * POSIX 根（`/`）。**不查存在性** —— 「必须是一个已存在的目录」由引擎判定，客户端
+ * 无法可靠代劳（尤其是 Web 端连本地文件系统都看不到）。
+ */
+export function isAbsoluteWorkspacePath(p: string): boolean {
+  const s = p.trim();
+  if (!s) return false;
+  return (
+    /^[a-zA-Z]:[\\/]/.test(s) ||
+    s.startsWith('\\\\') ||
+    s.startsWith('//') ||
+    s.startsWith('/')
+  );
+}
+
+/**
  * 解析工作空间展示名：默认工作空间 > 用户别名 > 路径末级目录名。
  *
  * **默认工作空间优先于别名**：别名是给「用户指定的某个目录」起的名字，而默认工作

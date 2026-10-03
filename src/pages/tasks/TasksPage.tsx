@@ -43,7 +43,19 @@ import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { TaskFormDialog } from "@/components/tasks/TaskFormDialog";
 import { MarkdownView } from "@/components/MarkdownView";
 import { platform } from "@/platform";
-import { describeSchedule, nextCronRunMs } from "@/lib/cron";
+import { describeSchedule, describeValidity, nextCronRunMs } from "@/lib/cron";
+import {
+  RUN_FAILURE_LABELS,
+  classifyRunFailure,
+  formatSuccessRate,
+  summarizeRuns,
+  summarizeRunsByTask,
+  type RunStats,
+} from "@/lib/taskRunStats";
+import { describeDelivery } from "@/lib/taskDelivery";
+import { describeTaskWorkdir } from "@/lib/taskWorkdir";
+import { useDefaultWorkspacePath } from "@/stores/storageInfoStore";
+import { useSettingsStore } from "@/stores/settingsStore";
 import { toast } from "@/components/Toast";
 import { ROUTES } from "@/lib/constants";
 import type { TaskConfig, TaskRunRecord } from "@/types";
@@ -103,6 +115,9 @@ export function TasksPage() {
   const openCronSession = useTasksStore((s) => s.openCronSession);
   const navigate = useNavigate();
   const agents = useAgentsStore((s) => s.agents);
+  // 工作目录展示：默认路径用于「绑到默认目录 == 未绑定」的判定，别名用于显示名字
+  const defaultWorkspacePath = useDefaultWorkspacePath();
+  const workspaceAliases = useSettingsStore((s) => s.settings.workspaceAliases);
   const agentMap = useMemo(
     () => Object.fromEntries(agents.map((a) => [a.id, a.name])),
     [agents],
@@ -149,6 +164,16 @@ export function TasksPage() {
     }
     return m;
   }, [runs]);
+
+  /**
+   * 成功率与失败分布（FR-5.3）。
+   *
+   * 与 `lastRunByTask` 同源，都从 `runs` 派生——**不新增存储字段**：`TaskRunRecord`
+   * 已经带了判定所需的全部信息（status / durationMs / error），再存一份统计既会过期，
+   * 又会出现「同一个数两处不一致」。
+   */
+  const runStats = useMemo(() => summarizeRuns(runs), [runs]);
+  const statsByTask = useMemo(() => summarizeRunsByTask(runs), [runs]);
 
   /** 测试运行：真实执行并跳转会话查看过程 */
   const handleRun = async (t: TaskConfig) => {
@@ -469,6 +494,34 @@ export function TasksPage() {
                     >
                       自动化任务 · {describeSchedule(t.schedule)} · 目标：
                       {agentMap[t.agentId] ?? "未指定"}
+                      {/* 工作目录（FR-5.8）：绑到默认目录与不绑定是同一个意思，那时整段不显示 */}
+                      {(() => {
+                        const wd = describeTaskWorkdir(
+                          t.workdir,
+                          defaultWorkspacePath,
+                          workspaceAliases,
+                        );
+                        return wd ? ` · ${wd}` : "";
+                      })()}
+                      {/* 有效期窗口（FR-5.4）：填了就必须看得见，否则「只在某区间生效」
+                          会变成一条只存在于数据里的设置 */}
+                      {describeValidity(t.validFrom, t.validUntil)
+                        ? ` · ${describeValidity(t.validFrom, t.validUntil)}`
+                        : ""}
+                      {/* 成功率（FR-5.3）：只在真跑过之后显示——没跑过时写「0%」是误导 */}
+                      {(() => {
+                        const st = statsByTask.get(t.id);
+                        return st && st.total > 0
+                          ? ` · 成功率 ${formatSuccessRate(st.successRate)}`
+                          : "";
+                      })()}
+                      {/* 结果推送（FR-5.6）：配了推送就得看得见，否则用户无从确认结果会
+                          不会发出去。刻意排在 prompt **之前**——prompt 往往很长，落它后面的
+                          信息会被这一行的 noWrap 裁掉 */}
+                      {(() => {
+                        const d = describeDelivery(t.delivery);
+                        return d ? ` · ${d}` : "";
+                      })()}
                       {t.prompt ? ` · ${t.prompt}` : ""}
                     </Typography>
                   </Box>
@@ -609,22 +662,25 @@ export function TasksPage() {
       )}
 
       {tab === "runs" && (
-        <RunRecordList
-          runs={runs}
-          query={query}
-          onOpenSession={(sid) => {
-            useSessionsStore.getState().selectSession(sid);
-            navigate(ROUTES.chat);
-          }}
-          onOpenCronSession={async (taskId, title) => {
-            const opened = await openCronSession(taskId, title);
-            if (!opened) {
-              toast.error("该任务暂无执行会话（可能尚未实际执行）");
-              return;
-            }
-            navigate(ROUTES.chat);
-          }}
-        />
+        <>
+          <RunStatsBar stats={runStats} />
+          <RunRecordList
+            runs={runs}
+            query={query}
+            onOpenSession={(sid) => {
+              useSessionsStore.getState().selectSession(sid);
+              navigate(ROUTES.chat);
+            }}
+            onOpenCronSession={async (taskId, title) => {
+              const opened = await openCronSession(taskId, title);
+              if (!opened) {
+                toast.error("该任务暂无执行会话（可能尚未实际执行）");
+                return;
+              }
+              navigate(ROUTES.chat);
+            }}
+          />
+        </>
       )}
 
       <TaskFormDialog
@@ -875,6 +931,72 @@ interface RunRecordListProps {
 }
 
 /**
+ * 运行统计条（FR-5.3）：总次数 / 成功率 / 平均耗时 / 失败原因分布。
+ *
+ * 两个刻意的取舍：
+ * - **无样本显示「—」而不是 0%**：0% 是「跑了全失败」，`—` 是「还没跑过」，
+ *   把后者说成前者会让用户以为任务坏了；
+ * - 失败原因只列**分类 + 条数**，样例原文收在 `title` 里：分类是给人扫的，
+ *   原文是给人看的，挤在一行会把两者都变得不可读。
+ */
+function RunStatsBar({ stats }: { stats: RunStats }) {
+  if (stats.total === 0) return null;
+  const cells: Array<{ label: string; value: string; tone?: string }> = [
+    { label: "运行次数", value: String(stats.total) },
+    {
+      label: "成功率",
+      value: formatSuccessRate(stats.successRate),
+      tone: stats.successRate === null ? undefined : stats.successRate >= 0.8 ? "success.main" : "warning.main",
+    },
+    { label: "平均耗时", value: formatDuration(stats.avgDurationMs ?? undefined) || "—" },
+    {
+      label: "失败",
+      value: String(stats.error),
+      tone: stats.error > 0 ? "error.main" : undefined,
+    },
+  ];
+
+  return (
+    <Box
+      sx={{
+        mb: 2,
+        p: 2,
+        bgcolor: "background.paper",
+        borderRadius: 3,
+        border: "1px solid",
+        borderColor: "divider",
+      }}
+    >
+      <Box sx={{ display: "flex", gap: 3, flexWrap: "wrap" }}>
+        {cells.map((c) => (
+          <Box key={c.label} sx={{ minWidth: 72 }}>
+            <Typography sx={{ fontSize: 12, color: "text.secondary" }}>{c.label}</Typography>
+            <Typography sx={{ fontSize: 18, fontWeight: 600, color: c.tone }}>
+              {c.value}
+            </Typography>
+          </Box>
+        ))}
+      </Box>
+      {stats.failures.length > 0 && (
+        <Box sx={{ mt: 1.5, display: "flex", gap: 0.75, flexWrap: "wrap", alignItems: "center" }}>
+          <Typography sx={{ fontSize: 12, color: "text.secondary" }}>失败原因：</Typography>
+          {stats.failures.map((f) => (
+            <Chip
+              key={f.kind}
+              size="small"
+              variant="outlined"
+              // 样例原文挂 title：分类负责「一眼扫过去」，原文负责「点开看真相」
+              title={f.sample}
+              label={`${f.label} ${f.count}`}
+            />
+          ))}
+        </Box>
+      )}
+    </Box>
+  );
+}
+
+/**
  * 运行记录列表：按日期分组（今天/昨天/日期），条目可展开查看
  * 触发方式、耗时、失败原因，并可跳转关联会话查看完整执行过程。
  */
@@ -1017,10 +1139,19 @@ function RunRecordList({
                           : ""}
                         {r.finishedAt ? ` · 结束 ${hhmm(r.finishedAt)}` : ""}
                       </Typography>
-                      {r.error && (
-                        <Typography sx={{ fontSize: 13, color: "error.main" }}>
-                          失败原因：{r.error}
-                        </Typography>
+                      {r.status === "error" && (
+                        <Box sx={{ display: "flex", gap: 1, alignItems: "center", flexWrap: "wrap" }}>
+                          <Chip
+                            size="small"
+                            variant="outlined"
+                            color="error"
+                            label={RUN_FAILURE_LABELS[classifyRunFailure(r.error)]}
+                          />
+                          {/* 分类之外**必须**保留原文：用户排查时要看到引擎到底说了什么 */}
+                          <Typography sx={{ fontSize: 13, color: "error.main", flex: 1, minWidth: 0 }}>
+                            {r.error?.trim() ? r.error : "（引擎未给出失败原因）"}
+                          </Typography>
+                        </Box>
                       )}
                       {r.trigger === "scheduled" && r.sessionKey && (
                         <>

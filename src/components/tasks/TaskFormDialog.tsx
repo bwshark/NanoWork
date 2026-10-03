@@ -40,12 +40,15 @@ import PsychologyIcon from '@mui/icons-material/Psychology';
 import VerifiedUserIcon from '@mui/icons-material/VerifiedUser';
 import GppMaybeIcon from '@mui/icons-material/GppMaybe';
 import { toast } from '@/components/Toast';
+import { DeliveryField } from '@/components/tasks/DeliveryField';
+import { WorkdirField } from '@/components/tasks/WorkdirField';
+import { isAbsoluteWorkspacePath } from '@/lib/workspaceLabel';
 import { validateCron } from '@/lib/cron';
 import { describeRrule, lowerRrule } from '@/lib/rrule';
 import { useAgentsStore } from '@/stores/agentsStore';
 import { useSkillsStore } from '@/stores/skillsStore';
 import { describeModelId, useModelsStore } from '@/stores/modelsStore';
-import type { TaskConfig, TaskSchedule, TaskStatus } from '@/types';
+import type { TaskConfig, TaskDelivery, TaskSchedule, TaskStatus } from '@/types';
 import type { TaskDraft } from '@/lib/taskDraft';
 
 /** 调度类型：周期（daily/weekly/monthly）/ 按间隔 / 单次 */
@@ -96,6 +99,15 @@ interface FormState {
   status: TaskStatus;
   ui: UiState;
   run: RunState;
+  /** 结果推送（FR-5.6）；`undefined` = 不推送，与「有目标」是两个不同的状态 */
+  delivery: TaskDelivery | undefined;
+  /**
+   * 任务级工作目录（FR-5.8）。空串 = 不绑定（跟随默认工作空间）。
+   *
+   * 与 `delivery` 一样：状态里**保留这个键**，因为它也是一个可以被「清空」的设置，
+   * 而清空动作必须能真的传到 store（`updateTask` 是浅合并，省略键 = 旧值留下）。
+   */
+  workdir: string;
 }
 
 /** UI 默认值：周期 + 每天 09:00（最贴近「定时任务」的直觉） */
@@ -198,8 +210,11 @@ function scheduleToUi(schedule?: TaskSchedule): UiState {
 /**
  * UI 状态 → 调度结构（提交）。
  *
- * 生效区间（validFrom）没有对应的 cron 字段，只能表达成「从起始日的月份起，每月起始日」
- * ——即 `分 时 D M *`。这是刻意的降级：宁可把区间近似成月度锚点，也不静默丢弃用户填的日期。
+ * ⚠️ **不把生效区间编进 cron**。曾经把 `validFrom` 的「日 / 月」硬编码成 cron 的第 3、4 段
+ * 来「近似表达区间」，那是错的：`每天 09:00` + 开始日期 `2026-10-15` 会变成
+ * `0 9 15 10 *`，也就是**每年** 10 月 15 日才跑一次——把用户最常见的诉求静默改成一年一次。
+ * cron 根本没有「从哪天起生效」这种字段，能表达它的只有 `validFrom` / `validUntil`
+ * 本身（由 `computeNextRunMs` 在算下次触发时刻时体现，见 `TaskConfig` 的字段注释）。
  */
 function uiToSchedule(ui: UiState): TaskSchedule {
   const tz = ui.tz.trim() ? ui.tz.trim() : undefined;
@@ -226,15 +241,10 @@ function uiToSchedule(ui: UiState): TaskSchedule {
   }
 
   const [hour, minute] = (ui.time || '09:00').split(':').map((n) => Number(n));
-  const dom = ui.validFrom
-    ? String(new Date(ui.validFrom).getDate())
-    : ui.freq === 'monthly'
-      ? String(clamp(ui.monthDay, 1, 31))
-      : '*';
-  const month = ui.validFrom ? String(new Date(ui.validFrom).getMonth() + 1) : '*';
+  const dom = ui.freq === 'monthly' ? String(clamp(ui.monthDay, 1, 31)) : '*';
   const dow = ui.freq === 'weekly' ? String(ui.weekday === 7 ? 0 : ui.weekday) : '*';
 
-  return { kind: 'cron', expr: `${minute} ${hour} ${dom} ${month} ${dow}`, tz };
+  return { kind: 'cron', expr: `${minute} ${hour} ${dom} * ${dow}`, tz };
 }
 
 /**
@@ -324,7 +334,31 @@ function validateForm(form: FormState): string {
   if (ui.validFrom && ui.validTo && ui.validFrom > ui.validTo) {
     return '生效开始日期不能晚于结束日期';
   }
+
+  // 工作目录必须是绝对路径：引擎对相对路径抛 `WorkspaceScopeError`，而那个错会被
+  // **静默吞掉并回落默认工作空间** —— 用户只会看到「配了没生效，也查不出原因」。
+  // 录入侧拦住是唯一便宜的时机（客户端查不了存在性，但查得了形状）。
+  if (form.workdir.trim() && !isAbsoluteWorkspacePath(form.workdir)) {
+    return '工作目录需填绝对路径（如 C:\\proj 或 /home/me/proj）';
+  }
   return '';
+}
+
+/** ISO 时间戳 → `type="date"` 的 'YYYY-MM-DD'（按**本地**日，与 `toDateInput` 同口径） */
+function isoToDayInput(iso?: string): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? '' : toDateInput(d);
+}
+
+/** 'YYYY-MM-DD' → ISO 下界（本地零点）；空串 → undefined（= 不设下界） */
+function dayStartIso(day: string): string | undefined {
+  return day ? new Date(`${day}T00:00:00`).toISOString() : undefined;
+}
+
+/** 'YYYY-MM-DD' → ISO 上界（本地当日 23:59:59.999）；`validUntil` 是**含**的 */
+function dayEndIso(day: string): string | undefined {
+  return day ? new Date(`${day}T23:59:59.999`).toISOString() : undefined;
 }
 
 /** 预填值 → 表单状态；缺省字段回退 UI 默认 */
@@ -334,12 +368,26 @@ function toForm(initial?: Partial<TaskConfig>): FormState {
     prompt: initial?.prompt ?? '',
     agentId: initial?.agentId ?? '',
     status: initial?.status ?? 'enabled',
-    ui: scheduleToUi(initial?.schedule),
+    ui: {
+      ...scheduleToUi(initial?.schedule),
+      /*
+       * 生效区间**不在** schedule 里（`scheduleToUi` 只拿得到调度结构），必须单独回填。
+       * 漏了这一步的后果是：编辑一条设过区间的任务时两个日期框是空的，一保存就把区间
+       * 清掉了 —— 而用户什么都没改。
+       */
+      validFrom: isoToDayInput(initial?.validFrom),
+      validTo: isoToDayInput(initial?.validUntil),
+    },
     run: {
       model: initial?.runOptions?.model ?? '',
       skillIds: initial?.runOptions?.skillIds ?? [],
       fullAccess: initial?.runOptions?.fullAccess ?? false,
     },
+    // 空目标收敛成 undefined：手改过 / 老数据可能留一个 `{ targets: [], on }`，
+    // 它与「不推送」是同一个意思，不该在表单里表现成「配了推送却没有目标」
+    delivery:
+      initial?.delivery && initial.delivery.targets.length > 0 ? initial.delivery : undefined,
+    workdir: initial?.workdir ?? '',
   };
 }
 
@@ -403,6 +451,25 @@ export function TaskFormDialog({
       agentId: form.agentId,
       status: form.status,
       schedule: uiToSchedule(form.ui),
+      /*
+       * 显式带上 `delivery`（值可能是 `undefined`）。
+       *
+       * ⚠️ 不能写成 `...(form.delivery ? { delivery } : {})`：`updateTask` 是**浅合并**
+       * （`{...t, ...patch}`），省略这个键会让「把最后一个推送目标删掉」永远删不掉
+       * ——旧配置被原样留下，而界面上已经看不到了。显式给 `undefined` 才能真正清掉。
+       */
+      delivery: form.delivery,
+      /*
+       * 生效区间同理**显式带上**（值可能是 `undefined`）：清空那两个日期框必须能真的
+       * 清掉旧区间，而 `updateTask` 的浅合并会把省略的键原样留下。
+       */
+      validFrom: dayStartIso(form.ui.validFrom),
+      validUntil: dayEndIso(form.ui.validTo),
+      /*
+       * 工作目录同理**显式带上**：空串是「不绑定」，必须真的清掉旧值。
+       * 收敛成 `undefined` 而不是空串——「未指定」在类型上就该是缺席。
+       */
+      workdir: form.workdir.trim() ? form.workdir.trim() : undefined,
       runOptions: {
         ...(form.run.model ? { model: form.run.model } : {}),
         ...(form.run.skillIds.length > 0 ? { skillIds: form.run.skillIds } : {}),
@@ -627,7 +694,24 @@ export function TaskFormDialog({
           </>
         )}
 
-        <Button size="small" onClick={() => setAdvancedOpen((v) => !v)} sx={{ mb: 1 }}>
+        <WorkdirField
+          label={<FieldLabel label="工作目录" hint="可选；留空跟随默认工作空间" />}
+          value={form.workdir}
+          onChange={(workdir) => setForm((v) => ({ ...v, workdir }))}
+        />
+
+        <DeliveryField
+          label={
+            <FieldLabel
+              label="结果推送"
+              hint="可选；结果由引擎直接发到渠道，发送失败会按退避自动重试"
+            />
+          }
+          value={form.delivery}
+          onChange={(delivery) => setForm((v) => ({ ...v, delivery }))}
+        />
+
+        <Button size="small" onClick={() => setAdvancedOpen((v) => !v)} sx={{ mb: 1, mt: 1 }}>
           {advancedOpen ? '收起高级' : '高级（Cron / 时区）'}
         </Button>
         <Collapse in={advancedOpen}>

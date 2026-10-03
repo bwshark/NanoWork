@@ -250,12 +250,12 @@
 | ------ | ----------------- | ------ | -- | -------- | ---------------------------------------------------------------------------------------------------- |
 | FR-5.1 | 定时任务 CRUD         | P0     | ✅  | both     | cron / interval / once + 启停 / 删除（已实现）                                                                |
 | FR-5.2 | 任务镜像到引擎           | P0     | ✅  | electron | 合并进 `cron/jobs.json` + 热加载，无需重启网关（已实现，含托管标记）                                                         |
-| FR-5.3 | 执行留痕              | P0     | 🟡 | both     | `TaskRunRecord` 已有；**补**：运行详情页、成功率统计、失败原因分类                                                          |
+| FR-5.3 | 执行留痕              | P0     | ✅  | both     | `TaskRunRecord` 已有；**2026-10-03 补齐三处缺口**：① 成功率统计（`src/lib/taskRunStats.ts` 的 `summarizeRuns`/`summarizeRunsByTask`，运行记录页统计条 + 每条任务卡片上的成功率）；② **失败原因分类**（7 类 + `unknown`，判据取自引擎与客户端**真实会写入的文案**，见该文件头）；③ 运行详情（既有「展开看触发方式/耗时/原文 + 只读执行会话视图」即详情形态，**未单开独立页面**）。所有指标**从 `runs` 派生，不新增存储字段** |
 | FR-5.4 | **RFC 5545 循环规则** | **P1** | 🟡  | both     | 支持 `RRULE`（如「每月 1、15、28 日 09:00」）、`valid_from` / `valid_until` 有效期窗口（对齐 WorkBuddy `automations` 表语义）。**2026-10-03 已落**：`TaskSchedule` 加 `rrule` 形态、`TaskConfig` 加 `validFrom`/`validUntil`、降级纯函数 `src/lib/rrule.ts`（含**明确拒绝**不可降级的规则）、同步链路 `computeNextRunMs` 按窗口算 `nextRunAtMs`、表单加「循环规则」档 + **降级结果实时回显**。**未做**：结果回推（FR-5.6）仍缺 |
 | FR-5.5 | 自然语言建任务           | P0     | ✅  | both     | 对话内 hover → 创建定时任务（已实现）。**补**：语义推荐调度（如「每周一早上」→ 自动生成 cron）                                            |
-| FR-5.6 | **结果回推渠道**        | **P1** | ⬜  | both     | 任务可配置推送到企微 / 微信 / 飞书；投递失败进 outbox 重试（对齐 WorkBuddy `automation_delivery_outbox`）                      |
+| FR-5.6 | **结果回推渠道**        | **P1** | 🟡 | both     | 任务可配置推送到企微 / 微信 / 飞书。**2026-10-03 按路线 C 落地**（为什么不用「纯客户端」的路线 A，见 §15.3）：引擎 `[LOCAL PATCH]` 新增 `payload.delivery`，`run_bound_cron_job` 完成后再经 message bus **另发**一份到配置的目标；执行会话仍绑 `api:cron-{id}`（工作区 / 权限 / 留痕零回归）。**未做**：`milestone`（每个关键节点）、持久化 outbox（第一期由 `ChannelManager._send_with_retry` 的指数退避等价覆盖）                      |
 | FR-5.7 | Webhook / 邮件触发器   | P2     | ⬜  | both     | 除定时外支持外部事件触发（V2）                                                                                     |
-| FR-5.8 | 工作目录上下文           | P1     | 🟡 | both     | 任务可绑定 `cwds`（工作目录）；会话按工作空间分组（已实现）                                                                    |
+| FR-5.8 | 工作目录上下文           | P1     | ✅ | both     | 任务可绑定工作目录。**2026-10-03 落地，且是纯客户端的**（引擎无需新增任何字段）：`TaskConfig.workdir` → job 的 `originMetadata.workspace_scope.project_path`，而 `originMetadata` 是引擎既有的透传字段，`bound_runner` 会把它原样搬成 cron turn 的 message metadata，引擎在 turn 边界按**会话作用域**解析出这一轮该在哪个目录里跑。表单加「工作目录」（目录选择器 + 绝对路径校验：相对路径会被引擎静默回落默认目录）。⚠️ 硬约束：任务的 origin 渠道必须保持 `api` —— 详见 §15.3                                                                    |
 
 ## R6 IM 通道与远程派活
 
@@ -2084,7 +2084,7 @@ WorkBuddy 用数据库表管理自动化（实测 14 条自动化、93 次执行
 | `rrule`（RFC 5545）                                                   | `schedule.rrule`                | ⬜ 缺           |
 | `scheduled_at`（一次性）                                                 | `schedule.kind='once'` + `at`   | ✅             |
 | `valid_from` / `valid_until`                                        | `task.validFrom` / `validUntil` | ⬜ 缺           |
-| `cwds`（工作目录）                                                        | `task.workdir`                  | 🟡 会话级已有，任务级缺 |
+| `cwds`（工作目录）                                                        | `task.workdir`                  | ✅ 任务级已落（2026-10-03，**纯客户端**，见 §15.3） |
 | `skills_json`                                                       | `task.runOptions.skillIds`      | ✅             |
 | `connector_ids_json`                                                | `task.runOptions.connectorIds`  | ⬜ 缺           |
 | `model_id`                                                          | `task.runOptions.model`         | ✅             |
@@ -2103,10 +2103,29 @@ export type TaskSchedule =
   | { kind: 'interval'; minutes: number }
   | { kind: 'once'; at: string };
 
+/**
+ * 结果推送（FR-5.6）—— **2026-10-03 实施时的实际形态**。
+ *
+ * ⚠️ 与原设计稿有两处偏离，都是被实现逼出来的：
+ * 1. **必须带 `chatId`**：投递按 `(channel, chatId)` 路由，光有渠道名推不出去。可选目标
+ *    取自引擎侧真实存在过的渠道会话（`platform.nanobotListChannelSessions()`），由用户在
+ *    表单里挑一个 —— 用户无从知道某个群的 chat id，所以这个控件只能是「从已有对话里选」。
+ * 2. **`milestone` 不在类型里**：它需要在引擎侧订阅进度事件，而第一期只挂在「执行结束」
+ *    这一个点上。声明一个不生效的档位，只会让用户以为选了就会生效。
+ *
+ * `on` 的语义：`complete` = **每次执行结束都推**（成功推结果、失败推失败原因）；
+ * `error` = 仅失败时推。两者是「包含」关系而不是并列 —— `error` 是更窄的过滤。
+ */
+export interface TaskDeliveryTarget {
+  /** 引擎侧渠道名（可能是 owner 限定形态，如 `feishu.feishu`） */
+  channel: string;
+  /** 目标会话 id（渠道会话 key 冒号**后**段；会话 id 自身可能含冒号） */
+  chatId: string;
+}
+
 export interface TaskDelivery {
-  channels: Array<'wecom' | 'weixin' | 'feishu' | 'dingtalk' | 'none'>;
-  /** 推送时机：结果完成 / 仅失败 / 每个关键节点 */
-  on: 'complete' | 'error' | 'milestone';
+  targets: TaskDeliveryTarget[];
+  on: 'complete' | 'error';
 }
 
 export interface TaskConfig {
@@ -2115,12 +2134,23 @@ export interface TaskConfig {
   schedule: TaskSchedule;
   prompt: string;
   agentId: string;
-  workdir?: string;                 // 新增：cwds
-  validFrom?: string;               // 新增
-  validUntil?: string;              // 新增
-  delivery?: TaskDelivery;          // 新增
+  workdir?: string;                 // FR-5.8 已落：→ originMetadata.workspace_scope.project_path
+  validFrom?: string;               // FR-5.4 已落
+  validUntil?: string;              // FR-5.4 已落
+  delivery?: TaskDelivery;          // FR-5.6 已落（见 §15.3）
   status: TaskStatus;
   createdAt: string;
+  /**
+   * ⚠️ **对 cron 任务目前完全没有生效**（2026-10-03 核实）：`toNanobotJob` 把它放进
+   * `originMetadata.runOptions`，但**引擎里没有任何消费点**（`fullAccess` / `skillIds`
+   * 全仓零匹配）。也就是说任务表单上的「模型 / 技能 / 权限」三个控件现在是**死配置**——
+   * 任务实际用网关默认模型与默认工具策略跑。
+   *
+   * 要救活它们，载体已经现成：同一个 `originMetadata.workspace_scope` 本就支持
+   * `access_mode` / `session_mode` / `agent_id` / `tool_allow` / `tool_deny`
+   * （见 `security/workspace_access.py` 的 `validate_workspace_scope_payload`），
+   * 而任务的 origin 渠道正是会被解析的 `api`。**这属于独立的一批工作，尚未排期。**
+   */
   runOptions?: TaskRunOptions;
 }
 ```
@@ -2137,7 +2167,122 @@ export interface TaskConfig {
   → cronRunsPoller / cronTaskMirror 回读  # 前端展示运行留痕
 ```
 
-**为什么保持这个架构**：调度是「长时间尺度、不能因 UI 关闭而停」的能力，放在引擎侧天然正确。前端只做配置与可视化——这是职责的正确划分。需要新增的是**结果回推**（FR-5.6）：引擎侧任务完成后，通过 `payload.deliver` 或独立的 `delivery` 配置把结果推到 IM。
+**为什么保持这个架构**：调度是「长时间尺度、不能因 UI 关闭而停」的能力，放在引擎侧天然正确。前端只做配置与可视化——这是职责的正确划分。需要新增的是**结果回推**（FR-5.6）：引擎侧任务完成后，把结果推到 IM。
+
+⚠️ **本节原文的 `payload.deliver` 前提是错的（2026-10-03 可行性勘查时纠正）**。`deliver` / `channel` / `to`
+在引擎里**明确是历史遗留字段**（`nanobot/cron/types.py:55` 注释：*Legacy delivery fields used by
+pre-session-bound cron jobs*），且 `service.py:_normalize_agent_turn_job()` 会在加载时把它们
+**迁移成 session-bound 形态并清空**；若一个 job 只有 legacy 上下文而缺 `channel`/`to`，
+引擎**直接禁用该任务**并写 `_UNBOUND_AGENT_JOB_REASON`（就是 FR-5.3 分类里的「任务未绑定会话」）。
+**所以「打开 `deliver` 开关即可推送」不成立，这条路已死。**
+
+**FR-5.6 的实际可用形态（勘查结论）**：引擎的投递能力**只有一条** ——
+`bound_runner` 经 `origin_delivery_context(job)` 取 `(origin_channel, origin_chat_id)` 路由，
+出站由 `ChannelManager._dispatch_outbound` 按渠道名取实例后 `_send_with_retry`（指数退避）发出；
+目标渠道未启用时**只记一行 `Unknown channel` 警告、不抛错**。引擎对外 API（`create_app` 注册的 6 条）
+**没有**「发消息到渠道」的端点。据此有两条路线：
+
+| 路线 | 做法 | 代价 | 是否动引擎 |
+| --- | --- | --- | --- |
+| **A**（纯客户端） | 把任务的 `sessionKey` / `originChannel` / `originChatId` 指向**真实 IM 会话**（客户端已有 `platform.listNanobotChannelSessions()`，key 形如 `wecom:xxx`，用户从中挑推送目标） | 任务**执行会话即该 IM 会话**，失去独立的 `api:cron-{id}` 留痕会话（`getCronSession` 读不到，退化为 `run.response` 兜底）；IM 后续消息与任务共享上下文；进度类出站可能进群。**另有硬伤见下** | 否（但要绕开下面那条硬伤就还得动） |
+| **C**（`[LOCAL PATCH]`） | cron payload 增 `delivery` 配置 + 投递 outbox：执行会话保持 `api:cron-{id}`，完成后**另发**一份到配置渠道，失败进 outbox 重试 | 动 `nanobot/`、需重启网关；与 WorkBuddy `automation_delivery_outbox` 语义一致 | 是 |
+
+### ⚠️ 路线 A 的硬伤：会把渠道换成 IM 名，从而**丢掉工作区/权限作用域**
+
+`security/workspace_access.py:158` 的 `WorkspaceScopeResolver.scoped_channels` 是
+`frozenset({"websocket", "api"})`（**本身就是一处 `[LOCAL PATCH]`**，注释写着「本客户端按会话选择工作空间/权限」）。
+`for_turn(channel=…)` 的逻辑是：
+
+```python
+if channel not in self.scoped_channels:
+    return self.default()          # ← 直接回落默认工作区 / 默认权限
+return resolve_effective_workspace_scope(...)
+```
+
+而 `bound_runner.run_bound_cron_job` 构造 InboundMessage 时，**`channel` 一个值同时承担两件事**：
+会话键归属与出站路由。所以路线 A 一旦把 channel 设成 `wecom`，这个 turn 就不在
+`scoped_channels` 里 → **`originMetadata` 里的工作区/权限 scope 被静默忽略，回落默认值**。
+
+后果有两层：
+1. **FR-5.8（任务级 cwds）在 A 下无法实现** —— 任务级工作目录正是靠 `originMetadata` 的
+   `WORKSPACE_SCOPE_METADATA_KEY` 传进去的（`resolve_effective_workspace_scope` 先读 message_metadata）。
+   A 想修就得再加一处 `[LOCAL PATCH]` 扩 `scoped_channels` → 「零引擎改动」这个卖点就没了。
+2. 两者的功能上限不同：A **只能一个投递目标、且只能无条件推**；PRD §15.2 的
+   `TaskDelivery` 目标是 `channels: Array<…>` + `on: 'complete' | 'error' | 'milestone'`，A 表达不了。
+
+**结论（推荐 C）**：A 与 C 的客户端工作量几乎一样（都要「目标枚举 + 表单选择器 + `toNanobotJob` 接线」），
+差别只在 C 多一处引擎 `[LOCAL PATCH]`。而 C 可以写成「**执行会话仍绑 `api:cron-{id}`**（工作区/权限/留痕
+全不变，零回归）+ 只新增一个**独立的投递目标字段**」——**即 C = A 的意图 + 不让渠道角色重叠**。
+换言之，一旦要求 channel 保持 `api`，C 严格优于 A；A 只在「只求单目标、无条件推、且不要 FR-5.8」时才划算。
+
+**C 可分期，且第一期很小**（不需要新持久化）：`CronPayload` 加一个 `delivery` 字段
+（`{ targets: {channel: chatId}, on: 'complete'|'error' }`），`run_bound_cron_job` 在写完 run record 后
+按条件 `bus.publish_outbound(...)` 一条消息即可 —— 出站直接复用
+`ChannelManager._send_with_retry` 的指数退避，**第一期的 outbox 由引擎内联重试等价覆盖**；
+「跨重启补投」的持久化 outbox 留到真出现「渠道长时间不可用」需求时再做。
+
+两条都**依赖目标渠道已在引擎启用**（客户端侧渠道配置经 `syncChannelsToRuntime` 同步）。
+
+### ✅ 2026-10-03 已按**路线 C** 落地（第一期）
+
+**引擎侧（`nanobot/`，四处 `[LOCAL PATCH]`）**
+- `cron/types.py`：新增 `CronDelivery` / `CronDeliveryTarget` 与 `CronPayload.delivery`。
+  ⚠️ 它们与 legacy 的 `deliver` / `channel` / `to` **完全独立**——后三者非空会让
+  `is_bound_cron_job` 判 False 从而禁用任务（见上面的勘查），所以推送**必须**另开字段。
+  另：`CronJob.from_dict` 也走同一个解析器，否则从 action 路径进来的裸 dict 会让投递代码
+  拿到一个没有 `.targets` 的对象。
+- `cron/bound_runner.py`：`run_bound_cron_job(..., publish_outbound=...)`；跑完（或失败）后按
+  `delivery.on` 决定是否把结果 `publish_outbound` 到各目标。**尽力而为**：投递失败只记日志，
+  绝不把一次已经跑完的任务改写成失败。
+- `cli/gateway_runtime.py`：传入 `bus.publish_outbound` —— 出站直接复用
+  `ChannelManager._dispatch_outbound` 的**指数退避重试**，第一期的 outbox 需求由它等价覆盖。
+- `cron/service.py` 的 `_save_store`：**必须显式列出 `delivery`**。那个函数是逐字段手写序列化，
+  漏一个键 = 引擎每次落盘静默丢弃。由 `nanobot/tests/cron/test_cron_delivery_persistence.py` 的
+  **往返用例**守住（已按项目纪律做变异验证：去掉那一行即变红，且红在正确断言上）。
+
+**客户端**
+- `TaskConfig.delivery`（`TaskDelivery`，见 §15.2）+ `toNanobotJob` 写入 `payload.delivery`
+  （**缺省不写键**，免得与主进程的幂等合并在「有键但空」与「没键」之间来回抖）。
+- `src/lib/taskDelivery.ts`：会话 key ⇄ 投递目标的**唯一**映射处（key 的**第一个**冒号是分界，
+  会话 id 自身可能含冒号；`unified:default` 给不出目标故不列为选项）；
+  `src/lib/channelLabel.ts` 收拢渠道展示名（原先侧边栏另有一份同义实现，两处必然漂移）。
+- 表单新增「结果推送」区（`src/components/tasks/DeliveryField.tsx`）+ 任务卡片元信息行显示推送摘要。
+
+**仍然未做**（诚实标注）：`milestone` 档位、持久化 outbox（跨重启补投）。另有一条**刻意的**取舍：
+投递**不写入目标会话历史**——push 不等于「在那次对话里说了一句」，写进去会让该渠道下一次真实对话
+把这条自动消息当成上下文。
+
+⚠️ 同批修掉两处 **FR-5.4 缺陷**（都在「表单 → 落库」这一段，单测全绿、只有真机才现形）：
+① 生效区间曾被**编进 cron**（`每天 09:00` + 开始日期被写成 `0 9 15 10 *`，等于每年只跑一次）；
+② `tasksStore.addTask` 的新建分支逐个列举可选字段 → `validFrom` / `validUntil` / `delivery`
+**全部被静默丢弃**。后者改成「先铺开草稿、再由 store 覆盖自管键」，并配回归用例
+（`tests/tasksStore.test.ts` 的「新建时必须照搬草稿的可选字段」）。
+
+### ✅ 2026-10-03 FR-5.8（任务级工作目录）已落 —— **纯客户端，引擎零改动**
+
+关键事实是这条链**不需要新的引擎字段**：`originMetadata` 本就是引擎的透传区，
+`bound_runner` 会把 `payload.origin_metadata` 原样搬成 cron turn 的 message metadata，
+而引擎在 turn 边界用 `WorkspaceScopeResolver.for_turn` 读的正是 message metadata 里的
+`workspace_scope`（`WORKSPACE_SCOPE_METADATA_KEY = 'workspace_scope'`）。所以客户端只要：
+
+```ts
+// src/ai/runtime/nanobotHttp/tasks.ts 的 toNanobotJob()
+...(task.workdir ? { workspace_scope: { project_path: task.workdir } } : {})
+```
+
+**这条链同时钉住一条硬约束**：`for_turn` 只在 `channel ∈ scoped_channels = {websocket, api}`
+时才解析作用域，否则直接 `return self.default()` —— **静默回落默认工作空间**（不报错、
+不告警）。任务的 origin 渠道正是 `api`，所以链成立；反过来，**「任务级工作目录」与
+「让任务跑在外部 IM 会话里」是互斥的** —— 这正是 FR-5.6 最终另开 `delivery` 字段、
+而不去改 origin 渠道的直接原因。引擎侧有**否定用例**把这件事钉在代码里：
+`nanobot/tests/cron/test_bound_runner_workspace.py`（把 channel 换成 `wecom`，
+同一份配置里的工作目录被丢掉、回落默认目录）。
+
+客户端零散件：`TaskConfig.workdir`；`WorkdirField`（目录选择器走 `platform.pickDirectory()`，
+与聊天里切换工作目录**同一入口**）；`isAbsoluteWorkspacePath` 在**录入侧**拦住相对路径
+（引擎对相对路径抛的 `WorkspaceScopeError` 会被静默吞掉，用户只会看到「配了没生效」）；
+`describeTaskWorkdir` 负责卡片展示（**绑到默认目录 == 不绑定**，判据复用
+`isSameWorkspacePath`，与侧边栏分组同一套）。
 
 **RRULE 支持**：引擎侧只认 cron / every / at，因此 RRULE 由前端**降级**后下发。
 
