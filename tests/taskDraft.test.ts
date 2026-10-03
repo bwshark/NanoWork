@@ -68,3 +68,27 @@ describe('buildTaskDraftFromMessage', () => {
     expect(asDraft).toBeTruthy();
   });
 });
+
+describe('buildTaskDraftFromMessage：从正文推断执行频率（FR-5.5 补）', () => {
+  it('⭐ 认得出时间规则就填进草稿', () => {
+    const draft = buildTaskDraftFromMessage(msg('每周一早上9点提醒我开周会'), 'a1');
+    expect(draft.schedule).toEqual({ kind: 'cron', expr: '0 9 * * 1' });
+  });
+
+  it('⭐ 认不出来就**不填** —— 让表单用它自己的默认值，而不是塞一个猜的', () => {
+    const draft = buildTaskDraftFromMessage(msg('帮我看看这段报错'), 'a1');
+    expect('schedule' in draft).toBe(false);
+  });
+
+  it('间隔类同样认', () => {
+    const draft = buildTaskDraftFromMessage(msg('每30分钟检查一次构建状态'), 'a1');
+    expect(draft.schedule).toEqual({ kind: 'interval', minutes: 30 });
+  });
+
+  it('推断只影响 schedule，不动 name / prompt', () => {
+    const content = '每天9点把昨日的告警汇总发我';
+    const draft = buildTaskDraftFromMessage(msg(content), 'a1');
+    expect(draft.name).toBe(makeTaskName(content));
+    expect(draft.prompt).toBe(content);
+  });
+});

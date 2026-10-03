@@ -395,7 +395,7 @@
 > 客户端零散件：`WorkdirField`（目录选择器与聊天同一入口）、`isAbsoluteWorkspacePath`
 > 在**录入侧**拦相对路径（引擎会静默吞掉那个错并回落默认目录）、`describeTaskWorkdir`
 > 负责卡片展示（**绑到默认目录 == 不绑定**，判据复用 `isSameWorkspacePath`）。
-> 真机脚本 `tasks/verify-task-workdir.mjs`（**13/13 全绿**）验的是「表单填路径 → 交给主进程的
+> 真机脚本 `tasks/verify-task-form.mjs`（**13/13 全绿**）验的是「表单填路径 → 交给主进程的
 > jobs.json 片段里 `originMetadata.workspace_scope.project_path` 正确，且 `originChannel`
 > 仍是 `api`」。⚠️ 写这个脚本又踩两条：桥桩漏了 `loadUserSkills`（落到 Proxy 的
 > `async () => null` 兜底 → `skills.map` 抛错），以及**注释里写反引号会把 BRIDGE 模板串提前
@@ -404,6 +404,29 @@
 > 在引擎里**没有任何消费点**（`fullAccess` / `skillIds` 全仓零匹配）→ 那是三个**死配置**，
 > 任务实际用网关默认模型与默认工具策略跑。载体已现成（同一个 `workspace_scope` 支持
 > `access_mode` / `session_mode` / `agent_id` / `tool_allow` / `tool_deny`），但**属于独立一批，未排期**。
+>
+> **2026-10-03 FR-5.5 补（自然语言 → 调度推荐）已落 —— 至此 M4 收口**：
+> 新增 `src/lib/scheduleFromText.ts`（纯函数），接在唯一的「消息 → 草稿」预填点
+> `buildTaskDraftFromMessage` 上。覆盖 每(个)工作日 / 每周 X（列举·连写·区间·**跨周界绕回**）/
+> 每月 N 号 / 每天 / 每半小时·N 分钟·N 小时·每小时·N 天·N 周；时刻支持 `HH:mm`、「N点[半|一刻|三刻]」、
+> **中文数字**与时段补正（下午/晚上 +12；晚上 12 点与凌晨 12 点都归零）。四条纪律：
+> **不猜**（识别不出就**不填** `schedule`）、只产引擎原生形态、优先级固定可预测、
+> 结果必须能被表单如实回显。
+> ⭐ 顺带修掉一处**「配了看不见」**：多日 / 工作日这类结构化表达不了的调度会落到 `cronOverride`
+> （在折叠区里），表单原先默认收起 ⇒ 用户看到的是控件默认值、真规则藏着。现在
+> **`TaskFormDialog` 在 `cronOverride` 非空时默认展开「高级」**（编辑带步长的 cron 同样受益）。
+> 实现时踩到两处「错填比不填更坏」：**中文数字**（「每天下午三点半」一度落到 `下午 → 14:00`）、
+> 以及 `每周一到周五` 的第二个端点也带「周」字（正则没允许时只取到「一」）。
+> ⚠️ 还有一处**语法级**的坑：注释里写「星号紧跟斜杠」（cron 步长写法的字面量）会**提前终止块注释**，
+> 后面的代码全被当成语句解析、报的还是别处的语法错（`tsc` 报 “Invalid character”，
+> 而真正的原因在几十行之前）。
+> 验证：**35 例**纯函数用例（肯定:否定≈1:1，重点钉「每周例会 ≠ 每周一」「只说时刻不算调度」
+> 「每周三 10 点里的 10 不是周日」）、**5 例** `CreateTaskDialog` 组件用例（含「高级默认展开」
+> 与「认不出就不显示提示」）、真机 `tasks/verify-task-form.mjs` **13/13 全绿**
+> （回归确认新增的提示条与展开逻辑没破坏原路径）。
+> ⚠️ jsdom 里**不能用 `document.body.innerText`**（jsdom 未实现，读出来是 `undefined`，
+> 断言报的是「undefined 与字符串比」这种看不出根因的错）—— 用 `textContent`；
+> 真机 Playwright 里反过来，那里 `innerText` 才会做可见性过滤。
 ---
 
 ## 十、检查清单（提交前自检）

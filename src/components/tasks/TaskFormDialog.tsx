@@ -395,6 +395,13 @@ export interface TaskFormDialogProps {
   open: boolean;
   /** 预填值；schedule 默认「周期 · 每天 09:00」，agentId 默认待上层给定 */
   initial?: Partial<TaskConfig>;
+  /**
+   * 执行频率的**来源说明**（如「每周一 09:00」）。
+   *
+   * 只为聊天入口准备：那里的调度是从用户消息里推断出来的（FR-5.5 补），不说一句的话
+   * 「打开表单就是填好的」会看起来像上次编辑的残留。推断不出来时传 `null`。
+   */
+  scheduleHint?: string | null;
   /** 标题，默认 '新建任务'；聊天入口传 '创建定时任务（来自对话）' */
   title?: string;
   /** 提交按钮文案，默认 '保存'；聊天入口传 '创建任务' */
@@ -409,6 +416,7 @@ export function TaskFormDialog({
   initial,
   title = '新建任务',
   submitLabel = '保存',
+  scheduleHint = null,
   onSubmit,
   onClose,
 }: TaskFormDialogProps) {
@@ -428,9 +436,18 @@ export function TaskFormDialog({
    */
   useEffect(() => {
     if (!open) return;
-    setForm(toForm(initial));
+    const next = toForm(initial);
+    setForm(next);
     setNoticeVisible(true);
-    setAdvancedOpen(false);
+    /*
+     * 调度**无法结构化回显**时默认展开「高级」。
+     *
+     * 这不是少见情况：推断出的「每周一、三、五」或「每个工作日」在结构化控件里表达不了，
+     * `scheduleToUi` 会把原文落到折叠区里的 `cronOverride`。默认收起的话，用户看到的是
+     * 结构化控件的**默认值**（每天 09:00），而他真正生效的规则藏在折叠区里 —— 等于
+     * 「配了看不见」。编辑既有任务时同理（带步长的 cron 就属于这一类）。
+     */
+    setAdvancedOpen(Boolean(next.ui.cronOverride));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
@@ -512,6 +529,13 @@ export function TaskFormDialog({
             </span>
           </Alert>
         </Collapse>
+
+        {/* 执行频率的**来源说明**（FR-5.5 补）：只有聊天入口认出了正文里的时间才会传 */}
+        {scheduleHint && (
+          <Alert severity="success" sx={{ mb: 2, borderRadius: 2, py: 0.25 }}>
+            已从消息里识别执行频率：{scheduleHint}（可修改）
+          </Alert>
+        )}
 
         <TextField
           fullWidth
