@@ -141,6 +141,8 @@ describe('buildManaged: 引擎快照 → 设置页行模型', () => {
       deepseek: { apiKey: 'sk-1', apiBase: null, displayName: null },
     },
     defaultPreset: 'sciherd',
+    fallbacks: [],
+    providerRetryMode: 'standard',
   };
 
   it('默认预设排在最前，且能识别自定义供应商与密钥状态', () => {
@@ -179,6 +181,8 @@ describe('buildManaged: 引擎快照 → 设置页行模型', () => {
       },
       providers: {},
       defaultPreset: null,
+      fallbacks: [],
+      providerRetryMode: 'standard',
     });
     expect(rows[0].providerLabel).toBe('自动匹配');
     expect(rows[0].hasKey).toBe(false);
@@ -406,6 +410,8 @@ describe('能力声明：三项勾选项必须能落盘并回读', () => {
       },
       providers: {},
       defaultPreset: null,
+      fallbacks: [],
+      providerRetryMode: 'standard',
     });
     const withFlags = rows.find((r) => r.name === 'with-flags')!;
     expect(withFlags.supportsTools).toBe(false);
@@ -435,6 +441,8 @@ describe('能力声明：三项勾选项必须能落盘并回读', () => {
       },
       providers: {},
       defaultPreset: null,
+      fallbacks: [],
+      providerRetryMode: 'standard',
     });
     expect(rows[0].supportsTools).toBe(true);
     expect(rows[0].supportsVision).toBe(false);

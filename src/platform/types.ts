@@ -243,7 +243,46 @@ export interface NanobotModelsSnapshot {
   providers: Record<string, NanobotModelProvider>;
   /** agents.defaults.modelPreset；null = 走隐式 default 预设 */
   defaultPreset: string | null;
+  /** agents.defaults.fallbackModels 原序（越靠前越先尝试）；空数组 = 没配回退 */
+  fallbacks: NanobotFallbackCandidate[];
+  /** agents.defaults.providerRetryMode */
+  providerRetryMode: ProviderRetryMode;
 }
+
+/** 供应商重试模式（`agents.defaults.providerRetryMode`） */
+export type ProviderRetryMode = 'standard' | 'persistent';
+
+/**
+ * 回退链里的一环（`agents.defaults.fallbackModels` 的一项）。
+ *
+ * 引擎侧的类型是 `FallbackCandidate = str | InlineFallbackConfig`：**一个字符串**
+ * 表示「引用某个已存在的预设」，**一个对象**表示「内联一份自己的配置」。
+ *
+ * 所以这里必须做成**两态联合**，不能拍平成一个「字段都可选」的对象——拍平之后
+ * `{preset:'x'}` 与内联的 `{model:'x', provider:...}` 都是合法值，回写时无从还原，
+ * 用户手写在内联里的那份配置会被静默改写成另一种语义（或者直接丢掉）。
+ */
+export type NanobotFallbackCandidate =
+  | {
+      kind: 'preset';
+      /**
+       * 被引用的预设名。
+       *
+       * ⚠️ 引擎在配置加载时校验它**必须存在**（`Config._validate_model_preset`），
+       * 不存在会抛 `ValueError` —— 也就是**整个配置加载失败、网关起不来**。
+       * 因此删除 / 改名预设时必须同步维护回退链里的引用（见主进程 `mergeModelMutationIntoConfig`）。
+       */
+      preset: string;
+    }
+  | {
+      kind: 'inline';
+      model: string;
+      provider: string;
+      maxTokens?: number | null;
+      contextWindowTokens?: number | null;
+      temperature?: number | null;
+      reasoningEffort?: string | null;
+    };
 
 /**
  * 模型配置的一次变更。
@@ -277,7 +316,19 @@ export type NanobotModelsMutation =
       /** 随之清理的供应商 key；仅当它是自定义供应商且已无人引用时才真的删 */
       providerKey?: string;
     }
-  | { op: 'setDefault'; preset: string };
+  | { op: 'setDefault'; preset: string }
+  /**
+   * 整条回退链 + 重试模式。**整体替换**是对的（与逐 key 变更预设相反）：
+   * 顺序本身就是语义（谁先被尝试），逐条增删会让「上移一格」变成两次写盘，
+   * 中间态还可能短暂出现自引用。
+   *
+   * 主进程负责把它序列化成引擎的两态形状，并在预设被删/改名时维护引用。
+   */
+  | {
+      op: 'setFailover';
+      fallbacks: NanobotFallbackCandidate[];
+      providerRetryMode: ProviderRetryMode;
+    };
 
 /** 模型配置同步结果（与 MCP / 技能覆盖同形） */
 export interface ModelsSyncResult {

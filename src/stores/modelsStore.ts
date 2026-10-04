@@ -1,7 +1,13 @@
 import { create } from 'zustand';
 import { connectionManager } from '@/ai/connectionManager';
 import { platform } from '@/platform';
-import type { NanobotModelsMutation, NanobotModelsSnapshot } from '@/platform/types';
+import type {
+  NanobotFallbackCandidate,
+  NanobotModelsMutation,
+  NanobotModelsSnapshot,
+  ProviderRetryMode,
+} from '@/platform/types';
+import { DEFAULT_PROVIDER_RETRY_MODE } from '@/lib/modelFallbacks';
 import { normalizePricing, type ModelPricing } from '@/lib/modelPricing';
 import type { ModelInfo } from '@/types';
 import {
@@ -159,6 +165,15 @@ interface ModelsState {
    */
   managedAvailable: boolean;
   /**
+   * 回退链（`agents.defaults.fallbackModels`），**按引擎里的原序**。
+   *
+   * 顺序即语义（主模型失败后依次尝试，第一个成功就停），所以这里不做任何排序 /
+   * 归一——`buildManaged` 那套「默认排最前」的规则在这里会直接改错东西。
+   */
+  managedFallbacks: NanobotFallbackCandidate[];
+  /** `agents.defaults.providerRetryMode` */
+  providerRetryMode: ProviderRetryMode;
+  /**
    * 从 config.json 重新读取模型预设。
    *
    * `force`：已有一次读取在飞时要不要另起一次。默认 false（复用飞着的那次）——
@@ -173,6 +188,11 @@ interface ModelsState {
   removeModel: (name: string) => Promise<boolean>;
   /** 把一个已有模型设为默认；成功返回 true */
   setDefaultModel: (name: string) => Promise<boolean>;
+  /** 整链替换回退链 + 重试模式；成功返回 true */
+  setFailover: (
+    fallbacks: NanobotFallbackCandidate[],
+    providerRetryMode: ProviderRetryMode,
+  ) => Promise<boolean>;
 }
 
 /** 进行中的拉取任务（并发去重句柄） */
@@ -360,6 +380,8 @@ export const useModelsStore = create<ModelsState>()((set, get) => ({
   managed: [],
   managedLoading: false,
   managedAvailable: false,
+  managedFallbacks: [],
+  providerRetryMode: DEFAULT_PROVIDER_RETRY_MODE,
 
   loadManaged: (force = false) => {
     // 复用飞行中的那一次：并发读同一个文件是白工，而且**旧结果后返回会覆盖新结果**
@@ -370,10 +392,20 @@ export const useModelsStore = create<ModelsState>()((set, get) => ({
       try {
         const snapshot = await platform.getNanobotModels();
         if (!snapshot) {
-          set({ managed: [], managedAvailable: false });
+          set({
+            managed: [],
+            managedFallbacks: [],
+            managedAvailable: false,
+          });
           return;
         }
-        set({ managed: buildManaged(snapshot), managedAvailable: true });
+        set({
+          managed: buildManaged(snapshot),
+          // 回退链**不做任何归一**（顺序即语义）；缺失字段由主进程侧补缺省
+          managedFallbacks: snapshot.fallbacks,
+          providerRetryMode: snapshot.providerRetryMode,
+          managedAvailable: true,
+        });
       } catch {
         // 配置损坏 / 主进程桥不可用：保持上一次的列表，把可用性标为 false
         set({ managedAvailable: false });
@@ -413,6 +445,17 @@ export const useModelsStore = create<ModelsState>()((set, get) => ({
     const mutation: NanobotModelsMutation = { op: 'setDefault', preset: name };
     const result = await platform.syncNanobotModels(JSON.stringify(mutation));
     if (!result.ok) return false;
+    await get().loadManaged(true);
+    await get().refresh(true);
+    return true;
+  },
+
+  setFailover: async (fallbacks, providerRetryMode) => {
+    const mutation: NanobotModelsMutation = { op: 'setFailover', fallbacks, providerRetryMode };
+    const result = await platform.syncNanobotModels(JSON.stringify(mutation));
+    if (!result.ok) return false;
+    // 以磁盘为准回读：主进程会做「引用归一」（字符串引用 ↔ 两态联合），
+    // 拿本地那份乐观状态继续显示就可能与文件里的实际内容不一致
     await get().loadManaged(true);
     await get().refresh(true);
     return true;

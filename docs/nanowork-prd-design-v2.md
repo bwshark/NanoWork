@@ -300,7 +300,7 @@
 | FR-9.1 | 模型目录      | P0     | ✅  | both     | 从网关 `GET /v1/models` 拉取；`modelPresets` + 隐式 `default`（已实现）                                                      |
 | FR-9.2 | 会话级模型覆盖   | P0     | ✅  | both     | 每请求下发模型，网关按请求级解析（已实现）                                                                                           |
 | FR-9.3 | **能力协商**  | **P1** | ✅  | both     | 模型元数据声明 `supportsToolCall` / `supportsImages` / `supportsReasoning`；不具备 tool-call 的模型自动降级为纯对话（禁用工具卡片与 Skill 挂载）。**已落地（2026-10-04）**：字段名叫 `supportsTools` / `supportsVision` / `supportsReasoning`（沿用引擎既有命名，见 `schema.py::ModelPresetConfig`；`supportsReasoning` 为本轮新增）。门控实现在 `src/lib/modelCapability.ts`（纯逻辑）+ `src/hooks/useActiveModelCapabilities.ts`：**技能挂载入口禁用并给出原因**（`ComposerMenu`）、权限弹层显示「已降级为纯对话」且逐条批准置灰、模型对话框里「注入思考强度」由「思考能力」门控。两条关键取舍：① **「查不到 ≠ 不支持」**（Web 端 / 引擎离线 / 手填模型名一律按宽松处理，否则一升级就把所有人的功能禁掉且无报错）；② **视觉能力只提醒不阻止**——`supports_vision` 的引擎默认是 `false`，硬门禁会把所有历史预设的贴图功能一并禁掉 |
-| FR-9.4 | 多供应商与故障转移 | P1     | 🟡 | electron | provider / fallback 配置（nanobot 侧支持）；前端需展示当前 provider 与回退链                                                       |
+| FR-9.4 | 多供应商与故障转移 | P1     | ✅ | both | provider / fallback 配置（nanobot 侧支持）；前端需展示当前 provider 与回退链。**已落地（2026-10-04）**：设置「模型 → 故障转移」可读可写 `agents.defaults.fallbackModels`（有序回退链：添加预设 / 上移 / 下移 / 移除）与 `providerRetryMode`（标准 / 持久 两档）。纯逻辑在 `src/lib/modelFallbacks.ts`，引擎形状转换在 `electron/modelFallbacksConfig.ts`，界面 `src/components/settings/FailoverCard.tsx`。三条关键设计：① **草稿 + 保存**（每次写入都会重启网关，逐次落盘等于每点一下闪一次）；② 链里引用了**已删除**的预设时**禁用保存**并说明后果——引擎在配置加载时校验回退链，不满足会抛 ValueError，即**整份配置加载失败、网关起不来**，所以主进程在删除 / 改名预设时会同步维护这些引用；③ 内联项（`InlineFallbackConfig`）保真回显与移除，但本轮不提供新建（见 §20.5） |
 | FR-9.5 | 私有模型与内网部署 | P1     | ✅  | both     | OpenAI 兼容 endpoint 可指向内网 vLLM（已支持，需补「完全离线」验收：无外网时全链路可用）                                                         |
 
 ## R10 账户、同步与多端一致
@@ -2955,6 +2955,92 @@ traces/<pid>/<traceId>.json  全链路 trace
   跨进程的 traceId 关联（`traceId` 是本机生成的）。要真对齐得引擎侧先上报。
 - **日志没有轮转上限**：单文件不按大小切分。日目录 + 模块分文件已经把单文件规模压到
   「一天一个模块」的量级，真实使用下不构成问题。
+
+## 20.5 故障转移（FR-9.4）落地口径
+
+### 20.5.1 配置面：有序回退链
+
+落点是 `agents.defaults`：
+
+```jsonc
+{
+  "agents": {
+    "defaults": {
+      "fallbackModels": ["deepseek", { "model": "gpt-4o", "provider": "openai" }],
+      "providerRetryMode": "standard"   // standard | persistent
+    }
+  }
+}
+```
+
+引擎侧 `FallbackCandidate = str | InlineFallbackConfig`：**字符串**是「引用一个已存在的预设」，
+**对象**是「内联一份自己的配置」。两者的区别在 JSON 里靠**类型**而不是靠字段判断，所以
+客户端把它建构成两态联合 `{kind:'preset'} | {kind:'inline'}`，主进程负责与引擎形状互转
+（`electron/modelFallbacksConfig.ts`）。**不拍平成一个字段全可选的对象**：拍平之后两种形态
+都能表达，回写时无从还原，用户手写在内联里的那份配置会被静默改成另一种语义。
+
+引擎在 `providers/factory.py::make_provider` 里把主 provider 包进 `FallbackProvider`，
+顺序即尝试次序，第一个成功即停止。
+
+### 20.5.2 三处必须写进界面的引擎事实
+
+| 事实 | 出处 | 界面怎么用 |
+| --- | --- | --- |
+| 主模型**连续 3 次失败即短路 60 秒**，期间直接走回退链 | `fallback_provider.py::_PRIMARY_FAILURE_THRESHOLD` / `_PRIMARY_COOLDOWN_S` | 「主模型」一行的说明 |
+| 只有 **连接 / 超时 / 5xx / 限流 / 过载** 触发回退；**内容被拦截 / 上下文超长 / 请求非法** 不回退 | `_FALLBACK_ERROR_KINDS` / `_NON_FALLBACK_ERROR_KINDS` | 单列一行「哪些失败会触发回退」 |
+| `standard` = 1s/2s/4s 退避后放弃；`persistent` = 一直重试（上限 60s），仅连续 10 次**完全相同**的瞬时错误才停 | `_CHAT_RETRY_DELAYS` / `_PERSISTENT_MAX_DELAY` / `_PERSISTENT_IDENTICAL_ERROR_LIMIT` | 两个档位的说明文案 |
+
+第三行是选档位的**唯一**依据，所以文案把「什么时候放弃」原样写出来，而不是概括成
+「更稳 / 更快」——两档的差别就是放弃时机，说成笼统的稳定性等于没说。
+
+### 20.5.3 为什么是「草稿 + 保存」而不是逐次落盘
+
+写回 `fallbackModels` 走 `syncNanobotModels`，而那条链路**每次写入之后都会重启网关**
+（`/v1/models` 的预设目录在 serve 启动时构建）。顺序编辑是典型的多步操作——「把第 3 环挪到
+最前」中间要动好几次——逐次落盘就是好几次网关重启，用户每点一下界面闪一下。
+
+所以链的编辑先在本地攒着，一次保存一次写盘；顺带得到「整体放弃」：改到一半发现不对，
+点「放弃修改」回到磁盘上的样子，而不是把中间态一个个撤回（撤回本身又是一串写盘）。
+
+### 20.5.4 引用维护：一条会让**网关起不来**的约束
+
+引擎在配置加载时校验回退链的每一项都指向存在的预设（`schema.py::Config._validate_model_preset`），
+不满足抛 `ValueError` —— 不是「这条回退失效」，而是**整份配置加载失败、网关起不来**。
+
+于是两道闸：
+
+1. **写入侧**：主进程在删除 / 改名预设时同步维护回退链里的字符串引用
+   （`dropFallbackRef` / `renameFallbackRef`）。漏了这一步，一次普通的删除操作会在下一次启动时
+   变成「网关莫名其妙起不来」，而原因早就消失在历史里。
+2. **界面侧**：链里存在失效引用时**禁用保存**并说明后果；同时提供逐条移除，移掉之后立刻恢复
+   可保存——拦的是**那一份加载不了的配置**，不是把人锁死在卡片上。
+   失效项在列表里用错误色标出并保留原预设名，否则「网关起不来」在界面上没有任何线索。
+
+另两类问题**只提示、不阻断**：重复项（白等一次）和「回退到默认模型本身」
+（会话级模型覆盖意味着「主模型」随会话变，今天没意义的项在另一个会话里可能就有意义）。
+
+### 20.5.5 明确未做
+
+- **运行时「本轮实际由谁服务」拿不到**，所以卡片只展示**配置事实**（主模型是谁、失败后按什么顺序试），
+  不显示「上次回退到了 X」。原因是传输层：引擎确实会在回退发生时广播 `turn_model_updated`
+  （带 `fallback: true`），但那个观察者只在 **websocket 通道**上发出
+  （`webui_turns.py::build_webui_fallback_model_observer` 里 `context.channel != "websocket"` 即返回），
+  而本客户端走 HTTP `/v1/chat/completions`（引擎侧 `channel="api"`）；HTTP 响应里的 `model`
+  只是**请求解析出的预设模型**，不含回退信息（`api/server.py` 的 SSE 构造）。
+  要真拿到，要么引擎在 HTTP 契约里补一个字段，要么客户端改走 websocket——两者都是引擎侧改动，
+  不在本轮范围。**不要**用「请求里的模型名」冒充「实际服务模型」：那在回退发生时恰好是错的。
+- **内联项不能新建**。界面上可保真回显、可移除、可移动，但不能创建新的内联配置
+  （需要一套「模型 + 供应商 + 覆盖参数」的子表单，而 `modelPresets` 已经覆盖了绝大多数用法）。
+- **不做「按会话钉不同的回退链」**：`agents.defaults` 是工作区级配置，引擎侧没有会话级的回退链。
+
+### 20.5.6 门禁与验收
+
+- 纯逻辑 3 个文件 43 例：`tests/lib/modelFallbacks.test.ts`（链的编辑规则与问题分档）、
+  `tests/electron/modelFallbacksConfig.test.ts`（引擎形状互转与引用维护）、
+  `tests/modelsStoreFailover.test.ts`（顺序不被归一、桥拒绝时不装作成功）。
+- 界面 18 例（`tests/failoverCard.test.tsx`）：草稿语义、顺序真的会变、阻断态、内联项保真。
+- 真机 `tasks/verify-failover.mjs`：5 场景 39 项（含「还没点保存，桥一次都没被调用」与
+  「落盘的链顺序就是屏幕上那个顺序」）。
 
 # 第 21 章 接口清单
 

@@ -58,6 +58,13 @@ import {
   type StorageRoots,
 } from './storageRoutes';
 import { fallbackMemoryDir } from './memoryRoutes';
+import {
+  dropFallbackRef,
+  parseFallbacks,
+  parseProviderRetryMode,
+  renameFallbackRef,
+  serializeFallbacks,
+} from './modelFallbacksConfig';
 // —— 可观测性（FR-11.2 / FR-11.3）——
 // 三个模块都只依赖 `node:fs` / `node:zlib` / `src/observability/*` 的**纯**文件
 // （后者不 import `@/platform`），因此可以被 esbuild 直接打进 main.cjs。
@@ -1891,15 +1898,17 @@ async function getNanobotModels(): Promise<NanobotModelsSnapshot | null> {
       typeof data.providers === 'object' && data.providers !== null
         ? (data.providers as Record<string, unknown>)
         : {};
-    const defaults = (data.agents as Record<string, unknown> | undefined)?.defaults;
-    const modelPreset =
-      typeof defaults === 'object' && defaults !== null
-        ? (defaults as Record<string, unknown>).modelPreset
+    const rawDefaults = (data.agents as Record<string, unknown> | undefined)?.defaults;
+    const defaults =
+      typeof rawDefaults === 'object' && rawDefaults !== null
+        ? (rawDefaults as Record<string, unknown>)
         : undefined;
     return {
       presets,
       providers: collectReferencedProviders(presets, providers),
-      defaultPreset: typeof modelPreset === 'string' ? modelPreset : null,
+      defaultPreset: typeof defaults?.modelPreset === 'string' ? defaults.modelPreset : null,
+      fallbacks: parseFallbacks(defaults?.fallbackModels),
+      providerRetryMode: parseProviderRetryMode(defaults?.providerRetryMode),
     };
   } catch (err) {
     console.warn(`[nanobot] modelPresets 回读失败：${String(err)}`);
@@ -1941,6 +1950,14 @@ async function mergeModelMutationIntoConfig(
     if (previous && previous !== mutation.preset) {
       delete presets[previous];
       if (defaults.modelPreset === previous) defaults.modelPreset = mutation.preset;
+      // 回退链里对这个预设的引用必须跟着改名。不改的话引擎在配置加载时校验
+      // `fallback_models` 的每一项都在 `model_presets` 里 → 抛 ValueError →
+      // **整个配置加载失败、网关起不来**，而界面上的表现只是「改了名之后模型不可用」。
+      defaults.fallbackModels = renameFallbackRef(
+        defaults.fallbackModels,
+        previous,
+        mutation.preset,
+      );
     }
     presets[mutation.preset] = mutation.config;
 
@@ -1959,6 +1976,11 @@ async function mergeModelMutationIntoConfig(
     // 这是唯一安全的兜底——指向一个已删除的预设会让每轮请求都炸。
     if (defaults.modelPreset === mutation.preset) defaults.modelPreset = null;
 
+    // 回退链里对它的引用必须一起摘掉，理由同上面的改名：留着它就是一条
+    // 「引用了不存在预设」的记录，引擎会在下一次启动时直接拒绝加载配置。
+    // 内联项不受影响（它们自带 model+provider，不依赖预设表）。
+    defaults.fallbackModels = dropFallbackRef(defaults.fallbackModels, mutation.preset);
+
     // 自定义供应商无人引用时一并清掉：它是为这个模型才建出来的动态条目，
     // 留着会在 providers 里堆一串没有主人的 apiBase。内置供应商一律不动——
     // 用户可能为别的用途（语音转录、别的预设）填过 key。
@@ -1970,6 +1992,11 @@ async function mergeModelMutationIntoConfig(
       });
       if (!stillUsed) delete providers[providerKey];
     }
+  } else if (mutation.op === 'setFailover') {
+    // 整链替换：顺序即语义（谁先被尝试），逐条增删会让「上移一格」变成两次写盘，
+    // 中间态还可能短暂出现自引用。
+    defaults.fallbackModels = serializeFallbacks(mutation.fallbacks);
+    defaults.providerRetryMode = parseProviderRetryMode(mutation.providerRetryMode);
   } else {
     defaults.modelPreset = mutation.preset;
   }
@@ -1979,18 +2006,28 @@ async function mergeModelMutationIntoConfig(
   data.modelPresets = presets;
   data.providers = providers;
 
-  // 幂等检测只比「模型相关的三段」：config.json 里还有 channels / tools 等
+  // 幂等检测只比「模型相关的几段」：config.json 里还有 channels / tools 等
   // 别人也会写的段，拿整份 data 比对会把无关的差异也算进来。
-  const modelSegments = (source: Record<string, unknown>) => ({
-    modelPresets: asObject(source.modelPresets),
-    providers: asObject(source.providers),
-    defaultPreset: asObject(asObject(source.agents).defaults).modelPreset,
-  });
+  const modelSegments = (source: Record<string, unknown>) => {
+    const d = asObject(asObject(source.agents).defaults);
+    return {
+      modelPresets: asObject(source.modelPresets),
+      providers: asObject(source.providers),
+      defaultPreset: d.modelPreset,
+      // 回退链与重试模式也算「模型相关」：它们与预设表互相引用（链里的字符串
+      // 就是预设名），漏掉这两段会让「删预设顺手清掉链上引用」被幂等检测判成
+      // 「没变化」，于是那次清理根本不会落盘。
+      fallbacks: Array.isArray(d.fallbackModels) ? d.fallbackModels : [],
+      retryMode: d.providerRetryMode ?? null,
+    };
+  };
   const before = JSON.stringify(modelSegments(JSON.parse(raw) as Record<string, unknown>));
   const after = JSON.stringify({
     modelPresets: presets,
     providers,
     defaultPreset: defaults.modelPreset,
+    fallbacks: Array.isArray(defaults.fallbackModels) ? defaults.fallbackModels : [],
+    retryMode: defaults.providerRetryMode ?? null,
   });
   if (before === after) return false;
 
@@ -2021,6 +2058,12 @@ async function syncNanobotModels(mutationJson: string): Promise<ModelsSyncResult
       }
       if (!mutation.config || !mutation.config.model?.trim()) {
         return { ok: false, message: '模型名称不能为空' };
+      }
+    } else if (mutation.op === 'setFailover') {
+      // 这条指令没有 `preset`（它动的是 agents.defaults 那一段），所以必须显式分支，
+      // 否则会掉进下面的「缺少模型名称」——一条合法的回退链变更被拒，且理由驴唇不对马嘴。
+      if (!Array.isArray(mutation.fallbacks)) {
+        return { ok: false, message: '回退链格式非法' };
       }
     } else if (!mutation.preset?.trim()) {
       return { ok: false, message: '缺少模型名称' };

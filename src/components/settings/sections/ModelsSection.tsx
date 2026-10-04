@@ -19,6 +19,8 @@ import StarIcon from '@mui/icons-material/Star';
 import StarBorderIcon from '@mui/icons-material/StarBorder';
 import { SettingsCard, SettingsRow } from '@/components/settings/SettingsPrimitives';
 import { ModelDialog } from '@/components/settings/ModelDialog';
+import { FailoverCard } from '@/components/settings/FailoverCard';
+import { chainedPresetNames } from '@/lib/modelFallbacks';
 import { toast } from '@/components/Toast';
 import {
   useModelsStore,
@@ -45,11 +47,13 @@ export function ModelsSection() {
   const saveModel = useModelsStore((s) => s.saveModel);
   const removeModel = useModelsStore((s) => s.removeModel);
   const setDefaultModel = useModelsStore((s) => s.setDefaultModel);
+  const managedFallbacks = useModelsStore((s) => s.managedFallbacks);
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<ManagedModel | undefined>(undefined);
   const [pendingDelete, setPendingDelete] = useState<ManagedModel | null>(null);
   const [busy, setBusy] = useState(false);
+  const chained = chainedPresetNames(managedFallbacks);
 
   useEffect(() => {
     // force：进分区就读磁盘现状（用户可能在引擎 WebUI 里改过 config.json），
@@ -144,42 +148,52 @@ export function ModelsSection() {
             }`}
             control={
               <>
+                {/* Tooltip 里垫一层 `<span>`：这三颗按钮**有 disabled 的时候**（默认模型
+                    那颗星恒为 disabled，另两颗在 busy 时 disabled），而 MUI 的 Tooltip 靠
+                    子元素的鼠标事件显形——disabled 的元素不触发事件，提示永远弹不出来，
+                    控制台每次还刷一条警告。垫一层可接收事件的容器才真正修好。 */}
                 <Tooltip title={item.isDefault ? '当前默认模型' : '设为默认模型'}>
-                  <IconButton
-                    size="small"
-                    aria-label={item.isDefault ? '当前默认模型' : '设为默认模型'}
-                    disabled={busy || item.isDefault}
-                    onClick={() => void handleSetDefault(item)}
-                  >
-                    {item.isDefault ? (
-                      <StarIcon sx={{ fontSize: 18, color: 'warning.main' }} />
-                    ) : (
-                      <StarBorderIcon sx={{ fontSize: 18 }} />
-                    )}
-                  </IconButton>
+                  <span>
+                    <IconButton
+                      size="small"
+                      aria-label={item.isDefault ? '当前默认模型' : '设为默认模型'}
+                      disabled={busy || item.isDefault}
+                      onClick={() => void handleSetDefault(item)}
+                    >
+                      {item.isDefault ? (
+                        <StarIcon sx={{ fontSize: 18, color: 'warning.main' }} />
+                      ) : (
+                        <StarBorderIcon sx={{ fontSize: 18 }} />
+                      )}
+                    </IconButton>
+                  </span>
                 </Tooltip>
                 <Tooltip title="编辑">
-                  <IconButton
-                    size="small"
-                    aria-label="编辑"
-                    disabled={busy}
-                    onClick={() => {
-                      setEditing(item);
-                      setDialogOpen(true);
-                    }}
-                  >
-                    <EditOutlinedIcon sx={{ fontSize: 18 }} />
-                  </IconButton>
+                  <span>
+                    <IconButton
+                      size="small"
+                      aria-label="编辑"
+                      disabled={busy}
+                      onClick={() => {
+                        setEditing(item);
+                        setDialogOpen(true);
+                      }}
+                    >
+                      <EditOutlinedIcon sx={{ fontSize: 18 }} />
+                    </IconButton>
+                  </span>
                 </Tooltip>
                 <Tooltip title="删除">
-                  <IconButton
-                    size="small"
-                    aria-label="删除"
-                    disabled={busy}
-                    onClick={() => setPendingDelete(item)}
-                  >
-                    <DeleteOutlineIcon sx={{ fontSize: 18 }} />
-                  </IconButton>
+                  <span>
+                    <IconButton
+                      size="small"
+                      aria-label="删除"
+                      disabled={busy}
+                      onClick={() => setPendingDelete(item)}
+                    >
+                      <DeleteOutlineIcon sx={{ fontSize: 18 }} />
+                    </IconButton>
+                  </span>
                 </Tooltip>
               </>
             }
@@ -194,6 +208,10 @@ export function ModelsSection() {
         onSubmit={handleSubmit}
       />
 
+      {/* 故障转移（FR-9.4）紧挨着模型表：它引用的就是上面这些预设的名字，
+          分到别的分区会让「链里那个名字指的是谁」需要来回翻。 */}
+      <FailoverCard />
+
       <Dialog
         open={pendingDelete !== null}
         onClose={() => setPendingDelete(null)}
@@ -206,6 +224,14 @@ export function ModelsSection() {
             确定删除「{pendingDelete?.name}」？该预设会从引擎配置中移除，
             已选了它的会话需要重新选择模型。
           </DialogContentText>
+          {pendingDelete && chained.includes(pendingDelete.name) && (
+            // 用户该知道这件事：删除会**顺带**改掉「故障转移」那张卡片的内容。
+            // 不说的话，他下次打开那张卡片会以为自己记错了。
+            <DialogContentText sx={{ fontSize: 12.5, mt: 1.5, color: 'warning.main' }}>
+              它还在「故障转移」的回退链里，删除时会一并把那一条摘掉——
+              留着一条指向已删除预设的记录会让引擎直接拒绝加载配置（网关起不来）。
+            </DialogContentText>
+          )}
         </DialogContent>
         <DialogActions sx={{ px: 2.5, pb: 2 }}>
           <Button onClick={() => setPendingDelete(null)}>取消</Button>
