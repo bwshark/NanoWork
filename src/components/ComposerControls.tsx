@@ -28,6 +28,8 @@ import {
 import { hasConversation } from '@/lib/conversation';
 import { useDefaultWorkspacePath } from '@/stores/storageInfoStore';
 import { getRuntime } from '@/ai/runtime';
+import { useActiveModelCapabilities } from '@/hooks/useActiveModelCapabilities';
+import { degradedNotice } from '@/lib/modelCapability';
 import type { ExecutionMode } from '@/types/event';
 
 /**
@@ -120,6 +122,15 @@ export function ComposerControls() {
   const currentMode = MODE_OPTIONS.find((o) => o.value === mode) ?? MODE_OPTIONS[2];
   // 能力门控：同步取当前实现即可（单例惰性构造，不含 IO）
   const modesSupported = getRuntime().capabilities.executionModes === true;
+  /**
+   * 模型级能力门控（FR-9.3）。
+   *
+   * 与上面的 `modesSupported`（**运行时**能力）是两层：那一层问「这个引擎支不支持
+   * 执行模式」，这一层问「当前这个模型能不能调工具」。工具都调不动时，权限设定
+   * （沙箱 / 逐条批准）没有任何对象可言——`toolCall` 为假才置灰「逐条批准」。
+   */
+  const modelCaps = useActiveModelCapabilities();
+  const plainChatNotice = degradedNotice(modelCaps.capabilities);
   /**
    * 是否显示工作空间选择（对齐 WorkBuddy：有对话的会话里没有这个入口）。
    *
@@ -274,6 +285,16 @@ export function ComposerControls() {
         transformOrigin={{ vertical: 'top', horizontal: 'left' }}
         slotProps={{ paper: { sx: { p: 2, width: 320 } } }}
       >
+        {/* 纯对话提示放在最前：它解释的是「下面两个开关为什么点不动」，
+            排在后面会让人先看到置灰的控件再去找原因 */}
+        {plainChatNotice && (
+          <>
+            <Typography variant="body2" sx={{ color: 'warning.main', lineHeight: 1.7 }}>
+              {plainChatNotice}
+            </Typography>
+            <Divider sx={{ my: 1.5 }} />
+          </>
+        )}
         <Typography variant="body2" sx={{ color: 'text.secondary' }}>
           {fullAccess
             ? '当前为完全访问，AI 将在工作空间外直接执行操作，不再逐一请求你的允许。'
@@ -301,7 +322,8 @@ export function ComposerControls() {
           <Switch
             size="small"
             checked={toolApproval && !fullAccess}
-            disabled={fullAccess}
+            // 模型不能调工具时这个开关没有对象（`fullAccess` 时同理，但那是另一个原因）
+            disabled={fullAccess || plainChatNotice !== null}
             onChange={(e) => {
               setSessionToolApproval(ensureSession(), e.target.checked);
             }}

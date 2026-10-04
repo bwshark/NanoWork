@@ -17,7 +17,7 @@
  * 引擎默认值的出处：`nanobot/nanobot/config/schema.py`
  * （`max_tokens: int = 32_768`、`context_window_tokens: int = 200_000`、
  * `supports_tools: bool = True`、`supports_vision: bool = False`、
- * `custom_protocol: bool = False`）。
+ * `supports_reasoning: bool = True`、`custom_protocol: bool = False`）。
  */
 
 import { describe, expect, it } from 'vitest';
@@ -151,10 +151,16 @@ describe('parseTokenLimitInput: 输入框文本 → token 数', () => {
 });
 
 describe('ENGINE_DEFAULT_CAPABILITIES: 与引擎字段默认值同源', () => {
-  it('工具调用默认开、另两项默认关（schema.py::ModelPresetConfig）', () => {
+  it('默认值逐项与引擎同源（schema.py::ModelPresetConfig）', () => {
+    // ⚠️ 两个方向相反是**有意**的，别「统一」成同一个：
+    // `supportsTools` / `supportsReasoning` 默认 true —— 客户端拿它们做硬门禁
+    // （技能挂载、注入思考强度），默认保守会把所有历史预设一升级就禁掉；
+    // `supportsVision` 默认 false —— 正因如此视觉能力只做提醒、不做门禁
+    // （否则同样是一升级就禁掉所有人的贴图功能）。
     expect(ENGINE_DEFAULT_CAPABILITIES).toEqual({
       supportsTools: true,
       supportsVision: false,
+      supportsReasoning: true,
       customProtocol: false,
     });
   });

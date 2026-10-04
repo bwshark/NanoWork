@@ -124,14 +124,21 @@ export function parseTokenLimitInput(raw: string): {
 /**
  * 模型能力声明的缺省值，**必须与引擎 `schema.py::ModelPresetConfig` 的字段默认值
  * 逐字一致**（`supports_tools: bool = True` / `supports_vision: bool = False` /
- * `custom_protocol: bool = False`）。
+ * `supports_reasoning: bool = True` / `custom_protocol: bool = False`）。
  *
- * 引擎当前不消费这三项（工具定义始终随请求下发），它们是**声明式**字段：
+ * 引擎当前不消费前四项（工具定义始终随请求下发），它们是**声明式**字段：
  * 客户端把「用户认定的模型能力」随预设落盘，回读与迁移才有依据。改缺省值要回来
  * 同步这里，否则「界面显示的默认」与「引擎侧缺省」会不一样。
+ *
+ * ⚠️ **两个方向相反的默认值是有意的**（见 `src/lib/modelCapability.ts` 的文件头）：
+ * - `supportsTools` / `supportsReasoning` 默认 true → 客户端拿它们做**硬门禁**，
+ *   默认宽松才不会一升级就把所有人禁掉；
+ * - `supportsVision` 默认 false → 因此视觉能力**只做提醒不做门禁**（否则同样会把
+ *   所有历史预设的贴图功能一起禁掉）。
  */
 export const ENGINE_DEFAULT_CAPABILITIES = {
   supportsTools: true,
   supportsVision: false,
+  supportsReasoning: true,
   customProtocol: false,
 } as const;

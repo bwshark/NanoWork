@@ -23,6 +23,14 @@ import {
   type UsageWindow,
 } from '@/lib/usageReport';
 import { useUsageStore } from '@/stores/usageStore';
+import { useModelsStore } from '@/stores/modelsStore';
+import {
+  computeCost,
+  formatCost,
+  formatUnitPrice,
+  resolvePricingFor,
+  sumByCurrency,
+} from '@/lib/modelPricing';
 
 /**
  * 用量分区（FR-11.1）：本机 LLM 用量报表。
@@ -72,6 +80,46 @@ export function UsageSection() {
   );
   const totals = useMemo(() => sumDays(windowed), [windowed]);
   const bySource = useMemo(() => aggregateBySource(windowed), [windowed]);
+
+  /**
+   * 单价来自模型预设（FR-11.1 的金额口径）。
+   *
+   * 与「设置 → 模型」共用同一份 `managed`：单价在那里编辑、在这里结算，
+   * 分成两份状态就会出现「改了单价，报表还是老数字」。补读的理由同
+   * `useActiveModelCapabilities`（用户可能从没打开过模型分区）。
+   */
+  const managed = useModelsStore((m) => m.managed);
+  const loadManaged = useModelsStore((m) => m.loadManaged);
+  useEffect(() => {
+    if (managed.length === 0) void loadManaged();
+  }, [managed.length, loadManaged]);
+
+  /**
+   * 逐模型的成本。**只算配了单价的那些**——没配的按 0 计入会让人以为「都算过了」，
+   * 而合计里少了几个模型正是最需要被看见的信息。
+   *
+   * 归因口径见 `src/lib/modelPricing.ts` 的文件头：用量表只有 `(provider, model)`
+   * 两列，同一个上游模型被多个预设引用时取第一条（不承诺精确归因，已如实说明）。
+   */
+  const pricedRows = useMemo(
+    () =>
+      stats.providers.map((row) => {
+        const pricing = resolvePricingFor(managed, row.provider, row.model);
+        return { row, pricing, cost: pricing ? computeCost(row, pricing) : null };
+      }),
+    [stats.providers, managed],
+  );
+
+  const costTotals = useMemo(
+    () =>
+      sumByCurrency(
+        pricedRows.flatMap((r) =>
+          r.cost !== null && r.pricing ? [{ cost: r.cost, currency: r.pricing.currency }] : [],
+        ),
+      ),
+    [pricedRows],
+  );
+  const unpricedCount = pricedRows.filter((r) => r.cost === null).length;
 
   if (!loaded) {
     return (
@@ -203,22 +251,86 @@ export function UsageSection() {
         {stats.providers.length === 0 ? (
           <SettingsRow label="暂无模型数据" hint="引擎还没有记录到任何一次模型调用。" />
         ) : (
-          stats.providers.map((row) => (
+          pricedRows.map(({ row, pricing, cost }) => (
             <SettingsRow
               key={`${row.provider}/${row.model}`}
               label={`${row.provider} · ${row.model}`}
-              hint={`输入 ${formatTokens(row.inputTokens)} · 输出 ${formatTokens(row.outputTokens)} · ${row.requests} 次请求`}
-              control={<Chip size="small" variant="outlined" label={`${formatTokens(row.totalTokens)} token`} />}
+              hint={
+                <>
+                  输入 {formatTokens(row.inputTokens)} · 输出 {formatTokens(row.outputTokens)} ·{' '}
+                  {row.requests} 次请求
+                  <br />
+                  {pricing ? (
+                    <>
+                      单价 {formatUnitPrice(pricing)}（每百万 token）
+                      {/* 缓存占输入的比例是判断「金额准不准」的关键：缓存单价没填时
+                          按输入价结算，占比越高这个上界越松 */}
+                      {' · '}缓存读 {formatTokens(row.cacheReadTokens)}
+                    </>
+                  ) : (
+                    '未配置单价 → 不计入金额合计（在「设置 → 模型」的「计价」里填）'
+                  )}
+                </>
+              }
+              control={
+                cost === null ? (
+                  <Chip size="small" variant="outlined" label={`${formatTokens(row.totalTokens)} token`} />
+                ) : (
+                  <Chip
+                    size="small"
+                    variant="outlined"
+                    label={`${formatCost(cost, pricing!.currency)} · ${formatTokens(row.totalTokens)}`}
+                  />
+                )
+              }
             />
           ))
         )}
       </SettingsCard>
 
-      <SettingsCard title="成本">
-        <SettingsRow
-          label="金额暂不统计"
-          hint="当前只统计 token。金额需要模型单价（输入 / 输出分别计价），等 models 元数据带上 pricing 后再接——现在编一个单价出来的数字比没有数字更糟，它会让人拿去对账。"
-        />
+      <SettingsCard
+        title="成本"
+        description="按你在「设置 → 模型」里填的单价结算（每百万 token，不换算汇率）"
+      >
+        {costTotals.length === 0 ? (
+          <SettingsRow
+            label="金额暂不统计"
+            hint={
+              <>
+                还没有任何一个模型配过单价。到「设置 → 模型 → 计价」里填上输入 / 输出单价即可——
+                {' '}
+                <strong>留空就是不计</strong>，不会按 0 计入。
+                <br />
+                缓存读取那一档可以不填（按输入单价结算，是一个明确的上界）：引擎的输入 token
+                本就包含缓存读取，而长会话里它往往占绝大多数，这一档对结果影响最大。
+              </>
+            }
+          />
+        ) : (
+          <>
+            {costTotals.map((t) => (
+              <SettingsRow
+                key={t.currency}
+                label={formatCost(t.amount, t.currency)}
+                hint={`近 30 天 · 覆盖 ${t.models} 个模型${
+                  unpricedCount > 0 ? ` · 还有 ${unpricedCount} 个模型没配单价（未计入）` : ''
+                }`}
+              />
+            ))}
+            <SettingsRow
+              label="口径"
+              hint={
+                <>
+                  输入按 <strong>未命中缓存</strong> 的部分计价，命中部分走「缓存读取」单价；
+                  输出单独计价。两种以上币种<strong>不会相加</strong>——本项目没有汇率来源。
+                  <br />
+                  用量表只有 (provider, model) 两列，同一个上游模型被多个预设引用时按第一条结算，
+                  因此这是一个<strong>估算</strong>，不承诺与账单逐条对齐。
+                </>
+              }
+            />
+          </>
+        )}
       </SettingsCard>
     </Box>
   );

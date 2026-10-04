@@ -186,6 +186,20 @@ export interface TaskSyncResult {
  * `label` 恒等于预设名——**预设名就是模型选择器里显示的那行字**，
  * 改名只能换 key，不能只换展示名。
  */
+/**
+ * 预设里的单价（每百万 token）。
+ *
+ * 与引擎 `ModelPricing` 同形（camelCase 侧）。`cacheReadPerMillion` 允许缺省，
+ * 语义是「用户没填」→ 客户端按输入单价计；**不是** 0（0 = 缓存免费，另一个方向的错）。
+ * 归一化在 `src/lib/modelPricing.ts::normalizePricing`，UI 不要直接读这里的裸值。
+ */
+export interface NanobotModelPricing {
+  inputPerMillion?: number;
+  outputPerMillion?: number;
+  cacheReadPerMillion?: number | null;
+  currency?: string;
+}
+
 export interface NanobotModelPreset {
   model: string;
   provider: string;
@@ -194,15 +208,19 @@ export interface NanobotModelPreset {
   temperature: number;
   reasoningEffort: string | null;
   /**
-   * 能力声明（客户端「高级配置」的三项）。
+   * 能力声明（客户端「高级配置」的四项）。
    *
    * **刻意是可选的**：`agents.defaults` 组的隐式 default 预设、以及本产品上手
-   * 之前建下的预设都没有这三个键。缺省语义由 `buildManaged` 按引擎字段默认值
+   * 之前建下的预设都没有这几个键。缺省语义由 `buildManaged` 按引擎字段默认值
    * 补齐，别在这里写 `false` —— 那会把「没声明过」变成「声明了不支持工具调用」。
    */
   supportsTools?: boolean;
   supportsVision?: boolean;
+  /** 是否有思考模式。引擎默认 **true**（方向与 `supports_vision` 相反，理由见 schema.py） */
+  supportsReasoning?: boolean;
   customProtocol?: boolean;
+  /** 单价；缺省 = 没配 → 不计入金额合计 */
+  pricing?: NanobotModelPricing | null;
 }
 
 /** 预设引用到的 providers 条目（回显用，含 key 明文——见 NanobotModelsSnapshot） */

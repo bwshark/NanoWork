@@ -27,6 +27,24 @@ if (typeof g.localStorage === 'undefined') {
   }
 }
 
+// —— `URL.createObjectURL` / `revokeObjectURL` ——
+// jsdom **没有**实现它们（它不实现 blob URL），而附件链路（图片预览 `previewUrl`）
+// 会用到：缺了就会在「往输入区添加一个图片附件」时抛
+// `URL.createObjectURL is not a function`，表现成添加附件直接失败。
+// 与上面两条同因：纯 node 测试环境的能力缺口，在这里一次补齐，别让每个用例各垫各的。
+if (typeof g.URL !== 'undefined') {
+  const urlLike = g.URL as unknown as {
+    createObjectURL?: (blob: unknown) => string;
+    revokeObjectURL?: (url: string) => void;
+  };
+  if (typeof urlLike.createObjectURL !== 'function') {
+    urlLike.createObjectURL = () => 'blob:jsdom-unimplemented';
+  }
+  if (typeof urlLike.revokeObjectURL !== 'function') {
+    urlLike.revokeObjectURL = () => {};
+  }
+}
+
 // 每个测试文件执行前清空持久化状态，避免 zustand persist 的跨用例串扰。
 beforeEach(() => {
   try {

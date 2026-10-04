@@ -46,6 +46,13 @@ import {
   parseTokenLimitInput,
 } from '@/lib/modelOptions';
 import {
+  CURRENCY_SYMBOL,
+  PRICING_CURRENCIES,
+  normalizePricing,
+  parsePriceInput,
+  type PricingCurrency,
+} from '@/lib/modelPricing';
+import {
   capabilityRowSx,
   checkLabelSx,
   checkRowSx,
@@ -127,11 +134,26 @@ export function ModelDialog({
    */
   const [contextText, setContextText] = useState('');
   const [maxText, setMaxText] = useState('');
-  /** 思考强度；`null` = 关闭思考模式（提交时写 `null`，引擎不注入 reasoning_effort） */
+  /**
+   * 思考强度；`null` = 不注入 `reasoning_effort`（跟随供应商默认）。
+   *
+   * ⚠️ 与 `supportsReasoning`（**能力声明**）是两件事：一个模型可能「有思考模式但
+   * 我们不想强制档位」，所以两个开关必须分开。此前只有一个「思考模式」勾选框绑在
+   * 这个值上，于是「模型不支持思考」与「不注入档位」被压成了同一个状态。
+   */
   const [reasoning, setReasoning] = useState<string | null>(null);
   const [supportsTools, setSupportsTools] = useState(true);
   const [supportsVision, setSupportsVision] = useState(false);
+  const [supportsReasoning, setSupportsReasoning] = useState(true);
   const [customProtocol, setCustomProtocol] = useState(false);
+  /**
+   * 三档单价的**原始输入文本**（与 token 上限同因：`number | null` 表达不了
+   * 「正在敲 `2.`」这种中间态）。空串 = 不配这一档。
+   */
+  const [priceInputText, setPriceInputText] = useState('');
+  const [priceCacheText, setPriceCacheText] = useState('');
+  const [priceOutputText, setPriceOutputText] = useState('');
+  const [priceCurrency, setPriceCurrency] = useState<PricingCurrency>('CNY');
   const [setDefault, setSetDefault] = useState(false);
   const [probing, setProbing] = useState(false);
   const [probe, setProbe] = useState<ModelProbeResult | null>(null);
@@ -149,6 +171,27 @@ export function ModelDialog({
   /** 全部 token 数，与两个文本框同步（`null` = 使用提供商默认值） */
   const contextTokens = parseTokenLimitInput(contextText);
   const maxTokens = parseTokenLimitInput(maxText);
+
+  /** 三档单价的解析结果（`value: null` = 未填） */
+  const priceInput = parsePriceInput(priceInputText);
+  const priceCache = parsePriceInput(priceCacheText);
+  const priceOutput = parsePriceInput(priceOutputText);
+  const priceInvalid = priceInput.invalid || priceCache.invalid || priceOutput.invalid;
+  /**
+   * 提交用的单价对象；`null` = 不配（三档都空或全零）。
+   *
+   * 归一化交给 `normalizePricing`（与 store 里 `buildManaged` 同一份判据）：
+   * 「全零」与「没填」在数据里必须是同一个值，否则「用量」分区会因为一个 `¥0`
+   * 的单价而显示金额、掩盖掉「其实没配」。
+   */
+  const pendingPricing = priceInvalid
+    ? null
+    : normalizePricing({
+        inputPerMillion: priceInput.value ?? 0,
+        outputPerMillion: priceOutput.value ?? 0,
+        cacheReadPerMillion: priceCache.value,
+        currency: priceCurrency,
+      });
 
   // 每次打开（或切换到编辑另一条）都重置为这一条的真实值：
   // 对话框是常驻挂载的，不重置的话上一条填的 key 会残留到下一条。
@@ -180,7 +223,24 @@ export function ModelDialog({
       setReasoning(editing.reasoningEffort);
       setSupportsTools(editing.supportsTools);
       setSupportsVision(editing.supportsVision);
+      setSupportsReasoning(editing.supportsReasoning);
       setCustomProtocol(editing.customProtocol);
+      // 单价：`null` = 没配 → 三个框都留空（占位符写着「不填」）。
+      // 数字用 `String()` 而不是本地化格式：单价是小数，`toLocaleString` 会引入
+      // 千分位与本地小数点，而 `parsePriceInput` 只吃掉逗号——「2,5」这种欧式小数
+      // 往返一次就成 25 了。
+      setPriceInputText(
+        editing.pricing ? String(editing.pricing.inputPerMillion) : '',
+      );
+      setPriceCacheText(
+        editing.pricing?.cacheReadPerMillion != null
+          ? String(editing.pricing.cacheReadPerMillion)
+          : '',
+      );
+      setPriceOutputText(
+        editing.pricing ? String(editing.pricing.outputPerMillion) : '',
+      );
+      setPriceCurrency(editing.pricing?.currency ?? 'CNY');
       setSetDefault(editing.isDefault);
     } else {
       setProvider('deepseek');
@@ -193,7 +253,12 @@ export function ModelDialog({
       setReasoning(null);
       setSupportsTools(true);
       setSupportsVision(false);
+      setSupportsReasoning(true);
       setCustomProtocol(false);
+      setPriceInputText('');
+      setPriceCacheText('');
+      setPriceOutputText('');
+      setPriceCurrency('CNY');
       setSetDefault(false);
     }
     setShowKey(false);
@@ -257,7 +322,9 @@ export function ModelDialog({
         reasoningEffort: reasoning,
         supportsTools,
         supportsVision,
+        supportsReasoning,
         customProtocol,
+        pricing: pendingPricing,
         setDefault,
         original: editing,
       });
@@ -268,13 +335,14 @@ export function ModelDialog({
   };
 
   // 必填只有三处：模型名（预设名就是它，空名会让这一行在下拉里彻底消失）、
-  // 自定义供应商的接口地址（没有它就没有可打的端点）、以及两个 token 框的**格式**。
-  // API Key 不在此列。
+  // 自定义供应商的接口地址（没有它就没有可打的端点）、以及两个 token 框与三个
+  // 单价框的**格式**。API Key 不在此列。
   const canSave =
     Boolean(model.trim()) &&
     (!custom || Boolean(apiBase.trim())) &&
     !contextTokens.invalid &&
-    !maxTokens.invalid;
+    !maxTokens.invalid &&
+    !priceInvalid;
 
   const openDocs = () => {
     if (docsUrl) void platform.openUrl(docsUrl);
@@ -518,9 +586,26 @@ export function ModelDialog({
                   checked={supportsVision}
                   onChange={setSupportsVision}
                 />
+                {/*
+                  「思考能力」与「注入思考强度」是**两件事**，此前被一个勾选框压成了
+                  同一状态（勾选 = `reasoning_effort` 非空）。分开的理由：一个模型可以
+                  「有思考模式，但我们不强制档位」——那时能力为真、强度为空。合并之后
+                  这种状态在界面上根本表达不出来。
+                */}
                 <CapabilityCheck
-                  label="思考模式"
+                  label="思考能力"
+                  checked={supportsReasoning}
+                  onChange={(next) => {
+                    setSupportsReasoning(next);
+                    // 能力关掉时顺手清掉强度：留着一个「不支持思考却注入了档位」的
+                    // 预设，引擎照样会把 reasoning_effort 发出去，而界面却说它不支持
+                    if (!next) setReasoning(null);
+                  }}
+                />
+                <CapabilityCheck
+                  label="注入思考强度"
                   checked={reasoning !== null}
+                  disabled={!supportsReasoning}
                   // 开启时沿用原预设的档位（用户在引擎 WebUI 里设过 high 就别压成 medium），
                   // 没有才落到默认档；关闭即写 null（不注入，跟随供应商默认）
                   onChange={(next) =>
@@ -535,6 +620,11 @@ export function ModelDialog({
                   onChange={setCustomProtocol}
                 />
               </Box>
+              {!supportsReasoning && (
+                <Typography sx={fieldHintSx}>
+                  已声明该模型没有思考能力，因此「注入思考强度」不可开——关掉的能力不该留着一个仍然生效的档位。
+                </Typography>
+              )}
               {/* 输入 / 输出各占一列：两者都是「token 上限」，并排才看得出窗口与输出的比例关系 */}
               <Box sx={[tokenGridSx, { mt: 1 }]}>
                 <TokenLimitField
@@ -554,8 +644,73 @@ export function ModelDialog({
                   onChange={setMaxText}
                 />
               </Box>
+
             </Box>
           )}
+        {/* 计价（FR-11.1 的金额口径）。**刻意放在自定义供应商之外**：单价是用户照着
+            自己账单填的事实，与「这个端点内置还是自建」无关。放在里面会让内置供应商
+            （最常见的那类）永远配不了单价，「用量」分区的金额也就永远是「暂不统计」。 */}
+          <Box>
+            <Typography sx={sectionLabelSx}>计价（每百万 token）</Typography>
+            <Box sx={[tokenGridSx, { mt: 0.5 }]}>
+              <TextField
+                label="输入"
+                size="small"
+                sx={denseFieldSx}
+                fullWidth
+                placeholder="不填"
+                error={priceInput.invalid}
+                inputProps={{ 'aria-label': '输入单价', inputMode: 'decimal' }}
+                value={priceInputText}
+                onChange={(e) => setPriceInputText(e.target.value)}
+              />
+              <TextField
+                label="输出"
+                size="small"
+                sx={denseFieldSx}
+                fullWidth
+                placeholder="不填"
+                error={priceOutput.invalid}
+                inputProps={{ 'aria-label': '输出单价', inputMode: 'decimal' }}
+                value={priceOutputText}
+                onChange={(e) => setPriceOutputText(e.target.value)}
+              />
+            </Box>
+            <Box sx={[tokenGridSx, { mt: 1 }]}>
+              <TextField
+                label="缓存读取（可选）"
+                size="small"
+                sx={denseFieldSx}
+                fullWidth
+                placeholder="不填 = 按输入单价"
+                error={priceCache.invalid}
+                inputProps={{ 'aria-label': '缓存读取单价', inputMode: 'decimal' }}
+                value={priceCacheText}
+                onChange={(e) => setPriceCacheText(e.target.value)}
+              />
+              <TextField
+                select
+                label="币种"
+                size="small"
+                sx={denseFieldSx}
+                fullWidth
+                SelectProps={{ inputProps: { 'aria-label': '计价币种' } }}
+                value={priceCurrency}
+                onChange={(e) => setPriceCurrency(e.target.value as PricingCurrency)}
+              >
+                {PRICING_CURRENCIES.map((c) => (
+                  <MenuItem key={c} value={c}>
+                    {CURRENCY_SYMBOL[c]} {c}
+                  </MenuItem>
+                ))}
+              </TextField>
+            </Box>
+            <Typography sx={fieldHintSx}>
+              留空即不参与「用量」分区的金额合计（不是按 0 计）。引擎的输入 token
+              已包含缓存读取，所以「缓存读取」不填时按**输入单价**结算——那是一个明确的上界，
+              而不是替你假定一个折扣。两种币种不会被加到一起。
+            </Typography>
+          </Box>
         </Stack>
       </Box>
 
@@ -658,19 +813,24 @@ function CapabilityCheck({
   label,
   checked,
   onChange,
+  disabled = false,
 }: {
   label: string;
   checked: boolean;
   onChange: (next: boolean) => void;
+  /** 由**另一项**能力门控时置灰（如「思考能力」关掉后的「注入思考强度」） */
+  disabled?: boolean;
 }) {
   return (
     <FormControlLabel
       sx={checkRowSx}
+      disabled={disabled}
       control={
         <Checkbox
           size="small"
           sx={{ p: 0.5 }}
           checked={checked}
+          disabled={disabled}
           onChange={(e) => onChange(e.target.checked)}
           inputProps={{ 'aria-label': label }}
         />

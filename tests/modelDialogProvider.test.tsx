@@ -24,7 +24,7 @@
  * 其实是空转（见 `helpers/reactMount`）。
  */
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react';
 import { ThemeProvider } from '@mui/material';
 import { ModelDialog } from '@/components/settings/ModelDialog';
@@ -59,6 +59,19 @@ beforeEach(() => {
   // 症状是「菜单点自定义没反应」「找不到 Autocomplete 箭头」这类**假失败**，且只在
   // 全量跑时出现（单跑该用例全绿）。空 body 是最省事、也最容易理解的隔离手段。
   document.body.innerHTML = '';
+});
+
+/**
+ * 收尾：卸组件 + **把过渡定时器跑完**。
+ *
+ * 只 `unmount()` 不够：MUI `Dialog` 的开合过渡是 react-transition-group 的
+ * `setTimeout`，**不归 React 管**。用例结束时若还有一次过渡在飞，它会在测试环境销毁
+ * 之后触发，vitest 记一条 `Unhandled Error`——**所有用例都绿，但整个 run 的退出码是 1**
+ * （`Errors 2 errors`）。这种「绿灯 + 非零退出码」最容易在 CI 里被当成噪音放过。
+ */
+afterEach(async () => {
+  unmount();
+  await new Promise((resolve) => setTimeout(resolve, 400));
 });
 
 /** 每次挂载收到的提交值（`submitted[0]` 即第一次提交） */
@@ -328,17 +341,42 @@ describe('添加模型 · 完全自定义', () => {
     expect(saveButton().disabled).toBe(false);
   });
 
-  it('四个能力勾选项齐全，默认只有「工具调用」勾上（与引擎字段默认值同源）', async () => {
+  it('五个能力勾选项齐全，默认勾上与引擎字段默认值同源（工具调用 / 思考能力为真）', async () => {
     mountDialog();
     await pickCustom();
 
-    for (const label of ['工具调用', '图片输入', '思考模式', '自定义协议']) {
+    // 「思考能力」与「注入思考强度」是两件事：前者是模型能不能思考（引擎默认 true），
+    // 后者是我们要不要强制一个档位（默认不注入）。此前只有一个勾选框绑在档位上，
+    // 「有思考能力但不强制档位」这种状态在界面上根本表达不出来。
+    for (const label of ['工具调用', '图片输入', '思考能力', '注入思考强度', '自定义协议']) {
       expect(checkboxByAria(label), `找不到勾选项「${label}」`).toBeTruthy();
     }
     expect(checkboxByAria('工具调用').checked).toBe(true);
     expect(checkboxByAria('图片输入').checked).toBe(false);
-    expect(checkboxByAria('思考模式').checked).toBe(false);
+    expect(checkboxByAria('思考能力').checked).toBe(true);
+    expect(checkboxByAria('注入思考强度').checked).toBe(false);
     expect(checkboxByAria('自定义协议').checked).toBe(false);
+  });
+
+  it('⚠️ 关掉「思考能力」会同时清掉「注入思考强度」并把它置灰', async () => {
+    mountDialog();
+    await pickCustom();
+
+    click(checkboxByAria('注入思考强度'));
+    await flush();
+    expect(checkboxByAria('注入思考强度').checked).toBe(true);
+
+    click(checkboxByAria('思考能力'));
+    await flush();
+
+    // 留着一个「不支持思考却注入了档位」的预设，引擎照样会把 reasoning_effort
+    // 发出去，而界面说它不支持——必须一起清掉
+    expect(checkboxByAria('注入思考强度').checked).toBe(false);
+    expect(checkboxByAria('注入思考强度').disabled).toBe(true);
+    expect(
+      document.body.textContent?.includes('已声明该模型没有思考能力'),
+      '置灰要给出原因，否则用户以为控件坏了',
+    ).toBe(true);
   });
 
   it('能力勾选真的进 onSubmit（只画不传的控件在界面上看不出来）', async () => {
@@ -349,7 +387,7 @@ describe('添加模型 · 完全自定义', () => {
 
     click(checkboxByAria('工具调用')); // 取消勾选
     click(checkboxByAria('图片输入'));
-    click(checkboxByAria('思考模式'));
+    click(checkboxByAria('思考能力')); // 取消勾选（默认是勾上的）
     click(checkboxByAria('自定义协议'));
     await flush();
 
@@ -358,9 +396,10 @@ describe('添加模型 · 完全自定义', () => {
 
     expect(submitted[0].supportsTools).toBe(false);
     expect(submitted[0].supportsVision).toBe(true);
+    expect(submitted[0].supportsReasoning).toBe(false);
     expect(submitted[0].customProtocol).toBe(true);
-    // 思考模式落的是 reasoning effort（引擎唯一真会读的那个）
-    expect(submitted[0].reasoningEffort).toBeTruthy();
+    // 关掉「思考能力」时强度被一并清空：留着一个仍然生效的档位，引擎照样会把它发出去
+    expect(submitted[0].reasoningEffort).toBeNull();
   });
 
   it('两个 token 框初始为空 = 使用提供商默认值，占位符写着这句话', async () => {
@@ -606,7 +645,10 @@ function managedModel(overrides: Partial<ManagedModel> = {}): ManagedModel {
     reasoningEffort: null,
     supportsTools: true,
     supportsVision: false,
+    supportsReasoning: true,
     customProtocol: false,
+    // 单价：null = 没配（回填时三个框都该是空的）
+    pricing: null,
     temperature: 0.7,
     ...overrides,
   };
@@ -657,11 +699,15 @@ describe('添加模型 · 编辑回填', () => {
     expect(pressed('上下文窗口')).toEqual([]); // 100000 不在档位里，但值要看得见
     expect(pressed('单次最大输出')).toEqual(['64K']); // 65536 就是那个档位，必须显示为选中
     expect(checkboxByAria('图片输入').checked).toBe(true);
-    expect(checkboxByAria('思考模式').checked).toBe(true);
+    // 回填后「思考能力」勾上（引擎默认 true），「注入思考强度」也勾上（预设里是 high）——
+    // 两个控件各答一个问题，此前它们被压成同一个
+    expect(checkboxByAria('思考能力').checked).toBe(true);
+    expect(checkboxByAria('注入思考强度').checked).toBe(true);
 
     click(saveButton());
     await flush();
     expect(submitted[0].reasoningEffort).toBe('high');
+    expect(submitted[0].supportsReasoning).toBe(true);
     expect(submitted[0].contextWindowTokens).toBe(100_000);
     expect(submitted[0].supportsVision).toBe(true);
   });
@@ -681,5 +727,77 @@ describe('添加模型 · 编辑回填', () => {
     expect(inputByAria('接口地址')).toBeTruthy();
     expect(byAria('上下文窗口')).toBeNull();
     expect(inputByAria('模型名称').value).toBe('qwen-long');
+  });
+});
+
+describe('计价：单价进预设（FR-11.1 的金额口径）', () => {
+  it('⭐ 内置供应商也能配单价（计价与「端点内置还是自建」无关）', async () => {
+    mountDialog(); // 默认 provider = deepseek（内置）
+    // 高级配置对它仍然不显示（既有约定），但计价必须在——
+    // 否则最常见的这批用户永远配不了单价，「用量」分区的金额就永远是「暂不统计」
+    expect(byAria('上下文窗口')).toBeNull();
+    expect(inputByAria('输入单价')).toBeTruthy();
+    expect(inputByAria('输出单价')).toBeTruthy();
+    expect(inputByAria('缓存读取单价')).toBeTruthy();
+  });
+
+  it('三档单价进 onSubmit；缓存留空保持 null（＝按输入单价计，不是 0）', async () => {
+    mountDialog();
+    setInputValue(inputByAria('模型名称'), 'gpt-4o');
+    setInputValue(inputByAria('输入单价'), '2.5');
+    setInputValue(inputByAria('输出单价'), '10');
+    await flush();
+    click(saveButton());
+    await flush();
+
+    expect(submitted[0].pricing).toEqual({
+      inputPerMillion: 2.5,
+      outputPerMillion: 10,
+      // 留空 ≠ 0：0 是「缓存免费」，那会把长会话的成本算低一个数量级
+      cacheReadPerMillion: null,
+      currency: 'CNY',
+    });
+  });
+
+  it('三档都留空 → pricing 为 null（「没配」与「配成全零」在数据里是同一个值）', async () => {
+    mountDialog();
+    setInputValue(inputByAria('模型名称'), 'gpt-4o');
+    await flush();
+    click(saveButton());
+    await flush();
+    expect(submitted[0].pricing).toBeNull();
+  });
+
+  it('非法单价拦住保存（不静默当成 0）', async () => {
+    mountDialog();
+    setInputValue(inputByAria('模型名称'), 'gpt-4o');
+    setInputValue(inputByAria('输入单价'), '2.5.1');
+    await flush();
+    expect(saveButton().disabled, '格式错的单价不该能保存').toBe(true);
+
+    setInputValue(inputByAria('输入单价'), '2.5');
+    await flush();
+    expect(saveButton().disabled).toBe(false);
+  });
+
+  it('编辑回填：单价三个框按原值填回，留空的那档仍是空', async () => {
+    mountDialog(
+      managedModel({
+        pricing: {
+          inputPerMillion: 3,
+          outputPerMillion: 15,
+          cacheReadPerMillion: 0.3,
+          currency: 'USD',
+        },
+      }),
+    );
+    expect(inputByAria('输入单价').value).toBe('3');
+    expect(inputByAria('输出单价').value).toBe('15');
+    expect(inputByAria('缓存读取单价').value).toBe('0.3');
+
+    click(saveButton());
+    await flush();
+    expect(submitted[0].pricing?.currency).toBe('USD');
+    expect(submitted[0].pricing?.cacheReadPerMillion).toBe(0.3);
   });
 });

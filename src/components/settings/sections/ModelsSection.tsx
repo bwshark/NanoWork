@@ -52,7 +52,9 @@ export function ModelsSection() {
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    void loadManaged();
+    // force：进分区就读磁盘现状（用户可能在引擎 WebUI 里改过 config.json），
+    // 而不是复用某次还没返回的读取
+    void loadManaged(true);
   }, [loadManaged]);
 
   const handleSubmit = async (value: ModelFormValue): Promise<boolean> => {

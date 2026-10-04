@@ -299,7 +299,7 @@
 | ------ | --------- | ------ | -- | -------- | --------------------------------------------------------------------------------------------------------------- |
 | FR-9.1 | 模型目录      | P0     | ✅  | both     | 从网关 `GET /v1/models` 拉取；`modelPresets` + 隐式 `default`（已实现）                                                      |
 | FR-9.2 | 会话级模型覆盖   | P0     | ✅  | both     | 每请求下发模型，网关按请求级解析（已实现）                                                                                           |
-| FR-9.3 | **能力协商**  | **P1** | ⬜  | both     | 模型元数据声明 `supportsToolCall` / `supportsImages` / `supportsReasoning`；不具备 tool-call 的模型自动降级为纯对话（禁用工具卡片与 Skill 挂载） |
+| FR-9.3 | **能力协商**  | **P1** | ✅  | both     | 模型元数据声明 `supportsToolCall` / `supportsImages` / `supportsReasoning`；不具备 tool-call 的模型自动降级为纯对话（禁用工具卡片与 Skill 挂载）。**已落地（2026-10-04）**：字段名叫 `supportsTools` / `supportsVision` / `supportsReasoning`（沿用引擎既有命名，见 `schema.py::ModelPresetConfig`；`supportsReasoning` 为本轮新增）。门控实现在 `src/lib/modelCapability.ts`（纯逻辑）+ `src/hooks/useActiveModelCapabilities.ts`：**技能挂载入口禁用并给出原因**（`ComposerMenu`）、权限弹层显示「已降级为纯对话」且逐条批准置灰、模型对话框里「注入思考强度」由「思考能力」门控。两条关键取舍：① **「查不到 ≠ 不支持」**（Web 端 / 引擎离线 / 手填模型名一律按宽松处理，否则一升级就把所有人的功能禁掉且无报错）；② **视觉能力只提醒不阻止**——`supports_vision` 的引擎默认是 `false`，硬门禁会把所有历史预设的贴图功能一并禁掉 |
 | FR-9.4 | 多供应商与故障转移 | P1     | 🟡 | electron | provider / fallback 配置（nanobot 侧支持）；前端需展示当前 provider 与回退链                                                       |
 | FR-9.5 | 私有模型与内网部署 | P1     | ✅  | both     | OpenAI 兼容 endpoint 可指向内网 vLLM（已支持，需补「完全离线」验收：无外网时全链路可用）                                                         |
 
@@ -319,7 +319,7 @@
 
 | 编号      | 名称          | 优先级    | 现状 | 环境       | 验收标准                                                                    |
 | ------- | ----------- | ------ | -- | -------- | ----------------------------------------------------------------------- |
-| FR-11.1 | 用量与成本       | **P0** | 🟡 | both     | 已完成：引擎只读 `GET /v1/usage`（`[LOCAL PATCH]`）+ 设置 →「用量」分区（日期 / 来源 / provider·模型 三个维度，token-only，窗口 7/30/90）。**补**：金额报表（需 `models` 元数据扩展 `pricing` 单价）。注：用量表没有 session / agent 列，原案「按会话 / Agent」不成立，见 §20.2 |
+| FR-11.1 | 用量与成本       | **P0** | ✅ | both     | 引擎只读 `GET /v1/usage`（`[LOCAL PATCH]`）+ 设置 →「用量」分区（日期 / 来源 / provider·模型 三个维度，窗口 7/30/90）。**金额已落地（2026-10-04）**：模型元数据新增 `pricing`（三档单价 + 币种，见 §20.2）。注：用量表没有 session / agent 列，原案「按会话 / Agent」不成立，见 §20.2 |
 | FR-11.2 | 全链路 Trace   | P1     | ✅  | electron | **已落地（2026-10-04）**：单次请求 trace 落盘，落点 `<userData>/traces/<pid>/trace_<32hex>.json`，**形状对齐 WorkBuddy**（`{trace, spans}`，span 类型 `agent` / `generation` / `function` / `custom`）。数据源**不是新埋点**而是事件流：回合收尾时由 `buildTurnTrace(events)` 折出（见 §20.4）。两处刻意差异：`workerPid` / `workerHostname` 由主进程落盘时补（渲染层不知道写文件那个进程的 pid）；**不落提问正文**（诊断包会被用户发出去） |
 | FR-11.3 | 运行日志分级      | P1     | ✅  | electron | **已落地（2026-10-04）**：`<userData>/logs/<本地日 YYYY-MM-DD>/<module>.log`，一行一条、只追加；模块名走**白名单**（16 个，同时是文件名取值域 → 不需要再挡路径穿越）；等级 `debug` / `info` / `warn` / `error`（行内字段，不按等级分文件）。两侧共用一份纯逻辑（`src/observability/logging.ts`）格式化，渲染层经 IPC 送**已格式化的行**，主进程只做校验 + 追加。**一键打包诊断**已落：设置 →「诊断」→ 导出 zip（见 §20.4） |
 | FR-11.4 | 健康监控告警      | P2     | ⬜  | electron | 渠道掉线 / 队列积压 / 模型失败率超阈值告警（V3）                                            |
@@ -2749,7 +2749,7 @@ export interface SyncMeta {
     30 天派生指标（峰值日 / 连续天数 / 缓存命中率，分母只算渠道真上报了缓存的请求）
 客户端：runtime.readUsageStats() → 设置弹窗「用量」分区
   · 维度：日期（趋势，窗口 7/30/90）/ 来源（user/cron/dream/api/system）/ provider·模型
-  · token-only；金额留口（UI 明示「暂不统计」）
+  · token 由引擎算；**金额由客户端按「模型预设里的单价」乘加**（见下方 20.2.1）——
 ```
 
 **修订一：走 HTTP，不让主进程直读用量库**。原案「electron: 主进程 Open 用量库」的
@@ -2762,10 +2762,54 @@ export interface SyncMeta {
 是表里真实存在的最近似维度（「定时任务烧的」还是「对话烧的」能分开）；要按 Agent 归因
 需先给表加列，列为后续增强。
 
-**成本口径（未实施，留口）**：`cost = input_tokens × 输入单价 + output_tokens × 输出单价`，
-单价来自模型元数据（`models.json` 可扩展 `pricing` 字段）。未配置单价的模型只统计
-token 不计金额——在单价接入之前，UI 明示「金额暂不统计」：编一个单价出来的数字
-比没有数字更糟，它会让人拿去对账。
+### 20.2.1 成本口径（2026-10-04 落地）
+
+**原案的「两档单价」不成立**，原因是一条引擎侧事实：用量表里的 `input_tokens` 是
+**逻辑输入总量、已经包含缓存读取**（`nanobot/providers/base.py` 的 `LLMUsage` 原话：
+*"``input_tokens`` is the logical input total and therefore includes cache reads"*；
+Anthropic 侧写入处把 `input + cache_write + cache_read` 相加）。只按「输入 / 输出」
+两档计价，在长会话里会**严重高估**——缓存命中的部分通常只按输入价的 ~10% 计费，而它
+往往占输入的绝大部分（本机实测某份 trace：输入 1060 万、其中缓存 1048 万，命中 98.8%）。
+两档与三档在这个量级上能差一个数量级，那不是「粗略」，是错的。
+
+所以单价是三档：
+
+| 字段（camelCase / snake_case） | 语义 |
+| --- | --- |
+| `inputPerMillion` / `input_per_million` | 输入（**未命中缓存**部分） |
+| `cacheReadPerMillion` / `cache_read_per_million` | 缓存读取；**可缺省**，缺省 = 按输入单价计（明确的保守上界，不是 0） |
+| `outputPerMillion` / `output_per_million` | 输出 |
+| `currency` / `currency` | `CNY` / `USD`（`Literal`，拼错当场报错） |
+
+```
+cost = (input - cache_read) / 1e6 × 输入单价
+     +  cache_read          / 1e6 × 缓存单价（缺省则用输入单价）
+     +  output              / 1e6 × 输出单价
+```
+
+**四处刻意的取舍**（都在代码注释里写了「为什么」）：
+
+1. **缓存单价缺省不猜折扣率**：不替你假定「缓存按 10% 计」，而是按输入单价算出一个
+   明确的上界，并在界面上写明。编一个折扣率出来的数字比没有数字更糟——它会让人拿去对账。
+2. **不换算汇率**：按币种**分组**展示，绝不把两个币种相加（那需要一个汇率来源，本项目没有）。
+3. **没配单价的模型不计入合计**，且界面明说「还有 N 个模型没配单价（未计入）」——
+   按 0 计入会让合计看起来像「都算过了」。
+4. **归因是估算**：用量表只有 `(provider, model)` 两列（没有 preset 列，同「没有
+   session / agent 列」的成因），同一个上游模型被多个预设引用、各自单价不同时，按
+   「provider+model 都相等 → 只 model 相等（预设名升序）」取第一条。界面如实写明「不承诺
+   与账单逐条对齐」，而不是伪装成精确值。
+
+**金额为什么算在客户端**（与「口径都在引擎」的既有立场看似矛盾）：token 的**口径**
+（按哪个本地日归日、缓存命中率的分母）确实只能由引擎算，那需要业务知识；而金额是一个
+**纯乘法**，单价又是用户在客户端编辑的元数据。放到引擎侧要改 `/v1/usage` 的载荷与
+聚合逻辑，换来的只是把同一个乘法搬个地方。**口径没变的部分（分母、归日）仍在引擎**，
+这条边界是清楚的。
+
+**落点**：单价存在 `config.json` 的 `modelPresets.<name>.pricing`（不是原案设想的
+`models.json`——模型元数据本来就在预设里，另起一个文件会出现「同一个模型两处元数据」）。
+引擎侧 `ModelPricing` 是 `[LOCAL PATCH]` 的**声明式**字段（引擎当前不据此改变请求行为），
+必须显式声明：`Base` 未开 `extra="allow"`，未声明的键会被 pydantic 静默丢弃，症状是
+「填了单价 → 保存了 → 再打开又没了」而界面上看不出异常。
 
 ## 20.3 审计日志（FR-8.9）
 

@@ -202,6 +202,8 @@ describe('buildMutation: 表单值 → 引擎变更指令', () => {
     supportsTools: true,
     supportsVision: false,
     customProtocol: false,
+    supportsReasoning: true,
+    pricing: null,
     setDefault: false,
   };
 
@@ -223,6 +225,8 @@ describe('buildMutation: 表单值 → 引擎变更指令', () => {
     supportsTools: true,
     supportsVision: false,
     customProtocol: false,
+    supportsReasoning: true,
+    pricing: null,
     temperature: 0.1,
     ...overrides,
   });
@@ -330,6 +334,22 @@ describe('buildMutation: 表单值 → 引擎变更指令', () => {
     if (mutation.op !== 'upsert') throw new Error('期望 upsert');
     expect(mutation.config.temperature).toBe(0.7);
   });
+
+  it('⭐ 能力为假时强度被强制写 null（手改过的 config 会在保存时自愈）', () => {
+    // 矛盾数据（声明不支持思考、却留着档位）在唯一写入点收口：一次保存就修好，
+    // 而不是下次打开继续显示「勾着但置灰」
+    const mutation = buildMutation({
+      ...base,
+      reasoningEffort: 'high',
+      supportsReasoning: false,
+    });
+    if (mutation.op !== 'upsert') throw new Error('期望 upsert');
+    expect(mutation.config.reasoningEffort).toBeNull();
+
+    const keep = buildMutation({ ...base, reasoningEffort: 'high', supportsReasoning: true });
+    if (keep.op !== 'upsert') throw new Error('期望 upsert');
+    expect(keep.config.reasoningEffort).toBe('high');
+  });
 });
 
 describe('能力声明：三项勾选项必须能落盘并回读', () => {
@@ -345,6 +365,8 @@ describe('能力声明：三项勾选项必须能落盘并回读', () => {
     supportsTools: true,
     supportsVision: false,
     customProtocol: false,
+    supportsReasoning: true,
+    pricing: null,
     setDefault: false,
     ...overrides,
   });

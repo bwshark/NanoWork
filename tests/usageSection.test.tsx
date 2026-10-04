@@ -18,6 +18,7 @@ import { __setRuntimeForTest } from '@/ai/runtime';
 import { UsageSection } from '@/components/settings/sections/UsageSection';
 import { emptyUsageStats, todayLocalIso, zeroCounters } from '@/lib/usageReport';
 import { useUsageStore } from '@/stores/usageStore';
+import { useModelsStore, type ManagedModel } from '@/stores/modelsStore';
 import type { AgentRuntime } from '@/ai/runtime/types';
 import type { UsageDay, UsageStats } from '@/types';
 import { buttonByText, click, flush, mount, unmount } from './helpers/reactMount';
@@ -95,7 +96,34 @@ beforeEach(() => {
     refreshing: false,
     windowDays: 30,
   });
+  // 单价来自模型预设：不重置的话上一个用例配的价会漏进下一个（都是同一条用量行）
+  useModelsStore.setState({ managed: [], managedAvailable: false, managedLoading: false });
 });
+
+/** 一份带单价的模型预设（只管 `resolvePricingFor` 要的那几个字段） */
+function pricedPreset(over: Partial<ManagedModel> & { name: string }): ManagedModel {
+  return {
+    model: over.name,
+    provider: 'openai',
+    providerKey: 'openai',
+    providerLabel: 'OpenAI',
+    apiKey: '',
+    apiBase: '',
+    hasKey: false,
+    isDefault: false,
+    custom: false,
+    contextWindowTokens: null,
+    maxTokens: null,
+    reasoningEffort: null,
+    supportsTools: true,
+    supportsVision: false,
+    supportsReasoning: true,
+    customProtocol: false,
+    pricing: null,
+    temperature: 0.1,
+    ...over,
+  };
+}
 
 describe('设置「用量」分区', () => {
   it('挂载即读取，并把引擎的数字显示出来', async () => {
@@ -160,5 +188,80 @@ describe('设置「用量」分区', () => {
     await flush();
 
     expect(host.textContent ?? '').toContain('最后更新：');
+  });
+});
+
+describe('设置「用量」分区 · 成本（FR-11.1 的金额口径）', () => {
+  // fixture 的用量行：输入 8000 / 输出 4345（缓存读为 0 —— `zeroCounters()` 给的）
+  const WITH_PRICE = pricedPreset({
+    name: 'gpt-4o-mini',
+    pricing: { inputPerMillion: 10, outputPerMillion: 20, cacheReadPerMillion: 1, currency: 'CNY' },
+  });
+
+  it('没有模型配单价 → 说「暂不统计」，并给出**去哪儿配**（不是一句「暂不支持」）', async () => {
+    readUsageStats.mockResolvedValue(fixture());
+    const host = mount(<UsageSection />);
+    await flush();
+
+    const text = host.textContent ?? '';
+    expect(text).toContain('金额暂不统计');
+    expect(text, '要指路到「设置 → 模型 → 计价」').toContain('设置 → 模型');
+    // 「留空就是不计，不会按 0 计入」这条必须说出来——否则用户会以为留空 = 免费
+    expect(text).toContain('留空就是不计');
+    // 逐模型行该说明为什么没有金额
+    expect(text).toContain('未配置单价');
+  });
+
+  it('配了单价 → 出合计，并**逐模型算出金额**（缓存读取走自己那一档）', async () => {
+    readUsageStats.mockResolvedValue(fixture());
+    useModelsStore.setState({ managed: [WITH_PRICE], managedAvailable: true });
+
+    const host = mount(<UsageSection />);
+    await flush();
+    const text = host.textContent ?? '';
+
+    // 8000/1e6*10 + 4345/1e6*20 = 0.08 + 0.0869 = 0.1669
+    expect(text).toContain('¥0.1669');
+    expect(text).toContain('覆盖 1 个模型');
+    // 逐模型行里也带上金额，且把缓存读的量摆出来（它决定这个数字有多「紧」）
+    expect(text).toContain('缓存读');
+    expect(text).not.toContain('金额暂不统计');
+  });
+
+  it('⭐ 没配单价的模型**不计入**合计，但要说清还有几个没配', async () => {
+    readUsageStats.mockResolvedValue(
+      fixture({
+        providers: [
+          {
+            provider: 'openai',
+            model: 'gpt-4o-mini',
+            ...zeroCounters(),
+            inputTokens: 8_000,
+            outputTokens: 4_345,
+            totalTokens: 12_345,
+            requests: 3,
+          },
+          {
+            // 同一个上游模型名，但 provider 对不上任何预设 → 归因不到单价
+            provider: 'unknown-gw',
+            model: 'mystery-model',
+            ...zeroCounters(),
+            inputTokens: 1_000,
+            totalTokens: 1_000,
+            requests: 1,
+          },
+        ],
+      }),
+    );
+    useModelsStore.setState({ managed: [WITH_PRICE], managedAvailable: true });
+
+    const host = mount(<UsageSection />);
+    await flush();
+    const text = host.textContent ?? '';
+
+    // 合计只含配了单价的那一个；另一个是「未计入」而不是按 0 计入
+    expect(text).toContain('¥0.1669');
+    expect(text).toContain('还有 1 个模型没配单价（未计入）');
+    expect(text).toContain('未配置单价 → 不计入金额合计');
   });
 });

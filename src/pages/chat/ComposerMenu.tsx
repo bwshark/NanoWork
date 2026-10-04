@@ -39,6 +39,13 @@ import { toast } from "@/components/Toast";
 
 interface ComposerMenuProps {
   onFilesSelected?: (files: FileList) => void;
+  /**
+   * 「技能」入口不可用的原因（FR-9.3 能力协商）；`null` / 省略 = 可用。
+   *
+   * 由调用方算好传进来而不是在这里读 store：菜单是纯展示组件，且同一条判据
+   * （哪个模型、什么能力）在输入区其它地方也要用，分散读会各读各的。
+   */
+  skillsDisabledReason?: string | null;
   /** 点击「引用对话中的文件」：由 Composer 插入 @ 并弹出引用浮层 */
   onQuoteFile?: () => void;
   /** 用户从技能子菜单选择了一个已启用技能 */
@@ -101,6 +108,7 @@ function stringToHue(name: string) {
 /** Composer 左侧加号菜单：文件 / 引用 / 模式 / 专家 / 技能 / 连接器 */
 export function ComposerMenu({
   onFilesSelected,
+  skillsDisabledReason = null,
   onQuoteFile,
   onSkillSelect,
   onAgentSelect,
@@ -196,6 +204,10 @@ export function ComposerMenu({
     e: React.MouseEvent<HTMLElement>,
     action: string,
   ) => {
+    // 技能入口在模型不支持工具调用时是禁用的：菜单项上的 `disabled` 已挡住点击，
+    // 这里再挡一次是因为**键盘可达**——`MenuItem` 的 disabled 拦得住鼠标与
+    // Enter，但 `handleMainAction` 也会被其它路径调到，别让子菜单从缝里冒出来
+    if (action === "skills" && skillsDisabledReason) return;
     if (action === "agents" || action === "skills" || action === "mcp") {
       // 带子菜单的项：悬浮即展开；点击兜底确保展开（触屏场景），不关闭主菜单
       openSub(e, action as SubMenuType);
@@ -647,12 +659,19 @@ export function ComposerMenu({
         {MENU_ITEMS.map((item) => {
           const Icon = item.icon;
           const isActive = activeSub === item.action;
+          const blocked = item.action === "skills" ? skillsDisabledReason : null;
           return (
             <MenuItem
               key={item.action}
               selected={isActive}
+              disabled={Boolean(blocked)}
               onClick={(e) => handleMainAction(e, item.action)}
               onMouseEnter={(e) => {
+                if (blocked) {
+                  // 禁用项不展开子菜单，也不收起别人正在看的那个：鼠标扫过时
+                  // 让已有子菜单僵在原处，比「滑一下就没了」更好理解
+                  return;
+                }
                 if (item.hasSub) {
                   openSub(e, item.action as SubMenuType);
                 } else {
@@ -677,9 +696,18 @@ export function ComposerMenu({
                 >
                   <Icon fontSize="small" />
                 </Box>
-                <Typography variant="body2" sx={{ fontSize: 14 }}>
-                  {item.label}
-                </Typography>
+                <Box sx={{ minWidth: 0 }}>
+                  <Typography variant="body2" sx={{ fontSize: 14 }}>
+                    {item.label}
+                  </Typography>
+                  {blocked && (
+                    // 禁用**必须给原因**：一个点不动、也不说为什么的菜单项，
+                    // 用户只会以为应用坏了（同 `ComposerControls` 对执行模式的处理）
+                    <Typography sx={{ fontSize: 11.5, color: "text.secondary", lineHeight: 1.4 }}>
+                      {blocked}
+                    </Typography>
+                  )}
+                </Box>
               </Box>
               {item.hasSub && (
                 <ArrowRightIcon

@@ -47,6 +47,8 @@ import {
   type FileRefItem,
 } from "@/components/composer/FileReferencePicker";
 import { useVoiceInput, formatDuration } from "@/hooks/useVoiceInput";
+import { useActiveModelCapabilities } from "@/hooks/useActiveModelCapabilities";
+import { shortDegradedReason, visionNotice } from "@/lib/modelCapability";
 import {
   MAX_ATTACHMENT_COUNT,
   fileToAttachment,
@@ -387,6 +389,20 @@ export function Composer({
   const [dragOver, setDragOver] = useState(false);
   /** 当前附件快照：供「卸载清理」「数量校验」在不重建回调的前提下读取 */
   const attachmentsRef = useRef<Attachment[]>([]);
+  /**
+   * 当前会话生效模型的能力（FR-9.3）。
+   *
+   * 「查不到就宽松」这条规则在 `resolveModelCapabilities` 里，这里只负责取用——
+   * 输入区因此不会因为引擎离线 / Web 端而突然禁掉技能入口。
+   */
+  const modelCaps = useActiveModelCapabilities();
+  /**
+   * 「图片可能识别不了」这条只提示一次（按**预设名**记）。
+   *
+   * 每加一张图提示一遍会变成噪音，而这条提醒的用途只是「让人知道有这么回事」；
+   * 用户换了模型（预设名变了）时重新提示，因为那是一个新的判断对象。
+   */
+  const visionWarnedFor = useRef<string | null>(null);
   useEffect(() => {
     attachmentsRef.current = attachments;
   }, [attachments]);
@@ -614,6 +630,15 @@ export function Composer({
         }
       }
       if (added.length > 0) {
+        // 图片附件 + 模型未声明视觉能力 → **只提醒不阻止**（见 modelCapability 的文件头：
+        // `supports_vision` 默认是 false，硬门禁会把所有历史预设的贴图功能一并禁掉）
+        if (added.some((a) => a.kind === 'image')) {
+          const notice = visionNotice(modelCaps.capabilities);
+          if (notice && visionWarnedFor.current !== modelCaps.presetName) {
+            visionWarnedFor.current = modelCaps.presetName;
+            toast.warning(notice);
+          }
+        }
         // 徽章插入当前光标处（选区不在输入区内时追加末尾），与参考应用行为一致
         for (const a of added) insertChipAtCaret(makeChipSpan(a));
         // 同步 ref 再提交 state：结构性变更是「同步改 DOM + 异步提交 state」，
@@ -625,7 +650,7 @@ export function Composer({
         pushUndo(0);
       }
     },
-    [insertChipAtCaret, makeChipSpan, pushUndo],
+    [insertChipAtCaret, makeChipSpan, pushUndo, modelCaps.capabilities, modelCaps.presetName],
   );
 
   /**
@@ -1621,6 +1646,9 @@ export function Composer({
             }}
             onSkillSelect={handleAddSkill}
             onAgentSelect={handleAgentChange}
+            // 能力协商（FR-9.3）：模型不能调工具时，技能挂载没有意义——
+            // 挂上去的技能只会白占提示词，一次也调不动
+            skillsDisabledReason={shortDegradedReason(modelCaps.capabilities)}
           />
 
           {!isHero && <ComposerControls />}

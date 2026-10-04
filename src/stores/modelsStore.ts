@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { connectionManager } from '@/ai/connectionManager';
 import { platform } from '@/platform';
 import type { NanobotModelsMutation, NanobotModelsSnapshot } from '@/platform/types';
+import { normalizePricing, type ModelPricing } from '@/lib/modelPricing';
 import type { ModelInfo } from '@/types';
 import {
   AUTO_PROVIDER_VALUE,
@@ -67,8 +68,23 @@ export interface ManagedModel {
   supportsTools: boolean;
   /** 能力声明：该模型接受图片输入（引擎默认 false） */
   supportsVision: boolean;
+  /**
+   * 能力声明：该模型有思考模式（引擎默认 **true**）。
+   *
+   * 与 `supportsTools` 一样用于**硬门禁**（关闭「注入思考强度」并给出原因），
+   * 所以缺省取宽松方向——默认保守会把所有历史预设一升级就禁掉。
+   */
+  supportsReasoning: boolean;
   /** 能力声明：端点不走标准 OpenAI 兼容协议（引擎默认 false） */
   customProtocol: boolean;
+  /**
+   * 单价（每百万 token）；`null` = 没配（界面「成本」卡片据此说「暂不统计」）。
+   *
+   * 归一化在 `buildManaged` 里做：全零的单价会折成 `null` —— 留着它会让
+   * 「已配置单价」判成真，于是界面显示 `¥0` 而不是「暂不统计」，
+   * 用户会以为自己的模型不花钱。
+   */
+  pricing: ModelPricing | null;
   /**
    * 采样温度。
    *
@@ -104,8 +120,12 @@ export interface ModelFormValue {
   supportsTools: boolean;
   /** 能力声明：接受图片输入 */
   supportsVision: boolean;
+  /** 能力声明：有思考模式（关闭时同时把 `reasoningEffort` 清空） */
+  supportsReasoning: boolean;
   /** 能力声明：端点不走标准 OpenAI 兼容协议 */
   customProtocol: boolean;
+  /** 单价（每百万 token）；`null` = 不配 → 「用量」分区不计金额 */
+  pricing: ModelPricing | null;
   /** 保存后是否立即设为默认 */
   setDefault: boolean;
   /** 编辑模式下的原模型（新增时省略） */
@@ -138,8 +158,15 @@ interface ModelsState {
    * 「Web 端不支持」和「还没有自定义模型」。
    */
   managedAvailable: boolean;
-  /** 从 config.json 重新读取模型预设 */
-  loadManaged: () => Promise<void>;
+  /**
+   * 从 config.json 重新读取模型预设。
+   *
+   * `force`：已有一次读取在飞时要不要另起一次。默认 false（复用飞着的那次）——
+   * 否则「设置页打开 + 聊天页门控补读」这类并发会各读一遍，且**后写盘的旧结果
+   * 可能覆盖先返回的新结果**（保存模型后紧接着的回读就是这样被冲掉的）。
+   * 明确要「以磁盘为准确认一次」的场合（进入模型分区、保存 / 删除之后）传 true。
+   */
+  loadManaged: (force?: boolean) => Promise<void>;
   /** 新增或更新一个模型；成功返回 true */
   saveModel: (value: ModelFormValue) => Promise<boolean>;
   /** 删除一个模型；成功返回 true */
@@ -150,6 +177,8 @@ interface ModelsState {
 
 /** 进行中的拉取任务（并发去重句柄） */
 let inflight: Promise<void> | null = null;
+/** `loadManaged` 的飞行中请求（与 `inflight` 分开：两者数据源完全不同） */
+let managedInflight: Promise<void> | null = null;
 
 /** 配置里的 provider 名 → providers 里的 config key（内置大小写/连字符都可能不同） */
 export function resolveProviderKey(provider: string, keys: string[]): string {
@@ -212,10 +241,17 @@ export function buildManaged(snapshot: NanobotModelsSnapshot): ManagedModel[] {
           typeof preset?.supportsVision === 'boolean'
             ? preset.supportsVision
             : ENGINE_DEFAULT_CAPABILITIES.supportsVision,
+        supportsReasoning:
+          typeof preset?.supportsReasoning === 'boolean'
+            ? preset.supportsReasoning
+            : ENGINE_DEFAULT_CAPABILITIES.supportsReasoning,
         customProtocol:
           typeof preset?.customProtocol === 'boolean'
             ? preset.customProtocol
             : ENGINE_DEFAULT_CAPABILITIES.customProtocol,
+        // 全零 / 非法 / 缺键都折成 null（见 `normalizePricing`）——「没配单价」与
+        // 「单价为零」在界面上必须是同一个状态「暂不统计」，分开只会让人以为配过了
+        pricing: normalizePricing(preset?.pricing),
         temperature:
           typeof preset?.temperature === 'number' && Number.isFinite(preset.temperature)
             ? preset.temperature
@@ -261,14 +297,23 @@ export function buildMutation(value: ModelFormValue): NanobotModelsMutation {
       // 温度不在表单里，必须从原预设带过来：硬编码会让「只改个模型名」顺手把用户在
       // 引擎 WebUI 里调过的采样温度重置掉（界面上完全看不出来）
       temperature: value.original?.temperature ?? ENGINE_DEFAULT_TEMPERATURE,
-      // 思考模式：开启写具体档位，关闭写 null（＝不注入，跟随供应商默认）
-      reasoningEffort: value.reasoningEffort,
-      // 能力声明：三项都**显式写全**。它们引擎当前不消费，但缺键会被 pydantic
+      // 思考模式：开启写具体档位，关闭写 null（＝不注入，跟随供应商默认）。
+      //
+      // ⚠️ 这里额外强制一条**不变量：能力为假 ⇒ 强度为 null**。对话框的勾选联动
+      // 已经保证了顺序操作的结果，但**手改过的 config.json** 完全可能两者矛盾
+      // （声明不支持思考、却留着 `reasoning_effort: high`）。在唯一的写入点收口，
+      // 一次保存就把矛盾数据自愈掉——而不是让它在下一次打开时继续显示「勾着但置灰」。
+      reasoningEffort: value.supportsReasoning ? value.reasoningEffort : null,
+      // 能力声明：四项都**显式写全**。它们引擎当前不消费，但缺键会被 pydantic
       // 静默丢弃（`Base` 未开 extra="allow"）——「勾选了、保存了、再打开又没了」
       // 就是这么来的。引擎侧字段声明见 `nanobot/config/schema.py::ModelPresetConfig`。
       supportsTools: value.supportsTools,
       supportsVision: value.supportsVision,
+      supportsReasoning: value.supportsReasoning,
       customProtocol: value.customProtocol,
+      // 单价同样显式写全：`null` 表示「不配」，与「没写这个键」不同——
+      // 后者在引擎侧会落到默认 `None`（结果一样，但「到底写没写过」就查不出来了）
+      pricing: value.pricing ? { ...value.pricing } : null,
     },
     provider: auto
       ? undefined
@@ -316,28 +361,35 @@ export const useModelsStore = create<ModelsState>()((set, get) => ({
   managedLoading: false,
   managedAvailable: false,
 
-  loadManaged: async () => {
+  loadManaged: (force = false) => {
+    // 复用飞行中的那一次：并发读同一个文件是白工，而且**旧结果后返回会覆盖新结果**
+    // （「保存模型后紧接着回读」正是这种形态）。要确认磁盘现状的调用方传 force。
+    if (managedInflight && !force) return managedInflight;
     set({ managedLoading: true });
-    try {
-      const snapshot = await platform.getNanobotModels();
-      if (!snapshot) {
-        set({ managed: [], managedAvailable: false });
-        return;
+    managedInflight = (async () => {
+      try {
+        const snapshot = await platform.getNanobotModels();
+        if (!snapshot) {
+          set({ managed: [], managedAvailable: false });
+          return;
+        }
+        set({ managed: buildManaged(snapshot), managedAvailable: true });
+      } catch {
+        // 配置损坏 / 主进程桥不可用：保持上一次的列表，把可用性标为 false
+        set({ managedAvailable: false });
+      } finally {
+        set({ managedLoading: false });
+        managedInflight = null;
       }
-      set({ managed: buildManaged(snapshot), managedAvailable: true });
-    } catch {
-      // 配置损坏 / 主进程桥不可用：保持上一次的列表，把可用性标为 false
-      set({ managedAvailable: false });
-    } finally {
-      set({ managedLoading: false });
-    }
+    })();
+    return managedInflight;
   },
 
   saveModel: async (value) => {
     const mutation = buildMutation(value);
     const result = await platform.syncNanobotModels(JSON.stringify(mutation));
     if (!result.ok) return false;
-    await get().loadManaged();
+    await get().loadManaged(true);
     // 预设目录在 serve 启动时构建 → 必须强制重拉，否则下拉里看不到新模型
     await get().refresh(true);
     return true;
@@ -352,7 +404,7 @@ export const useModelsStore = create<ModelsState>()((set, get) => ({
     };
     const result = await platform.syncNanobotModels(JSON.stringify(mutation));
     if (!result.ok) return false;
-    await get().loadManaged();
+    await get().loadManaged(true);
     await get().refresh(true);
     return true;
   },
@@ -361,7 +413,7 @@ export const useModelsStore = create<ModelsState>()((set, get) => ({
     const mutation: NanobotModelsMutation = { op: 'setDefault', preset: name };
     const result = await platform.syncNanobotModels(JSON.stringify(mutation));
     if (!result.ok) return false;
-    await get().loadManaged();
+    await get().loadManaged(true);
     await get().refresh(true);
     return true;
   },
