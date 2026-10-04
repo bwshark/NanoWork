@@ -19,7 +19,11 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
 import { SettingsDialog } from '@/components/settings/SettingsDialog';
 import { SETTINGS_NAV_ITEMS } from '@/components/settings/settingsNav';
+import { __setRuntimeForTest } from '@/ai/runtime';
+import { emptyUsageStats } from '@/lib/usageReport';
 import { useSettingsUiStore } from '@/stores/settingsUiStore';
+import { useUsageStore } from '@/stores/usageStore';
+import type { AgentRuntime } from '@/ai/runtime/types';
 import type { SettingsSectionId } from '@/stores/settingsUiStore';
 import { click, dialogRoot, flush, mount, unmount } from './helpers/reactMount';
 
@@ -40,10 +44,24 @@ const CONTENT_ANCHORS: Record<SettingsSectionId, string> = {
   assistant: '配置 IM 频道',
   plugins: '引擎已激活',
   data: '数据落点',
+  // 「近 30 天概览」是用量分区概览卡片的标题；左侧菜单项只有「用量」两个字，不会误命中
+  usage: '近 30 天概览',
   // 「账户」分区用 `useNavigate`（未登录入口跳登录页），故弹窗需挂在 Router 下（见 renderDialog）
   account: '跨设备同步',
   about: '运行环境',
 };
+
+/**
+ * 给「用量」分区一个**同步可得**的引擎应答。
+ *
+ * 不能让它走真实 runtime：jsdom 里那是一次真的 `fetch`（网关多半没起），
+ * 等它超时要 8 秒，而断言只跑了十轮微任务——用例会随机挂在「正在读取用量…」。
+ */
+function stubUsageRuntime(): void {
+  __setRuntimeForTest({
+    readUsageStats: async () => ({ ...emptyUsageStats(), available: true }),
+  } as unknown as AgentRuntime);
+}
 
 /**
  * 挂载设置弹窗。
@@ -91,6 +109,14 @@ function dialogPaper(): HTMLElement {
 
 beforeEach(() => {
   unmount();
+  stubUsageRuntime();
+  // 用量 store 是全局单例：不重置的话，上一个用例读到的报表会漏进下一个用例
+  useUsageStore.setState({
+    stats: emptyUsageStats(),
+    loaded: false,
+    refreshing: false,
+    windowDays: 30,
+  });
   useSettingsUiStore.setState({ open: true, section: 'general' });
 });
 

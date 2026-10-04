@@ -3,7 +3,7 @@ import { fetchSSE, readSSEStream, type SSEStreamEnd } from '@/lib/sse';
 // MIME 推断统一复用附件模块的扩展名映射表（文档 / 表格 / 幻灯片 / PDF / 文本标记 /
 // 配置日志 / 图片 / 音视频），避免出现「Composer 能选、上传时却退化成 octet-stream」
 import { inferMime } from '@/lib/attachments';
-import type { ModelInfo, ConnectionStatus } from '@/types';
+import type { ModelInfo, ConnectionStatus, UsageStats } from '@/types';
 import type {
   ApprovalDecision,
   ChatHandle,
@@ -23,6 +23,7 @@ import {
   type PluginRequestContext,
   type PluginToggleOutcome,
 } from './plugins';
+import { readUsageFromRuntime, type UsageRequestContext } from './usage';
 import type { PluginEngineIndex } from '@/types/plugin';
 
 /**
@@ -249,6 +250,21 @@ export class NanobotClient {
   }
 
   private pluginContext(): PluginRequestContext {
+    const { endpoint } = this.getConfig();
+    return { endpoint, headers: this.authHeaders() };
+  }
+
+  /**
+   * 读本机 LLM 用量报表（`GET /v1/usage`，FR-11.1）。
+   *
+   * 与插件域同款分工：endpoint 解析与鉴权头复用本类（含开发态代理改写），
+   * `usage.ts` 只管 wire 与解码。
+   */
+  readUsage(): Promise<UsageStats> {
+    return readUsageFromRuntime(this.usageContext());
+  }
+
+  private usageContext(): UsageRequestContext {
     const { endpoint } = this.getConfig();
     return { endpoint, headers: this.authHeaders() };
   }

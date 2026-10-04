@@ -408,6 +408,72 @@ export const platform: PlatformAdapter = {
     }
     return Promise.resolve({ ok: false, error: 'Web 端无法卸载插件包，请使用桌面端' });
   },
+  // —— 市场注册表与版本化缓存（FR-3.7 / FR-3.8）——
+  // Web 端一律**如实拒绝**而不是返回空结果：市场要读写 `~/.nanowork/plugins`，
+  // 浏览器做不到；返回空列表会让界面显示「没有市场」——那是假话。
+  pluginsMarkets: () => {
+    if (isElectron() && window.electronAPI) return window.electronAPI.pluginsMarkets();
+    return Promise.resolve({
+      version: 1,
+      markets: [],
+      error: 'Web 端不支持市场功能，请使用桌面端',
+    });
+  },
+  pluginsMarketsUpsert: (entry) => {
+    if (isElectron() && window.electronAPI) {
+      return window.electronAPI.pluginsMarketsUpsert(entry);
+    }
+    return Promise.resolve({ ok: false, error: 'Web 端不支持市场功能，请使用桌面端' });
+  },
+  pluginsMarketsRemove: (id) => {
+    if (isElectron() && window.electronAPI) {
+      return window.electronAPI.pluginsMarketsRemove(id);
+    }
+    return Promise.resolve({ ok: false, error: 'Web 端不支持市场功能，请使用桌面端' });
+  },
+  pluginsMarketsSync: (id) => {
+    if (isElectron() && window.electronAPI) return window.electronAPI.pluginsMarketsSync(id);
+    return Promise.resolve({
+      ok: false,
+      result: { ok: false, market: id, synced: 0, skipped: [], error: 'Web 端不支持市场功能' },
+      entry: {
+        id,
+        name: id,
+        type: 'directory',
+        location: '',
+        isBuiltIn: false,
+        autoUpdate: false,
+        lastSyncAt: null,
+        lastError: 'Web 端不支持市场功能',
+      },
+      error: 'Web 端不支持市场功能，请使用桌面端',
+    });
+  },
+  pluginsMarketPackages: (market) => {
+    if (isElectron() && window.electronAPI) {
+      return window.electronAPI.pluginsMarketPackages(market);
+    }
+    return Promise.resolve({ market, packages: [], skipped: [] });
+  },
+  pluginsMarketInstall: (market, name, version) => {
+    if (isElectron() && window.electronAPI) {
+      return window.electronAPI.pluginsMarketInstall(market, name, version);
+    }
+    return Promise.resolve({
+      ok: false,
+      market,
+      name,
+      version: '',
+      path: '',
+      error: 'Web 端无法安装插件包，请使用桌面端',
+    });
+  },
+  pluginsMarketGc: (referenced, keepDays) => {
+    if (isElectron() && window.electronAPI) {
+      return window.electronAPI.pluginsMarketGc(referenced, keepDays);
+    }
+    return Promise.resolve({ removed: [], kept: [] });
+  },
   // —— 桌面端集成（窗口控制 / 托盘配置 / 主进程指令）——
   // 这一组统一走 `electronBridge()`（而非上面那种 `isElectron() && window.electronAPI`
   // 的写法）：桥不在就是「Web 降级」，判据只有一处。

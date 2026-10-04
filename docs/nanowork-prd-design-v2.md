@@ -319,7 +319,7 @@
 
 | 编号      | 名称          | 优先级    | 现状 | 环境       | 验收标准                                                                    |
 | ------- | ----------- | ------ | -- | -------- | ----------------------------------------------------------------------- |
-| FR-11.1 | 用量与成本       | **P0** | 🟡 | both     | `llm_usage.sqlite3` 已存在；**补**：前端消费 → 按会话 / Agent / 模型 / 日期的 token 与成本报表 |
+| FR-11.1 | 用量与成本       | **P0** | 🟡 | both     | 已完成：引擎只读 `GET /v1/usage`（`[LOCAL PATCH]`）+ 设置 →「用量」分区（日期 / 来源 / provider·模型 三个维度，token-only，窗口 7/30/90）。**补**：金额报表（需 `models` 元数据扩展 `pricing` 单价）。注：用量表没有 session / agent 列，原案「按会话 / Agent」不成立，见 §20.2 |
 | FR-11.2 | 全链路 Trace   | P1     | ⬜  | electron | 单次请求 trace 落盘（对齐 WorkBuddy `traces/<pid>/trace_*.json`）                 |
 | FR-11.3 | 运行日志分级      | P1     | ⬜  | electron | 按模块分文件；`logs/<date>/`；支持一键打包诊断                                          |
 | FR-11.4 | 健康监控告警      | P2     | ⬜  | electron | 渠道掉线 / 队列积压 / 模型失败率超阈值告警（V3）                                            |
@@ -2689,19 +2689,33 @@ export interface SyncMeta {
 
 ## 20.2 成本核算（FR-11.1）
 
-根目录已有 `llm_usage.sqlite3`，说明用量数据已产生。需要做的是**消费**它：
+> **2026-10-03 实施修订**：本节原案有两处前置条件不成立，已按实际情况落地。
+
+根目录已有 `llm_usage.sqlite3`，说明用量数据已产生。消费它的**实际实现**：
 
 ```
-新增 platform 能力：readUsageStats({from, to}) → UsageRow[]
-  → electron: 主进程 Open 用量库并查询
-  → web: 返回 {ok:false, error:'用量统计仅在桌面端可用'}
-  → UI：设置页 / 用量页
-     · 按会话 / Agent / 模型 / 日期 四维聚合
-     · token 数与成本趋势图
-     · 单次任务成本（与 TaskRunRecord 关联）
+引擎（[LOCAL PATCH]）：只读 GET /v1/usage → llm_usage_payload(timezone_name=…)
+  · 聚合口径全在引擎的 nanobot.llm_usage：按「引擎配置的本地日」归日、
+    30 天派生指标（峰值日 / 连续天数 / 缓存命中率，分母只算渠道真上报了缓存的请求）
+客户端：runtime.readUsageStats() → 设置弹窗「用量」分区
+  · 维度：日期（趋势，窗口 7/30/90）/ 来源（user/cron/dream/api/system）/ provider·模型
+  · token-only；金额留口（UI 明示「暂不统计」）
 ```
 
-**成本口径**：`cost = input_tokens × 输入单价 + output_tokens × 输出单价`，单价来自模型元数据（`models.json` 可扩展 `pricing` 字段）。未配置单价的模型只统计 token 不计金额，并在 UI 标注「无单价」。
+**修订一：走 HTTP，不让主进程直读用量库**。原案「electron: 主进程 Open 用量库」的
+前置条件不成立——Electron 31 内置 Node 20，没有 `node:sqlite`，直读要引入原生依赖
+（better-sqlite3 + electron-rebuild）或 WASM 版，且派生指标还得用 JS 重写一遍。
+走 HTTP 引擎保持单一真相，Web 端也照常可用。
+
+**修订二：没有「按会话 / Agent」维度**。`llm_usage` 表按 `(date, source, provider, model)`
+记录，**没有 session / agent 列**——原案的四维聚合里那两维无数据可查。来源（source）
+是表里真实存在的最近似维度（「定时任务烧的」还是「对话烧的」能分开）；要按 Agent 归因
+需先给表加列，列为后续增强。
+
+**成本口径（未实施，留口）**：`cost = input_tokens × 输入单价 + output_tokens × 输出单价`，
+单价来自模型元数据（`models.json` 可扩展 `pricing` 字段）。未配置单价的模型只统计
+token 不计金额——在单价接入之前，UI 明示「金额暂不统计」：编一个单价出来的数字
+比没有数字更糟，它会让人拿去对账。
 
 ## 20.3 审计日志（FR-8.9）
 
@@ -2731,6 +2745,7 @@ audit-log/YYYY-MM-DD.jsonl
 | ------------------------------- | ---------------------------- | ---------------------------------------------------------------------------- |
 | `POST /v1/chat/completions`     | 流式对话（SSE）                    | 支持 `session_id` / `model` / `workspace` / `access_mode`；multipart 支持 `files` |
 | `GET /v1/models`                | 模型目录                         | 来源 `modelPresets` + 隐式 `default`                                             |
+| `GET /v1/usage`                 | LLM 用量聚合（`[LOCAL PATCH]`）      | 按本地日 / 来源 / provider·模型 聚合；token-only；窗口默认 371 天                 |
 | `POST /audio/transcriptions`    | 语音转录                         | OpenAI 兼容                                                                    |
 | WS `settings.channel.connect.*` | 扫码接入                         | `pending/succeeded/failed/expired/cancelled`                                 |
 | 配置写入                            | `config.json` 的 `channels` 段 | 由主进程合并 + 重启                                                                  |

@@ -83,6 +83,17 @@ import {
   readInstalledPlugins,
   uninstallPluginPackage,
 } from './pluginPackage';
+import {
+  collectMarketCache,
+  installFromMarket,
+  listMarketPackages,
+  readMarketRegistry,
+  recordMarketSync,
+  removeMarket,
+  syncMarket,
+  upsertMarket,
+  type MarketplaceEntry,
+} from './pluginMarketplace';
 import type { SessionMeta } from '../src/types/event';
 
 const isDev = !app.isPackaged;
@@ -3824,6 +3835,77 @@ ipcMain.handle('plugins:uninstall', async (_e, name: unknown) => {
   }
   const removed = await uninstallPluginPackage(USER_PLUGINS_DIR, name);
   return removed ? { ok: true } : { ok: false, error: `插件「${name}」不存在或名字不合法` };
+});
+
+// —— 市场注册表与版本化缓存（FR-3.7 / FR-3.8）——
+/**
+ * 这一组 IPC 只做**文件系统那一半**：注册表读写、目录型市场同步、
+ * 把某一版 materialize 成生效副本并拨指针、以及回收无引用的旧副本。
+ *
+ * 与上面那三条（扫 / 装 / 卸）同源同理：激活状态是引擎的权威，这里不碰。
+ * 指针**只在安装 / 切版本时改写**——市场同步不碰它，这条是「刷新不破坏
+ * 活跃会话」的另一半（引擎侧的另一半见 `nanobot/agent/plugins.py`）。
+ */
+
+/** 注册表：读不到文件时给空注册表 + 原因（「还没建过」不是错误） */
+ipcMain.handle('plugins:markets', async () => {
+  const { registry, error } = await readMarketRegistry(USER_PLUGINS_DIR);
+  return { ...registry, error };
+});
+
+/** 新增 / 更新市场条目（按 id 幂等；内置市场的来源不可改） */
+ipcMain.handle('plugins:marketsUpsert', async (_e, entry: unknown) => {
+  if (typeof entry !== 'object' || entry === null) {
+    return { ok: false, error: '市场条目为空' };
+  }
+  return upsertMarket(USER_PLUGINS_DIR, entry as MarketplaceEntry);
+});
+
+ipcMain.handle('plugins:marketsRemove', async (_e, id: unknown) => {
+  if (typeof id !== 'string' || id.trim() === '') return { ok: false, error: '未指定市场' };
+  return removeMarket(USER_PLUGINS_DIR, id.trim());
+});
+
+/** 同步一个市场：目录型扫目录归档；远程型本轮如实失败（不联网） */
+ipcMain.handle('plugins:marketsSync', async (_e, id: unknown) => {
+  if (typeof id !== 'string' || id.trim() === '') return { ok: false, error: '未指定市场' };
+  const { registry } = await readMarketRegistry(USER_PLUGINS_DIR);
+  const target = registry.markets.find((item) => item.id === id.trim());
+  if (!target) return { ok: false, error: `市场「${id}」未注册` };
+  const result = await syncMarket(USER_PLUGINS_DIR, target);
+  const entry = await recordMarketSync(USER_PLUGINS_DIR, target, result);
+  return { ok: result.ok, result, entry, error: result.error };
+});
+
+/** 某个市场里已归档的包（源侧索引） */
+ipcMain.handle('plugins:marketPackages', async (_e, market: unknown) => {
+  if (typeof market !== 'string' || market.trim() === '') return { market: '', packages: [], skipped: [] };
+  return listMarketPackages(USER_PLUGINS_DIR, market.trim());
+});
+
+/** 安装（= 把某一版放进 cache/ 并拨指针） */
+ipcMain.handle(
+  'plugins:marketInstall',
+  async (_e, market: unknown, name: unknown, version: unknown) => {
+    if (typeof market !== 'string' || typeof name !== 'string' || typeof version !== 'string') {
+      return { ok: false, market: '', name: '', version: '', path: '', error: '参数不完整' };
+    }
+    return installFromMarket(USER_PLUGINS_DIR, market.trim(), name.trim(), version.trim());
+  },
+);
+
+/**
+ * 回收无引用的旧副本。
+ *
+ * `referenced` 由渲染层给出（活跃会话的版本引用集 + 当前指针）：
+ * 主进程不知道哪些会话在跑，硬塞一份猜测进来只会误删。
+ */
+ipcMain.handle('plugins:marketGc', async (_e, referenced: unknown, keepDays?: unknown) => {
+  const list = Array.isArray(referenced) ? referenced.filter((v): v is string => typeof v === 'string') : [];
+  return collectMarketCache(USER_PLUGINS_DIR, {
+    referenced: list,
+    keepDays: typeof keepDays === 'number' ? keepDays : 30,
+  });
 });
 
 /**

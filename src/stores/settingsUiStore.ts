@@ -18,6 +18,10 @@ export const SETTINGS_SECTION_IDS = [
   'assistant',
   'plugins',
   'data',
+  // 用量（FR-11.1）：只读报表，回答「这台机器上跑了多少 token」。
+  // 挂在「数据与安全」组里而不是「功能」组——它不是一项可以开关的能力，
+  // 而是对已发生事实的查看，与「数据管理」同类。
+  'usage',
   'account',
   'about',
 ] as const;

@@ -18,3 +18,4 @@ export * from './prompt';
 export * from './channel';
 export * from './plugin';
 export * from './sync';
+export * from './usage';

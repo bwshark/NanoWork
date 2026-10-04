@@ -23,6 +23,7 @@
  */
 
 import type { PluginEngineEntry, PluginEngineIndex } from '@/types/plugin';
+import { isAbortError } from './httpError';
 
 /** 单次插件请求的连接参数（由 transport 层解析后传入） */
 export interface PluginRequestContext {
@@ -39,21 +40,6 @@ const DEFAULT_PLUGIN_TIMEOUT_MS = 6000;
 /** 把未知值收敛成字符串字段（引擎漏字段时不至于渲染出 `undefined`） */
 function text(value: unknown): string {
   return typeof value === 'string' ? value : '';
-}
-
-/**
- * 跨 realm 安全的 AbortError 判定——**只看 `name`，不看 `instanceof`**。
- *
- * `controller.abort()` / `AbortSignal.timeout()` 抛出的是 **DOMException**，它**不是**
- * `Error` 的实例；jsdom 与 Node 又各持一份 `Error`，`instanceof` 跨 realm 恒为 false。
- * 原写法 `err instanceof Error && err.name === 'AbortError'` 因此在**浏览器里也永远为
- * false**——网关没起时超时会被误报成裸 `AbortError: ...`，而本模块文案的用途恰恰是
- * 「告诉用户网关可能没启动」（见文首）。
- */
-function isAbortError(err: unknown): boolean {
-  return (
-    typeof err === 'object' && err !== null && (err as { name?: unknown }).name === 'AbortError'
-  );
 }
 
 /**

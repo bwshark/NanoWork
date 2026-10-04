@@ -27,6 +27,7 @@ import type {
   TaskConfig,
   TaskRunRecord,
   ToolCallStatus,
+  UsageStats,
 } from '@/types';
 import type { ExecutionMode, PlanStep } from '@/types/event';
 import type { PluginEngineIndex } from '@/types/plugin';
@@ -481,6 +482,19 @@ export interface AgentRuntime {
     name: string,
     enabled: boolean,
   ): Promise<{ ok: boolean; error?: string }>;
+
+  /**
+   * 本机 LLM 用量报表（FR-11.1）。
+   *
+   * 为什么不在渲染层算：报表口径（按**本地日**分组、30 天窗口、连续使用天数、
+   * 缓存命中率的分母）全在引擎的 `nanobot.llm_usage` 里。复制一份到客户端就是
+   * 两份真相，引擎改一次这边静默偏一次，而偏的是数字、不是报错。
+   *
+   * 契约要求：**不抛异常**（读不到 → `available: false` + `error`）。
+   * 「网关没起」是常态；而老版本网关没有 `/v1/usage` 这条路由，
+   * 也走同一个出口（`error` 里说明是版本问题），调用方无需区分这两种情况。
+   */
+  readUsageStats(): Promise<UsageStats>;
 }
 
 /** 该引擎实现不支持某个配置域时抛出（调用方据此走降级分支，而非静默） */

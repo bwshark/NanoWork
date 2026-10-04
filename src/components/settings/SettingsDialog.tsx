@@ -12,6 +12,7 @@ import { ModelsSection } from '@/components/settings/sections/ModelsSection';
 import { PersonaSection } from '@/components/settings/sections/PersonaSection';
 import { PluginsSection } from '@/components/settings/sections/PluginsSection';
 import { ShortcutsSection } from '@/components/settings/sections/ShortcutsSection';
+import { UsageSection } from '@/components/settings/sections/UsageSection';
 import {
   useSettingsUiStore,
   type SettingsSectionId,
@@ -227,6 +228,8 @@ function SectionBody({ section }: { section: SettingsSectionId }) {
       return <PluginsSection />;
     case 'data':
       return <DataSection />;
+    case 'usage':
+      return <UsageSection />;
     case 'account':
       return <AccountSection />;
     case 'about':

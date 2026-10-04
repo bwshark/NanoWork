@@ -135,6 +135,16 @@ const api: ElectronAPI = {
   pluginsInstall: (sourceDir: string, overwrite?: boolean) =>
     ipcRenderer.invoke('plugins:install', sourceDir, overwrite),
   pluginsUninstall: (name: string) => ipcRenderer.invoke('plugins:uninstall', name),
+  // —— 市场注册表与版本化缓存（FR-3.7 / FR-3.8）——
+  pluginsMarkets: () => ipcRenderer.invoke('plugins:markets'),
+  pluginsMarketsUpsert: (entry: unknown) => ipcRenderer.invoke('plugins:marketsUpsert', entry),
+  pluginsMarketsRemove: (id: string) => ipcRenderer.invoke('plugins:marketsRemove', id),
+  pluginsMarketsSync: (id: string) => ipcRenderer.invoke('plugins:marketsSync', id),
+  pluginsMarketPackages: (market: string) => ipcRenderer.invoke('plugins:marketPackages', market),
+  pluginsMarketInstall: (market: string, name: string, version: string) =>
+    ipcRenderer.invoke('plugins:marketInstall', market, name, version),
+  pluginsMarketGc: (referenced: string[], keepDays?: number) =>
+    ipcRenderer.invoke('plugins:marketGc', referenced, keepDays),
   // ——— 窗口控制（自绘标题栏）———
   windowMinimize: () => ipcRenderer.send('window:minimize'),
   windowToggleMaximize: () => ipcRenderer.send('window:toggle-maximize'),

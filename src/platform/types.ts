@@ -1,5 +1,14 @@
 import type { ArtifactIndexEntry, McpToolInfo, Skill } from '@/types';
-import type { PluginInstallResult, PluginScanResult } from '@/types/plugin';
+import type {
+  MarketGcResult,
+  MarketIndex,
+  MarketInstallResult,
+  MarketRegistry,
+  MarketSyncOutcome,
+  MarketplaceEntry,
+  PluginInstallResult,
+  PluginScanResult,
+} from '@/types/plugin';
 import type {
   SessionEvent,
   SessionIndexFile,
@@ -836,6 +845,36 @@ export interface PlatformAdapter {
    * @param overwrite 已安装时是否覆盖（升级场景）
    */
   installPlugin(sourceDir: string, overwrite?: boolean): Promise<PluginInstallResult>;
+  // —— 市场注册表与版本化缓存（FR-3.7 / FR-3.8）——
+  /**
+   * 读市场注册表。
+   *
+   * 四个字段（`type` / `isBuiltIn` / `autoUpdate` / `lastSyncAt`）是「能否离线 /
+   * 失败怎么办」的判据，界面据此决定「要不要联网、拉不到时说什么」。
+   * - web：返回空注册表 + 原因（**不是**「没有市场」，那是假话）。
+   */
+  pluginsMarkets(): Promise<MarketRegistry & { error: string | null }>;
+  /** 新增 / 更新市场条目（按 id 幂等；内置市场的来源不可改） */
+  pluginsMarketsUpsert(entry: MarketplaceEntry): Promise<PluginActionResult>;
+  /** 删除市场（内置市场拒绝） */
+  pluginsMarketsRemove(id: string): Promise<PluginActionResult>;
+  /** 同步一个市场：目录型扫目录归档；远程型本轮如实失败（不联网） */
+  pluginsMarketsSync(id: string): Promise<MarketSyncOutcome>;
+  /** 某市场已归档的包（源侧索引，含版本） */
+  pluginsMarketPackages(market: string): Promise<MarketIndex>;
+  /** 安装：把某一版 materialize 成生效副本并拨 `current` 指针 */
+  pluginsMarketInstall(
+    market: string,
+    name: string,
+    version: string,
+  ): Promise<MarketInstallResult>;
+  /**
+   * 回收无引用的旧副本。
+   *
+   * `referenced` 由调用方给出（活跃会话的版本引用集 + 当前指针指向的副本）：
+   * 平台层不知道哪些会话在跑，把这份知识硬塞进来只会误删。
+   */
+  pluginsMarketGc(referenced: string[], keepDays?: number): Promise<MarketGcResult>;
   /**
    * 卸载插件（删除包目录，不可撤销）。名字非法或目录越界时拒绝。
    * - electron：主进程删除；
@@ -1261,6 +1300,26 @@ export interface ElectronAPI {
   pluginsInstall(sourceDir: string, overwrite?: boolean): Promise<PluginInstallResult>;
   /** 卸载插件（删除包目录，不可撤销） */
   pluginsUninstall(name: string): Promise<PluginActionResult>;
+  // —— 市场注册表与版本化缓存（FR-3.7 / FR-3.8）——
+  // 同样是「文件系统那一半」：注册表读写、目录型市场同步、materialize 副本并拨指针。
+  /** 读市场注册表（含 `type` / `isBuiltIn` / `autoUpdate` / `lastSyncAt`） */
+  pluginsMarkets(): Promise<MarketRegistry & { error: string | null }>;
+  /** 新增 / 更新市场条目（按 id 幂等） */
+  pluginsMarketsUpsert(entry: MarketplaceEntry): Promise<PluginActionResult>;
+  /** 删除市场（内置市场拒绝） */
+  pluginsMarketsRemove(id: string): Promise<PluginActionResult>;
+  /** 同步一个市场（目录型扫目录归档；远程型本轮如实失败） */
+  pluginsMarketsSync(id: string): Promise<MarketSyncOutcome>;
+  /** 某市场已归档的包（源侧索引） */
+  pluginsMarketPackages(market: string): Promise<MarketIndex>;
+  /** 安装：把某一版放进 `cache/` 并拨 `current` 指针 */
+  pluginsMarketInstall(
+    market: string,
+    name: string,
+    version: string,
+  ): Promise<MarketInstallResult>;
+  /** 回收无引用的旧副本（`referenced` 由调用方给：活跃会话 + 当前指针） */
+  pluginsMarketGc(referenced: string[], keepDays?: number): Promise<MarketGcResult>;
   /** 窗口最小化 */
   windowMinimize(): void;
   /** 窗口最大化/还原切换 */

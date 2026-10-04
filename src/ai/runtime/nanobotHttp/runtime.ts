@@ -31,7 +31,7 @@ import {
   type TaskRunRecord,
   type TranscribeRequest,
 } from '../types';
-import type { ChannelConfig, ChannelKind, MCPConfig, TaskConfig } from '@/types';
+import type { ChannelConfig, ChannelKind, MCPConfig, TaskConfig, UsageStats } from '@/types';
 import type { PluginEngineIndex } from '@/types/plugin';
 
 /** 引擎当前支持的 IM 渠道（对齐 nanobot 各 channel manifest） */
@@ -169,6 +169,14 @@ export class NanobotHttpRuntime implements AgentRuntime {
 
   listRuns(query: RunQuery): Promise<TaskRunRecord[]> {
     return listRunsFromRuntime(query);
+  }
+
+  /**
+   * 本机 LLM 用量报表（FR-11.1）。与插件域同款：直接委托 transport
+   * ——「读一次、拿结论」没有跨模块编排，也没有要登记的在途状态。
+   */
+  readUsageStats(): Promise<UsageStats> {
+    return this.client.readUsage();
   }
 
   /**

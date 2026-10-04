@@ -177,3 +177,86 @@ export interface PluginScanResult {
   /** 扫描的插件根绝对路径（便于用户定位） */
   pluginsRoot: string;
 }
+
+/**
+ * 市场来源类型（FR-3.7）。
+ *
+ * `directory` **永不联网**（本地一个目录就是全部内容）；`remote` 要从 URL 拉 zip，
+ * 拉不到时保留上次索引并记 `lastError`——这两种生命周期完全不同，是
+ * 「能否离线 / 失败怎么办」的唯一判据。
+ */
+export type MarketplaceType = 'directory' | 'remote';
+
+/** 注册表里的一个市场（`~/.nanowork/plugins/registry.json`） */
+export interface MarketplaceEntry {
+  /** 稳定 id（也是 `marketplaces/` 下的目录名） */
+  id: string;
+  name: string;
+  type: MarketplaceType;
+  /** `directory`：绝对目录路径；`remote`：zip 地址 */
+  location: string;
+  /** 随应用分发（不可删除、不联网） */
+  isBuiltIn: boolean;
+  /** 启动时自动刷新（false = 只有用户点刷新时才拉） */
+  autoUpdate: boolean;
+  /** 上次同步成功时刻（ISO）；从未同步过为 null */
+  lastSyncAt: string | null;
+  /** 上次同步的失败原因；成功为 null */
+  lastError: string | null;
+}
+
+/** 市场注册表文件形状 */
+export interface MarketRegistry {
+  version: number;
+  markets: MarketplaceEntry[];
+}
+
+/** 市场里的一个包（同步后才知道有哪些包、哪一版） */
+export interface MarketPackage {
+  name: string;
+  displayName: string;
+  version: string;
+  description: string;
+}
+
+/** 一个市场的源侧索引 */
+export interface MarketIndex {
+  market: string;
+  packages: MarketPackage[];
+  /** 坏包（清单缺失或不合规）的目录名 */
+  skipped: string[];
+}
+
+/** 一次市场同步的结果 */
+export interface MarketSyncResult {
+  ok: boolean;
+  market: string;
+  synced: number;
+  skipped: string[];
+  error?: string;
+}
+
+/** 从市场安装（materialize 某一版 + 拨指针）的结果 */
+export interface MarketInstallResult {
+  ok: boolean;
+  market: string;
+  name: string;
+  version: string;
+  /** 生效副本的绝对路径（成功时） */
+  path: string;
+  error?: string;
+}
+
+/** 缓存回收结果 */
+export interface MarketGcResult {
+  removed: string[];
+  kept: string[];
+}
+
+/** 一次同步的回报（结果 + 回写后的条目，界面据此更新徽标） */
+export interface MarketSyncOutcome {
+  ok: boolean;
+  result: MarketSyncResult;
+  entry: MarketplaceEntry;
+  error?: string;
+}
