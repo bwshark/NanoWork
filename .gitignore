@@ -67,4 +67,6 @@ media/
 # 于是 `src/components/tasks/` 与 `src/pages/tasks/` 也被静默忽略——那两处是**源码**，
 # 一旦没进版本库，误删/换工作区就再也找不回来（2026-09-19 实际发生过一次）。
 # 这里只忽略仓库根目录下存放截图的 tasks/。
-tasks/
+# ⚠️ 这一行在 2026-10-04 被改回过裸 `tasks/`（注释留着、规则却错了）——判据不能只信注释，
+# 要跑 `git check-ignore -v src/components/tasks/__probe__.ts`：有输出就是又漏了。
+/tasks/
