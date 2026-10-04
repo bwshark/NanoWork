@@ -4,6 +4,7 @@ import { promises as fs, existsSync, readFileSync, watch as fsWatch, type Dirent
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createConnection } from 'node:net';
 import { request as httpRequest } from 'node:http';
+import { arch as osArch, release as osRelease } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import WebSocket from 'ws';
 import { parseWebuiResponseFrame } from './webuiFrames';
@@ -57,6 +58,16 @@ import {
   type StorageRoots,
 } from './storageRoutes';
 import { fallbackMemoryDir } from './memoryRoutes';
+// —— 可观测性（FR-11.2 / FR-11.3）——
+// 三个模块都只依赖 `node:fs` / `node:zlib` / `src/observability/*` 的**纯**文件
+// （后者不 import `@/platform`），因此可以被 esbuild 直接打进 main.cjs。
+import { appendLogLine, createFileLogger, logStats, pruneLogs } from './logStore';
+import { pruneTraces, traceStats, writeTrace } from './traceStore';
+import { buildDiagnosticsBundle } from './diagnostics';
+// 只取类型（esbuild 会擦掉）：用 `as never` 之类的硬转会在字段改名时静默失守，
+// 而这里的字段名是渲染层与主进程的**线上契约**。
+import type { LogLevel, LogModule } from '../src/observability/logging';
+import type { TraceFile } from '../src/observability/trace';
 import {
   appendMemoryFileLine,
   clearMemoryFiles,
@@ -808,6 +819,14 @@ async function startNanobot(): Promise<boolean> {
   // 端口已被占用（用户手动拉起过 / 上一实例未退出）→ 直接复用，避免 10048 冲突
   if (await isPortInUse(host, preferred)) {
     console.log(`[nanobot] ${host}:${preferred} 已有网关在监听，复用既有服务，不重复拉起`);
+    // 这条 warn 是给「改了配置不生效」准备的：被复用的进程带着**它启动那一刻**的
+    // 配置，而引擎只在启动时读配置、没有文件监听。日志里留一行，省掉一次
+    // 「翻进程 CreationDate 与配置 mtime 比大小」的排查（见开发笔记 §7.13.11）。
+    userDataLog('engine', 'warn', '复用既有网关进程（该进程持有它启动时的配置）', {
+      host,
+      port: preferred,
+      config,
+    });
     nanobotServeHost = host;
     nanobotServePort = preferred;
     return true;
@@ -820,6 +839,7 @@ async function startNanobot(): Promise<boolean> {
       console.warn(
         `[nanobot] ${host}:${preferred} 不可用（被占用或落在系统保留端口区间），自动改用 ${listenPort}`,
       );
+      userDataLog('engine', 'warn', '首选网关端口不可用，已顺延', { preferred, listenPort });
     }
     const serveArgs = [...args, 'serve', '--host', host, '--port', String(listenPort)];
     if (config && existsSync(config)) {
@@ -834,6 +854,9 @@ async function startNanobot(): Promise<boolean> {
     nanobotProcess.stderr?.on('data', (d) => console.warn(`[nanobot] ${d.toString().trim()}`));
     nanobotProcess.on('exit', (code) => {
       console.log(`[nanobot] 进程退出 code=${code}`);
+      // 引擎退出几乎总是「它自己崩了」，而崩溃原因在它的 stderr 里（已经打在控制台，
+      // 但控制台不会留档）。等级用 warn：这是预期外的状态，不是本应用的操作失败。
+      userDataLog('engine', 'warn', '网关进程退出', { code });
       nanobotProcess = null;
     });
     // 等到端口真正进入监听再返回：只等固定 800ms 会让渲染层的首次探测
@@ -845,6 +868,11 @@ async function startNanobot(): Promise<boolean> {
       console.warn(
         `[nanobot] ${host}:${listenPort} 在 ${LAUNCH_READY_TIMEOUT_MS / 1000} 秒内未进入监听（进程可能已退出）`,
       );
+      userDataLog('engine', 'error', '网关未在超时内进入监听', {
+        host,
+        port: listenPort,
+        timeoutMs: LAUNCH_READY_TIMEOUT_MS,
+      });
     } else {
       // 只在实际就绪后写入：渲染层据此把 gatewayEndpoint 对齐到真实端口，
       // 未就绪就改写地址会让界面指向一个暂时没人监听的端口。
@@ -854,6 +882,7 @@ async function startNanobot(): Promise<boolean> {
     return ready;
   } catch (err) {
     console.warn(`[nanobot] 启动失败（可能未安装 nanobot）：${String(err)}`);
+    userDataLog('engine', 'error', '网关启动失败', { error: String(err) });
     nanobotProcess = null;
     return false;
   }
@@ -2741,6 +2770,109 @@ ipcMain.handle('artifactIndex:remove', async (_e, id: string) => {
   }
 });
 
+// ——— 可观测性（FR-11.2 全链路 trace / FR-11.3 运行日志分级）———
+//
+// 两条写入通道都用 `ipcMain.on`（不是 `handle`）：渲染层侧是 fire-and-forget，
+// 没有回值可等。主进程侧一律自行吞错——日志 / trace 写不进去是「少一份诊断材料」，
+// 不是「用户的这一轮失败了」。把错误抛回渲染层只会制造一个与真实原因无关的报错。
+const DIAGNOSTICS_USER_DATA = STORAGE_ROOTS.electronUserData;
+const userDataLog = createFileLogger(DIAGNOSTICS_USER_DATA);
+
+ipcMain.on('log:append', (_e, entry: unknown) => {
+  const e = entry as { module?: unknown; level?: unknown; line?: unknown } | null;
+  if (!e || typeof e.line !== 'string') return;
+  // module / level 由 `appendLogLine` 按白名单再校一次（渲染层的值不可全信，
+  // 而模块名是文件名的一部分）
+  void appendLogLine(DIAGNOSTICS_USER_DATA, {
+    at: Date.now(),
+    module: e.module as LogModule,
+    level: e.level as LogLevel,
+    message: e.line,
+  });
+});
+
+/**
+ * trace 保留策略的执行频率。
+ *
+ * 每次写 trace 都扫一遍目录是 O(文件数) 的白工。答案不是「启动时清一次就够」——
+ * 一次长会话能产出几十份 trace，而应用可能连开几天。折中成「最多每小时一次」：
+ * 最坏情况下多留一个小时的量，代价有界。
+ */
+const TRACE_PRUNE_INTERVAL_MS = 60 * 60 * 1000;
+let lastTracePruneAt = 0;
+
+ipcMain.on('trace:write', (_e, file: unknown) => {
+  void (async () => {
+    const written = await writeTrace(DIAGNOSTICS_USER_DATA, file as TraceFile);
+    if (!written) return;
+    const now = Date.now();
+    if (now - lastTracePruneAt < TRACE_PRUNE_INTERVAL_MS) return;
+    lastTracePruneAt = now;
+    await pruneTraces(DIAGNOSTICS_USER_DATA, { now });
+  })();
+});
+
+ipcMain.handle('diagnostics:stats', async () => {
+  const [logs, traces] = await Promise.all([
+    logStats(DIAGNOSTICS_USER_DATA),
+    traceStats(DIAGNOSTICS_USER_DATA),
+  ]);
+  return {
+    logsDir: logs.dir,
+    tracesDir: traces.dir,
+    logFiles: logs.files,
+    logBytes: logs.bytes,
+    traceFiles: traces.files,
+    traceBytes: traces.bytes,
+    logDates: logs.dates,
+  };
+});
+
+ipcMain.handle('diagnostics:export', async () => {
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  const win = BrowserWindow.getAllWindows()[0];
+  const picked = win
+    ? await dialog.showSaveDialog(win, {
+        title: '导出诊断包',
+        defaultPath: join(app.getPath('downloads'), `nanowork-diagnostics-${stamp}.zip`),
+        filters: [{ name: 'Zip 压缩包', extensions: ['zip'] }],
+      })
+    : await dialog.showSaveDialog({
+        title: '导出诊断包',
+        defaultPath: join(app.getPath('downloads'), `nanowork-diagnostics-${stamp}.zip`),
+        filters: [{ name: 'Zip 压缩包', extensions: ['zip'] }],
+      });
+  if (picked.canceled || !picked.filePath) return { ok: false, canceled: true };
+
+  try {
+    const bundle = await buildDiagnosticsBundle({
+      userData: DIAGNOSTICS_USER_DATA,
+      appInfo: {
+        appName: app.getName(),
+        version: app.getVersion(),
+        electron: process.versions.electron,
+        node: process.versions.node,
+        chrome: process.versions.chrome,
+        platform: process.platform,
+        osVersion: `${osRelease()} (${osArch()})`,
+        arch: process.arch,
+      },
+    });
+    await fs.writeFile(picked.filePath, bundle.bytes);
+    return {
+      ok: true,
+      path: picked.filePath,
+      bytes: bundle.bytes.length,
+      entryCount: bundle.entryCount,
+      skipped: bundle.skipped,
+    };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    userDataLog('app', 'error', '导出诊断包失败', { error: message });
+    return { ok: false, error: message };
+  }
+});
+
 // ——— 系统 shell 桥（侧边栏「在资源管理器打开」）———
 ipcMain.handle('shell:openPath', async (_e, path: string) => {
   const normalized = join(path);
@@ -3978,6 +4110,23 @@ app.whenReady().then(async () => {
   await migrateLegacyStore();
 
   void createWindow();
+
+  // 诊断产物的保留清理（FR-11.2 / FR-11.3）：启动时各扫一次，之后在 trace 写入侧
+  // 按小时顺带做（见 TRACE_PRUNE_INTERVAL_MS 的说明）。
+  // **不 await**：清理失败与启动链路无关，慢一点也绝不该挡住窗口。
+  void (async () => {
+    try {
+      await pruneLogs(DIAGNOSTICS_USER_DATA, { now: Date.now() });
+      await pruneTraces(DIAGNOSTICS_USER_DATA, { now: Date.now() });
+    } catch {
+      /* 清理失败只影响占盘，不影响功能 */
+    }
+  })();
+  userDataLog('app', 'info', '应用启动', {
+    version: app.getVersion(),
+    platform: process.platform,
+    arch: process.arch,
+  });
 
   // 托盘 + 全局快捷键：窗口建好后立即初始化，保证冷启动即可用快捷键唤起。
   // 依赖全部以回调注入，托盘模块不反向依赖 mainWindow，避免循环引用。

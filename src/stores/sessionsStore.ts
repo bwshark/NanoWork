@@ -23,9 +23,12 @@ import {
   recorderWorkdir,
   setRecordErrorSink,
   setRecorderWorkdir,
+  takeTurnEvents,
   toEventAttachment,
   UNBOUND_AGENT_SENTINEL,
 } from '@/events';
+import { buildTurnTrace } from '@/observability/trace';
+import { log } from '@/observability/logger';
 import type { EventFactory } from '@/events/factory';
 import type { ExecutionMode, SessionEvent, SessionMeta } from '@/types/event';
 import { normalizeMeta, withoutTombstone } from '@/lib/syncMeta';
@@ -414,7 +417,67 @@ export function isEventStreamSession(s: Pick<Session, 'id' | 'channel' | 'readon
 function reportStreamError(sessionId: string, error: unknown): void {
   const msg = error instanceof Error ? error.message : String(error);
   console.error(`[sessionsStore] 事件流操作失败（${sessionId}）：`, error);
+  // 同时落一行日志（FR-11.3）：控制台随窗口关闭就消失，而「记录写入失败」
+  // 恰恰是用户事后想回溯的问题——它已经不可复现了（内存视图仍是好的）。
+  log.error('events', '事件流操作失败', { sessionId, error: msg });
   toast.error(`会话记录写入失败：${msg}`);
+}
+
+/**
+ * 对话失败的日志落点（FR-11.3）。
+ *
+ * ## 为什么必须是**两**条路径共用一个出口
+ *
+ * 2026-10-04 的真机验证抓到的第一个缺陷就是这个：最初只在最外层的 `catch` 里落了
+ * 日志，而**绝大多数失败根本走不到那里**——引擎报错 / 断流超时是由
+ * `handlers.onError` 上报的（见下方 `onError` 分支），它把 `sendError` 一写就结束了。
+ * 结果是「跑一轮失败对话，日志里一条都没有」，而那恰恰是用户最会来问的场景。
+ *
+ * 两条路径的**下一步不同**，所以文案也分开（`phase`）：
+ * - `stream`：请求发出去了、引擎答了话但它说失败（先看引擎 / 模型）；
+ * - `request`：请求压根没能建立（先看网关起没起、地址对不对）。
+ */
+function logChatFailure(sessionId: string, phase: 'stream' | 'request', message: string): void {
+  log.error('chat', phase === 'stream' ? '对话流失败' : '发送请求失败', {
+    sessionId,
+    phase,
+    error: message,
+  });
+}
+
+/**
+ * 把刚结束的这一回合折成一份 trace 落盘（FR-11.2）。
+ *
+ * ## 为什么在这里取值、而不是重新读一遍事件流
+ *
+ * 事件流的写入是**异步入队**的（`recordEvents` 只把构造好的事件排进队列），此刻
+ * 读盘既可能读到半截、也要多付一次 IO。记录器的**回合缓冲**（`takeTurnEvents`）
+ * 给的正是这一轮事件的原始对象——构造与消费同一批，不存在两种推导。
+ *
+ * ## 为什么整段吞错
+ *
+ * 调用点在回合收尾路径上（所有出口 done / error / abort 的唯一交汇点）。可观测性
+ * 是旁路：它失败只该少一份 trace，绝不能把这一轮的收尾打挂——那会换来一个
+ * 「发消息报错」的假象，而真正的原因在 trace 里（如果它还能写出来的话）。
+ */
+function persistTurnTrace(sessionId: string): void {
+  try {
+    const events = takeTurnEvents(sessionId);
+    if (events.length === 0) return;
+    const session = useSessionsStore.getState().sessions.find((s) => s.id === sessionId);
+    // channel / readonly / cron 三类会话的事实源在引擎侧，本地没有事件流
+    // （`recordFor` 对它们根本不写盘），也就没有「本机这一轮」可言。
+    if (session && !isEventStreamSession(session)) return;
+
+    const file = buildTurnTrace(events, {
+      sessionId,
+      agentId: session?.agentId || undefined,
+    });
+    // fire-and-forget：写盘在主进程，渲染层不等（见 PlatformAdapter.writeTrace）
+    platform.writeTrace(file);
+  } catch (e) {
+    log.warn('trace', '构建回合 trace 失败', { sessionId, error: String(e) });
+  }
 }
 
 // 记录器的写盘失败走同一出口（模块初始化时注册一次）
@@ -894,6 +957,10 @@ async function streamAssistantReply(
       onError: (err) => {
         sendError = err.message;
         useSessionsStore.setState({ error: err.message });
+        // 协议级失败是**绝大多数**失败形态（引擎报错 / 断流超时都会走这里），
+        // 而它不会抛到 `streamAssistantReply` 的外层 catch —— 两个出口都要记，
+        // 否则「跑一轮失败的对话，日志里一条都没有」。
+        logChatFailure(sessionId, 'stream', err.message);
         toast.error(`发送失败：${err.message}`);
       },
       onInterrupted: () => {
@@ -910,6 +977,10 @@ async function streamAssistantReply(
     const msg = e instanceof Error ? e.message : String(e);
     sendError = msg;
     useSessionsStore.setState({ error: msg });
+    // 落一行日志（FR-11.3）：对话失败是「用户会来问」的头号问题，而 toast 一关就没。
+    // 这条覆盖的是「请求压根没发出去」（拿不到 runtime / 同步抛错），
+    // 协议级失败走上面 onError 那一条——两条都要，理由见 `logChatFailure`。
+    logChatFailure(sessionId, 'request', msg);
     toast.error(`发送失败：${msg}`);
   } finally {
     // 回合边界：先把未闭合的思考段落盘（此后不会再追加），再结算助手消息。
@@ -1000,6 +1071,11 @@ async function streamAssistantReply(
       }),
       f.sessionEnd({ reason }),
     ]);
+
+    // 全链路 trace（FR-11.2）：这一轮的事件刚刚全部构造完，趁热折成一份 trace。
+    // 位置刻意放在 recordFor **之后**：缓冲里必须已经含 `session-end`，否则
+    // trace 的 status 无从判断（那正是「这一轮到底算成功还是失败」的唯一权威）。
+    persistTurnTrace(sessionId);
 
     /**
      * 落盘：协议块只是**意图**，真正的写入统一交给 MemoryService.append

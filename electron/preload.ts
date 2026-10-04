@@ -145,6 +145,14 @@ const api: ElectronAPI = {
     ipcRenderer.invoke('plugins:marketInstall', market, name, version),
   pluginsMarketGc: (referenced: string[], keepDays?: number) =>
     ipcRenderer.invoke('plugins:marketGc', referenced, keepDays),
+  // —— 可观测性（FR-11.2 / FR-11.3）——
+  // 日志与 trace 都是 **fire-and-forget**（`send` 而不是 `invoke`）：它们是旁路，
+  // 不该给渲染层造出 await 点；主进程侧全部自行吞错（写不进去就是写不进去，
+  // 不能回头把用户的这一轮对话打挂）。
+  appendLog: (entry) => ipcRenderer.send('log:append', entry),
+  writeTrace: (file) => ipcRenderer.send('trace:write', file),
+  diagnosticsStats: () => ipcRenderer.invoke('diagnostics:stats'),
+  exportDiagnostics: () => ipcRenderer.invoke('diagnostics:export'),
   // ——— 窗口控制（自绘标题栏）———
   windowMinimize: () => ipcRenderer.send('window:minimize'),
   windowToggleMaximize: () => ipcRenderer.send('window:toggle-maximize'),

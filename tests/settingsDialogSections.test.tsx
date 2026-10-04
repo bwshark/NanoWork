@@ -15,8 +15,9 @@
  *    只查 DOM 结构永远查不出这个 bug，必须落到计算样式上。
  */
 
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
+import { platform } from '@/platform';
 import { SettingsDialog } from '@/components/settings/SettingsDialog';
 import { SETTINGS_NAV_ITEMS } from '@/components/settings/settingsNav';
 import { __setRuntimeForTest } from '@/ai/runtime';
@@ -48,6 +49,10 @@ const CONTENT_ANCHORS: Record<SettingsSectionId, string> = {
   usage: '近 30 天概览',
   // 「账户」分区用 `useNavigate`（未登录入口跳登录页），故弹窗需挂在 Router 下（见 renderDialog）
   account: '跨设备同步',
+  // 「导出诊断包」是诊断分区里那一行的标签；左侧菜单项只有「诊断」两个字，不会误命中。
+  // ⚠️ 这个锚点只在**统计读得到**的分支里渲染，所以 beforeEach 里要桩掉
+  // `diagnosticsStats`（jsdom 走 Web 适配器，真值恒为 null，会渲染「没有本地数据目录」那一支）。
+  diagnostics: '导出诊断包',
   about: '运行环境',
 };
 
@@ -109,7 +114,20 @@ function dialogPaper(): HTMLElement {
 
 beforeEach(() => {
   unmount();
+  vi.restoreAllMocks();
   stubUsageRuntime();
+  // 诊断分区在 Web 适配器下拿不到统计（如实返回 null），会渲染「没有本地数据目录」
+  // 那一支——那是**另一条**分支，没有「导出诊断包」。这里桩成有数据，
+  // 让锚点落在真正的分区内容上。
+  vi.spyOn(platform, 'diagnosticsStats').mockResolvedValue({
+    logsDir: '/tmp/logs',
+    tracesDir: '/tmp/traces',
+    logFiles: 1,
+    logBytes: 1024,
+    traceFiles: 1,
+    traceBytes: 2048,
+    logDates: ['2026-10-04'],
+  });
   // 用量 store 是全局单例：不重置的话，上一个用例读到的报表会漏进下一个用例
   useUsageStore.setState({
     stats: emptyUsageStats(),

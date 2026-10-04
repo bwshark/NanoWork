@@ -59,7 +59,27 @@ interface RecorderState {
   workdir?: string;
   /** `messageId` → 活跃链上该消息 `message` 事件 id */
   messageEventIds: Map<string, string>;
+  /**
+   * **本回合**已落盘的事件（自上次 `takeTurnEvents` 起）。
+   *
+   * 用途只有一个：回合收尾时把这一批事件交给 trace 构建器（FR-11.2）。之所以
+   * 记在记录器里，而不是让调用方自己攒——**只有这里知道「一个回合从哪开始」**：
+   * 事件由若干个不相邻的 `recordFor` 调用产出（思考段、工具行、产物、助手终值、
+   * 回合结束），而它们全都经过本模块。放在调用方攒，就要在十几处各加一行。
+   *
+   * 不担心无限增长：`takeTurnEvents` 每次取完即清空，而回合结束必然调用它。
+   */
+  turnEvents: SessionEvent[];
 }
+
+/**
+ * 回合缓冲上限。
+ *
+ * 正常回合是几十条事件；到量说明出了别的状况（例如某个循环在猛发工具事件）。
+ * 到量后**丢最早的一半**而不是拒绝新增——trace 里最近的步骤比开头的更有用，
+ * 而且这样也不会让「缓冲满了」变成一次内存事故。
+ */
+const MAX_TURN_EVENTS = 2000;
 
 const recorders = new Map<string, RecorderState>();
 /** 每会话串行写队列：队列尾始终是一个「永不拒绝」的 Promise */
@@ -86,6 +106,7 @@ export function createRecorder(sessionId: string, workdir?: string): void {
     factory: new EventFactory({ sessionId }),
     workdir,
     messageEventIds: new Map(),
+    turnEvents: [],
   });
 }
 
@@ -108,6 +129,9 @@ export function primeRecorder(
     factory,
     workdir,
     messageEventIds: messageEventIndex(activePath(events)),
+    // 历史事件**不进**回合缓冲：缓冲的语义是「本次这一轮」，把整个历史倒进去
+    // 会让第一轮的 trace 变成整份会话的记录
+    turnEvents: [],
   });
 }
 
@@ -160,6 +184,20 @@ export function messageEventIdOf(sessionId: string, messageId: string): string |
 }
 
 /**
+ * 取走**本回合**累积的事件并清空缓冲（FR-11.2 的 trace 数据源）。
+ *
+ * 记录器未就绪时返回空数组而不是抛错：调用点在回合收尾路径上，可观测性拿不到
+ * 数据只是少一份 trace，不该把这一轮的收尾打断。
+ */
+export function takeTurnEvents(sessionId: string): SessionEvent[] {
+  const state = recorders.get(sessionId);
+  if (!state) return [];
+  const events = state.turnEvents;
+  state.turnEvents = [];
+  return events;
+}
+
+/**
  * 构造并落盘一批事件（构造同步、写盘异步）。
  *
  * @param build 在工厂上构造事件；返回单条或多条。**必须同步返回**。
@@ -184,6 +222,11 @@ export function recordEvents(
 
   for (const ev of events) {
     if (ev.type === 'message') state.messageEventIds.set(ev.messageId, ev.id);
+  }
+
+  state.turnEvents.push(...events);
+  if (state.turnEvents.length > MAX_TURN_EVENTS) {
+    state.turnEvents.splice(0, state.turnEvents.length - MAX_TURN_EVENTS);
   }
 
   const workdir = state.workdir;

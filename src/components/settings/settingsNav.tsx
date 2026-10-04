@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import BookmarksOutlinedIcon from '@mui/icons-material/BookmarksOutlined';
+import BugReportOutlinedIcon from '@mui/icons-material/BugReportOutlined';
 import CloudOutlinedIcon from '@mui/icons-material/CloudOutlined';
 import ExtensionIcon from '@mui/icons-material/Extension';
 import HubIcon from '@mui/icons-material/Hub';
@@ -76,6 +77,9 @@ export const SETTINGS_NAV: SettingsNavGroup[] = [
       // 用量紧挨「数据管理」：两者看的都是**本机已发生的事实**（存了什么 / 跑了多少），
       // 与上面「功能」组那种「开了什么能力」不是一回事。
       { id: 'usage', label: '用量', icon: <InsightsOutlinedIcon /> },
+      // 诊断与「用量」同类（也是本机事实的查看），但它回答的是「东西在哪、怎么带走」，
+      // 是排障入口而不是报表，所以排在用量之后、账户之前。
+      { id: 'diagnostics', label: '诊断', icon: <BugReportOutlinedIcon /> },
     ],
   },
   {

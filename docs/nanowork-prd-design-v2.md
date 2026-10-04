@@ -320,8 +320,8 @@
 | 编号      | 名称          | 优先级    | 现状 | 环境       | 验收标准                                                                    |
 | ------- | ----------- | ------ | -- | -------- | ----------------------------------------------------------------------- |
 | FR-11.1 | 用量与成本       | **P0** | 🟡 | both     | 已完成：引擎只读 `GET /v1/usage`（`[LOCAL PATCH]`）+ 设置 →「用量」分区（日期 / 来源 / provider·模型 三个维度，token-only，窗口 7/30/90）。**补**：金额报表（需 `models` 元数据扩展 `pricing` 单价）。注：用量表没有 session / agent 列，原案「按会话 / Agent」不成立，见 §20.2 |
-| FR-11.2 | 全链路 Trace   | P1     | ⬜  | electron | 单次请求 trace 落盘（对齐 WorkBuddy `traces/<pid>/trace_*.json`）                 |
-| FR-11.3 | 运行日志分级      | P1     | ⬜  | electron | 按模块分文件；`logs/<date>/`；支持一键打包诊断                                          |
+| FR-11.2 | 全链路 Trace   | P1     | ✅  | electron | **已落地（2026-10-04）**：单次请求 trace 落盘，落点 `<userData>/traces/<pid>/trace_<32hex>.json`，**形状对齐 WorkBuddy**（`{trace, spans}`，span 类型 `agent` / `generation` / `function` / `custom`）。数据源**不是新埋点**而是事件流：回合收尾时由 `buildTurnTrace(events)` 折出（见 §20.4）。两处刻意差异：`workerPid` / `workerHostname` 由主进程落盘时补（渲染层不知道写文件那个进程的 pid）；**不落提问正文**（诊断包会被用户发出去） |
+| FR-11.3 | 运行日志分级      | P1     | ✅  | electron | **已落地（2026-10-04）**：`<userData>/logs/<本地日 YYYY-MM-DD>/<module>.log`，一行一条、只追加；模块名走**白名单**（16 个，同时是文件名取值域 → 不需要再挡路径穿越）；等级 `debug` / `info` / `warn` / `error`（行内字段，不按等级分文件）。两侧共用一份纯逻辑（`src/observability/logging.ts`）格式化，渲染层经 IPC 送**已格式化的行**，主进程只做校验 + 追加。**一键打包诊断**已落：设置 →「诊断」→ 导出 zip（见 §20.4） |
 | FR-11.4 | 健康监控告警      | P2     | ⬜  | electron | 渠道掉线 / 队列积压 / 模型失败率超阈值告警（V3）                                            |
 | FR-11.5 | Langfuse 集成 | P2     | ⬜  | electron | 可选接入（nanobot 侧已支持）（V3）                                                  |
 
@@ -2581,7 +2581,8 @@ rollbackTo(commitSeq: number): Promise<{ ok: true; restored: string[] } | { ok: 
 | `<userData>/projects/<slug>/`                                       | ③ 的 `sessions/<workspace_id>/`；渲染层会话暂为 ② `sessions.json`                                                      | ⚠️ 落点与声明不同（D2 落地后迁实体流） |
 | `<userData>/index/sessions.db`                                      | 无；用量数据在 ③ 的 `llm_usage.sqlite3`                                                                               | ⚠️ 落点与声明不同             |
 | `<userData>/file-history/`                                          | 无（`lib/undoStack.ts` 是**输入框草稿**撤销，非文件回滚）                                                                      | ⬜ 待建（FR-7.3）           |
-| `<userData>/artifact-index/` `logs/` `traces/` `audit-log/` `sync/` | 无                                                                                                             | ⬜ 待建                   |
+| `<userData>/artifact-index/` `logs/` `traces/` | ✅ `artifact-index/<id>.json`（FR-7.2 单向镜像）、`logs/<date>/<module>.log`（FR-11.3）、`traces/<pid>/<traceId>.json`（FR-11.2） | ✅ 已落地 |
+| `<userData>/audit-log/` `sync/` | 审计日志在**引擎侧**（`NANOBOT_TOOL_AUDIT_LOG`，见 20.3）；`sync/` 无——M6 的 pull 游标刻意留在内存、事件水位走 `platform.storage` 的 `misc/` 兜底 | ⚠️ 落点与声明不同 |
 
 这张表的价值不在「有几项没做」——那本就属排期。关键在**两类偏差性质完全不同**：`⬜` 是没做，按里程碑推进即可；`⚠️` 是**落点与声明不一致**，会在 V1.5 做同步时集中爆发——同步要按实体粒度读写，而现状是一块 blob 加几个引擎私有目录。
 
@@ -2731,8 +2732,8 @@ export interface SyncMeta {
 | 层   | 产物                                          | 现状          |
 | --- | ------------------------------------------- | ----------- |
 | 会话级 | 事件流自带 `provider.traceId` / `requestModelId` | 设计就绪（第 9 章） |
-| 请求级 | `traces/<pid>/trace_*.json` 单次请求全链路         | ⬜           |
-| 系统级 | `logs/<date>/<module>.log` 分模块日志            | ⬜           |
+| 请求级 | `traces/<pid>/trace_*.json` 单次请求全链路         | ✅ 见 §20.4   |
+| 系统级 | `logs/<date>/<module>.log` 分模块日志            | ✅ 见 §20.4   |
 
 **关键设计**：trace 信息**逐事件落盘**（不是集中埋点）。WorkBuddy 的 `function_call` 事件里带 `traceId` + `requestModelId` + `agent`，这意味着可观测性不需要额外埋点系统——事件流本身就是 telemetry。这大幅降低实现成本。
 
@@ -2785,6 +2786,131 @@ audit-log/YYYY-MM-DD.jsonl
 - 每条含 `category` / `eventType` / `decision` 三元组，便于机器聚合。
 
 ---
+
+## 20.4 本轮落地口径（FR-11.2 全链路 trace / FR-11.3 运行日志分级）
+
+### 20.4.1 落点
+
+```
+<userData>/logs/<本地日 YYYY-MM-DD>/<module>.log     # 运行日志（16 个模块各一个文件）
+<userData>/traces/<pid>/<traceId>.json               # 全链路 trace（一次回合一份）
+```
+
+- **目录名用本地日**（回答「我哪天用的」），**行内时间用 UTC ISO**（多机诊断包合并时
+  不错序）。两者刻意不同口径，各有各的读者。
+- trace 的 `<pid>` 是**写文件那个进程**的 pid（即 Electron 主进程），不是渲染进程。
+
+### 20.4.2 trace 由事件流派生，不新增埋点
+
+20.1 的关键设计（「可观测性不需要额外埋点，因为 trace 信息本来就随事件走」）就是
+本轮的实现方式：回合收尾时记录器交出**本回合的全部事件**，`buildTurnTrace` 把它们
+折成 `{trace, spans}`。
+
+| 事件 | 折成 |
+| --- | --- |
+| 整回合（`session-start` … `session-end`） | 根 span，`type: 'agent'` |
+| 助手消息（`createdAt` → 落盘时刻） | `type: 'generation'`（**一个回合一个**，见下） |
+| `function-call` + `function-call-result`（按 `callId` 配对） | `type: 'function'`，带 `toolName` / `toolInput` / `toolOutput` |
+| `permission-decision` | `type: 'custom'`，名字固定 `permission` |
+
+**为什么只有一条 generation span**：引擎一次回合可能对模型发起多次调用（工具执行后
+再问一轮），但事件流里没有「第 N 次调用」的边界——只有 `reasoning` 与
+`function-call` 的交替。按启发式切出若干段，切错的概率不低；如实记成一个生成窗口
+更诚实。`metadata` 里同时给 `reason`（回合结果）与 `promptChars`。
+
+**状态口径**：`session-end.reason` 是唯一权威。`error` / `interrupted` → `status: 'error'`；
+`aborted`（用户主动停）→ **`ok`** ——把它记成 error 会让失败率被用户的正常操作污染，
+之后没法拿它做告警基线。
+
+**未配对的工具调用**（只有 `function-call`、没有结果事件）记为 `status: 'error'`，
+但 `error` 文案写「结果未返回（回合被中断或超时）」而不是「失败」：工具可能已经成功
+执行，只是结果事件没送到——说成失败与说成完成一样是骗人（同 §7.28.8）。
+
+### 20.4.3 与 WorkBuddy 的两处**刻意**差异
+
+1. **`workerPid` / `workerHostname` 由主进程落盘时补**。渲染层不知道写文件那个进程的
+   pid，硬填一个近似值等于在诊断数据里写假话——查的人会据此去另一个进程上找。
+2. **不落提问正文**。WorkBuddy 的 trace 里有 `prompt`；但诊断包是会被用户发出去的，
+   提问正文隐私权重高、排障价值低（`metadata.promptChars` 已够用）；工具参数与结果相反
+   ——「哪一步失败、参数是什么」是排障的全部，保留并**截断到 4000 字符**。
+
+### 20.4.4 日志：分级是行内字段，不按等级分文件
+
+- 模块名走**白名单**（`app` / `chat` / `engine` / `events` / `gateway` / `ipc` / `mcp` /
+  `memory` / `plugin` / `settings` / `skills` / `storage` / `sync` / `task` / `trace` /
+  `window`）。白名单同时是**文件名取值域**，于是「模块名拼进路径」这条攻击面不存在
+  ——不需要在主进程再挡一次路径穿越。
+- 行格式：`[ISO] [module] LEVEL message detail`（detail 是 JSON 或原样字符串）。
+  换行一律转义成 `
+` 字面量：一行一条是 `grep` 与**追加写入**的前提。
+- 等级只作行内字段。按等级分文件（`error.log` / `info.log`）是把「谁在说话」与
+  「说得多严重」两个正交维度压进一个维度——排查某模块时仍要跨文件拼接。
+- **两侧共用一份纯逻辑**（`src/observability/logging.ts`，不 import `node:*`）：
+  渲染层格式化好**整行**再经 IPC 送出，主进程只做「校验模块名 + 追加一行」。
+  主进程自身的事件（启动 / 网关端口顺延 / 复用既有进程 / 网关退出）直接落盘。
+
+**为什么必须记这两条引擎日志**：`nanobot serve` **只在启动时读配置、没有文件监听**，
+而端口被占用时主进程会**复用**既有进程（见开发笔记 §7.13.11）——「改了配置不生效」
+的根因就在那里。日志里留一行「复用既有网关进程（该进程持有它启动时的配置）」，
+省掉一次「翻进程 CreationDate 与配置 mtime 比大小」的排查。
+
+### 20.4.5 保留策略：两道闸
+
+| 产物 | 时间闸 | 数量闸 |
+| --- | --- | --- |
+| 日志 | 14 天（**按目录名**判，不按文件 mtime） | 日期目录 ≤ 30 |
+| trace | 7 天（按 pid 目录内最新文件的 mtime） | pid 目录 ≤ 40 |
+
+- **日志按目录名判年龄**：名字就是「这批日志属于哪一天」；mtime 是「最后一次往里写」，
+  把很久以前的日志目录拷进来查看会让它永远清不掉。
+- **数量闸不可省**：trace 每个 pid 一个目录，而**每次启动都是新 pid**——一天开 40 次
+  就是 40 个「今天」的目录，时间闸一个都清不掉。
+- 两者都抽成**纯函数**（`selectPrunableDirs` / `selectOverflowDirs`），IO 只剩
+  「照着名单删」。清理在中途**放弃删除含子目录的目录**：宁可留着，也不猜用户放了什么。
+
+### 20.4.6 一键打包诊断（zip）
+
+设置 →「诊断」→ 「导出…」：保存对话框 → 打包 → 写盘。
+
+```
+README.txt    这份包是什么、怎么读、包含什么隐私
+meta.json     应用 / 运行时版本、平台、设备 ID、各类文件数与体量、保留策略
+logs/<date>/<module>.log     运行日志
+traces/<pid>/<traceId>.json  全链路 trace
+```
+
+- **手写最小 ZIP writer**（`electron/zipWriter.ts`，只用 `node:zlib`）：ZIP 的**写**
+  方向只有「本地文件头 + 中央目录 + EOCD」三段定长结构，为它引一个包不值得。CRC-32
+  必须自己算——它是读方校验完整性的唯一依据，省略 CRC 很多工具直接判损坏。
+- **体积闸 25MB，先保最新**：按 mtime 从新到旧累加，触到上限即停，并把「略过了几个」
+  **如实写进包内**（`README.txt` + `meta.json`）——悄悄少装几个文件，拿到包的人会以为
+  「就这些」。
+- **刻意不装**：`nanowork.config.json` / `channels.json` / `connectors/`（**含明文凭据**，
+  引擎要读，见 §7.9）与事件流 `projects/<slug>/<sessionId>.jsonl`（体积大且含完整对话正文）。
+- ⚠️ **隐私边界要在界面上说清**：包里含工具调用的参数与结果（可能涉及文件路径、代码片段、
+  命令输出），但**不含**提问正文与 API Key。文案写在导出按钮的说明里，而不是只写进
+  文档——用户是点按钮的人。
+
+### 20.4.7 门禁与验收
+
+- 纯逻辑 4 个文件 60 例（`tests/observability/*` + `tests/electron/zipWriter.test.ts`）；
+  IO 全链路 17 例（`tests/electron/diagnosticsStore.test.ts`，临时目录真读写，含
+  「诊断包不含凭据」的反向断言）；UI 9 例；接线 5 例（真跑一轮 `send`，断言
+  `appendLog` / `writeTrace` 被调用、缓冲取完即清）。
+- ZIP 单测**自己解一遍**（按规范逐字段读中央目录 + `zlib.inflateRawSync`），不复用写侧判断
+  ——否则「CRC 算错、偏移算错」全是假绿。
+- 真机脚本 `tasks/verify-diagnostics.mjs`：4 场景（展示与导出 / 取消与失败 / 读不到 /
+  **接线**），最后一条在真浏览器里驱动一轮必然失败的对话，证明渲染层真的把日志与
+  trace 交给了桥。
+
+### 20.4.8 明确未做
+
+- **`logs/` 按模块切分与保留清理都在主进程；渲染层没有「读日志」的能力**。要看内容，
+  打开目录或导出诊断包——多一个读入口就多一个「谁是权威」的歧义。
+- **trace 不与网关日志对齐**：`EventProvider.traceId` 目前引擎未上报，故 trace 里没有
+  跨进程的 traceId 关联（`traceId` 是本机生成的）。要真对齐得引擎侧先上报。
+- **日志没有轮转上限**：单文件不按大小切分。日目录 + 模块分文件已经把单文件规模压到
+  「一天一个模块」的量级，真实使用下不构成问题。
 
 # 第 21 章 接口清单
 

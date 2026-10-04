@@ -474,6 +474,27 @@ export const platform: PlatformAdapter = {
     }
     return Promise.resolve({ removed: [], kept: [] });
   },
+  // —— 可观测性（FR-11.2 / FR-11.3）——
+  // 两条写入都是 fire-and-forget：日志与 trace 是旁路，不能给业务调用造出 await 点。
+  // Web 端 no-op —— 没有 `<userData>`，写进 localStorage 只会让设置页显示一个
+  // 「已记录 N 条」的假象，而磁盘上什么都没有。
+  appendLog: (entry) => {
+    if (isElectron() && window.electronAPI) window.electronAPI.appendLog(entry);
+  },
+  writeTrace: (file) => {
+    if (isElectron() && window.electronAPI) window.electronAPI.writeTrace(file);
+  },
+  diagnosticsStats: () => {
+    if (isElectron() && window.electronAPI) return window.electronAPI.diagnosticsStats();
+    return Promise.resolve(null);
+  },
+  exportDiagnostics: () => {
+    if (isElectron() && window.electronAPI) return window.electronAPI.exportDiagnostics();
+    return Promise.resolve({
+      ok: false,
+      error: '浏览器环境没有本地数据目录与保存对话框，无法导出诊断包',
+    });
+  },
   // —— 桌面端集成（窗口控制 / 托盘配置 / 主进程指令）——
   // 这一组统一走 `electronBridge()`（而非上面那种 `isElectron() && window.electronAPI`
   // 的写法）：桥不在就是「Web 降级」，判据只有一处。

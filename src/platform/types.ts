@@ -15,6 +15,8 @@ import type {
   SessionIndexFile,
   SessionMeta,
 } from '@/types/event';
+import type { LogLevel, LogModule } from '@/observability/logging';
+import type { TraceFile } from '@/observability/trace';
 
 // 插件领域类型声明在 `@/types/plugin.ts`（**唯一声明处**，主进程也引它）。
 // 这里只做转出，让 platform 消费方「只 import 一处」即可拿到完整契约面。
@@ -586,6 +588,47 @@ export interface FileBackup {
   get(hash: string): Promise<string | null>;
 }
 
+/**
+ * 一条运行日志（FR-11.3）。
+ *
+ * 渲染层**格式化好再送**（`line` 已含时间 / 模块 / 等级），主进程只做「校验模块名 +
+ * 追加一行」——格式化只有一份实现（`@/observability/logging` 的 `formatLogLine`），
+ * 两侧各写一遍必然漂移。`module` / `level` 仍单独带上：主进程要按白名单挡一次
+ * （它是文件名的一部分），将来也可以只把 warn 以上写盘而不用改协议。
+ */
+export interface LogEntry {
+  module: LogModule;
+  level: LogLevel;
+  /** 已格式化的单行文本（不含换行） */
+  line: string;
+}
+
+/** 诊断产物的落点与体量（「诊断」分区展示用） */
+export interface DiagnosticsStats {
+  /** 日志根目录绝对路径（界面提供「打开目录」） */
+  logsDir: string;
+  tracesDir: string;
+  logFiles: number;
+  logBytes: number;
+  traceFiles: number;
+  traceBytes: number;
+  /** 有日志的日期（升序） */
+  logDates: string[];
+}
+
+/** 导出诊断包的结果 */
+export interface DiagnosticsExportResult {
+  ok: boolean;
+  /** 用户选定的落点（取消时缺省） */
+  path?: string;
+  /** 用户在保存对话框里取消——不是错误，界面不该报错 */
+  canceled?: boolean;
+  bytes?: number;
+  entryCount?: number;
+  skipped?: number;
+  error?: string;
+}
+
 /** 平台适配实现（web / electron） */
 export interface PlatformAdapter {
   env: 'web' | 'electron';
@@ -953,6 +996,33 @@ export interface PlatformAdapter {
    * - web：无文件系统权限，返回 `null`（卡片据此显示不可用）。
    */
   storageInfo(ensureDefaultWorkspace?: boolean): Promise<StorageInfo | null>;
+  // —— 可观测性（FR-11.2 全链路 trace / FR-11.3 运行日志分级）——
+  // 两者都只落**桌面端**（PRD 的 platform 列就是 electron）：Web 端没有 `<userData>`，
+  // 也没法调保存对话框，故一律如实降级（no-op / null），而不是把数据写进 localStorage
+  // 假装成功——那样设置页会显示「已记录 N 条」，而磁盘上什么都没有。
+  /**
+   * 追加一条运行日志。
+   *
+   * **fire-and-forget（返回 `void`）**：日志是旁路，不能成为 await 点（否则一个
+   * 埋点就能拖慢对话），失败也必须静默——实现内部自行 catch。
+   * web 端 no-op。
+   */
+  appendLog(entry: LogEntry): void;
+  /**
+   * 落一份回合 trace。
+   *
+   * 同样 fire-and-forget：调用点在回合收尾路径上，可观测性产物写不进去绝不该
+   * 影响用户这一轮的结果。web 端 no-op。
+   */
+  writeTrace(file: TraceFile): void;
+  /** 诊断产物统计；web 端返回 `null`（界面据此显示不可用）。 */
+  diagnosticsStats(): Promise<DiagnosticsStats | null>;
+  /**
+   * 导出诊断包（zip）：弹保存对话框 → 打包 → 写盘。
+   * 用户取消时 `{ ok: false, canceled: true }`——**不是错误**，界面不该弹红。
+   * web 端返回 `{ ok: false, error: … }`（没有保存对话框可用）。
+   */
+  exportDiagnostics(): Promise<DiagnosticsExportResult>;
 }
 
 /** 本地文件 base64 读取结果 */
@@ -1321,6 +1391,15 @@ export interface ElectronAPI {
   ): Promise<MarketInstallResult>;
   /** 回收无引用的旧副本（`referenced` 由调用方给：活跃会话 + 当前指针） */
   pluginsMarketGc(referenced: string[], keepDays?: number): Promise<MarketGcResult>;
+  // —— 可观测性（FR-11.2 / FR-11.3）——
+  /** 追加一条运行日志（fire-and-forget；主进程按模块白名单校验后落盘） */
+  appendLog(entry: LogEntry): void;
+  /** 落一份回合 trace（fire-and-forget；主进程补上写盘进程的 pid / 主机名） */
+  writeTrace(file: TraceFile): void;
+  /** 诊断产物统计（落点与体量） */
+  diagnosticsStats(): Promise<DiagnosticsStats>;
+  /** 导出诊断包（zip）：弹保存对话框 → 打包 → 写盘 */
+  exportDiagnostics(): Promise<DiagnosticsExportResult>;
   /** 窗口最小化 */
   windowMinimize(): void;
   /** 窗口最大化/还原切换 */

@@ -6,6 +6,7 @@ import { AccountSection } from '@/components/settings/sections/AccountSection';
 import { AssistantSection } from '@/components/settings/sections/AssistantSection';
 import { ConnectionSection } from '@/components/settings/sections/ConnectionSection';
 import { DataSection } from '@/components/settings/sections/DataSection';
+import { DiagnosticsSection } from '@/components/settings/sections/DiagnosticsSection';
 import { GeneralSection } from '@/components/settings/sections/GeneralSection';
 import { MemorySection } from '@/components/settings/sections/MemorySection';
 import { ModelsSection } from '@/components/settings/sections/ModelsSection';
@@ -230,6 +231,8 @@ function SectionBody({ section }: { section: SettingsSectionId }) {
       return <DataSection />;
     case 'usage':
       return <UsageSection />;
+    case 'diagnostics':
+      return <DiagnosticsSection />;
     case 'account':
       return <AccountSection />;
     case 'about':
