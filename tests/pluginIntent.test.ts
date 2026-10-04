@@ -2,10 +2,14 @@ import { describe, expect, it } from 'vitest';
 import {
   derivePluginDrift,
   derivePluginViews,
+  describePluginSource,
   isPluginIntended,
+  marketVersionState,
   PLUGIN_DRIFT_NOTICE,
   pluginMarketplaceFromEntry,
   pluginNameFromEntry,
+  referencedCopyPaths,
+  sourceFromPath,
   withPluginIntent,
 } from '@/lib/pluginIntent';
 import type { InstalledPlugin, PluginEngineIndex, PluginManifest } from '@/types/plugin';
@@ -57,6 +61,9 @@ function engineIndex(...names: Array<[string, boolean]>): PluginEngineIndex {
       category: '',
       enabled,
       mcpServers: [],
+      // 默认「说不上来源」：单测要显式指定从哪个市场装的，不该在这里猜
+      market: null,
+      version: null,
     })),
   };
 }
@@ -243,5 +250,159 @@ describe('derivePluginViews', () => {
     );
 
     expect(views[0]?.engineIncompatible).toBe(false);
+  });
+
+  it('来源：引擎上报了市场和版本 → 原样采纳（不按路径猜）', () => {
+    const views = derivePluginViews(
+      [installed()],
+      {
+        available: true,
+        entries: [
+          {
+            name: 'demo-plugin',
+            displayName: '演示插件',
+            description: '',
+            category: '',
+            enabled: false,
+            mcpServers: [],
+            market: 'official',
+            version: '2.0.0',
+          },
+        ],
+      },
+      [],
+    );
+
+    expect(views[0]?.source).toEqual({ market: 'official', version: '2.0.0' });
+  });
+
+  it('来源：引擎只报了版本没报市场 → 也原样采纳（宁可缺市场，也不猜一个）', () => {
+    const views = derivePluginViews(
+      [installed()],
+      {
+        available: true,
+        entries: [
+          {
+            name: 'demo-plugin',
+            displayName: '演示插件',
+            description: '',
+            category: '',
+            enabled: false,
+            mcpServers: [],
+            market: null,
+            version: '0.9.0',
+          },
+        ],
+      },
+      [],
+    );
+
+    expect(views[0]?.source).toEqual({ market: null, version: '0.9.0' });
+  });
+
+  it('来源兜底：引擎不可达 → 按路径反推市场副本，认不出就是本地安装', () => {
+    const [cached, flat] = derivePluginViews(
+      [
+        { ...installed(), root: 'C:/Users/u/.nanowork/plugins/cache/official/demo-plugin/2.0.0' },
+        { ...installed({ name: 'flat' }), root: 'C:/Users/u/.nanowork/plugins/flat' },
+      ],
+      { available: false, entries: [] },
+      [],
+    );
+
+    expect(cached?.source).toEqual({ market: 'official', version: '2.0.0' });
+    // 认不出路径时退回本地安装，**不编一个市场名出来**
+    expect(flat?.source).toEqual({ market: null, version: '1.2.3' });
+  });
+
+  it('来源终极兜底：连市场路径都不是 → 用包自己声明的版本（未声明则不显示版本）', () => {
+    const views = derivePluginViews(
+      [installed({ version: '3.1.4', versionDeclared: true }), installed({ versionDeclared: false })],
+      { available: false, entries: [] },
+      [],
+    );
+
+    expect(views[0]?.source).toEqual({ market: null, version: '3.1.4' });
+    expect(views[1]?.source).toEqual({ market: null, version: null });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 来源与版本（FR-3.8）
+// ---------------------------------------------------------------------------
+
+describe('sourceFromPath', () => {
+  it('认得 cache/<market>/<plugin>/<version> 四段', () => {
+    expect(sourceFromPath('/home/u/.nanowork/plugins/cache/official/demo-plugin/2.0.0')).toEqual({
+      market: 'official',
+      version: '2.0.0',
+    });
+  });
+
+  it('Windows 反斜杠路径也一样认（路径分隔符不能写死成 "/"）', () => {
+    expect(sourceFromPath('C:\\Users\\u\\.nanowork\\plugins\\cache\\official\\demo-plugin\\2.0.0')).toEqual(
+      { market: 'official', version: '2.0.0' },
+    );
+  });
+
+  it('认不出 / 段数不够 → null（调用方据此退回本地安装）', () => {
+    expect(sourceFromPath('/home/u/.nanowork/plugins/demo-plugin')).toBeNull();
+    expect(sourceFromPath('/home/u/.nanowork/plugins')).toBeNull();
+  });
+
+  it('插件名里带点号也不误判（段数够就信）', () => {
+    expect(sourceFromPath('/p/cache/m/my.tool/1.2.3')).toEqual({
+      market: 'm',
+      version: '1.2.3',
+    });
+  });
+});
+
+describe('describePluginSource', () => {
+  it('市场来源显示「市场 v版本」（界面一眼分清是哪个市场的哪一版）', () => {
+    expect(describePluginSource({ market: 'official', version: '2.0.0' })).toBe('official v2.0.0');
+  });
+
+  it('本地安装即使有版本也不带市场名（那个版本不是市场里的版本号）', () => {
+    expect(describePluginSource({ market: null, version: '1.2.3' })).toBe('本地安装 v1.2.3');
+  });
+
+  it('本地安装且说不出版本 → 只说「本地安装」', () => {
+    expect(describePluginSource({ market: null, version: null })).toBe('本地安装');
+  });
+});
+
+describe('marketVersionState', () => {
+  it('市场里有这一版 → 生效中', () => {
+    expect(marketVersionState('2.0.0', '2.0.0')).toBe('current');
+  });
+
+  it('比当前生效版本新 → 可更新；旧 → 更旧（旧的那档界面不标红劝升级）', () => {
+    expect(marketVersionState('2.1.0', '2.0.0')).toBe('update');
+    expect(marketVersionState('1.9.0', '2.0.0')).toBe('older');
+  });
+
+  it('说不上当前版本（引擎没报）→ 一律按「可更新」，不误报「更旧」', () => {
+    expect(marketVersionState('2.0.0', null)).toBe('update');
+  });
+
+  it('解析不了的版本号 → 判「更旧」而不是「可更新」（说不清就不劝升级）', () => {
+    expect(marketVersionState('latest', '2.0.0')).toBe('older');
+  });
+});
+
+describe('referencedCopyPaths', () => {
+  it('只收市场来源的包根（本地平铺安装不进 GC 的引用集）', () => {
+    const views = derivePluginViews(
+      [{ ...installed(), root: '/p/cache/official/demo-plugin/2.0.0' }, installed({ name: 'flat' })],
+      { available: false, entries: [] },
+      [],
+    );
+
+    expect(referencedCopyPaths(views)).toEqual(['/p/cache/official/demo-plugin/2.0.0']);
+  });
+
+  it('空列表 → 空引用集（GC 仍按 keepDays 保护，不会把新副本全删了）', () => {
+    expect(referencedCopyPaths([])).toEqual([]);
   });
 });

@@ -15,14 +15,41 @@
  * 静默对齐会让「明明启用了却没生效」变成一次无痕的自我治愈，问题从此查不出来。
  */
 
-import { satisfiesRange } from './semverRange';
+import { compareVersions, satisfiesRange } from './semverRange';
 import type {
   InstalledPlugin,
   PluginActivation,
   PluginDrift,
   PluginEngineIndex,
+  PluginSource,
   PluginView,
 } from '@/types/plugin';
+
+/**
+ * 生效副本路径里那段缓存目录名。
+ *
+ * 与 `electron/pluginMarketplace.ts` 的 `CACHE_DIR` 同名——**两处必须一致**，
+ * 但这一侧在渲染进程，不能 import 主进程模块，所以各写一份常量并在此注明。
+ * 改_layout时两处都要动，否则「按路径兜底」会静默认不出市场副本。
+ */
+const CACHE_DIR = 'cache';
+
+/**
+ * 从生效副本路径反推来源（**纯函数**，只在引擎不可达时兜底用）。
+ *
+ * 认得的形式：`…/cache/<market>/<plugin>/<version>`。
+ * 认不出就返回 `null`，由调用方退回到「本地安装」——路径解析失败绝不猜。
+ */
+export function sourceFromPath(root: string): PluginSource | null {
+  const parts = root.split(/[\\/]+/).filter((part) => part !== '');
+  const index = parts.lastIndexOf(CACHE_DIR);
+  if (index < 0 || index + 3 >= parts.length) return null;
+  const market = parts[index + 1];
+  const version = parts[index + 3];
+  const plugin = parts[index + 2];
+  if (!market || !plugin || !version) return null;
+  return { market, version };
+}
 
 /** 市场后缀分隔符（PRD §12.2 的 `<name>@<marketplace>`） */
 const ENTRY_SEPARATOR = '@';
@@ -140,6 +167,73 @@ export function derivePluginViews(
       intended,
       drift: derivePluginDrift(intended, activation),
       engineIncompatible,
+      source: derivePluginSource(engineEntry?.market ?? null, engineEntry?.version ?? null, plugin),
     };
   });
+}
+
+/**
+ * 来源的中文短标签（界面 chip 直接渲染）。
+ *
+ * `market` 为空时一律叫「本地安装」——即使有版本也不带市场名：
+ * 「本地安装 v1.2」里那个 v1.2 容易被读成市场里的版本号，而这个副本根本
+ * 不归市场管，返回目录名才能一眼分清。
+ */
+export function describePluginSource(source: PluginSource): string {
+  if (!source.market) {
+    return source.version ? `本地安装 v${source.version}` : '本地安装';
+  }
+  return source.version ? `${source.market} v${source.version}` : source.market;
+}
+
+/** 市场里某一版相对「当前生效版本」的关系 */
+export type MarketVersionState = 'current' | 'update' | 'older';
+
+/**
+ * 市场索引里一版与该插件当前生效版本的关系。
+ *
+ * 解析不了（不是 semver）时判成 `older`：宁可在界面上不标「可更新」，
+ * 也不要把一个说不清的版本号标红劝用户「升级」——升完没变化比不升更糟。
+ */
+export function marketVersionState(
+  version: string,
+  currentVersion: string | null,
+): MarketVersionState {
+  if (version === currentVersion) return 'current';
+  if (!currentVersion) return 'update';
+  return compareVersions(version, currentVersion) > 0 ? 'update' : 'older';
+}
+
+/**
+ * 回收缓存之前要交给主进程的「被引用副本」清单。
+ *
+ * 只有**从市场装的**（`source.market` 非空）副本才在 `cache/` 下、才可能被回收；
+ * 本地平铺装的那一摊根本不归 GC 管。这份清单是 GC 的唯一保护伞——它一旦漏掉，
+ * 正在跑的那份副本会被删掉，界面表现为「插件凭空消失」。
+ */
+export function referencedCopyPaths(views: PluginView[]): string[] {
+  return views
+    .filter((view) => view.source.market !== null)
+    .map((view) => view.plugin.root)
+    .filter((root) => root !== '');
+}
+
+/**
+ * 合并来源：引擎上报 → 路径反推（只在问不到引擎时）→ 包自己声明的版本。
+ *
+ * 顺序不能倒。引擎是「真正跑起来那份」的权威；网关没起时才允许按路径猜，
+ * 且不猜出市场就退回本地安装，最终连版本都没有时显示包声明的版本。
+ */
+function derivePluginSource(
+  market: string | null,
+  version: string | null,
+  plugin: InstalledPlugin,
+): PluginSource {
+  if (market !== null || version !== null) return { market, version };
+  const fromPath = sourceFromPath(plugin.root);
+  if (fromPath !== null) return fromPath;
+  return {
+    market: null,
+    version: plugin.manifest.versionDeclared ? plugin.manifest.version : null,
+  };
 }

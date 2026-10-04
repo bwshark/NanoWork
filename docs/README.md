@@ -266,7 +266,16 @@
 > 渲染层常量同一性 + 豁免清单），其「STORAGE_KEYS 全部显式登记」不变量现在自动覆盖该 key。
 > 已按铁律**重建 `main.cjs` / `preload.cjs`**。
 >
-> **#33 于 2026-10-03 处理（开发态日志噪声：`Request Autofill.enable failed`）**：
+> **#34 于 2026-10-04 处理（PRD 第 3 章状态表滞后于代码）**：来源是对用户「下一步做什么」的答复——
+先 `grep` 代码再读文档，才发现 M6 主体早已交付。处理口径是**逐条改状态 + 补落点出处**，
+而不是笼统标 ✅：区分了「已落但状态没更新」（FR-10.2~10.6 / FR-7.3 / FR-5.4 → ✅）、
+「落了一半」（FR-7.4 / FR-6.3 → 🟡，写清缺什么）、「既未落也未登记」（FR-3.9 / FR-11.2 / FR-11.3 / FR-9.3）——
+后者本来在表里就是 ⬜，状态没错，只是没有「真·下一步」的排期价值。
+⚠️ **可复用的判据**：判断某 FR 是否真未做，**用 `find` / `grep -rn` 证伪，不要只读文档**；
+本文档 §九 看板的作用是「文档与文档之间的冲突」，而这种「文档与代码之间的冲突」它拦不住，
+只能靠每次里程碑收口时按 FR 编号跑一遍代码复查。
+
+**#33 于 2026-10-03 处理（开发态日志噪声：`Request Autofill.enable failed`）**：
 > 现象是每次开发启动都往控制台刷两条 `ERROR:CONSOLE … 'Autofill.enable' wasn't found` /
 > `'Autofill.setAddresses' wasn't found`，`source` 是 `devtools://devtools/bundled/core/protocol_client/protocol_client.js`。
 > 根因：**DevTools 前端**初始化时请求 CDP 的 `Autofill.enable` / `Autofill.setAddresses`，
@@ -287,6 +296,8 @@
 > 加载 `dist/index.html` 报 `ERR_FAILED`），开/关 DevTools 两种配置都抓不到那两条，
 > 无法作为判据；已在产物上确认 `openDevTools` **只剩一处且被开关守卫**。
 >
+| 34 | `docs/nanowork-prd-design-v2.md` 第 3 章 ↔ `src/sync/` + `cloud/app/` | **状态表滞后于代码，照表排期会把已落的东西重做一遍**：`architecture-m6-sync.md` §七 写着批次 1/2/3/4/5/6a/6b **七个全部已落**（代码可证：`cloud/app/auth/routes.py` 五端点、`cloud/app/sync/routes.py` 的 push/pull/reset 与 `cloud/app/account/routes.py` 的 export/delete、`src/sync/` 全套 + `src/pages/auth/AuthPage.tsx` + `SyncStatusBadge` + `AccountSection` + `accountArchive`），但 PRD 里 **FR-10.2 / 10.3 / 10.4 / 10.5 / 10.6 五条仍全是 `⬜`**，§6 里程碑表 M6 行也没有完成标记，本文看板此前**连这条滞后都没登记**。同类滞后：FR-7.3（`file-backup:put/get` IPC + 记忆页回滚 UI 已落）、FR-7.4（`artifactsStore` 已有 `version/versions/previousVersion`）、FR-5.4 / FR-5.6（本文上一批自己记着已落，PRD 仍 🟡）。 | ✅ 已修复（**2026-10-04**：FR-10.2~10.6 转 ✅ 并各补落地说明与批次出处；FR-7.3 转 ✅ 但注明**仅客户端写作点**、引擎侧 workspace 文件回滚仍缺；FR-7.4 由 ⬜ 升 🟡——数据层已落、无版本对比/回退 UI；FR-5.4 转 ✅、FR-6.3 由 ⬜ 升 🟡——主体已由 FR-5.6 路线 C 覆盖但缺 `milestone` 档位；§6 里程碑表 M6 行标「已闭合」并补两条验收门禁由 `tests/sync/integration.twoDevice.test.ts` / `sessionEventsSync.test.ts` 自动化承担的记法；§6 进度块补记 M6 主体闭合与「FR-3.9 仍未做」的诚实标注。**教训**：状态表是排期输入，滞后等于把已交付的活排进 backlog——本次是靠逐条 `grep` 代码（`find` / `grep -rn`）才查出来的，纯读文档会得出「下一步做 M6」的错误结论） |
+
 > **2026-10-03 开 M4 自动化收尾：FR-5.4（RRULE + 有效期窗口）已落**：
 > ① `TaskSchedule` 加 `{ kind:'rrule'; rrule; tz? }`（**本层表达形态**，不是引擎形态——真实调度在
 > nanobot `CronService`，前端保留规则原文是为了让用户看到自己写的那条）；

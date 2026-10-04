@@ -21,7 +21,7 @@ import { usePluginsStore } from "@/stores/pluginsStore";
 import { platform } from "@/platform";
 import { toast } from "@/components/Toast";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
-import { PLUGIN_DRIFT_NOTICE } from "@/lib/pluginIntent";
+import { PLUGIN_DRIFT_NOTICE, describePluginSource } from "@/lib/pluginIntent";
 import {
   cardChipOutlinedSx,
   cardStatusChipSx,
@@ -29,6 +29,7 @@ import {
   hoverCardSx,
   iconTileSx,
 } from "@/lib/cardSx";
+import { PluginMarketSection } from "./PluginMarketSection";
 import type { PluginView } from "@/types/plugin";
 
 /**
@@ -340,6 +341,13 @@ export function PluginsPage({ embedded = false }: { embedded?: boolean }) {
                   label={manifest.category}
                   sx={cardChipOutlinedSx}
                 />
+                {/* 来源与生效版本：市场版插件换版本后「谁在跑哪一版」全靠它解释 */}
+                <Chip
+                  size="small"
+                  variant="outlined"
+                  label={describePluginSource(view.source)}
+                  sx={cardChipOutlinedSx}
+                />
                 <Chip
                   size="small"
                   color={activation.color}
@@ -450,6 +458,8 @@ export function PluginsPage({ embedded = false }: { embedded?: boolean }) {
           );
         })}
       </Box>
+
+      <PluginMarketSection />
 
       <ConfirmDialog
         open={pendingRemoval !== null}

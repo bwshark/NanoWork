@@ -5,10 +5,15 @@ import {
   derivePluginViews,
   pluginMarketplaceFromEntry,
   pluginNameFromEntry,
+  referencedCopyPaths,
   withPluginIntent,
 } from '@/lib/pluginIntent';
 import { useSettingsStore } from '@/stores/settingsStore';
 import type {
+  MarketIndex,
+  MarketInstallResult,
+  MarketplaceEntry,
+  MarketSyncOutcome,
   PluginEngineIndex,
   PluginInstallResult,
   PluginView,
@@ -80,6 +85,43 @@ interface PluginsState {
   uninstall: (name: string) => Promise<boolean>;
   /** 清掉一次性提示 / 错误 */
   clearFeedback: () => void;
+
+  /** 注册表里的市场（由 `loadMarkets` 填充，与磁盘上的 `registry.json` 同源） */
+  markets: MarketplaceEntry[];
+  /** 各市场的包索引（`marketplaces/<id>/` 里归档了哪些包哪一版） */
+  marketIndexes: Record<string, MarketIndex>;
+  /** 是否正在读注册表 */
+  loadingMarkets: boolean;
+  /** 各市场索引的读取中标记 */
+  loadingIndexes: Record<string, boolean>;
+  /** 正在同步的市场 id（界面据此只禁用那一张卡） */
+  syncingMarket: string | null;
+  /** 正在安装的市场包，形如 `market:name` */
+  installingKey: string | null;
+  /** 市场读写 / 同步 / 安装的最近一次失败原因 */
+  marketError: string | null;
+
+  // —— 市场注册表（FR-3.7）——
+  /** 读注册表（进入市场区时调用；失败时 `marketError` 有原因） */
+  loadMarkets: () => Promise<void>;
+  /** 新增 / 改写一个市场；`id` 为空表示新增 */
+  addMarket: (input: Omit<MarketplaceEntry, 'lastSyncAt' | 'lastError'>) => Promise<boolean>;
+  /** 删除市场（内置市场拒绝删除） */
+  removeMarket: (id: string) => Promise<boolean>;
+  /** 同步一个市场（目录型扫目录归档；远程型当前如实失败） */
+  syncMarket: (id: string) => Promise<MarketSyncOutcome | null>;
+  /** 读某个市场的包索引（同步后才有内容） */
+  loadMarketPackages: (id: string) => Promise<MarketIndex | null>;
+  /**
+   * 从市场安装 / 切到某一版（materialize 副本 + 拨 `current` 指针）。
+   *
+   * 成功后**不会自动启用**：切版本只是让这一版生效，「是否启用」仍是独立的一步
+   * （引擎激活标记与包内容指纹绑定，改版本会让旧标记失效）。自动启用会把两件事
+   * 合成一件，届时「装了没生效」永远查不出原因。
+   */
+  installFromMarket: (market: string, name: string, version: string) => Promise<boolean>;
+  /** 回收无引用旧副本（keepDays=0 表示只看引用集） */
+  collectCache: (keepDays?: number) => Promise<{ removed: string[]; kept: string[] }>;
 }
 
 /** 组装派生视图：把三份输入（磁盘 / 引擎 / 意图）合成界面可用的形状 */
@@ -123,7 +165,28 @@ async function readEngine(): Promise<PluginEngineIndex> {
   }
 }
 
+/**
+ * 市场相关状态的骨架。
+ *
+ * 与 store 里其它「事实」同理不落盘：注册表本身就是磁盘上的 `registry.json`。
+ * 唯一的区别是这里多了 `loadingIndexes`，因为市场索引要**按需**读（读一次盘），
+ * 不存在于注册表里。
+ */
+const EMPTY_MARKET_STATE = {
+  markets: [] as MarketplaceEntry[],
+  marketIndexes: {} as Record<string, MarketIndex>,
+  loadingMarkets: false,
+  loadingIndexes: {} as Record<string, boolean>,
+  /** 正在同步的市场 id（界面据此只禁用那一张卡） */
+  syncingMarket: null as string | null,
+  /** 正在安装的市场包 `market:name` */
+  installingKey: null as string | null,
+  /** 市场列表 / 同步 / 安装的最近一次失败原因 */
+  marketError: null as string | null,
+};
+
 export const usePluginsStore = create<PluginsState>((set, get) => ({
+  ...EMPTY_MARKET_STATE,
   installed: [],
   skipped: [],
   pluginsRoot: '',
@@ -244,4 +307,108 @@ export const usePluginsStore = create<PluginsState>((set, get) => ({
   },
 
   clearFeedback: () => set({ error: null, notice: null }),
+
+  // —— 市场 ——
+  loadMarkets: async () => {
+    set({ loadingMarkets: true });
+    try {
+      const registry = await platform.pluginsMarkets();
+      set({
+        markets: Array.isArray(registry.markets) ? registry.markets : [],
+        loadingMarkets: false,
+        marketError: registry.error ?? null,
+      });
+    } catch (err) {
+      set({
+        loadingMarkets: false,
+        marketError: err instanceof Error ? err.message : String(err),
+      });
+    }
+  },
+
+  addMarket: async (input) => {
+    const result = await platform.pluginsMarketsUpsert(input);
+    if (!result.ok) {
+      set({ marketError: result.error ?? '写入市场失败' });
+      return false;
+    }
+    set({ marketError: null });
+    await get().loadMarkets();
+    return true;
+  },
+
+  removeMarket: async (id) => {
+    const result = await platform.pluginsMarketsRemove(id);
+    if (!result.ok) {
+      set({ marketError: result.error ?? '删除市场失败' });
+      return false;
+    }
+    set({ marketError: null });
+    await get().loadMarkets();
+    return true;
+  },
+
+  syncMarket: async (id) => {
+    // 先上锁再发请求：同步要摸盘，双击「同步」会并行跑两遍归档
+    set({ syncingMarket: id, marketError: null });
+    const outcome = await platform.pluginsMarketsSync(id);
+    // 用**回写后的条目**替掉旧条目：`recordMarketSync` 已经把 `lastSyncAt` /
+    // `lastError` 写进注册表了，界面若显示旧值会显得「点了同步但没反应」。
+    set({
+      syncingMarket: null,
+      marketError: outcome.error ?? null,
+      markets: [...get().markets.filter((item) => item.id !== outcome.entry.id), outcome.entry],
+    });
+    return outcome;
+  },
+
+  loadMarketPackages: async (id) => {
+    set({ loadingIndexes: { ...get().loadingIndexes, [id]: true } });
+    try {
+      const index = await platform.pluginsMarketPackages(id);
+      set({ marketIndexes: { ...get().marketIndexes, [id]: index } });
+      return index;
+    } catch (err) {
+      set({ marketError: err instanceof Error ? err.message : String(err) });
+      return null;
+    } finally {
+      set({ loadingIndexes: { ...get().loadingIndexes, [id]: false } });
+    }
+  },
+
+  installFromMarket: async (market, name, version) => {
+    set({ installingKey: `${market}:${name}` });
+    try {
+      const result: MarketInstallResult = await platform.pluginsMarketInstall(
+        market,
+        name,
+        version,
+      );
+      if (!result.ok) {
+        set({ marketError: result.error ?? '从市场安装失败' });
+        return false;
+      }
+      set({ marketError: null, notice: `已切换到「${name}」v${version}（仍需启用才生效）` });
+      // 装完要重新扫：副本是新目录，磁盘事实变了
+      await get().refresh();
+      return true;
+    } catch (err) {
+      set({ marketError: err instanceof Error ? err.message : String(err) });
+      return false;
+    } finally {
+      set({ installingKey: null });
+    }
+  },
+
+  collectCache: async (keepDays) => {
+    try {
+      // 引用集必须由调用方给：主进程不知道哪些副本还在生效（「生效」的唯一证据是
+      // 磁盘扫描出来的包根），硬塞进主进程只会误删。
+      const referenced = referencedCopyPaths(get().installed);
+      return await platform.pluginsMarketGc(referenced, keepDays ?? 30);
+    } catch (err) {
+      set({ marketError: err instanceof Error ? err.message : String(err) });
+      return { removed: [], kept: [] };
+    }
+  },
 }));

@@ -132,6 +132,21 @@ export type PluginDrift =
   /** 问不到引擎（网关没起 / 非 Electron） */
   | 'unknown';
 
+/**
+ * 一个插件的**来源与生效版本**（FR-3.8）。
+ *
+ * 版本隔离之后「装了个插件」不再是一件事而是两件：市场里有哪几个版本
+ * （`marketplaces/<m>/<n>/<v>/`）、当前生效的是哪个（`cache/<m>/<n>/<v>/` + 指针）。
+ * 界面必须能把这两件事分开讲——否则「升级了但会话还在跑旧版」无从解释。
+ *
+ * `market: null` = **本地平铺安装**（`plugins/<name>/`），不归任何市场管。
+ */
+export interface PluginSource {
+  market: string | null;
+  /** 生效副本的版本；本地安装时就是包自己声明的版本 */
+  version: string | null;
+}
+
 /** 引擎上报的一条插件 */
 export interface PluginEngineEntry {
   name: string;
@@ -141,6 +156,10 @@ export interface PluginEngineEntry {
   enabled: boolean;
   /** 该插件注册进引擎的 MCP server 名（`<plugin>--<server>`） */
   mcpServers: string[];
+  /** 该副本来自哪个市场（null = 本地平铺安装） */
+  market: string | null;
+  /** 该副本的版本（null = 说不上来，不要猜） */
+  version: string | null;
 }
 
 /** 引擎侧插件索引：一次 `GET /v1/plugins` 的结果 */
@@ -167,6 +186,13 @@ export interface PluginView {
   drift: PluginDrift;
   /** 声明的引擎兼容区间不满足当前客户端版本（`false` = 未声明或满足） */
   engineIncompatible: boolean;
+  /**
+   * 生效副本的来源与版本。
+   *
+   * 优先采信引擎上报；引擎不可达时按包路径兜底（见 `sourceFromPath`）。
+   * 灰着不渲染，界面只在一张卡片上占一个 chip。
+   */
+  source: PluginSource;
 }
 
 /** 扫描结果（IPC `plugins:scan` 的返回） */
@@ -186,6 +212,14 @@ export interface PluginScanResult {
  * 「能否离线 / 失败怎么办」的唯一判据。
  */
 export type MarketplaceType = 'directory' | 'remote';
+
+/**
+ * 写入注册表的输入形状（`addMarket` 的入参）。
+ *
+ * `lastSyncAt` / `lastError` 是**同步的产出**，由主进程写；界面拿不到也不该伪造——
+ * 伪造一个假的 `lastSyncAt` 会让「上次同步」显示成用户从没点过的时刻。
+ */
+export type MarketplaceInput = Omit<MarketplaceEntry, 'lastSyncAt' | 'lastError'>;
 
 /** 注册表里的一个市场（`~/.nanowork/plugins/registry.json`） */
 export interface MarketplaceEntry {

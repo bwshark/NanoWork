@@ -69,6 +69,10 @@ export function parsePluginIndex(payload: unknown): PluginEngineEntry[] {
       mcpServers: Array.isArray(item.mcpServers)
         ? item.mcpServers.filter((s): s is string => typeof s === 'string')
         : [],
+      // 空串 = 引擎说不上来 → 归一成 null，界面据此走「本地安装」的文案，
+      // 而不是渲染一个空 market 后缀
+      market: text(item.market) || null,
+      version: text(item.version) || null,
     }))
     .filter((entry) => entry.name !== '');
 }

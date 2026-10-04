@@ -93,6 +93,7 @@ describe('parsePluginIndex', () => {
       ],
     });
 
+    // 引擎说不上来源时归一成 null（空串 → null），而不是渲染一个空的「市场」后缀
     expect(entries).toEqual([
       {
         name: 'demo-plugin',
@@ -101,6 +102,8 @@ describe('parsePluginIndex', () => {
         category: 'Development',
         enabled: true,
         mcpServers: ['demo--fs'],
+        market: null,
+        version: null,
       },
       // displayName 回落 name，其余降级成空串 / false / 空数组
       {
@@ -110,6 +113,8 @@ describe('parsePluginIndex', () => {
         category: '',
         enabled: false,
         mcpServers: [],
+        market: null,
+        version: null,
       },
     ]);
   });

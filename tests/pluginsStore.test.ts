@@ -4,7 +4,12 @@ import { __setRuntimeForTest } from '@/ai/runtime';
 import { usePluginsStore } from '@/stores/pluginsStore';
 import { useSettingsStore } from '@/stores/settingsStore';
 import type { AgentRuntime } from '@/ai/runtime/types';
-import type { InstalledPlugin, PluginEngineIndex, PluginManifest } from '@/types/plugin';
+import type {
+  InstalledPlugin,
+  MarketplaceEntry,
+  PluginEngineIndex,
+  PluginManifest,
+} from '@/types/plugin';
 
 /**
  * pluginsStore 测试（FR-3.4）。
@@ -56,6 +61,8 @@ function engineIndex(...names: Array<[string, boolean]>): PluginEngineIndex {
       category: '',
       enabled,
       mcpServers: [],
+      market: null,
+      version: null,
     })),
   };
 }
@@ -318,5 +325,203 @@ describe('pluginsStore.uninstall', () => {
     expect(ok).toBe(false);
     expect(useSettingsStore.getState().settings.enabledPlugins).toEqual(['demo-plugin']);
     expect(usePluginsStore.getState().error).toBe('插件不存在');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 市场注册表与版本切换（FR-3.7 / FR-3.8）
+// ---------------------------------------------------------------------------
+
+/**
+ * 市场相关状态骨架（与 store 的 `EMPTY_MARKET_STATE` 对齐）。
+ *
+ * 每个用例前重置而不是靠顺序：这些字段一旦粘住，上一个用例的「同步中」就会
+ * 让下一个用例的按钮显示成禁用，那种失败读起来完全指向错误的方向。
+ */
+function resetMarketState(): void {
+  usePluginsStore.setState({
+    markets: [],
+    marketIndexes: {},
+    loadingMarkets: false,
+    loadingIndexes: {},
+    syncingMarket: null,
+    installingKey: null,
+    marketError: null,
+  });
+}
+
+function marketEntry(patch: Partial<MarketplaceEntry> = {}): MarketplaceEntry {
+  return {
+    id: 'official',
+    name: '官方市场',
+    type: 'directory',
+    location: '/srv/plugins',
+    isBuiltIn: false,
+    autoUpdate: false,
+    lastSyncAt: null,
+    lastError: null,
+    ...patch,
+  };
+}
+
+describe('pluginsStore.loadMarkets', () => {
+  beforeEach(resetMarketState);
+
+  it('读注册表 → 市场列表原样进来', async () => {
+    vi.spyOn(platform, 'pluginsMarkets').mockResolvedValue({
+      version: 1,
+      markets: [marketEntry()],
+      error: null,
+    });
+
+    await usePluginsStore.getState().loadMarkets();
+
+    expect(usePluginsStore.getState().markets).toHaveLength(1);
+    expect(usePluginsStore.getState().marketError).toBeNull();
+    expect(usePluginsStore.getState().loadingMarkets).toBe(false);
+  });
+
+  it('平台层报不可用原因 → 落到 marketError，不伪装成「没有市场」', async () => {
+    vi.spyOn(platform, 'pluginsMarkets').mockResolvedValue({
+      version: 1,
+      markets: [],
+      error: 'Web 端不支持市场功能，请使用桌面端',
+    });
+
+    await usePluginsStore.getState().loadMarkets();
+
+    expect(usePluginsStore.getState().markets).toEqual([]);
+    expect(usePluginsStore.getState().marketError).toContain('桌面端');
+  });
+
+  it('注册表里 markets 字段缺失/不是数组 → 退化为空列表而不是渲染出 undefined 卡', async () => {
+    // @ts-expect-error 故意喂畸形注册表：主进程始终写这个字段，这里防的是将来改 schema 漏更
+    vi.spyOn(platform, 'pluginsMarkets').mockResolvedValue({ version: 1, error: null });
+
+    await usePluginsStore.getState().loadMarkets();
+
+    expect(usePluginsStore.getState().markets).toEqual([]);
+  });
+});
+
+describe('pluginsStore.syncMarket', () => {
+  beforeEach(resetMarketState);
+
+  it('同步成功 → 用**回写后**的条目替掉旧条目（否则 lastSyncAt 永远停在同步前）', async () => {
+    usePluginsStore.setState({ markets: [marketEntry()] });
+    vi.spyOn(platform, 'pluginsMarketsSync').mockResolvedValue({
+      ok: true,
+      result: { ok: true, market: 'official', synced: 3, skipped: [] },
+      entry: marketEntry({ lastSyncAt: '2026-10-04T05:00:00.000Z' }),
+      error: undefined,
+    });
+
+    const outcome = await usePluginsStore.getState().syncMarket('official');
+
+    expect(outcome?.ok).toBe(true);
+    expect(usePluginsStore.getState().markets).toHaveLength(1);
+    expect(usePluginsStore.getState().markets[0]?.lastSyncAt).toBe('2026-10-04T05:00:00.000Z');
+    expect(usePluginsStore.getState().syncingMarket).toBeNull();
+  });
+
+  it('平台层报找不到市场 → 如实返回失败，**不装作同步成功**（同步是唯一事实来源）', async () => {
+    usePluginsStore.setState({ markets: [marketEntry()] });
+    vi.spyOn(platform, 'pluginsMarketsSync').mockResolvedValue({
+      ok: false,
+      result: { ok: false, market: 'ghost', synced: 0, skipped: [], error: '市场不存在' },
+      entry: marketEntry({ id: 'ghost', lastError: '市场不存在' }),
+      error: '市场不存在',
+    });
+
+    const outcome = await usePluginsStore.getState().syncMarket('ghost');
+
+    expect(outcome?.ok).toBe(false);
+    expect(outcome?.error).toBe('市场不存在');
+    expect(usePluginsStore.getState().marketError).toBe('市场不存在');
+    // 回写后的条目（带 lastError）是唯一权威：主进程已经把它落进注册表，
+    // 界面若留着同步前的旧值，就会显示一个「没同步过也没失败过」的市场。
+    expect(usePluginsStore.getState().markets.map((m) => m.id)).toEqual(['official', 'ghost']);
+    expect(usePluginsStore.getState().markets[1]?.lastError).toBe('市场不存在');
+  });
+});
+
+describe('pluginsStore.installFromMarket', () => {
+  beforeEach(resetMarketState);
+
+  it('成功 → notice 明确「仍需启用」，并重新扫描磁盘（副本是新目录）', async () => {
+    stubPlatform({ plugins: [installed()], skipped: [] });
+    listPlugins.mockResolvedValue(engineIndex());
+    vi.spyOn(platform, 'pluginsMarketInstall').mockResolvedValue({
+      ok: true,
+      market: 'official',
+      name: 'demo-plugin',
+      version: '2.0.0',
+      path: `${PLUGINS_ROOT}/cache/official/demo-plugin/2.0.0`,
+    });
+
+    const ok = await usePluginsStore.getState().installFromMarket('official', 'demo-plugin', '2.0.0');
+
+    expect(ok).toBe(true);
+    expect(usePluginsStore.getState().notice).toContain('仍需启用');
+    expect(usePluginsStore.getState().installingKey).toBeNull();
+  });
+
+  it('失败 → marketError 有原因，且**不自动启用**（引擎激活标记与内容指纹绑定）', async () => {
+    stubPlatform({ plugins: [installed()], skipped: [] });
+    listPlugins.mockResolvedValue(engineIndex(['demo-plugin', false]));
+    vi.spyOn(platform, 'pluginsMarketInstall').mockResolvedValue({
+      ok: false,
+      market: 'official',
+      name: 'demo-plugin',
+      version: '2.0.0',
+      path: '',
+      error: '副本写入失败',
+    });
+    await usePluginsStore.getState().refresh();
+
+    const ok = await usePluginsStore.getState().installFromMarket('official', 'demo-plugin', '2.0.0');
+
+    expect(ok).toBe(false);
+    expect(usePluginsStore.getState().marketError).toBe('副本写入失败');
+    expect(usePluginsStore.getState().engine.entries[0]?.enabled).toBe(false);
+    expect(usePluginsStore.getState().installingKey).toBeNull();
+  });
+});
+
+describe('pluginsStore.collectCache', () => {
+  beforeEach(resetMarketState);
+
+  it('传给主进程的引用集**只含市场来源的包根**（本地安装的那一摊不归 GC 管）', async () => {
+    stubPlatform({ plugins: [], skipped: [] });
+    listPlugins.mockResolvedValue(engineIndex());
+    // 一个市场副本（生效中）+ 一个本地平铺安装（不该出现在引用集里）
+    const cacheCopy: InstalledPlugin = {
+      ...installed(),
+      root: `${PLUGINS_ROOT}/cache/official/demo-plugin/2.0.0`,
+    };
+    vi.spyOn(platform, 'scanPlugins').mockResolvedValue({
+      plugins: [cacheCopy, installed({ name: 'local-one' })],
+      skipped: [],
+      pluginsRoot: PLUGINS_ROOT,
+    });
+    const gcSpy = vi
+      .spyOn(platform, 'pluginsMarketGc')
+      .mockResolvedValue({ removed: [], kept: [] });
+
+    await usePluginsStore.getState().refresh();
+    await usePluginsStore.getState().collectCache(30);
+
+    const [referenced, keepDays] = gcSpy.mock.calls[0] ?? [];
+    expect(referenced).toEqual([`${PLUGINS_ROOT}/cache/official/demo-plugin/2.0.0`]);
+    expect(keepDays).toBe(30);
+  });
+
+  it('主进程失败 → 不抛出去，返回空回收结果（界面只提示，不该崩整页）', async () => {
+    vi.spyOn(platform, 'pluginsMarketGc').mockRejectedValue(new Error('目录被占用'));
+
+    const result = await usePluginsStore.getState().collectCache();
+
+    expect(result).toEqual({ removed: [], kept: [] });
+    expect(usePluginsStore.getState().marketError).toBe('目录被占用');
   });
 });

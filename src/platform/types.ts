@@ -6,6 +6,7 @@ import type {
   MarketRegistry,
   MarketSyncOutcome,
   MarketplaceEntry,
+  MarketplaceInput,
   PluginInstallResult,
   PluginScanResult,
 } from '@/types/plugin';
@@ -855,7 +856,7 @@ export interface PlatformAdapter {
    */
   pluginsMarkets(): Promise<MarketRegistry & { error: string | null }>;
   /** 新增 / 更新市场条目（按 id 幂等；内置市场的来源不可改） */
-  pluginsMarketsUpsert(entry: MarketplaceEntry): Promise<PluginActionResult>;
+  pluginsMarketsUpsert(entry: MarketplaceInput): Promise<PluginActionResult>;
   /** 删除市场（内置市场拒绝） */
   pluginsMarketsRemove(id: string): Promise<PluginActionResult>;
   /** 同步一个市场：目录型扫目录归档；远程型本轮如实失败（不联网） */
@@ -1305,7 +1306,7 @@ export interface ElectronAPI {
   /** 读市场注册表（含 `type` / `isBuiltIn` / `autoUpdate` / `lastSyncAt`） */
   pluginsMarkets(): Promise<MarketRegistry & { error: string | null }>;
   /** 新增 / 更新市场条目（按 id 幂等） */
-  pluginsMarketsUpsert(entry: MarketplaceEntry): Promise<PluginActionResult>;
+  pluginsMarketsUpsert(entry: MarketplaceInput): Promise<PluginActionResult>;
   /** 删除市场（内置市场拒绝） */
   pluginsMarketsRemove(id: string): Promise<PluginActionResult>;
   /** 同步一个市场（目录型扫目录归档；远程型本轮如实失败） */

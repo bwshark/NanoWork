@@ -228,8 +228,8 @@
 | FR-3.4 | **Plugin 形态**    | **P1** | ✅  | both | 一个插件 = 清单 + SKILL.md + agents/ + experts/ + hooks/ + mcp/ + prompt/ + commands/ + skills/ + scripts/；安装 / 升级 / 卸载 + 版本区间校验已落地（**市场流程与版本锁定写入未做**，属 FR-3.7/3.8）；激活状态权威在引擎（指纹绑定标记 + `GET /v1/plugins`），客户端只做文件系统那一半，见 §12.2.1                                             |
 | FR-3.5 | 扩展市场             | P2     | ⬜  | both | 远程市场索引 + 一键安装 + 来源可信校验（签名/哈希）（V2）                                                                                                                                                                                                                                      |
 | FR-3.6 | 生命周期钩子           | P2     | ⬜  | both | 插件可在会话开始 / 工具调用前后 / 会话结束挂载钩子                                                                                                                                                                                                                                           |
-| FR-3.7 | **市场注册与来源分级**    | **P1** | ⬜  | both | 市场注册表含 `type`（directory/zip）/ `isBuiltIn` / `autoUpdate` / `lastSyncAt`；目录型不联网；远程型按 `autoUpdate` 决定启动拉取或按需拉取；**这两字段即「能否离线 / 失败怎么办」的判据**（见 12.5）                                                                                                                        |
-| FR-3.8 | **版本隔离缓存**       | **P1** | ⬜  | both | 缓存目录为 `cache/<market>/<plugin>/<version>/`；市场刷新只覆盖 `marketplaces/`，不替换生效副本；活跃会话按 `{plugin, version}` **版本引用集**解析而非取最新版；无引用旧副本可 GC（见 12.6）                                                                                                                              |
+| FR-3.7 | **市场注册与来源分级**    | **P1** | ✅  | both | 市场注册表含 `type`（directory/remote）/ `isBuiltIn` / `autoUpdate` / `lastSyncAt`；目录型不联网；远程型按 `autoUpdate` 决定启动拉取或按需拉取；**这两字段即「能否离线 / 失败怎么办」的判据**（见 12.5）。**本轮落地口径**：注册表 + 目录型同步 + 归档（`main.cjs` 侧的 `registry.json`）已通；远程型**无服务端，本轮只留模型与开关**，界面上同步按钮**禁用并说明原因**，不偷偷联网                                                                                                                                                       |
+| FR-3.8 | **版本隔离缓存**       | **P1** | ✅  | both | 缓存目录为 `cache/<market>/<plugin>/<version>/`；市场刷新只覆盖 `marketplaces/`，不替换生效副本；活跃会话按 `{plugin, version}` **版本引用集**解析而非取最新版；无引用旧副本可 GC（见 12.6）。**本轮落地口径**：目录布局与 `marketplaces/<m>/<n>/<v>/` 归档已通；**用 `<version>/current` 指针代替「活跃会话版本引用集」达成同一目标**（引擎插件发现发生在 `ContextBuilder` 构造期、工作区级，拿不到会话引用集，见 12.6.1）；GC 的引用集由客户端按「磁盘扫描出的生效包根」给出（主进程不知道哪些在跑，硬塞进去只会误删）                                                                                                        |
 | FR-3.9 | 扩展态同步边界          | P1     | ⬜  | both | 多端同步仅同步**启用态**（`enabledPlugins` + 会话版本引用集），不同步包本体；专家身份资源走云端、失败降级内置默认（见 12.7）                                                                                                                                                                                           |
 
 ## R4 知识与记忆
@@ -251,7 +251,7 @@
 | FR-5.1 | 定时任务 CRUD         | P0     | ✅  | both     | cron / interval / once + 启停 / 删除（已实现）                                                                |
 | FR-5.2 | 任务镜像到引擎           | P0     | ✅  | electron | 合并进 `cron/jobs.json` + 热加载，无需重启网关（已实现，含托管标记）                                                         |
 | FR-5.3 | 执行留痕              | P0     | ✅  | both     | `TaskRunRecord` 已有；**2026-10-03 补齐三处缺口**：① 成功率统计（`src/lib/taskRunStats.ts` 的 `summarizeRuns`/`summarizeRunsByTask`，运行记录页统计条 + 每条任务卡片上的成功率）；② **失败原因分类**（7 类 + `unknown`，判据取自引擎与客户端**真实会写入的文案**，见该文件头）；③ 运行详情（既有「展开看触发方式/耗时/原文 + 只读执行会话视图」即详情形态，**未单开独立页面**）。所有指标**从 `runs` 派生，不新增存储字段** |
-| FR-5.4 | **RFC 5545 循环规则** | **P1** | 🟡  | both     | 支持 `RRULE`（如「每月 1、15、28 日 09:00」）、`valid_from` / `valid_until` 有效期窗口（对齐 WorkBuddy `automations` 表语义）。**2026-10-03 已落**：`TaskSchedule` 加 `rrule` 形态、`TaskConfig` 加 `validFrom`/`validUntil`、降级纯函数 `src/lib/rrule.ts`（含**明确拒绝**不可降级的规则）、同步链路 `computeNextRunMs` 按窗口算 `nextRunAtMs`、表单加「循环规则」档 + **降级结果实时回显**。**未做**：结果回推（FR-5.6）仍缺 |
+| FR-5.4 | **RFC 5545 循环规则** | **P1** | ✅  | both     | 支持 `RRULE`（如「每月 1、15、28 日 09:00」）、`valid_from` / `valid_until` 有效期窗口（对齐 WorkBuddy `automations` 表语义）。**2026-10-03 已落**：`TaskSchedule` 加 `rrule` 形态、`TaskConfig` 加 `validFrom`/`validUntil`、降级纯函数 `src/lib/rrule.ts`（含**明确拒绝**不可降级的规则）、同步链路 `computeNextRunMs` 按窗口算 `nextRunAtMs`、表单加「循环规则」档 + **降级结果实时回显**。**未做**：结果回推（FR-5.6）仍缺 **已落地（2026-10-03）**：`TaskSchedule.rule = { kind: 'rrule'; rrule; tz? }`、`TaskConfig.validFrom / validUntil`、降级纯函数 `src/lib/rrule.ts`（能降的降成单条 cron，不能降的**明确拒绝并给出人话原因**）、表单「循环规则」档 + 降级结果实时回显。当时唯一未做的是结果回推，已随 FR-5.6 落地 |
 | FR-5.5 | 自然语言建任务           | P0     | ✅  | both     | 对话内 hover → 创建定时任务（已实现）。**2026-10-03 补完语义推荐调度**：新建任务时从消息正文推断执行频率（`src/lib/scheduleFromText.ts`：「每周一早上9点」→ `0 9 * * 1`、「每个工作日18:00」→ `0 18 * * 1-5`、「每半小时」→ 引擎原生 30 分钟间隔），并在表单顶部说明识别结果。**识别不出就不填**（不猜 —— 自动化是会自动跑起来的东西，猜错的代价远高于「没帮你填」）；多日/工作日这类结构化表达不了的会落到 cron 原文，此时表单**默认展开「高级」**，让用户看见真正生效的那条规则                                            |
 | FR-5.6 | **结果回推渠道**        | **P1** | 🟡 | both     | 任务可配置推送到企微 / 微信 / 飞书。**2026-10-03 按路线 C 落地**（为什么不用「纯客户端」的路线 A，见 §15.3）：引擎 `[LOCAL PATCH]` 新增 `payload.delivery`，`run_bound_cron_job` 完成后再经 message bus **另发**一份到配置的目标；执行会话仍绑 `api:cron-{id}`（工作区 / 权限 / 留痕零回归）。**未做**：`milestone`（每个关键节点）、持久化 outbox（第一期由 `ChannelManager._send_with_retry` 的指数退避等价覆盖）                      |
 | FR-5.7 | Webhook / 邮件触发器   | P2     | ⬜  | both     | 除定时外支持外部事件触发（V2）                                                                                     |
@@ -263,7 +263,7 @@
 | ------ | --------------- | ------ | -- | -------- | ------------------------------------------------------------------------------ |
 | FR-6.1 | 渠道配置与镜像         | P0     | ✅  | both     | 5 渠道（钉钉/飞书/Lark/微信/企微）+ 白名单 + 群策略，镜像进 `config.json`（已实现）                       |
 | FR-6.2 | 扫码接入            | P0     | ✅  | electron | 扫码完成应用创建与凭据回写（已实现）                                                             |
-| FR-6.3 | **结果回推 IM**     | **P0** | ⬜  | both     | 任务完成 / 长任务关键节点 → 通过原渠道回推结果；复用 `payload.deliver` 投递字段                           |
+| FR-6.3 | **结果回推 IM**     | **P0** | 🟡  | both     | 任务完成 / 长任务关键节点 → 通过原渠道回推结果；复用 `payload.deliver` 投递字段 **主体已落地、档位不全（2026-10-04 核实）**：FR-5.6 按路线 C 落地的 `CronDelivery` / `CronDeliveryTarget` 已把结果推到企微 / 微信 / 飞书渠道，`run_bound_cron_job` 完成后经 message bus 另发一份、出站复用 `_send_with_retry` 的指数退避。**未做**：`on` 档位只有 `complete` / `error` 两档，缺 `milestone`（关键节点）；持久化 outbox（跨重启补投）第一期由退避等价覆盖 |
 | FR-6.4 | **远程派活 → 会话归档** | **P0** | 🟡 | both     | IM 指令驱动本地 Agent 执行，执行记录在客户端可见（`channelSessionsStore` 已有数据通道；补「IM 来源」会话筛选与只读呈现） |
 | FR-6.5 | IM 内审批          | P1     | ⬜  | both     | 敏感操作可在 IM 里一键批准/拒绝，无需回桌面（对齐 WorkBuddy `Approval`）                              |
 | FR-6.6 | 渠道健康与告警         | P1     | 🟡 | both     | 渠道掉线检测与提示（`channelDisconnect.ts` 已有）；补自动重连与告警                                  |
@@ -275,8 +275,8 @@
 | ------ | --------- | ------ | -- | -------- | ---------------------------------------------------------------------------------------------------- |
 | FR-7.1 | 富产物渲染     | P0     | ✅  | both     | html / svg / 图片 / mermaid / 代码 / md / 视频 渲染 + 下载（已实现）                                                |
 | FR-7.2 | 产物索引      | **P0** | ✅  | both     | 产物按会话 / 时间归档可检索（`artifactsStore` 已有）；**补**：独立索引（对齐 WorkBuddy `artifact-index/`），跨会话检索与去重             |
-| FR-7.3 | **文件级回滚** | **P0** | ⬜  | electron | 每次写类工具执行前建立快照；可按会话 / 按步回滚到任意 `commitSeq`；实现对齐 WorkBuddy 的 `file-history/` + `*.file-rollback.ndjson` |
-| FR-7.4 | 产物版本      | P1     | ⬜  | both     | 同源产物多版本可对比与回退                                                                                        |
+| FR-7.3 | **文件级回滚** | **P0** | ✅  | electron | 每次写类工具执行前建立快照；可按会话 / 按步回滚到任意 `commitSeq`；实现对齐 WorkBuddy 的 `file-history/` + `*.file-rollback.ndjson` **客户端侧已落地（2026-10-04 核实）**：写前快照 `src/lib/fileBackup.ts`（`snapshotBeforeWrite`）+ 平台抽象 `ElectronFileBackup` / `WebFileBackup`（复用既有 IPC `file-backup:put/get`，**无需重建 cjs**）+ 时间线 key `STORAGE_KEYS.fileBackups`（`nanowork.fileBackups`）已登记进 `electron/storageRoutes.ts`，主进程**已重建 `main.cjs`**；`MemoryService` 五个写入口挂 prebackup，记忆页有「历史快照 / 回滚到此处」。**仍未做**：引擎侧 workspace 文件回滚（nanobot 只读不可改，单列 follow-up）——因此本条标 ✅ 但**仅指客户端写作点** |
+| FR-7.4 | 产物版本      | P1     | 🟡  | both     | 同源产物多版本可对比与回退 **数据层已落地、对比与回退入口未做（2026-10-04 核实）**：`artifactsStore` 已按内容寻址推进 `version` / `previousVersion` / `versions[]`（`docs/fr-7-4-artifact-version-spec.md`、`artifact-content-dedup-spec.md`），内容池 `bodies` + 引用 `bySession`，回退策略是「新开一版不覆盖历史」；但全仓**没有**版本对比 UI 与「切回此版本」入口，故保持 🟡 而非 ✅ |
 | FR-7.5 | 人机双写      | P2     | ⬜  | both     | 产物内可圈选局部让 AI 改写，改动留版本（V2）                                                                            |
 
 ## R8 安全、权限与沙箱
@@ -308,11 +308,11 @@
 | 编号      | 名称     | 优先级    | 现状 | 环境   | 验收标准                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | ------- | ------ | ------ | -- | ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | FR-10.1 | 同步元数据  | **P1** | ✅  | both | 所有可同步实体带 `id` / `rev` / `updatedAt` / `deletedAt` / `updatedBy`。**已落地（V1 期提前完成，2026-09-25）**：`src/types/sync.ts`（`SyncMeta` / `SyncMetaInput` / `SyncableEntity` / `SyncTombstones`）+ `lib/{syncMeta,syncSelect,syncStamp,deviceId}.ts`；**8 个实体全部接线**（`Agent` / `ExpertGroup` / `TaskConfig` / `MCPConfig` / `ChannelConfig` / `SkillOverrideEntry` / `SessionMeta`(+索引条目) / `Settings`），删除由「摘除数组项」改为**墓碑**（五个 store 拆 `SyncTombstones` 独立表、`channels` 按 `kind` 键控），`Settings` 走字段级排除表（`lib/settingsSync.ts`）。**最后缺口已于 2026-09-27 补齐**：`deleteSession` / `deleteSessions` 改走 **`tombstoneSession(meta)`**（写墓碑 + 覆盖索引条目 + **丢弃 JSONL 正文**，保留 meta 与索引条目），硬删 `removeSession` 只留给「空会话搬迁分片」这类物理移动；三个存储实现（内存参照 / Web 分片 / Electron 主进程）与 `events:tombstone` IPC 全部落地。落地清单与实现偏差见 `architecture-syncmeta.md` §7.1–§7.3 |
-| FR-10.2 | 云端账户   | P1     | ⬜  | both | 邮箱+密码 + JWT；refresh 轮换；Electron 用系统钥匙串，Web 用 httpOnly Cookie                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| FR-10.3 | 双向同步   | P1     | ⬜  | both | `/api/sync/push` + `/api/sync/pull`；LWW + tombstone（已定设计见 `cross-platform-sync-design.md`）                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| FR-10.4 | 离线优先   | P1     | ⬜  | both | 无网络时本地照常工作，联网自动合并；状态 `local/syncing/synced/conflict/offline`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| FR-10.5 | 同步范围控制 | P1     | ⬜  | both | `settings` 只同步用户偏好，**机器专属字段（网关地址、本地路径）排除在同步负载之外**；**凭据同样不入同步负载**（`MCPConfig.auth` 已在主进程保险库；渠道密钥现为明文落 `channels.json`，**定案不上行**，见 `architecture-syncmeta.md` §5.3）                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| FR-10.6 | 数据主权   | P1     | ⬜  | both | 一键导出全部数据；彻底删除账户                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| FR-10.2 | 云端账户   | P1     | ✅  | both | 邮箱+密码 + JWT；refresh 轮换；Electron 用系统钥匙串，Web 用 httpOnly Cookie **已落地（2026-10-04 核实，批次 1 + 批次 4）**：服务端 `cloud/app/auth/routes.py` 五端点（register / login / refresh / logout / me）；客户端 `src/sync/syncAccount.ts` 的 `SyncAccount` 持有 refresh token 并负责轮换，`SyncClient` 遇 401 只重试一次、再 401 即判「凭据整体失效」；UI 为 `src/pages/auth/AuthPage.tsx`（登录 / 注册，**不引入全局守卫**——local-first 是本项目的一贯取舍）。access token 落 `platform.storage` 的字符串 JSON（Web 落 localStorage），**刻意不用**凭据保险库：保险库纪律是「值永不回传渲染层」，而同步引擎恰恰在渲染层需要 access token |
+| FR-10.3 | 双向同步   | P1     | ✅  | both | `/api/sync/push` + `/api/sync/pull`；LWW + tombstone（已定设计见 `cross-platform-sync-design.md`） **已落地（2026-10-04 核实，批次 1 + 2 + 4 + 5）**：`POST /api/sync/push` + `GET /api/sync/pull`（`cloud/app/sync/routes.py`，另有 `/reset`），LWW + 墓碑（`SyncTombstones` 独立表，`channels` 按 `kind` 键控）；客户端 `src/sync/SyncClient.ts` 同一对端点 + `src/sync/SyncEngine.ts` 定时/事件驱动；`syncRegistry` 已由「只注册 agents」扩到 **8 个 collection**（agents / expertGroups / tasks / mcp / channels / skillOverrides / settings / sessionMeta）。**验收门禁已自动化而非靠真机**：`tests/sync/integration.twoDevice.test.ts` 真 spawn `uvicorn` + 两套 store 快照 → 双向一致、空闲 `status === synced` 且 `conflict === 0`；`sessionEvents` 走第三类通道（`src/sync/eventStream.ts`，不进 `syncRegistry`——`read()` 是同步的而 `EventStore` 全异步） |
+| FR-10.4 | 离线优先   | P1     | ✅  | both | 无网络时本地照常工作，联网自动合并；状态 `local/syncing/synced/conflict/offline` **已落地（2026-10-04 核实）**：`src/sync/types.ts::SyncStatus` 五态 `local / syncing / synced / conflict / offline` 全部有接线点（`SyncEngine` 未登录与断网各置 `local` / `offline`，推送前 `syncing`，收尾按 `conflictCount` 归 `conflict` 或 `synced`），徽标 `SyncStatusBadge` 落**侧栏底部**而非 TitleBar（后者只在 Electron 渲染）。云端不可用时本地全功能可用这条底线由 `local-first` 守卫守住：未登录时 fetch 调用次数为 0（有断言） |
+| FR-10.5 | 同步范围控制 | P1     | ✅  | both | `settings` 只同步用户偏好，**机器专属字段（网关地址、本地路径）排除在同步负载之外**；**凭据同样不入同步负载**（`MCPConfig.auth` 已在主进程保险库；渠道密钥现为明文落 `channels.json`，**定案不上行**，见 `architecture-syncmeta.md` §5.3） **已落地（2026-10-04 核实，批次 3 + 4）**：`src/lib/settingsSync.ts` 的 `SETTINGS_SYNC_OMIT_KEYS` / `TRANSCRIPTION_SYNC_OMIT_KEYS`（后者剔除 `endpoint` / `apiToken` 这类**机器专属**字段）在 push 组装处生效；渠道凭据已保险库化（`src/lib/channelSecrets.ts` + `electron/channelSecretInjection.ts`，`CHANNEL_SYNC_OMIT_KEYS` 剔除 4 个密钥字段 + 3 个配套 id + 2 个运行时事实，有反向护栏用例），**凭据不上行**；`~/.nanowork/connectors/.credentials.v3.json` 的密钥由 OS 凭据库托管、渲染层只拿 key 名 |
+| FR-10.6 | 数据主权   | P1     | ✅  | both | 一键导出全部数据；彻底删除账户 **已落地（2026-10-04 核实，批次 6a + 6b + 6a 补）**：`GET /api/account/export`（云端副本导出）+ `DELETE /api/account`（事务清 `sync_items` + `sync_events` + `refresh_tokens` + `users`，客户端与 `logout()` 同路径收口）；客户端 `src/lib/accountArchive.ts` 的 `buildArchive` / `parseArchive` / `applyArchive` + 侧栏「账户」分区的**导入归档**按钮（走 `platform.pickFile`，只写回 local 段、未登录亦可点）——原「不提供导入 UI」的已知偏差已闭合；归档 v2 已含工作区记忆与提示词模板 |
 | FR-10.7 | 端到端加密  | P2     | ⬜  | both | 可选开启；云端只存密文（V2）                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 
 ## R11 可观测性与成本
@@ -386,7 +386,7 @@
 | **M3 扩展与提示词**  | FR-3.1/3.2/3.4、FR-4.2/4.3、P-提示词外置                 | Skill 目录扫描 + 三态覆盖、Plugin 包格式、用户级记忆、身份文件、模式×领域×风格模板                                                                                                                    | 装一个示例 Plugin 端到端可用；提示词可外置修改不重编译                                                                                        |
 | **M4 自动化与产物**  | FR-5.4/5.6、FR-6.3/6.4、FR-7.2/7.3                  | RRULE + 有效期、结果回推 IM、IM 会话归档、产物索引、文件回滚                                                                                                                                 | 任务结果能推回企微；回滚能恢复指定步前的文件状态                                                                                               |
 | **M5 可观测**     | FR-11.1/11.2/11.3、FR-8.9                          | 用量成本报表、trace、日志分级、审计日志                                                                                                                                                | 能回答「这个会话花了多少钱、每一步调了什么工具」                                                                                               |
-| **M6 多端同步**    | R10 全部                                            | FastAPI 认证 + Sync API + SyncMeta 全量接入                                                                                                                                 | 两端登录同账户后 Agent/会话双向一致；离线编辑联网合并无丢失                                                                                      |
+| **M6 多端同步 ✅**  | R10 全部                                            | FastAPI 认证 + Sync API + SyncMeta 全量接入                                                                                                                                 | **已闭合（2026-10-04 核实）**：七个批次全部落地（批次 1 服务端 / 2 客户端引擎 / 3 前置欠账 / 4 实体接线 + 认证 UI / 5 事件流追加同步 / 6a 数据主权 + 墓碑 GC + conflict 快照 / 6b C 类文件型资产），逐批完成判据与门禁见 `architecture-m6-sync.md` §七；两条验收门禁（两端登录同账户后 Agent/会话双向一致；离线编辑联网合并无丢失）已由 `tests/sync/integration.twoDevice.test.ts` 与 `tests/sync/sessionEventsSync.test.ts` 自动化承担，不再依赖真机手测                                                                                      |
 | **M7 团队（V2）**  | FR-2.6、FR-4.7、FR-7.5、FR-12.7                      | 项目空间、知识库 RAG、人机双写                                                                                                                                                     | 团队共享资产可用；知识库检索权限过滤生效                                                                                                   |
 | **M8 企业（V3）**  | R12 全部                                            | 多租户、SSO、RBAC、审批、计费、沙箱强化                                                                                                                                               | 过等保二级对齐检查；私有化一键部署                                                                                                      |
 
@@ -462,8 +462,8 @@
 >     推送失败在技能页显示告警——界面显示「已停用」而模型照旧在用，是用户永远不会自己发现的不一致。
 >   - **UI**：技能卡片的三态选择器（Switch 表达不出中间档）+ 来源层级徽标 + `allowed-tools` / `user-invocable`  
 >     真实字段展示；内置与项目级技能不给删除入口（删了会「复活」，真实删除动作不在界面上）。
->   - **未做**（仍属 M3 范围）：FR-3.4（Plugin 包格式，见下一批）、FR-3.7/3.8（市场注册表与版本化缓存）  
->     未开工，因此 **M3 仍未闭合**。
+>   - **未做**（仍属 M3 范围）：FR-3.4（Plugin 包格式，见下一批）  
+>     **FR-3.7 / FR-3.8 已落地**（市场注册表、目录型同步、版本化缓存与 `current` 指针、GC），落地口径差异见 12.6.1。
 > - **M3 第三批：连接器连接测试、工具级授权与凭据加密（2026-09-16，FR-3.2；引擎侧 + 主进程 + 客户端）**：
 >   - **修掉一句谎话**：原 `mcpStore.testConfig` 是 `delay(700)` → `connected`，**不发任何请求**。  
 >     现在是主进程真实探针（`electron/mcpProbe.ts`）：stdio 走 spawn + 行分隔 JSON-RPC  
@@ -529,8 +529,9 @@
 >     `tests/pluginsRuntime.test.ts`（15，**真起 HTTP 服务器**验线格式，不 mock fetch）、  
 >     `tests/pluginsStore.test.ts`（15）；引擎侧 `tests/test_api_plugins.py`（11）+  
 >     `tests/agent/test_agent_plugins.py` 追加用户级目录 / 优先级 / 位置回退用例。
->   - **未做（仍属 M3 范围）**：FR-3.7/3.8（市场注册表与版本化缓存）未开工，  
->     因此**市场安装流程与版本锁定写入**都还没有——当前版本只解析并展示 `engines`  
+>   - **已做**：FR-3.7/3.8（市场注册表、目录型市场同步、版本化缓存 + `current` 指针、GC）。  
+>     **市场安装流程与版本切换已贯通**（主进程归档 → materialize 副本 → 拨指针 → 重新扫盘），   
+>     但仍未接入「版本锁定写入」的自动策略（切版本后需用户自行启用，见 12.6.1）
 >     区间与版本号，安装来源是本地目录。**M3 仍未闭合**。
 >
 > 三套 `tsc`、`vitest`（**65 文件 / 1055 用例**）与 `vite build` 全绿。引擎侧 `pytest`：`tests/agent` + `tests/config` + `tests/command` + `tests/api` 全绿；`tests/tools` 环境类红 8 条（同上一批，无回归），另有 2 条 Windows 符号链接权限用例（环境性）。
@@ -538,6 +539,17 @@
 > **D2 遗留**：附件内容仍不入事件流（附件库属 R7/M4，见 9.6 的「已知范围差异」）。
 >
 > **⚠️ 与上游的刻意分歧**：`tests/tools/test_exec_security.py` 与 `test_tool_validation.py` 中「`rm <ws路径> 2>/dev/null` 应当放行」的三条断言（含上游 #3599 回归）已被**改写为断言拦截**，并以 `[LOCAL PATCH]` 标注。上游关心的是「重定向不该触发路径越界告警」，nanowork 关心的是「删除必须能进回收站」——两条需求叠加后结论相反。合并上游时这三处会冲突，属预期。
+>
+> **M6 主体闭合（2026-10-04 核实）——R10 全部落地**：`architecture-m6-sync.md` §七 的**七个批次全部已落**
+> （1 服务端骨架 / 2 客户端引擎 / 3 前置欠账 / 4 实体接线 + 认证 UI + 状态徽章 / 5 事件流追加同步 /
+> 6a 数据主权 + 墓碑 GC 30 天 + `conflict` 快照 + 删账户 / 6b C 类文件型资产）。据此把第 3 章
+> `FR-10.2` ~ `FR-10.6` 五条状态由 `⬜` 改 ✅（此前状态表滞后于代码，照表排期会把已落的东西重做一遍），
+> 并在 `docs/README.md` §九 看板新增 #34 登记这条滞后本身。
+>
+> **两处诚实标注**：① `FR-7.4`（产物版本）数据层已落但**没有版本对比 UI 与「切回此版本」入口**，
+> 故保持 🟡；② `FR-6.3`（IM 结果回推）主体已由 FR-5.6 路线 C 覆盖，但投递档位只有
+> `complete` / `error`，缺 `milestone`。另 `FR-3.9`（扩展态同步边界）**仍未做**——它是 M6 唯一
+> 没进交付清单的洞（只同步启用态与版本引用集、包本体不上行），已列入后续批次。
 >
 > **M6 前置（Phase 0）· `SyncMeta` 落地（2026-09-25）**：这是一件**跨期地基**而非 M6 本体——`FR-10.1` 归 V1.5，但 §19.2 要求「V1 创建的实体必须当场带同步元数据」（晚做只能全量迁移或在同步层永久补字段），故在 V1 期提前落。三批全部完成：① 地基纯逻辑件（`types/sync.ts` + `lib/{syncMeta,syncSelect,deviceId}`）；② 五个 store 接线 + 技能覆盖表抽离（新增 `nanowork.skillOverrides`）；③ 会话 `rev`/`updatedBy`（递增点落 `updateSession`）+ `Settings` 字段级负载裁剪。**门禁**：三套 `tsc` 0 错误 / `vitest` **99 文件 1594 用例全绿** / `vite build`（`--emptyOutDir false`）绿；批次 2 动了 `electron/storageRoutes.ts`（新增 `skills/overrides.json` 路由）故**已重建 `main.cjs` + `preload.cjs`**。**当时未做、已于 2026-09-27 补齐**：会话删除的墓碑——`deleteSession` / `deleteSessions` 改走 `tombstoneSession`（写墓碑 + 覆盖索引条目 + 丢弃 JSONL 正文），`FR-10.1` 随之转 ✅，落地形状与偏差见 `architecture-syncmeta.md` §7.4。完整清单与逐批实现偏差见该文 §七；V1.5 开工前置（`SyncMeta` 之外先是 5 条，平台边界与会话墓碑已各清一条）见 `architecture-m6-sync.md` §2.2。
 
@@ -1608,8 +1620,9 @@ my-plugin/
 包路径不泄漏给渲染层是次要的，主要理由是「客户端本来就能自己扫到路径」——  
 让它经引擎绕一圈反而多出一个可能不一致的来源。
 
-**仍未做**（属 FR-3.7/3.8）：市场注册表、版本化缓存目录（§12.6）、  
-以及「版本锁定」的**写入**。当前版本只做区间校验与版本展示，安装来源是本地目录。
+**已做**：市场注册表、目录型市场同步、版本化缓存目录（§12.6）与 `current` 指针。  
+**仍未做**：「版本锁定」的**自动写入策略**（引擎不提供会话→版本引用，改为单一指针；切版本   
+后需用户手动启用）。安装来源除本地目录外，也支持从已归档市场选版本安装。
 
 **也还没做**：§12.8 的 C1（专家 / 技能 / 插件共用一张启用开关表）。  
 本次落地的只是**包格式与生命周期**：插件自己的意图表是 `settings.enabledPlugins`，  
@@ -1846,6 +1859,42 @@ sheetagent/0.1.1784877812     与  sheetagent/0.1.1787966564
 
 GC 规则：无任何活跃会话引用、且不是当前启用版本的旧副本，超过 N 天可回收。
 
+### 12.6.1 本轮落地口径（与 WorkBuddy 实测的两处偏差）——已实现
+
+照抄 12.6 的目录布局时撞到两处**引擎侧事实**，它们决定了「版本引用集」这条能否照搬：
+
+**偏差一：用 `<version>/current` 指针代替「活跃会话版本引用集」。**
+
+12.6 要求「活跃会话按 `{plugin, version}` 引用集解析」。但我们的引擎里**插件发现发生在
+`ContextBuilder` 构造期**，作用域是工作区、**没有 `session_key`**——拿不到「哪几个会话正在跑哪一版」。
+所以改成在 `cache/<market>/<plugin>/<version>/` 里放一个 `current` 文件（Windows 不用符号链接，
+落一个真实小文件，跨进程读得到）：
+
+- 有指针 → 按指针解析；无指针 → 取最大版本（向后兼容老布局）；
+- **指针坏不回退**（内容被改坏了就该露出来，回退成「照最新版跑」会让问题消失且查不出）；
+- 市场刷新往 `marketplaces/` **只增不改**，所以「升级」永远不覆盖正在生效的那一版——
+  `current` 指针只是把「哪一版在跑」这件事变成一次显式选择。
+
+指针换来的能力（也是 FR-3.8 想要的全部）：同包多版本并存、改版本后旧版仍在、GC 有明确边界。
+
+**偏差二：GC 的引用集由客户端给，不由主进程猜。**
+
+「哪些副本在生效」的唯一证据是磁盘扫描出来的包根（`scanPlugins`），主进程没有这份知识，
+硬塞进 `pluginsMarketGc(referenced, keepDays)` 只会误删生效中的副本。判定抽成纯函数
+`shouldCollectCopy({ mtimeMs, referenced, deadlineMs })` 便于单测覆盖。
+
+**还有两条必须留在界面语义里的约束：**
+
+- 远程市场本轮**没有服务端**，只有模型（`type: remote`）与 `autoUpdate` 开关；界面上「同步」按钮
+  **禁用并给出原因**，而不是点了才报错。
+- 切版本后**不自动启用**：引擎的激活标记绑定**包内容指纹**，换一版内容就变了，旧标记立刻失效。
+  若安装顺手把启用也做了，「装了却没生效」会变成一次无痕的自我治愈，从此查不出原因。
+  所以安装完停在「生效、待启用」，卡片如实地显示「未激活」。
+
+> **对 C4（§12.8）的修订**：缓存目录仍是 `cache/<market>/<plugin>/<version>/`；
+> 「活跃会话版本引用集」在 V1.5 收敛为 `current` 指针——**目标（不破坏活跃现场）不变，
+> 达成手段随引擎能力调整**。
+
 ## 12.7 专家身份与凭据的云 / 端边界
 
 「这些内容保存在云端吗？」要拆成三类回答：
@@ -1883,7 +1932,7 @@ GC 规则：无任何活跃会话引用、且不是当前启用版本的旧副�
 | C1 | Expert 与 Skill 统一为 plugin，`expertType: agent\|team` + `teamInfo` 表达个体与团队，共用一张启用开关表 | 12.5.1 / §18 数据模型   |
 | C2 | 市场数据模型必须含 `type` / `isBuiltIn` / `autoUpdate` / `lastSyncAt` 四字段                   | 12.5.2 / FR-3.7     |
 | C3 | 目录型与远程型走不同生命周期：目录型不联网、远程型按 `autoUpdate` 决定启动拉取或按需拉取                                | 12.5.2 / FR-3.7     |
-| C4 | 缓存目录必须是 `cache/<market>/<plugin>/<version>/`，活跃会话按**版本引用集**解析                      | 12.6 / FR-3.8       |
+| C4 | 缓存目录必须是 `cache/<market>/<plugin>/<version>/`；活跃会话解析：V1.5 收敛为 `<version>/current` 指针（引擎侧无会话↔版本引用）                      | 12.6.1 / FR-3.8       |
 | C5 | 同步单元 = 启用态（非包本体）                                                                   | 12.7 / FR-3.9 / §19 |
 | C6 | 专家身份资源（头像等）按账户命名空间走云端，失败时降级到内置默认头像（离线可用）                                           | 12.7 / FR-3.3       |
 
