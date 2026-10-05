@@ -2,7 +2,6 @@ import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Alert,
-  Autocomplete,
   Avatar,
   Box,
   Button,
@@ -13,7 +12,6 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
-  Divider,
   FormControlLabel,
   IconButton,
   InputAdornment,
@@ -33,14 +31,13 @@ import GroupsIcon from "@mui/icons-material/Groups";
 import PersonIcon from "@mui/icons-material/Person";
 import { useAgentsStore } from "@/stores/agentsStore";
 import { useExpertGroupsStore } from "@/stores/expertGroupsStore";
-import { useSettingsStore } from "@/stores/settingsStore";
 import { useSkillsStore } from "@/stores/skillsStore";
 import { useSessionsStore } from "@/stores/sessionsStore";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { SummonSlot } from "@/components/agents/SummonSlot";
-import { PromptProfileFields } from "@/components/prompts/PromptProfileFields";
-import { AgentModelPicker } from "@/components/models/AgentModelPicker";
-import { AGENT_TOOL_CATALOG, AGENT_TOOL_LABELS, ROUTES } from "@/lib/constants";
+import { AgentFormDialog } from "@/components/agents/AgentFormDialog";
+import { PLATFORM_LABEL } from "@/lib/imPlatform";
+import { ROUTES } from "@/lib/constants";
 import {
   avatarGlyph,
   cardChipOutlinedSx,
@@ -51,7 +48,7 @@ import {
   entityAvatarSx,
   hoverCardSx,
 } from "@/lib/cardSx";
-import type { Agent, ExpertGroup, ExpertGroupMode, IMPlatform } from "@/types";
+import type { Agent, ExpertGroup, ExpertGroupMode } from "@/types";
 import {
   isBuiltinAgentId,
   isBuiltinGroupId,
@@ -61,25 +58,8 @@ import {
 } from "@/types";
 
 /** IM 平台中文标签 */
-const PLATFORM_LABEL: Record<IMPlatform, string> = {
-  wecom: "企业微信",
-  feishu: "飞书",
-  dingtalk: "钉钉",
-  slack: "Slack",
-  telegram: "Telegram",
-  other: "其他",
-};
-
 /** 页内分段 tab：专家（单 Agent）/ 专家团（多 Agent 编排） */
 type PageTab = "agents" | "groups";
-
-const EMPTY: Partial<Agent> = {
-  name: "",
-  systemPrompt: "",
-  skillIds: [],
-  imBinding: null,
-  enabled: true,
-};
 
 const EMPTY_GROUP: Partial<ExpertGroup> = {
   name: "",
@@ -115,16 +95,12 @@ export function MyAgentsPage() {
   const activeSessionId = useSessionsStore((s) => s.activeId);
   const updateSession = useSessionsStore((s) => s.updateSession);
 
-  /** 全局提示词档案：Agent 级覆盖未设置时展示「跟随全局」的继承结果 */
-  const settings = useSettingsStore((s) => s.settings);
-
   const [tab, setTab] = useState<PageTab>("agents");
   const [hoverId, setHoverId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
 
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Agent | null>(null);
-  const [form, setForm] = useState<Partial<Agent>>(EMPTY);
   const [toDelete, setToDelete] = useState<string | null>(null);
 
   const [groupOpen, setGroupOpen] = useState(false);
@@ -165,15 +141,14 @@ export function MyAgentsPage() {
 
   const openNew = () => {
     setEditing(null);
-    setForm(EMPTY);
     setOpen(true);
   };
   const openEdit = (a: Agent) => {
     setEditing(a);
-    setForm({ ...a });
     setOpen(true);
   };
-  const save = () => {
+  /** 表单草稿由 `AgentFormDialog` 持有；这里只负责落地到 store */
+  const saveAgent = (form: Partial<Agent>) => {
     if (!form.name?.trim()) return;
     if (editing) updateAgent(editing.id, form);
     else createAgent(form);
@@ -193,22 +168,6 @@ export function MyAgentsPage() {
       }));
     }
     navigate(ROUTES.chat);
-  };
-
-  const toggleImBinding = () => {
-    if (form.imBinding) {
-      setForm({ ...form, imBinding: null });
-    } else {
-      setForm({
-        ...form,
-        imBinding: {
-          platform: "feishu",
-          account: "",
-          status: "online",
-          lastSyncAt: new Date().toISOString(),
-        },
-      });
-    }
   };
 
   const openNewGroup = () => {
@@ -672,247 +631,13 @@ export function MyAgentsPage() {
         </Box>
       )}
 
-      <Dialog
+      {/** 专家创建/编辑弹窗：与「专家管理」页共用同一个组件（字段集为超集） */}
+      <AgentFormDialog
         open={open}
+        editing={editing}
         onClose={() => setOpen(false)}
-        maxWidth="sm"
-        fullWidth
-      >
-        <DialogTitle>{editing ? "编辑专家" : "新建专家"}</DialogTitle>
-        <DialogContent>
-          <TextField
-            fullWidth
-            margin="dense"
-            label="名称"
-            value={form.name ?? ""}
-            onChange={(e) => setForm({ ...form, name: e.target.value })}
-          />
-          <TextField
-            fullWidth
-            margin="dense"
-            multiline
-            minRows={3}
-            label="系统身份提示"
-            value={form.systemPrompt ?? ""}
-            onChange={(e) => setForm({ ...form, systemPrompt: e.target.value })}
-          />
-          <Typography sx={{ fontSize: 13, mt: 1, mb: 0.5 }}>
-            绑定技能
-          </Typography>
-          <Select
-            fullWidth
-            multiple
-            value={form.skillIds ?? []}
-            onChange={(e) =>
-              setForm({ ...form, skillIds: e.target.value as string[] })
-            }
-            renderValue={(sel) =>
-              (sel as string[])
-                .map((id) => skills.find((s) => s.id === id)?.name ?? id)
-                .join("、")
-            }
-          >
-            {skills.map((s) => (
-              <MenuItem key={s.id} value={s.id}>
-                {s.name}
-              </MenuItem>
-            ))}
-          </Select>
-
-          {/* 领域 / 风格覆盖（design §13.1）：留空 = 跟随全局设置。
-              刻意不预填全局值——把「跟随」落成具体值后，改全局就再也影响不到
-              这个 Agent，而用户根本没做过这个决定。 */}
-          <PromptProfileFields
-            domain={form.promptDomain}
-            style={form.promptStyle}
-            allowInherit
-            globalDomain={settings.promptDomain}
-            globalStyle={settings.promptStyle}
-            label="领域 / 风格覆盖（可选）"
-            onDomainChange={(v) => setForm({ ...form, promptDomain: v })}
-            onStyleChange={(v) => setForm({ ...form, promptStyle: v })}
-          />
-
-          {/* 工具权限（FR-2.2）：在引擎的工具网关强制，不依赖系统提示词。
-              关掉开关 = 不声明限制（undefined）；打开 = 声明白名单。
-              两者必须保持可区分——把「没设置」落成空数组会把这个 Agent 直接锁死。 */}
-          <Divider sx={{ my: 1.5 }} />
-          <Typography sx={{ fontSize: 13, fontWeight: 600 }}>
-            工具权限（FR-2.2）
-          </Typography>
-          <Typography sx={{ fontSize: 12, color: "text.secondary", mt: 0.5 }}>
-            白名单在引擎侧强制：不在名单里的工具连调用都会被拒，改提示词也绕不过。
-          </Typography>
-          <FormControlLabel
-            sx={{ mt: 0.5 }}
-            control={
-              <Switch
-                size="small"
-                checked={form.toolAllow !== undefined}
-                onChange={(e) =>
-                  setForm({
-                    ...form,
-                    // 打开时默认全选（等于「先不收紧，再逐个取消」），关掉时回到
-                    // undefined（不限制）而不是空数组（一个都不许）。
-                    toolAllow: e.target.checked
-                      ? [...AGENT_TOOL_CATALOG]
-                      : undefined,
-                  })
-                }
-              />
-            }
-            label={
-              <Typography sx={{ fontSize: 13 }}>
-                仅允许指定工具（最小权限）
-              </Typography>
-            }
-          />
-          {form.toolAllow !== undefined && (
-            <Autocomplete
-              multiple
-              freeSolo
-              size="small"
-              sx={{ mt: 1 }}
-              options={[...AGENT_TOOL_CATALOG]}
-              getOptionLabel={(o) => String(o)}
-              value={form.toolAllow}
-              onChange={(_e, value) =>
-                setForm({ ...form, toolAllow: value.map((v) => String(v)) })
-              }
-              renderOption={(props, option) => (
-                <li {...props} key={option}>
-                  <Box>
-                    <Typography sx={{ fontSize: 13 }}>{option}</Typography>
-                    {AGENT_TOOL_LABELS[option] && (
-                      <Typography
-                        sx={{ fontSize: 11, color: "text.secondary" }}
-                      >
-                        {AGENT_TOOL_LABELS[option]}
-                      </Typography>
-                    )}
-                  </Box>
-                </li>
-              )}
-              renderInput={(params) => (
-                <TextField
-                  {...params}
-                  label="允许的工具"
-                  placeholder="留空 = 一个工具都不许"
-                  helperText="可输入 MCP 工具名（如 mcp__github__create_issue）"
-                />
-              )}
-            />
-          )}
-          <Autocomplete
-            multiple
-            freeSolo
-            size="small"
-            sx={{ mt: 1 }}
-            options={[...AGENT_TOOL_CATALOG]}
-            getOptionLabel={(o) => String(o)}
-            value={form.toolDeny ?? []}
-            onChange={(_e, value) => {
-              const next = value.map((v) => String(v));
-              setForm({ ...form, toolDeny: next.length ? next : undefined });
-            }}
-            renderInput={(params) => (
-              <TextField
-                {...params}
-                label="禁止的工具（可选）"
-                placeholder="优先级高于上面的白名单"
-                helperText="用于在宽白名单上精确挖掉个别危险工具"
-              />
-            )}
-          />
-
-          {/* 模型绑定（FR-2.3）：专家自带模型，省得每次召唤再选一遍 */}
-          <AgentModelPicker
-            value={form.model}
-            onChange={(v) => setForm({ ...form, model: v })}
-          />
-
-          <Divider sx={{ my: 1.5 }} />
-          <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-            <Typography sx={{ fontSize: 13, fontWeight: 600 }}>
-              IM 远程控制（FR-010）
-            </Typography>
-            {form.imBinding && (
-              <Chip
-                size="small"
-                color={
-                  form.imBinding.status === "online" ? "secondary" : "default"
-                }
-                label={PLATFORM_LABEL[form.imBinding.platform]}
-              />
-            )}
-          </Box>
-          {form.imBinding ? (
-            <Box sx={{ mt: 1 }}>
-              <Select
-                fullWidth
-                value={form.imBinding.platform}
-                onChange={(e) =>
-                  setForm({
-                    ...form,
-                    imBinding: {
-                      ...form.imBinding!,
-                      platform: e.target.value as IMPlatform,
-                    },
-                  })
-                }
-              >
-                {(Object.keys(PLATFORM_LABEL) as IMPlatform[]).map((p) => (
-                  <MenuItem key={p} value={p}>
-                    {PLATFORM_LABEL[p]}
-                  </MenuItem>
-                ))}
-              </Select>
-              <TextField
-                fullWidth
-                margin="dense"
-                label="账号 / 机器人标识"
-                value={form.imBinding.account}
-                onChange={(e) =>
-                  setForm({
-                    ...form,
-                    imBinding: { ...form.imBinding!, account: e.target.value },
-                  })
-                }
-              />
-              <Button
-                size="small"
-                color="warning"
-                sx={{ mt: 1 }}
-                onClick={toggleImBinding}
-              >
-                解绑
-              </Button>
-            </Box>
-          ) : (
-            <Button
-              size="small"
-              variant="outlined"
-              sx={{ mt: 1 }}
-              onClick={toggleImBinding}
-            >
-              绑定 IM
-            </Button>
-          )}
-          <Typography variant="caption" color="text.secondary">
-            真实绑定推送依赖 nanobot 运行时（IM 网关）；此处先记录本地配置。
-          </Typography>
-        </DialogContent>
-        <DialogActions sx={{ px: 3, pb: 2 }}>
-          <Button onClick={() => setOpen(false)}>取消</Button>
-          <Button
-            variant="contained"
-            onClick={save}
-            disabled={!form.name?.trim()}
-          >
-            保存
-          </Button>
-        </DialogActions>
-      </Dialog>
+        onSave={saveAgent}
+      />
 
       <Dialog
         open={groupOpen}

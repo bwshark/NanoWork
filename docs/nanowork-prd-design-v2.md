@@ -276,7 +276,7 @@
 | FR-7.1 | 富产物渲染     | P0     | ✅  | both     | html / svg / 图片 / mermaid / 代码 / md / 视频 渲染 + 下载（已实现）                                                |
 | FR-7.2 | 产物索引      | **P0** | ✅  | both     | 产物按会话 / 时间归档可检索（`artifactsStore` 已有）；**补**：独立索引（对齐 WorkBuddy `artifact-index/`），跨会话检索与去重             |
 | FR-7.3 | **文件级回滚** | **P0** | ✅  | electron | 每次写类工具执行前建立快照；可按会话 / 按步回滚到任意 `commitSeq`；实现对齐 WorkBuddy 的 `file-history/` + `*.file-rollback.ndjson` **客户端侧已落地（2026-10-04 核实）**：写前快照 `src/lib/fileBackup.ts`（`snapshotBeforeWrite`）+ 平台抽象 `ElectronFileBackup` / `WebFileBackup`（复用既有 IPC `file-backup:put/get`，**无需重建 cjs**）+ 时间线 key `STORAGE_KEYS.fileBackups`（`nanowork.fileBackups`）已登记进 `electron/storageRoutes.ts`，主进程**已重建 `main.cjs`**；`MemoryService` 五个写入口挂 prebackup，记忆页有「历史快照 / 回滚到此处」。**仍未做**：引擎侧 workspace 文件回滚（nanobot 只读不可改，单列 follow-up）——因此本条标 ✅ 但**仅指客户端写作点** |
-| FR-7.4 | 产物版本      | P1     | 🟡  | both     | 同源产物多版本可对比与回退 **数据层已落地、对比与回退入口未做（2026-10-04 核实）**：`artifactsStore` 已按内容寻址推进 `version` / `previousVersion` / `versions[]`（`docs/fr-7-4-artifact-version-spec.md`、`artifact-content-dedup-spec.md`），内容池 `bodies` + 引用 `bySession`，回退策略是「新开一版不覆盖历史」；但全仓**没有**版本对比 UI 与「切回此版本」入口，故保持 🟡 而非 ✅ |
+| FR-7.4 | 产物版本      | P1     | ✅  | both     | 同源产物多版本可对比与回退 **已全部落地（2026-10-05 复核更正）**：`artifactsStore` 按内容寻址推进 `version` / `previousVersion` / `versions[]`（`docs/fr-7-4-artifact-version-spec.md`），内容池 `bodies` + 引用 `bySession`，回退＝新开一版不覆盖历史；**UI 侧 `ArtifactPanel` 早有完整入口**（版本历史区 + 预览此版本 + 左右分屏对比 + 回退到此版本，`src/components/artifacts/ArtifactPanel.tsx:694/304/933`），并随独立适配器跨端同步（`src/sync/artifacts.ts`）。⚠️ **旧标注「对比与回退入口未做（2026-10-04 核实）」是错的**——UI 在 2026-09-29（`b71cb3a`）就落了，核实结论晚于代码且未验证，已更正。唯一真实缺口是**这组交互长期没有测试**，见 §20.10 |
 | FR-7.5 | 人机双写      | P2     | ⬜  | both     | 产物内可圈选局部让 AI 改写，改动留版本（V2）                                                                            |
 
 ## R8 安全、权限与沙箱
@@ -551,6 +551,26 @@
 > **两处诚实标注**：① `FR-7.4`（产物版本）数据层已落但**没有版本对比 UI 与「切回此版本」入口**，
 > 故保持 🟡；② `FR-6.3`（IM 结果回推）主体已由 FR-5.6 路线 C 覆盖，但投递档位只有
 > `complete` / `error`，缺 `milestone`。**`FR-6.4`（IM 会话归档）已于 2026-10-05 落地**：来源判定单一事实源、侧栏按渠道筛选（未知渠道不再被并进钉钉组）、IM 会话头部只读 + 来源标记，见 §20.7。**`M4 自动化与产物` 已闭合（2026-10-05）**：`FR-5.4` / `FR-5.6` / `FR-6.3` / `FR-6.4` / `FR-7.2` / `FR-7.3` 六条全部落地（其中本轮补了投递的 `start` 档位与 IM 会话归档，见 §20.7–§20.8）。另 `FR-3.9`（扩展态同步边界）**仍未做**——它是 M6 唯一
+
+> **P0 状态基线（2026-10-05 盘点）**：V1 的 **P0 共 33 条，31 条已 ✅**，未完成的只剩两条，
+> 且两条都有明确归属——
+>
+> - **`FR-2.3`（专家）**：四类绑定里提示词 / 工具 / 模型都已生效，**只剩「知识库绑定」**，
+>   而知识库属 M7 团队（V2）——即 **V1 范围内已实质完成**（见 §20.9）。
+> - **`FR-2.4`（专家团编排）**：**依赖引擎新能力**，现状不可行的依据与三条可选路径见
+>   `docs/design-fr-2-4-expert-orchestration.md`。
+>
+> **P1 状态基线**：24 条中 18 条已 ✅，未完成的 12 条按「能不能在没有新引擎能力的前提下做」分两类：
+>
+> | 可纯客户端落地 | 需要引擎 / 系统层能力 |
+> | --- | --- |
+> | `FR-1.7` 会话检索（标题 / 全文 / 时间 / 工作区 / Agent 筛选） | `FR-2.5` 子 Agent 委派（依赖修 `/v1` 下 `spawn(wait=false)` 丢结果 + 权限单调递减） |
+> | `FR-7.4` 产物版本（数据层已落，缺版本对比与「切回此版本」入口） | `FR-8.5` 沙箱执行、`FR-8.6` 数据防泄漏 |
+> | `FR-6.6` 渠道健康与告警 | `FR-4.4` 记忆分级与命名空间、`FR-4.6` Dream 双阶段记忆 |
+> | `FR-8.9` 审计日志 | `FR-6.5` IM 内审批（依赖引擎审批通道） |
+> | `FR-3.9` 扩展态同步边界（M6 唯一遗留，设计已清） | `FR-3.3` Expert 包（需与已落的 plugin 体系统一，改动面大） |
+>
+> 其中**性价比最高的下一步**是 `FR-7.4`（数据层现成、用户可感知）与 `FR-1.7`（日常高频）。
 > 没进交付清单的洞（只同步启用态与版本引用集、包本体不上行），已列入后续批次。
 >
 > **M6 前置（Phase 0）· `SyncMeta` 落地（2026-09-25）**：这是一件**跨期地基**而非 M6 本体——`FR-10.1` 归 V1.5，但 §19.2 要求「V1 创建的实体必须当场带同步元数据」（晚做只能全量迁移或在同步层永久补字段），故在 V1 期提前落。三批全部完成：① 地基纯逻辑件（`types/sync.ts` + `lib/{syncMeta,syncSelect,deviceId}`）；② 五个 store 接线 + 技能覆盖表抽离（新增 `nanowork.skillOverrides`）；③ 会话 `rev`/`updatedBy`（递增点落 `updateSession`）+ `Settings` 字段级负载裁剪。**门禁**：三套 `tsc` 0 错误 / `vitest` **99 文件 1594 用例全绿** / `vite build`（`--emptyOutDir false`）绿；批次 2 动了 `electron/storageRoutes.ts`（新增 `skills/overrides.json` 路由）故**已重建 `main.cjs` + `preload.cjs`**。**当时未做、已于 2026-09-27 补齐**：会话删除的墓碑——`deleteSession` / `deleteSessions` 改走 `tombstoneSession`（写墓碑 + 覆盖索引条目 + 丢弃 JSONL 正文），`FR-10.1` 随之转 ✅，落地形状与偏差见 `architecture-syncmeta.md` §7.4。完整清单与逐批实现偏差见该文 §七；V1.5 开工前置（`SyncMeta` 之外先是 5 条，平台边界与会话墓碑已各清一条）见 `architecture-m6-sync.md` §2.2。
@@ -3382,14 +3402,33 @@ PRD 要求内置「招聘 / 法务 / 投研 / 财务 / 写作」，实际长期�
    边界必须写在**会真正进模型上下文的地方**，只写在产品文档里等于没写。测试里也断言了这两句。
 3. 提示词按「先问清目标 → 再产出 → 给可核对的过程」组织，与既有四条同风格。
 
-### 20.9.5 表单重复：新增要「一处实现、两处引用」
+### 20.9.5 两份专家表单已收口为一个组件（2026-10-05）
 
-`AgentsPage` 与 `MyAgentsPage` 各有一份专家编辑 Dialog（**重复实现**，字段集还不一致——
-`AgentsPage` 缺工具白名单编辑）。所以本轮新增的模型选择器是抽出来的共用组件
-`src/components/models/AgentModelPicker.tsx`，而不是在两边各写一段。
-顺带修了它内部一个真机上才看得见的缺陷：MUI `Select` 默认把**空串**当「没有值」，
-渲染零宽占位符——留空时框里是空白的，用户看不出「跟随会话」这个状态存在，
-必须显式 `displayEmpty`。
+`AgentsPage`（专家管理）与 `MyAgentsPage`（我的专家）此前**各自实现了一份专家编辑 Dialog**，
+字段集还不一致：**前者缺整个「工具权限」区**——于是「同一个专家，在两个页面能改的东西不同」，
+从专家管理进去看不到白/黑名单，从我的专家进去才有。
+
+本轮整体抽成 `src/components/agents/AgentFormDialog.tsx`（取**超集**），两个页面只保留
+`open / editing / onClose / onSave` 四个 prop。顺带收口了两处逐字重复的常量：
+
+- `PLATFORM_LABEL` → `src/lib/imPlatform.ts`（卡片徽标与表单下拉共用，两处定义会导致
+  「同一个渠道在两个页面显示成两个名字」）；
+- 专家表单的草稿初值与 `toggleImBinding` → 组件内部（此前两页各一份）。
+
+**状态归属**：草稿由组件用 `useEffect[open, editing]` 重置，而不是 `key={id}` 卸载重挂
+—— 重挂会让 Dialog 跳过退出动画（点「取消」时框直接消失）。
+
+同一批还修了两个视觉缺陷（都由「搬进共用组件后两个入口都能看到」而暴露）：
+
+1. **模型选择框的 label 与值文字重叠**：MUI 按「值是否为空」决定 label 下沉/浮起，
+   而该控件用 `displayEmpty` 在空值时也渲染了一行文案（`Auto · xxx`）——
+   两者位置相同。修法 `InputLabelProps={{ shrink: true }}`（详见 §20.9.5 之后的说明与 skill §7.35.4）。
+2. **「仅允许指定工具」的开关紧贴文字**：MUI 给 `FormControlLabel` 的 root 塞了
+   `marginLeft: -11px`（为让开关轨道的视觉左缘与上面的输入框对齐），代价是轨道右侧与文字
+   **零间距**，真机上看像开关压住了字。修法是给该行加 `gap`。
+
+新增的模型选择器 `src/components/models/AgentModelPicker.tsx` 同样是抽出来的共用组件，
+没有在两边各写一段。
 
 ### 20.9.6 ⚠️ FR-2.4 三模式：现状下**做不了真实执行**（勘查结论）
 
@@ -3418,8 +3457,6 @@ PRD 要求内置「招聘 / 法务 / 投研 / 财务 / 写作」，实际长期�
 - **知识库绑定**：V1 无知识库/RAG 概念，属 M7（V2）。FR-2.3 因此**保持 🟡**——
   四类绑定里这类没落，标 ✅ 会让人以为 V1 范围内全做完了。
 - **FR-2.4 三模式真实执行**：见 §20.9.6，依赖引擎新能力。
-- **两个专家表单的合并**：本轮只保证新增字段「一处实现两处引用」，没有把两份 Dialog
-  整体抽成一个（那是独立的重构批次，改动面覆盖两个页面的全部字段）。
 - **`imBinding` / `avatar` 的消费**：仍是只持久化未消费（`imBinding` 的 UI 自己也写了
   「真实绑定推送依赖 nanobot 运行时」）。
 
@@ -3433,9 +3470,39 @@ PRD 要求内置「招聘 / 法务 / 投研 / 财务 / 写作」，实际长期�
   PRD 点名的五类模板在、法务与投研的边界句在。
 - 组件 `tests/agentModelPicker.test.tsx` 7 例：留空显示 Auto 文案（`displayEmpty`）、
   失效标注、**目录未加载时不判失效**、选预设与选 Auto 的回调值。
-- 真机 `tasks/verify-agent-model-binding.mjs`：4 场景（内置模板齐全 / 留空显示 Auto 而非空白 /
-  选预设保存后重开仍在 + 清空后真的清掉 / 团表单的模式警示），截图
-  `tasks/agent-model-1-default.png`、`agent-model-2-persist.png`、`agent-model-3-group-mode.png`。
+- 真机 `tasks/verify-agent-model-binding.mjs`：**5 场景**（内置模板齐全 / 留空显示 Auto 而非空白 /
+  选预设保存后重开仍在 + 清空后真的清掉 / 团表单的模式警示 / **两个入口的字段集逐项相同**），
+  另含两条几何断言（label 不压值文本、开关与文字留间距）。截图
+  `tasks/agent-model-1-default.png`、`agent-model-2-persist.png`、`agent-model-3-group-mode.png`、
+  `tasks/agent-form-1-admin.png`、`agent-form-2-mine.png`。
+
+## 20.10 更正：FR-7.4 的「入口未做」是过期结论（2026-10-05）
+
+`FR-7.4`（产物版本）此前标 🟡，理由是「**全仓没有版本对比 UI 与『切回此版本』入口
+（2026-10-04 核实）**」。**这个结论是错的**：那些入口早在 2026-09-29（`b71cb3a` / `c4c06b6`）
+就落地了，比那次「核实」早一周：
+
+| 能力 | 位置 |
+| --- | --- |
+| 版本历史区（列表 + 计数 + 「当前」标记 + 「无正文快照」标注） | `src/components/artifacts/ArtifactPanel.tsx:694` |
+| 预览此版本 | 同上（`setVersionHash` → 正文按 hash 回填） |
+| 左右分屏对比 | 同上 `:933`（「版本对比 · 当前 vs vN」） |
+| 回退到此版本 | 同上 `:304` → `rollbackToVersion`（新开一版，不覆盖历史） |
+| 跨端同步（含版本字段） | `src/sync/artifacts.ts`（独立适配器，刻意不进 `syncRegistry`） |
+
+**唯一真实缺口是测试**：上述三个交互一直没有 UI 覆盖（`artifactsUi.test.tsx` 只到
+「多版本徽章 / 仅编辑过」那一层）。本轮补 `tests/components/artifactPanelVersions.test.tsx`
+5 例（显示条件 / 列表与「当前」/ 预览历史版 / 对比弹窗 / 回退＝新开一版且历史不丢），
+FR-7.4 随之标 ✅。
+
+### 教训（值得单列）
+
+**核实状态必须看代码，不能沿用笔记里的结论。** 这次是「笔记 → PRD → 我的盘点」三手转述：
+开发笔记里写着「数据层已落、缺 UI」，PRD 把它写成了「已核实」，而我在盘点时又引用了它——
+**三处都没有回到代码**。代价是 FR-7.4 被当成「待开发」排进了下一批，而真正该做的是**补测试**。
+
+对应的工程习惯：**给结论时必须能指出 `文件:行号`**。这次只要 grep 一次
+`rollbackToVersion` 就会发现它有两个调用方（store 与面板），而不是「无人调用」。
 
 # 第 21 章 接口清单
 

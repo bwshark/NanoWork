@@ -64,8 +64,13 @@ WorkBuddy 式智能体客户端：React 18 + TS + Vite 渲染层 + Electron 主�
 | IM 会话来源（FR-6.4） | 分组/筛选键用**渠道原始首段**（`ChannelKind` 只 5 个成员，未知渠道会被**图标**的回退规则并进钉钉组）；来源判定（`channel` 非空）与本地 id 前缀是两个判据不许合并；筛选态放 store（Tab 是条件渲染，组件 state 会重挂载丢）；IM 标题只读（轮询会盖回） | §7.33 |
 | 投递档位（FR-5.6/6.3） | `_DELIVERY_MODES` 三档是**包含**关系 `error` ⊂ `complete` ⊂ `start`；加档位必须有「不影响既有档位」的用例 + 登记表用例 | §7.34.1/§7.34.5 |
 | ⚠️ cron 进度事件**早就在发** | `channel != "system"` 一律 `publish_lifecycle=True`，cron turn 的 channel 是 origin → `ProgressEvent`（含 `tool_events`）已经发出，受渠道 `send_progress`/`send_tool_hints` 控制。**做 milestone 的真实工作量是「镜像到 targets + 定节流」，不是「找信号源」** | §7.34.2 |
-| ⚠️ FR-2.4 专家团「真实执行」现状**做不了** | 引擎只有**匿名子代理**（`SubagentManager`/`spawn`，system prompt 固定来自 `subagent_system.md`），`agent_id` 只用于**工具策略**、不是人设路由 → 引擎没有「运行某具名 Agent」的概念；`mode` 全仓**无执行读取点**（仅持久化+展示）。要真做 = 引擎新增「按具名成员派发」能力 | `.workbuddy/memory/2026-10-05.md` |
-| ⚠️ 专家编辑表单**两份重复** | `AgentsPage` 与 `MyAgentsPage` 各一份专家 Dialog，**字段不一致**（前者缺工具白名单编辑）→ 同一个专家在两个页面能改的东西不同 | 同上 |
+| ⚠️ FR-2.4 专家团「真实执行」现状**做不了** | `spawn` 只有 `task/label/temperature/wait`（无人设/工具策略），子代理人设由固定模板构造，`agent_id` 只用于工具策略 → 引擎没有「运行某具名 Agent」的概念；`mode` 全仓无执行读取点。**三条路径与 5 个待产品决策的语义问题见方案文档** | `docs/design-fr-2-4-expert-orchestration.md` |
+| 专家表单已收口为共用组件 | `AgentFormDialog`（超集）供「专家管理 / 我的专家」两个入口共用；`PLATFORM_LABEL` 收口到 `lib/imPlatform.ts`；草稿重置用 `useEffect` 不用 `key`（保退出动画） | §7.35.6 |
+| ⚠️ 两个 MUI 实测坑 | `MuiFormControlLabel-label` 类名**不存在**（选择器会静默拿 null）；`FormControlLabel` 的负 margin 让开关与文字**零间距**（看着像压住字，几何上只是紧贴） | §7.35.7 |
+| ⚠️ 项目未开 `noUnusedLocals` | 搬迁代码后残留的未使用 import/变量默认 tsc **抓不到** → 用 `tsc --noEmit --noUnusedLocals` 自查（注意它会报全仓既有项，只清自己改的文件） | §7.35.6 |
+| P0 已清空（2026-10-05 盘点） | P0 33 条中 31 ✅，剩 `FR-2.3`（只差知识库，属 V2）/ `FR-2.4`（待引擎能力）；P1 24 条中 18 ✅ | PRD 第 6 章基线 |
+| 产物版本链（FR-7.4）**早已实现** | 版本历史区 / 预览 / 对比 / 回退全在 `ArtifactPanel.tsx:694/304/933`（2026-09-29 落地）。⚠️ 旧笔记与 PRD 长期写着「缺对比与回退入口」是**错的** → **状态结论必须能指到 `文件:行号`，别沿用笔记** | PRD §20.10 |
+| ⚠️ MUI Tooltip 的 `aria-label` 层级不定 | 直接包 `IconButton` 时在 `button` 上；包一层 `<span>`（给 disabled 按钮垫的那层）时在 **span** 上。⚠️ 找到 span **也不能直接点**（它是 button 的父，事件向上冒泡不经过 button）→ 要向下取里面的 button | §7.36 |
 | 专家模型绑定（FR-2.3） | `Agent.model` 存**预设名**（与 `Session.model` 同域）；优先级 会话 > 专家 > 空，**逐级回落**；⚠️ **下发前必须拦失效预设**（否则「删一个预设」=「所有绑过它的专家全部发不出消息」）；⚠️ 目录未加载返回 `null` 而非空集（否则冷启动第一轮静默丢选择） | §7.35.1/§7.35.2 |
 | ⚠️ store 两条写路径不对称 | `createAgent` 白名单构造 / `updateAgent` 展开赋值 / `mergeAgents` 逐字段覆盖 → 加新字段只改一处**不报错**，症状是「新建时选的 X 保存瞬间消失」或「改了内置条目重启后变回」。新增字段三处一起改 | §7.35.3 |
 | ⚠️ 诊断产物的清理 | 一律**浅删除**（`readdir`+`unlink`+`rmdir`），`fs.rm(recursive)` 会撞宿主批量删除守卫挂几十秒 | §7.29 第 9 条 |
