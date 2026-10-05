@@ -36,8 +36,10 @@ import type {
   NanobotCronRunRecord,
   NanobotMcpSnapshot,
   NanobotModelsSnapshot,
+  NanobotToolsSnapshot,
   PlatformAdapter,
   PlatformName,
+  ToolsSyncResult,
   SecretWriteResult,
   SkillOverrideSyncResult,
   TaskSyncResult,
@@ -170,6 +172,27 @@ export const platform: PlatformAdapter = {
       return window.electronAPI.nanobotGetModels();
     }
     return null;
+  },
+  /** 只读回读 `tools.file` 的写策略（FR-8.4 默认拒绝写入） */
+  getNanobotTools: async (): Promise<NanobotToolsSnapshot | null> => {
+    if (isElectron() && window.electronAPI) {
+      return window.electronAPI.nanobotGetTools();
+    }
+    return null;
+  },
+  /** 提交一次写策略变更：合并写入 config.json.tools.file 并按需重启 serve */
+  syncNanobotTools: async (mutationJson: string): Promise<ToolsSyncResult> => {
+    if (isElectron() && window.electronAPI) {
+      return window.electronAPI.nanobotSyncTools(mutationJson);
+    }
+    // Web 端无文件系统权限：降级为下载片段，由用户手动合并进 tools.file
+    await webWriteTextFile('nanowork.tools.json', mutationJson);
+    return {
+      ok: true,
+      changed: true,
+      message: '已下载工具策略片段，请手动合并进 nanobot config.json 的 tools.file 并重启网关',
+      needsRestart: true,
+    };
   },
   /** 提交一次模型变更：合并写入 config.json 并按需重启 serve */
   syncNanobotModels: async (mutationJson: string): Promise<ModelsSyncResult> => {

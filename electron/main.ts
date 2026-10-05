@@ -36,10 +36,13 @@ import type {
   NanobotModelPreset,
   NanobotModelsMutation,
   NanobotModelsSnapshot,
+  NanobotToolsMutation,
+  NanobotToolsSnapshot,
   ModelProbeRequest,
   ModelProbeResult,
   ModelsSyncResult,
   StorageInfo,
+  ToolsSyncResult,
 } from '../src/platform/types';
 // 运行时值（不是 type-only）：供应商目录同时被渲染层（下拉）与这里（连接测试的
 // 默认地址、自定义供应商名冲突检测）消费，必须共用一份，否则两处迟早漂移。
@@ -65,6 +68,14 @@ import {
   renameFallbackRef,
   serializeFallbacks,
 } from './modelFallbacksConfig';
+// —— FR-8.4 写入策略（tools.file.default_deny_write）——
+// 纯逻辑，不 import electron，可直接在 vitest 里跑
+import {
+  DEFAULT_DENY_WRITE,
+  fileToolsSignature,
+  mergeDefaultDenyWrite,
+  parseFileToolsPolicy,
+} from './toolsPolicyConfig';
 // —— 可观测性（FR-11.2 / FR-11.3）——
 // 三个模块都只依赖 `node:fs` / `node:zlib` / `src/observability/*` 的**纯**文件
 // （后者不 import `@/platform`），因此可以被 esbuild 直接打进 main.cjs。
@@ -2074,29 +2085,117 @@ async function syncNanobotModels(mutationJson: string): Promise<ModelsSyncResult
       return { ok: false, message: '未找到 nanowork config.json，无法同步模型配置' };
     }
     const changed = await mergeModelMutationIntoConfig(configPath, mutation);
-    if (!changed) {
-      return { ok: true, changed: false, message: '模型配置与 nanowork 一致，无需变更' };
-    }
-    // /v1/models 的预设目录在 serve 启动时构建 → 改 modelPresets 必须重启 serve
-    if (nanobotProcess) {
-      stopNanobot();
-      await waitForPortFree(nanobotServeHost, nanobotServePort ?? DEFAULT_GATEWAY_PORT, 5000);
-      await startNanobot();
-      if (nanobotProcess) {
-        return { ok: true, message: '模型配置已写入 config.json.modelPresets，serve 已重启生效' };
-      }
-      return { ok: false, message: '模型配置已写入，但 serve 重启失败，请检查 nanowork 日志' };
-    }
-    const portBusy = await isPortInUse(nanobotServeHost, nanobotServePort ?? DEFAULT_GATEWAY_PORT);
-    return {
-      ok: true,
-      message: portBusy
-        ? '模型配置已写入 config.json.modelPresets，serve 由外部进程托管，请重启该网关后生效'
-        : '模型配置已写入 config.json.modelPresets，请启动 nanowork 网关后生效',
-      needsRestart: true,
-    };
+    return await commitNanobotConfig(changed, '模型配置已写入 config.json.modelPresets');
   } catch (err) {
     return { ok: false, message: `模型同步失败：${String(err)}` };
+  }
+}
+
+/**
+ * 配置写盘之后的统一收尾：**幂等短路 → 重启 serve → 判定是否需要用户自己重启**。
+ *
+ * 抽出来是因为写策略（FR-8.4）要走同一条路：工具实例在 serve 启动时构建，
+ * 光写 config.json 不重启的话，开关会一直显示「已保存」而引擎行为纹丝不动。
+ *
+ * `doneMessage` 是「已经写进磁盘」的那句主文案，由调用方按自己动了哪一段给：
+ * 收尾只负责补上「serve 已重启 / 需你手动重启」这半句。
+ */
+async function commitNanobotConfig(
+  changed: boolean,
+  doneMessage: string,
+): Promise<ModelsSyncResult> {
+  if (!changed) return { ok: true, changed: false, message: '配置与 nanowork 侧已一致，无需变更' };
+  // /v1/models 的预设目录、工具实例都在 serve 启动时构建 → 改模型与改工具策略都得重启 serve
+  if (nanobotProcess) {
+    stopNanobot();
+    await waitForPortFree(nanobotServeHost, nanobotServePort ?? DEFAULT_GATEWAY_PORT, 5000);
+    await startNanobot();
+    if (nanobotProcess) {
+      return { ok: true, message: `${doneMessage}，serve 已重启生效` };
+    }
+    return { ok: false, message: `${doneMessage}，但 serve 重启失败，请检查 nanowork 日志` };
+  }
+  const portBusy = await isPortInUse(nanobotServeHost, nanobotServePort ?? DEFAULT_GATEWAY_PORT);
+  return {
+    ok: true,
+    message: portBusy
+      ? `${doneMessage}，serve 由外部进程托管，请重启该网关后生效`
+      : `${doneMessage}，请启动 nanowork 网关后生效`,
+    needsRestart: true,
+  };
+}
+
+/**
+ * 回读 `tools.file` 的写策略（`default_deny_write`，FR-8.4）。
+ *
+ * 段缺失 / 字段非法时返回一个 `supported: false` 的策略而不是抛错：这与模型分区
+ * 的口径一致——「配置里没有 tools.file 段」和「配置坏了」在界面上得是两句话，
+ * 前者只是说明引擎这版没带这个功能，后者才该让用户去修文件。
+ */
+async function getNanobotTools(): Promise<NanobotToolsSnapshot | null> {
+  const configPath = await resolveNanobotConfigPath();
+  if (!configPath || !existsSync(configPath)) return null;
+  try {
+    const raw = await fs.readFile(configPath, 'utf-8');
+    const data = JSON.parse(raw) as Record<string, unknown>;
+    const policy = parseFileToolsPolicy(data.tools);
+    return {
+      file: policy ?? { defaultDenyWrite: DEFAULT_DENY_WRITE, supported: false },
+    };
+  } catch (err) {
+    console.warn(`[nanobot] tools.file 回读失败：${String(err)}`);
+    return null;
+  }
+}
+
+/**
+ * 合并一次工具策略变更（目前只有「默认拒绝写入」一条指令）。
+ *
+ * 与 `mergeModelMutationIntoConfig` 同形（逐段合并 + 幂等比对），差别只在动的是
+ * `tools.file` 而不是 `modelPresets` / `agents.defaults`——**并且这两段必须分开走**：
+ * 模型段和工具段的幂等签名只比自己那几段，混在一起会让「顺手改了模型」被判成
+ * 「工具策略有变更」，白白重启一次 serve。
+ */
+async function mergeToolsMutationIntoConfig(
+  configPath: string,
+  mutation: NanobotToolsMutation,
+): Promise<boolean> {
+  const raw = existsSync(configPath) ? await fs.readFile(configPath, 'utf-8') : '{}';
+  const data = JSON.parse(raw) as Record<string, unknown>;
+
+  const before = fileToolsSignature(data);
+  const next = mergeDefaultDenyWrite(data, mutation.defaultDenyWrite);
+  if (!next.changed) return false;
+  if (fileToolsSignature(next.data) === before) return false;
+
+  const tmp = `${configPath}.${process.pid}.${Date.now()}.tmp`;
+  await fs.writeFile(tmp, JSON.stringify(next.data, null, 2), 'utf-8');
+  await fs.rename(tmp, configPath);
+  return true;
+}
+
+/** 同步一次工具策略变更：合并写入 config.json 的 tools.file 并按需重启 serve */
+async function syncNanobotTools(mutationJson: string): Promise<ToolsSyncResult> {
+  try {
+    if (nanobotStartupPromise) await nanobotStartupPromise;
+    const mutation = JSON.parse(mutationJson) as NanobotToolsMutation;
+    if (!mutation || mutation.op !== 'setDefaultDenyWrite') {
+      return { ok: false, message: '工具策略变更指令格式非法' };
+    }
+    if (typeof mutation.defaultDenyWrite !== 'boolean') {
+      return { ok: false, message: 'defaultDenyWrite 必须是布尔值' };
+    }
+    const configPath = await resolveNanobotConfigPath();
+    if (!configPath) {
+      return { ok: false, message: '未找到 nanowork config.json，无法同步工具策略' };
+    }
+    const changed = await mergeToolsMutationIntoConfig(configPath, mutation);
+    return await commitNanobotConfig(
+      changed,
+      `写入策略已写入 config.json.tools.file（默认${mutation.defaultDenyWrite ? '拒绝' : '允许'}写入）`,
+    );
+  } catch (err) {
+    return { ok: false, message: `工具策略同步失败：${String(err)}` };
   }
 }
 
@@ -3249,6 +3348,19 @@ ipcMain.handle('nanobot:getModels', async () => {
 // 模型变更同步：合并写入 config.json 并按需重启 serve
 ipcMain.handle('nanobot:syncModels', async (_e, mutationJson: string) =>
   syncNanobotModels(mutationJson),
+);
+// FR-8.4 写策略只读回读：tools.file.default_deny_write
+ipcMain.handle('nanobot:getTools', async () => {
+  try {
+    return await getNanobotTools();
+  } catch (err) {
+    console.warn(`[nanobot] tools.file 回读失败：${String(err)}`);
+    return null;
+  }
+});
+// FR-8.4 写策略变更：合并写入 config.json.tools.file 并按需重启 serve（工具实例在启动时构建）
+ipcMain.handle('nanobot:syncTools', async (_e, mutationJson: string) =>
+  syncNanobotTools(mutationJson),
 );
 // 供应商连接测试：主进程发请求（渲染层 fetch 会被 CORS 挡掉，且失败原因不可辨）
 ipcMain.handle('model:probe', async (_e, request: ModelProbeRequest) =>

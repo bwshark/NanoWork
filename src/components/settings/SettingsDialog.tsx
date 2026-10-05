@@ -12,6 +12,7 @@ import { MemorySection } from '@/components/settings/sections/MemorySection';
 import { ModelsSection } from '@/components/settings/sections/ModelsSection';
 import { PersonaSection } from '@/components/settings/sections/PersonaSection';
 import { PluginsSection } from '@/components/settings/sections/PluginsSection';
+import { SecuritySection } from '@/components/settings/sections/SecuritySection';
 import { ShortcutsSection } from '@/components/settings/sections/ShortcutsSection';
 import { UsageSection } from '@/components/settings/sections/UsageSection';
 import {
@@ -227,6 +228,8 @@ function SectionBody({ section }: { section: SettingsSectionId }) {
       return <AssistantSection />;
     case 'plugins':
       return <PluginsSection />;
+    case 'security':
+      return <SecuritySection />;
     case 'data':
       return <DataSection />;
     case 'usage':

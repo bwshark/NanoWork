@@ -7,4 +7,5 @@ export { useSkillsStore } from './skillsStore';
 export { useMcpStore } from './mcpStore';
 export { usePluginsStore } from './pluginsStore';
 export { useTasksStore } from './tasksStore';
+export { useToolsPolicyStore } from './toolsPolicyStore';
 export { useArtifactsStore } from './artifactsStore';

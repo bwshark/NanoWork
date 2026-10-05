@@ -44,6 +44,8 @@ const CONTENT_ANCHORS: Record<SettingsSectionId, string> = {
   models: '自定义模型',
   assistant: '配置 IM 频道',
   plugins: '引擎已激活',
+  // 「写入策略」是安全分区第一张卡片的标题；左侧菜单项只有「安全」两个字，不会误命中
+  security: '凭据目录（始终拒绝访问）',
   data: '数据落点',
   // 「近 30 天概览」是用量分区概览卡片的标题；左侧菜单项只有「用量」两个字，不会误命中
   usage: '近 30 天概览',

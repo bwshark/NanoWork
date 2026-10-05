@@ -7,7 +7,9 @@ import type {
   ModelProbeResult,
   ModelsSyncResult,
   NanobotModelsSnapshot,
+  NanobotToolsSnapshot,
   PlatformName,
+  ToolsSyncResult,
 } from '../src/platform/types';
 
 /**
@@ -88,6 +90,11 @@ const api: ElectronAPI = {
     ipcRenderer.invoke('nanobot:getModels'),
   nanobotSyncModels: (mutationJson: string): Promise<ModelsSyncResult> =>
     ipcRenderer.invoke('nanobot:syncModels', mutationJson),
+  // —— FR-8.4 写策略（config.json 的 tools.file）——
+  nanobotGetTools: (): Promise<NanobotToolsSnapshot | null> =>
+    ipcRenderer.invoke('nanobot:getTools'),
+  nanobotSyncTools: (mutationJson: string): Promise<ToolsSyncResult> =>
+    ipcRenderer.invoke('nanobot:syncTools', mutationJson),
   probeModel: (request: ModelProbeRequest): Promise<ModelProbeResult> =>
     ipcRenderer.invoke('model:probe', request),
   /** 凭据保险库：可用性 / key 名清单 / 写入 / 删除（**密钥值不回传**） */

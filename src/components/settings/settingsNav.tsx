@@ -6,6 +6,7 @@ import ExtensionIcon from '@mui/icons-material/Extension';
 import HubIcon from '@mui/icons-material/Hub';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import InsightsOutlinedIcon from '@mui/icons-material/InsightsOutlined';
+import ShieldOutlinedIcon from '@mui/icons-material/ShieldOutlined';
 import KeyboardAltOutlinedIcon from '@mui/icons-material/KeyboardAltOutlined';
 import PortraitOutlinedIcon from '@mui/icons-material/PortraitOutlined';
 import SmartToyOutlinedIcon from '@mui/icons-material/SmartToyOutlined';
@@ -74,6 +75,10 @@ export const SETTINGS_NAV: SettingsNavGroup[] = [
       // 是「数据管理」的前置身份，同属「数据与安全」一类。
       { id: 'account', label: '账户', icon: <CloudOutlinedIcon /> },
       { id: 'data', label: '数据管理', icon: <StorageIcon /> },
+      // 「安全」紧挨「数据管理」：两者回答的都是**边界**——一个说东西存在哪、
+      // 一个说助手能写到哪 / 哪些地方碰都不许碰。放在数据管理之前，是因为
+      // 「能写哪里」是「东西存在哪」的前置约束，读起来是「先定边界，再定落点」。
+      { id: 'security', label: '安全', icon: <ShieldOutlinedIcon /> },
       // 用量紧挨「数据管理」：两者看的都是**本机已发生的事实**（存了什么 / 跑了多少），
       // 与上面「功能」组那种「开了什么能力」不是一回事。
       { id: 'usage', label: '用量', icon: <InsightsOutlinedIcon /> },

@@ -17,6 +17,8 @@ export const SETTINGS_SECTION_IDS = [
   'models',
   'assistant',
   'plugins',
+  // 安全（FR-8.4）：引擎侧的写策略与凭据目录边界，夹在「插件」与「数据管理」之间。
+  'security',
   'data',
   // 用量（FR-11.1）：只读报表，回答「这台机器上跑了多少 token」。
   // 挂在「数据与安全」组里而不是「功能」组——它不是一项可以开关的能力，

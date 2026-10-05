@@ -339,6 +339,58 @@ export interface ModelsSyncResult {
   needsRestart?: boolean;
 }
 
+/**
+ * `tools.file` 段里的写策略（FR-8.4）。
+ *
+ * ⚠️ **只暴露这一个布尔是刻意的**，不是字段漏了：
+ *
+ * - `default_deny_write` 是**唯一的写策略开关**——引擎的其余 `tools.file` 字段
+ *   （`enable` / `safe_delete_report_path` / `safe_delete_bulk_threshold`）都是
+ *   删除留痕与回收站那套（FR-8.3），已由别的入口管理，塞进这张卡片只会让
+ *   「这个开关管什么」变得说不清；
+ * - 白名单本身（哪些路径可写）在引擎里是**按作用域**的 `WorkspaceScope.allowed_root`，
+ *   不是配置里的一张扁平表，界面列出来只能是编的；
+ * - 凭据目录 `no_access` 是**无条件**守卫（读+写、`full` 模式亦不可越过、
+ *   allow-list 无法覆盖），因此**只展示不开放修改**——放个开关等于暗示它能被关掉，
+ *   而它在引擎里根本没有「关」这个开关。
+ */
+export interface NanobotFileToolsPolicy {
+  /**
+   * `tools.file.default_deny_write`。
+   *
+   * True = **默认拒绝写入**：没有显式 `allowed_root` 的作用域（即 `full`
+   * 访问模式）一律拒绝写，而不是退化成「哪里都能写」。
+   */
+  defaultDenyWrite: boolean;
+  /** 引擎是否认这个字段（config.json 里 `tools.file` 段存在且能被解析） */
+  supported: boolean;
+}
+
+/**
+ * 引擎侧工具策略快照。
+ *
+ * `null` 有两个不同的成因，界面据此给不同提示（与 `NanobotModelsSnapshot` 同一口径）：
+ * 桌面端找不到 config.json / Web 端无文件系统权限。
+ */
+export interface NanobotToolsSnapshot {
+  file: NanobotFileToolsPolicy;
+}
+
+/** 工具策略的一次变更。命名跟随 `NanobotModelsMutation`，但只有一条指令 */
+export type NanobotToolsMutation = {
+  op: 'setDefaultDenyWrite';
+  defaultDenyWrite: boolean;
+};
+
+/** 工具策略同步结果（与 `ModelsSyncResult` 同形：写盘 + 按需重启 serve） */
+export interface ToolsSyncResult {
+  ok: boolean;
+  message: string;
+  changed?: boolean;
+  /** 已写入但 serve 由外部进程托管，需用户自行重启才生效 */
+  needsRestart?: boolean;
+}
+
 /** 供应商连接测试请求（主进程发起，携带 key，不经过渲染层的网络栈） */
 export interface ModelProbeRequest {
   /** 内置供应商的注册表名，或自定义供应商的 config key */
@@ -798,6 +850,23 @@ export interface PlatformAdapter {
    * - web：无文件系统权限，降级为下载配置片段。
    */
   syncNanobotModels(mutationJson: string): Promise<ModelsSyncResult>;
+  /**
+   * 只读回读 `tools.file` 的写策略（FR-8.4 默认拒绝写入）。
+   * - electron：主进程读取磁盘，段缺失返回 `supported:false` 的策略而不是 null；
+   * - web：无文件系统权限，返回 null。
+   */
+  getNanobotTools(): Promise<NanobotToolsSnapshot | null>;
+  /**
+   * 提交一次写策略变更：合并写入 `tools.file` 并按需重启 serve。
+   * - electron：主进程只合并那一个键（其余 `tools` 子段原样保留）；
+   * - web：无文件系统权限，降级为下载配置片段。
+   */
+  syncNanobotTools(mutationJson: string): Promise<ToolsSyncResult>;
+  /**
+   * 只读回读 nanobot config.json 的 `tools.file` 写策略（FR-8.4，默认拒绝写入）。
+   * - electron：主进程读取磁盘；
+   * - web：无文件系统权限，返回 null。
+   */
   /**
    * 供应商连接测试：真实请求 `GET {apiBase}/models` 验证 key 是否可用。
    *
@@ -1369,6 +1438,13 @@ export interface ElectronAPI {
   nanobotGetModels(): Promise<NanobotModelsSnapshot | null>;
   /** 提交一次模型变更（upsert / delete / setDefault），主进程落盘并按需重启 serve */
   nanobotSyncModels(mutationJson: string): Promise<ModelsSyncResult>;
+  /** 只读回读 config.json 的 `tools.file` 写策略（FR-8.4 默认拒绝写入） */
+  nanobotGetTools(): Promise<NanobotToolsSnapshot | null>;
+  /**
+   * 提交一次写策略变更（工具实例在 serve 启动时构建 → 必须重启才生效）。
+   * 与模型变更走同一条落盘 + 重启收尾路径。
+   */
+  nanobotSyncTools(mutationJson: string): Promise<ToolsSyncResult>;
   /** 供应商连接测试（主进程发起 GET {apiBase}/models） */
   probeModel(request: ModelProbeRequest): Promise<ModelProbeResult>;
   /** 凭据保险库可用性与落点 */

@@ -286,7 +286,7 @@
 | FR-8.1 | 敏感操作门控           | P0     | ✅  | both     | 副作用工具（写文件/执行命令/MCP 调用）执行**前**弹确认并记录决策；**收口在引擎**（挂起 + 裁决回传，见 11.1.1）。只读工具自动放行；超时未响应按拒绝（fail-closed）                                                                                                                                                                                                                                                                                            |
 | FR-8.2 | **工具调用网关（唯一收口）** | **P0** | ✅  | both     | 收口**落点在引擎**（`before_execute_tool` 否决通道 + `POST /v1/tool-approvals/{id}`，见 ADR-021）：所有副作用工具调用必经此裁决，绕过即缺陷。三档决策（`allow` / `sandbox` / `deny`）由纯函数 `decide_tier` 给出并逐条穷举单测；Agent 白名单校验（FR-2.2）、`sandbox` 档（FR-8.3）、决策审计（FR-8.9）均已接线                                                                                                                                                               |
 | FR-8.3 | **运行时硬兜底**       | **P0** | ✅  | both     | 删除类操作改道系统回收站而非真删；回收站失败时 **fail-closed**（报错而非降级为真删）；临时目录例外。**归属由 electron 修正为引擎**：删除发生在引擎进程内（`shell.py` 的 `rm` / `apply_patch` 的写入），Electron 主进程拦不住。落地：`security/trash.py`（回收站纯逻辑 + 批量阈值 + 留痕）+ `delete_file` 工具（唯一删除入口）+ `shell.py::_guard_command` 收口（裸 `rm`/`del`/`Remove-Item`/`unlink` 一律拦下并指回 `delete_file`，临时目录例外）。浏览器端因此**无需**降级——强制点在引擎，Web 与 Electron 同强度                            |
-| FR-8.4 | **默认拒绝写入策略**     | **P0** | 🟡 | both     | 白名单制：未在允许列表中的路径默认禁止写入；`.ssh` / `.gnupg` 等凭据目录为 `no_access`（连读也禁止）。**已落地（引擎侧）**：凭据 `no_access` 为**无条件**守卫（读+写、`full` 模式亦不可越过、allow-list 无法覆盖）；写默认拒绝以 `file.default_deny_write` 开关承载。**归属由 electron 修正为引擎**：客户端拦不住工具在引擎进程内的实际读写                                                                                                                                                                 |
+| FR-8.4 | **默认拒绝写入策略**     | **P0** | ✅ | both     | 白名单制：未在允许列表中的路径默认禁止写入；`.ssh` / `.gnupg` 等凭据目录为 `no_access`（连读也禁止）。**已落地（引擎侧）**：凭据 `no_access` 为**无条件**守卫（读+写、`full` 模式亦不可越过、allow-list 无法覆盖）；写默认拒绝以 `file.default_deny_write` 开关承载。**归属由 electron 修正为引擎**：客户端拦不住工具在引擎进程内的实际读写。**客户端补齐（2026-10-04）**：设置 →「安全」分区可读可写 `tools.file.default_deny_write`（开关 + 草稿保存 + 重启网关），并以**只读清单**展示 `no_access` 凭据名册；详见 §20.6                                                                                                                                                                 |
 | FR-8.5 | 沙箱执行             | P1     | 🟡 | electron | 执行类任务在受限上下文中运行：nanobot 已有 `tools/sandbox.py` 与 `security/`，需显式启用 + 目录白名单 + 子进程树强杀（对齐 WorkBuddy Job Object）                                                                                                                                                                                                                                                                                    |
 | FR-8.6 | 数据防泄漏            | P1     | ⬜  | both     | 检索前按权限过滤；提示词注入检测；记忆可彻底删除（不出租户边界）                                                                                                                                                                                                                                                                                                                                                              |
 | FR-8.7 | 敏感操作审批           | P2     | ⬜  | both     | 外发邮件/消息、删除文件、访问敏感目录、超额 API 调用 → 人审批后执行（V3）                                                                                                                                                                                                                                                                                                                                                    |
@@ -406,6 +406,8 @@
 > 三套 `tsc`、`vitest`（**42 文件 / 649 用例**）与 `npm run build` 全绿；引擎侧 `pytest` 相关用例全绿（另有 11 条**环境类**红：Windows symlink 权限 / 沙箱 DNS 解析 / httpx 重定向，与本次改动无交集）。
 >
 > **M2 续做（FR-8.4，引擎侧）**：凭据 `no_access`（读+写、`full` 模式不可越过）+ 写默认拒绝开关已落地，详见 11.2.1。
+>
+> **FR-8.4 客户端补齐（2026-10-04）——M2 里程碑闭合**：引擎是强制点，但开关不露出来等于无从管理。设置新增「安全」分区：一个开关读可写 `tools.file.defaultDenyWrite`（草稿 + 保存 + 重启网关），凭据 `no_access` 名册只读展示（不提供修改入口）。三条硬约束——**只合并 `tools.file` 那一个键**（整体替换会静默吞掉 `mcpServers` / `restrictToWorkspace` / `ssrfWhitelist`）、**幂等签名只比那个键**（否则别处改 MCP 会让这里一直报「已变更」）、**`supported:false`（引擎没这个落点）与 `null`（读不到）是两句话**。详见 §20.6。
 >
 > **M2 收尾（2026-09-16，全在引擎侧 + 客户端透传）——M2 里程碑闭合**：
 >
@@ -1456,7 +1458,29 @@ WorkBuddy 的结论值得完整借鉴：**在 Bash / Python / Node 三个运行�
 凭据文件 / 私钥文件名 / 符号链接逃逸 / allow-list 不可覆盖 / 误伤面回归 /  
 写默认拒绝 / 上游兼容）。
 
-**执行归属**：这些兜底必须在 **Electron 主进程**实现（渲染层无系统调用能力）。渲染层通过 `platform` 暴露的能力请求；Web 端降级为「禁用删除类工具 + 明确提示 `请使用桌面端`」，返回 `{ok:false, error}`。
+### 11.2.2 客户端补齐（FR-8.4，2026-10-04）★
+
+强制点在引擎，但**用户看不见引擎**——开关不露出来，等于「策略存在但无从管理」。  
+本节补的正是可视可管的那一半，不改变上面那条归属结论。
+
+| 面        | 落地形状                                                                                 |
+| -------- | ------------------------------------------------------------------------------------ |
+| 设置分区     | 新增「安全」（`security`），位于「模型 / 插件」与「数据」之间——边界是落点的前置约束          |
+| 写入策略     | `SettingsRow` 一个开关：`tools.file.default_denyWrite`（默认关闭）。草稿 + 保存 + 重启网关    |
+| 凭据名册     | `no_access` 三条规则的全部条目（8 个凭据目录 / 6 个 `~` 凭据文件 / 4 个私钥文件名）**只读**展示 |
+| 平台能力     | `getNanobotTools` / `syncNanobotTools`（桥：`nanobotGetTools` / `nanobotSyncTools`）      |
+
+三条界面口径（与上表的实现一一对应，改 UI 前必读）：
+
+1. **`supported: false` 与 `null` 是两句话，不能合并**。`supported:false` 指  
+   `config.json` 里**还没有 `tools.file` 段**——引擎能认这个键，只是没写；界面提示  
+   「保存时会自动补上这一个键，其余配置不受影响」。而桥返回 `null`（读不到配置 /  
+   Web 端 / 有异常）是**读不到、无从管理**，提示改成「当前环境读不到引擎配置」并禁用保存。  
+   前者给的是「会自动修好」，后者给的是「你得先解决」，混成一句会让人以为保存会炸。
+2. **凭据名册是引擎的名单常量**（`NO_ACCESS_DIR_NAMES` 等），不是配置项 → **不提供修改入口**。  
+   给一个白名单输入框等于暗示「这里可以放行 `~/.ssh`」，而提示词注入正是靠「用户已授权」的错觉成立。
+3. **不做白名单编辑器**。引擎的白名单是**按作用域**的 `WorkspaceScope.allowed_root`（随请求下发），  
+   不是配置里的扁平表；渲染一个文本框引擎不认（`extra=ignore` 静默丢），比不做更糟。
 
 **新增 platform 能力（需同时在 preload 与主进程落地）**：
 
@@ -3042,6 +3066,89 @@ traces/<pid>/<traceId>.json  全链路 trace
 - 真机 `tasks/verify-failover.mjs`：5 场景 39 项（含「还没点保存，桥一次都没被调用」与
   「落盘的链顺序就是屏幕上那个顺序」）。
 
+## 20.6 写入策略（FR-8.4）落地口径（2026-10-04）
+
+引擎侧（`default_deny_write` + 凭据 `no_access`）2026-09 就位，本轮补的是客户端。
+**强制点始终在引擎**——客户端拦不住工具在引擎进程内的实际读写，这一点决定了下面所有取舍。
+
+### 20.6.1 配置面：只合并 `tools.file` 那一个键
+
+`mergeDefaultDenyWrite(data, destWrite)` 的产出是「原根对象 + 只替换了 `tools.file` 一个键」：
+
+```
+tools: { cliApps, imageGeneration, mcpServers, restrictToWorkspace, ssrfWhitelist,
+         file: { enable, defaultDenyWrite } }        ← 只动 file 这一个子对象
+```
+
+**为什么不能整体替换 `tools`**：现存 `~/.nanobot/config.json` 的 `tools` 段挂着
+`mcpServers` / `restrictToWorkspace` / `ssrfWhitelist` 等一整套。整体替换一次写入就吞掉三个安全
+相关的键，而这种丢失**不会报错**——引擎 `Base` 是 `extra="ignore"`，少一个键只是安静地按默认值跑。
+单测里专门有一条用例钉住「必须保留 `mcpServers`」；做变异（换成整体替换）会被这条抓红。
+
+### 20.6.2 幂等签名只比那个键
+
+`fileToolsSignature(data)` 取的是 `tools.file.defaultDenyWrite` 的值，不是整份配置。
+若拿整份 `data` 比签名，用户在别的面板里改一次 MCP 配置就会被算成「写入策略待保存」——
+下次点保存弹「配置已变更」，再点又弹，用户只会关掉整个设置页。
+
+签名相同直接短路返回 `changed:false`，不写盘、不重启。
+
+### 20.6.3 camelCase 写、两种键都读
+
+引擎 `FileToolsConfig` 挂在 `Base`（`alias_generator=to_camel, populate_by_name=True`）下，
+**camel 与 snake 都收**。现存配置的 `tools` 段是 camelCase 写的，所以：
+
+- **写**一律 camel `defaultDenyWrite`（跟邻居键同形，不引入第二种写法）；
+- **读**两种键都认（先 `defaultDenyWrite` 后 `default_deny_write`）——否则手改过 snake 键的用户
+  会把「已开启」显示成「没开」。变异验证：去掉 snake 分支，2 条例子转红。
+
+`parseFileToolsPolicy` 要区分三类，不能塌成一类：
+
+| 情形                        | 结果                                                |
+| ------------------------- | ------------------------------------------------- |
+| `tools.file` 段不存在         | `{ defaultDenyWrite: false, supported: true }`（引擎默认值 + 引擎认这个字段） |
+| 段在，两个键都不在               | 同上（这也是「引擎默认值」）                                    |
+| 键在、值不是布尔                | `null`（配置非法，当作读不到处理）                                |
+| 段在 / 键在，且值合法            | 按 camel ?? snake 取值，`supported: true`               |
+
+### 20.6.4 `supported: false` 与 `null` 是两句话
+
+- `supported:false` = `config.json` 里**没有 `tools.file` 段**。引擎认这个键，只是没写。
+  界面提示「保存时会自动补上这一个键，其余配置不受影响」，保存按钮**可用**。
+- `null` = 桥返回空（读不到配置、Web 端、读盘抛异常）。是**读不到**，不是「引擎不支持」。
+  界面提示「当前环境读不到引擎配置，无法管理写入策略」，保存按钮禁用。
+
+合并成一句（比如都显示「不可用」）会让人误以为保存会炸配置，反而不敢点。
+
+### 20.6.5 草稿 + 保存 + 重启
+
+开关改动**先攒草稿**，点「保存」才走 IPC。原因是每次写入都要重启 `serve`（工具实例在启动时构建），
+逐次落盘等于每拨一下开关闪一次网关。放弃修改即丢弃草稿；**保存失败保留草稿**（`toast.error` 但不清空
+用户的编辑——丢掉编辑比保存失败更糟）。
+
+保存成功后**回读**一次（以盘为准，不信本地乐观值）；写失败直接把开关打到 `false` 并**不**回读。
+
+### 20.6.6 明确未做
+
+- **不做白名单编辑器**：引擎白名单是按作用域的 `WorkspaceScope.allowed_root`（随请求下发），
+  不是配置里的扁平表，文本框渲染出来引擎不认（`extra=ignore` 静默丢）。
+- **凭据清单不提供修改入口**：`NO_ACCESS_DIR_NAMES` / `NO_ACCESS_HOME_FILE_NAMES` /
+  `NO_ACCESS_FILE_NAMES` 是引擎名单常量。给入口 = 暗示能放行 `~/.ssh`，而提示词注入正靠
+  「用户已授权」的错觉成立。界面上逐条列出、注明来源，收尾写明「只展示、不提供修改入口」。
+- **不改默认值到 `True`**：11.2.1 的「待定（需产品决策）」仍未决——改默认会静默改变
+  `full` 模式行为，界面里这个开关默认关着，由用户决定。
+- **Web 端只展示清单、不给开关**：`syncNanobotTools` 走 `webWriteTextFile('nanowork.tools.json', …)`
+  的降级路径只作为能力存在，UI 上不需要为它造一套假设置。
+
+### 20.6.7 门禁与验收
+
+- 纯逻辑 `tests/electron/toolsPolicyConfig.test.ts` 12 例：保留 `mcpServers` 等（整体替换会被抓）、
+  幂等签名只看 `tools.file`、camel+snake 双认、`null` 的两个分支。
+- store `tests/toolsPolicyStore.test.ts` 8 例：桥拒绝不装作成功、写入成功以盘为准回读、并发复用同一次回读。
+- 界面锚点 `tests/settingsDialogSections.test.tsx` 补 `security` 的内容锚点。
+- 真机 `tasks/verify-security.mjs`：5 场景（展示与清单逐条 / 草稿+放弃 / 保存往返 / 桥拒绝保留草稿 /
+  两种「不可用」两句话），`tasks/security.png`。
+
 # 第 21 章 接口清单
 
 ## 21.1 引擎接口（nanobot，现状）
@@ -3076,6 +3183,8 @@ window.electronAPI = {
   readSessionMeta / writeSessionMeta / listSessionMetas,
   readSessionIndex / rebuildSessionIndex,
   putFileBackup / getFileBackup,
+  // 已落地（FR-8.4，2026-10-04）：读引擎 tools.file 策略 / 写 defaultDenyWrite（含重启）
+  nanobotGetTools / nanobotSyncTools,
   // 目标态（第 11、17、20 章，未落地）
   safeDelete, createSnapshot, rollbackTo, readUsageStats,
 }
