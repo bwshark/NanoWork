@@ -111,6 +111,20 @@ interface SessionUiState {
   /** 切换面板列表口径（产物 / 变更） */
   setArtifactPanelView: (view: ArtifactPanelView) => void;
 
+  /**
+   * 侧栏「助理」Tab 的渠道筛选：`null` = 全部渠道，否则是渠道**分组键**
+   * （`channelGroupKey` 的原始首段，如 `weixin` / `feishu` / 未知渠道的自身名）。
+   *
+   * 放在 store 而不是 ChannelSessionList 的组件 state：Tab 切换是条件渲染
+   * （`tab === 'tasks' ? <SessionList/> : <ChannelSessionList/>`），切走再回来
+   * 组件会重挂载，组件内的筛选会被重置成「全部」——用户每切一次就要重选一遍。
+   *
+   * 存的是**分组键**而不是展示名：展示名会随后端渠道表变（`channelLabel` 的入参是
+   * 原始名），拿展示名当键会在改名后静默筛空。
+   */
+  channelFilter: string | null;
+  setChannelFilter: (key: string | null) => void;
+
   /** 会话内搜索条：展开时记录目标会话 id，null 表示收起 */
   searchSessionId: string | null;
   openSearch: (sessionId: string) => void;
@@ -287,6 +301,9 @@ export const useSessionUiStore = create<SessionUiState>()((set, get) => ({
   setArtifactPanelFullscreen: (fullscreen) => set({ artifactPanelFullscreen: fullscreen }),
 
   setArtifactPanelView: (view) => set({ artifactPanelView: view }),
+
+  channelFilter: null,
+  setChannelFilter: (key) => set({ channelFilter: key }),
 
   searchSessionId: null,
   openSearch: (sessionId) =>

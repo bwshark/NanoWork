@@ -137,4 +137,14 @@ describe('describeDelivery：任务卡片上的摘要', () => {
     };
     expect(describeDelivery(delivery)).toBe('推送：企业微信、飞书（2 个会话）· 仅失败时');
   });
+
+  it('start 档位读作「开始与结束时」，不能简写成「开始时」', () => {
+    // 「开始时」会被读成「只推开始、不推结果」，而 start 是**包含** complete 的
+    // （引擎侧 `_deliver_started` + `_deliver_result` 各推一条）
+    const delivery: TaskDelivery = {
+      targets: [{ channel: 'wecom', chatId: 'c1' }],
+      on: 'start',
+    };
+    expect(describeDelivery(delivery)).toBe('推送：企业微信（1 个会话）· 开始与结束时');
+  });
 });

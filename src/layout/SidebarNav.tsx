@@ -4,6 +4,7 @@ import { useNavigate, useLocation } from "react-router-dom";
 import {
   Box,
   Button,
+  Chip,
   CircularProgress,
   Collapse,
   Dialog,
@@ -48,6 +49,11 @@ import {
   UNBOUND_AGENT_LABEL,
 } from "@/lib/constants";
 import { channelLabel } from "@/lib/channelLabel";
+import {
+  CHANNEL_SESSION_ID_PREFIX,
+  channelGroupKey,
+  channelIconKind,
+} from "@/lib/channelSession";
 import { conversationCount, hasConversation } from "@/lib/conversation";
 import { CRON_SESSION_ID_PREFIX } from "@/lib/sessionImport";
 import { filterTasks, isFilterDefault } from "@/lib/taskQuery";
@@ -58,6 +64,7 @@ import {
 } from "@/lib/workspaceLabel";
 import { useSessionsStore } from "@/stores/sessionsStore";
 import { useChannelSessionsStore } from "@/stores/channelSessionsStore";
+import { useSessionUiStore } from "@/stores/sessionUiStore";
 import { useAgentsStore } from "@/stores/agentsStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useDefaultWorkspacePath } from "@/stores/storageInfoStore";
@@ -71,7 +78,7 @@ import { SessionQuickActions } from "@/components/session/SessionQuickActions";
 import { platform } from "@/platform";
 import { toast } from "@/components/Toast";
 import type { NanobotChannelSessionSummary } from "@/platform/types";
-import type { ChannelKind, Session, TaskConfig } from "@/types";
+import type { Session, TaskConfig } from "@/types";
 
 /** 侧边栏行的最小形态：只要有图标和标题就能渲染 */
 interface NavLinkItem {
@@ -543,19 +550,6 @@ function TasksChannelsTabs() {
   );
 }
 
-/** 会话来源渠道字符串 → ChannelKind（兼容 `feishu.feishu` 前缀变体，未知回退 dingtalk 图标） */
-const CHANNEL_KINDS: ChannelKind[] = [
-  "dingtalk",
-  "feishu",
-  "lark",
-  "weixin",
-  "wecom",
-];
-function toChannelKind(channel?: string): ChannelKind {
-  const head = (channel ?? "").split(".")[0];
-  return CHANNEL_KINDS.find((k) => k === head) ?? "dingtalk";
-}
-
 /**
  * 频道列表：数据源为 nanobot 磁盘上的 IM 频道会话（gateway 实时写入）。
  * 按机器人（渠道）分组展示，组内会话按更新时间倒序；
@@ -565,23 +559,31 @@ function ChannelSessionList() {
   const summaries = useChannelSessionsStore((s) => s.summaries);
   const activeId = useSessionsStore((s) => s.activeId);
   const openSession = useChannelSessionsStore((s) => s.openSession);
+  // 筛选态在 store：Tab 切换是条件渲染，本组件会重挂载，组件内 state 会被重置
+  const filter = useSessionUiStore((s) => s.channelFilter);
+  const setFilter = useSessionUiStore((s) => s.setChannelFilter);
   const navigate = useNavigate();
 
   /** 当前悬停的频道会话行：右侧快捷入口层随之淡入 */
   const [hoverKey, setHoverKey] = useState<string | null>(null);
 
-  /** 按渠道分组：组按最近活跃排序，组内会话按更新时间倒序 */
+  /**
+   * 按渠道分组：组按最近活跃排序，组内会话按更新时间倒序。
+   *
+   * ⚠️ 分组键是**渠道原始首段**（`channelGroupKey`）而不是 `ChannelKind`：
+   * 后者只有 5 个成员，未知渠道会被图标回退规则悄悄并进「钉钉」组。
+   */
   const groups = useMemo(() => {
-    const map = new Map<ChannelKind, NanobotChannelSessionSummary[]>();
+    const map = new Map<string, NanobotChannelSessionSummary[]>();
     for (const item of summaries) {
-      const kind = toChannelKind(item.channel);
-      const list = map.get(kind);
+      const key = channelGroupKey(item.channel);
+      const list = map.get(key);
       if (list) list.push(item);
-      else map.set(kind, [item]);
+      else map.set(key, [item]);
     }
     return Array.from(map.entries())
-      .map(([kind, list]) => ({
-        kind,
+      .map(([key, list]) => ({
+        key,
         list: [...list].sort(
           (a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt),
         ),
@@ -591,6 +593,12 @@ function ChannelSessionList() {
           Date.parse(b.list[0].updatedAt) - Date.parse(a.list[0].updatedAt),
       );
   }, [summaries]);
+
+  /** 应用渠道筛选；`全部`（filter === null）时即 groups 本身 */
+  const visible = useMemo(
+    () => (filter === null ? groups : groups.filter((g) => g.key === filter)),
+    [groups, filter],
+  );
 
   if (summaries.length === 0) {
     return (
@@ -610,100 +618,180 @@ function ChannelSessionList() {
   }
 
   return (
-    <Box sx={{ flex: 1, overflowY: "auto" }}>
-      {groups.map((g) => (
-        <Box key={g.kind} sx={{ mb: 0.5 }}>
-          {/* 机器人分组头 */}
-          <Box
-            sx={{
-              display: "flex",
-              alignItems: "center",
-              gap: 1,
-              px: 2,
-              py: 0.75,
-            }}
-          >
-            <ChannelIcon kind={g.kind} />
+    <Box
+      sx={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}
+    >
+      {/* 渠道筛选：只有一个渠道时不出现——没有可筛的东西，白占一行高度 */}
+      {groups.length > 1 && (
+        <Box
+          sx={{
+            display: "flex",
+            gap: 0.5,
+            px: 2,
+            pt: 1,
+            pb: 0.5,
+            flexShrink: 0,
+            overflowX: "auto",
+            // 渠道多到横向溢出时不要撑高这一行（滚动条高度会顶到列表）
+            "&::-webkit-scrollbar": { height: 0 },
+          }}
+        >
+          <ChannelFilterChip
+            label="全部"
+            selected={filter === null}
+            onClick={() => setFilter(null)}
+          />
+          {groups.map((g) => (
+            <ChannelFilterChip
+              key={g.key}
+              label={channelLabel(g.key)}
+              selected={filter === g.key}
+              onClick={() => setFilter(g.key)}
+            />
+          ))}
+        </Box>
+      )}
+
+      <Box sx={{ flex: 1, overflowY: "auto" }}>
+        {/* 选中的渠道在后续刷新里消失了（会话被清空 / 渠道改名）：给一句人话
+            和一条退路，而不是一片空白 */}
+        {visible.length === 0 && (
+          <Box sx={{ px: 3, py: 5, textAlign: "center" }}>
             <Typography
-              sx={{ fontSize: 12.5, fontWeight: 600, color: "text.secondary" }}
+              sx={{ fontSize: 12.5, color: "text.secondary", mb: 1 }}
             >
-              {channelLabel(g.kind)}
+              该渠道下暂无会话。
             </Typography>
-            <Typography
-              sx={{ fontSize: 11, color: "text.secondary", opacity: 0.7 }}
-            >
-              {g.list.length}
-            </Typography>
+            <Button size="small" onClick={() => setFilter(null)}>
+              查看全部
+            </Button>
           </Box>
-          {/* 组内会话 */}
-          {g.list.map((item) => {
-            const sessionId = `nb:${item.key}`;
-            const hovered = hoverKey === item.key;
-            return (
+        )}
+        {visible.map((g) => (
+          <Box key={g.key} sx={{ mb: 0.5 }}>
+            {/* 机器人分组头 */}
+            <Box
+              sx={{
+                display: "flex",
+                alignItems: "center",
+                gap: 1,
+                px: 2,
+                py: 0.75,
+              }}
+            >
+              <ChannelIcon kind={channelIconKind(g.key)} />
+              <Typography
+                sx={{ fontSize: 12.5, fontWeight: 600, color: "text.secondary" }}
+              >
+                {channelLabel(g.key)}
+              </Typography>
+              <Typography
+                sx={{ fontSize: 11, color: "text.secondary", opacity: 0.7 }}
+              >
+                {g.list.length}
+              </Typography>
+            </Box>
+            {/* 组内会话 */}
+            {g.list.map((item) => {
+              const sessionId = CHANNEL_SESSION_ID_PREFIX + item.key;
+              const hovered = hoverKey === item.key;
+              return (
               <Box
                 key={item.key}
+                data-testid="channel-session-row"
+                data-channel={channelGroupKey(item.channel)}
                 onClick={() => {
                   void openSession(item);
                   navigate(ROUTES.chat);
                 }}
-                onMouseEnter={() => setHoverKey(item.key)}
-                onMouseLeave={() =>
-                  setHoverKey((v) => (v === item.key ? null : v))
-                }
-                sx={{
-                  pl: 3,
-                  pr: 2,
-                  py: 0.875,
-                  cursor: "pointer",
-                  bgcolor:
-                    activeId === sessionId ? "action.selected" : "transparent",
-                  "&:hover": { bgcolor: "action.hover" },
-                }}
-              >
-                {/* 标题行：右侧快捷入口（搜索 / 历史提问 / 产物面板）随悬停淡入 */}
-                <Box
+                  onMouseEnter={() => setHoverKey(item.key)}
+                  onMouseLeave={() =>
+                    setHoverKey((v) => (v === item.key ? null : v))
+                  }
                   sx={{
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "space-between",
-                    gap: 0.5,
+                    pl: 3,
+                    pr: 2,
+                    py: 0.875,
+                    cursor: "pointer",
+                    bgcolor:
+                      activeId === sessionId ? "action.selected" : "transparent",
+                    "&:hover": { bgcolor: "action.hover" },
                   }}
                 >
-                  <Typography
-                    noWrap
-                    sx={{ fontSize: 13, fontWeight: 500, flex: 1, minWidth: 0 }}
-                  >
-                    {item.title}
-                  </Typography>
+                  {/* 标题行：右侧快捷入口（搜索 / 历史提问 / 产物面板）随悬停淡入 */}
                   <Box
                     sx={{
                       display: "flex",
                       alignItems: "center",
-                      gap: 0.25,
-                      flexShrink: 0,
-                      opacity: hovered ? 1 : 0,
-                      pointerEvents: hovered ? "auto" : "none",
-                      transition: "opacity 120ms ease",
+                      justifyContent: "space-between",
+                      gap: 0.5,
                     }}
                   >
-                    <SessionQuickActions
-                      sessionId={sessionId}
-                      ensureLoaded={() => openSession(item)}
-                    />
+                    <Typography
+                      noWrap
+                      sx={{ fontSize: 13, fontWeight: 500, flex: 1, minWidth: 0 }}
+                    >
+                      {item.title}
+                    </Typography>
+                    <Box
+                      sx={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 0.25,
+                        flexShrink: 0,
+                        opacity: hovered ? 1 : 0,
+                        pointerEvents: hovered ? "auto" : "none",
+                        transition: "opacity 120ms ease",
+                      }}
+                    >
+                      <SessionQuickActions
+                        sessionId={sessionId}
+                        ensureLoaded={() => openSession(item)}
+                      />
+                    </Box>
                   </Box>
+                  <Typography
+                    noWrap
+                    sx={{ fontSize: 11, color: "text.secondary" }}
+                  >
+                    {item.preview || `${item.messageCount} 条消息`}
+                  </Typography>
                 </Box>
-                <Typography
-                  noWrap
-                  sx={{ fontSize: 11, color: "text.secondary" }}
-                >
-                  {item.preview || `${item.messageCount} 条消息`}
-                </Typography>
-              </Box>
-            );
-          })}
-        </Box>
-      ))}
+              );
+            })}
+          </Box>
+        ))}
+      </Box>
     </Box>
+  );
+}
+
+/** 渠道筛选 chip：选中实心、未选描边（不靠颜色语义区分，避免与主题色冲突） */
+function ChannelFilterChip({
+  label,
+  selected,
+  onClick,
+}: {
+  label: string;
+  selected: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <Chip
+      size="small"
+      label={label}
+      variant={selected ? "filled" : "outlined"}
+      color={selected ? "primary" : "default"}
+      data-testid="channel-filter-chip"
+      data-selected={selected ? "true" : "false"}
+      onClick={onClick}
+      sx={{
+        flexShrink: 0,
+        height: 24,
+        fontSize: 12,
+        "& .MuiChip-label": { px: 1 },
+      }}
+    />
   );
 }
 

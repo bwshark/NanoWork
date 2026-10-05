@@ -1,12 +1,14 @@
 import { create } from 'zustand';
 import { platform } from '@/platform';
 import { mapRecordsToMessages, toIso } from '@/lib/sessionImport';
+import {
+  CHANNEL_SESSION_ID_PREFIX,
+  channelSessionKey,
+  isExternalSession,
+} from '@/lib/channelSession';
 import { useSessionsStore } from './sessionsStore';
 import type { NanobotChannelSessionDetail, NanobotChannelSessionSummary } from '@/platform/types';
 import type { Session } from '@/types';
-
-/** 频道会话在本地 sessionsStore 中的 id 前缀（`nb:` + nanobot session key） */
-const CHANNEL_SESSION_ID_PREFIX = 'nb:';
 
 /** 轮询间隔（毫秒）：IM 新消息以秒级延迟出现在智能体侧 */
 const POLL_INTERVAL_MS = 4000;
@@ -72,8 +74,9 @@ export const useChannelSessionsStore = create<ChannelSessionsState>()((set, get)
   refreshActiveIfChanged: async (summaries: NanobotChannelSessionSummary[]) => {
     const { activeId, sessions } = useSessionsStore.getState();
     const active = sessions.find((s) => s.id === activeId);
-    if (!active?.channel || !active.id.startsWith(CHANNEL_SESSION_ID_PREFIX)) return;
-    const key = active.id.slice(CHANNEL_SESSION_ID_PREFIX.length);
+    if (!isExternalSession(active) || !active) return;
+    const key = channelSessionKey(active.id);
+    if (!key) return;
     const summary = summaries.find((s) => s.key === key);
     if (!summary) return;
     if (seenUpdatedAt.get(key) === summary.updatedAt) return;

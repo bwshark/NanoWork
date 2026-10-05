@@ -80,18 +80,26 @@ export interface TaskDeliveryTarget {
  * 就把任务判成「未绑定会话」并禁用（见 `nanobot/nanobot/cron/session_turns.py`
  * 的 `is_bound_cron_job`）。本配置走引擎新增的 `payload.delivery`（`[LOCAL PATCH]`）。
  */
+/**
+ * 推送时机。三档是**包含**关系而不是并列：
+ * - `complete`：每次执行结束都推（成功推结果、失败推失败原因）
+ * - `error`：仅失败时推（比 `complete` 更窄的过滤）
+ * - `start`：在结果之外**多推一条**「已开始执行」，因此它包含 `complete`
+ *
+ * ⚠️ 「只告诉我开始了」不是一个有用的档位——用户永远不会知道结果。所以 `start`
+ * 是包住 `complete` 的：它只会让人**多收一条**，不会让人少收结果。
+ *
+ * ⚠️ PRD §15.2 目标模型里的 `milestone`（每个关键节点）**未实现**：绑定的定时任务
+ * 就是一轮 agent turn，「轮内」没有一个既对用户有意义、又能被引擎观察到、又不会把
+ * 聊天变成日志流的节点。这里刻意**不收**该取值——声明一个不生效的档位，只会让用户
+ * 以为选了就会生效。
+ */
+export type TaskDeliveryOn = 'complete' | 'error' | 'start';
+
 export interface TaskDelivery {
   targets: TaskDeliveryTarget[];
-  /**
-   * 推送时机。
-   * - `complete`：每次执行结束都推（成功推结果、失败推失败原因）
-   * - `error`：仅失败时推
-   *
-   * ⚠️ PRD §15.2 目标模型里的 `milestone`（每个关键节点）**未实现**：它需要在
-   * 引擎侧订阅进度事件，而第一期只挂在「执行结束」这一个点上。这里刻意**不收**
-   * 该取值——声明一个不生效的档位，只会让用户以为选了就会生效。
-   */
-  on: 'complete' | 'error';
+  /** 推送时机，语义见 `TaskDeliveryOn` 的说明 */
+  on: TaskDeliveryOn;
 }
 
 /** 自动化任务配置 */

@@ -28,7 +28,7 @@ import { hasConversation } from "@/lib/conversation";
 import { platform } from "@/platform";
 import { useSessionsStore } from "@/stores/sessionsStore";
 import { useChannelSessionsStore } from "@/stores/channelSessionsStore";
-import type { ChannelKind } from "@/types";
+import { channelIconKind } from "@/lib/channelSession";
 
 /**
  * 会话页。
@@ -487,19 +487,6 @@ function PromptTagButton({
   );
 }
 
-/** 渠道字符串 → ChannelKind(兼容 `feishu.feishu` 前缀变体) */
-function toChannelKind(channel: string): ChannelKind {
-  const head = channel.split(".")[0];
-  const kinds: ChannelKind[] = [
-    "dingtalk",
-    "feishu",
-    "lark",
-    "weixin",
-    "wecom",
-  ];
-  return kinds.find((k) => k === head) ?? "dingtalk";
-}
-
 /**
  * 频道会话发送栏:智能体侧主动向 IM 用户发消息。
  * 经 gateway `/v1/send` 出站投递,gateway 同时把消息镜像进会话历史,
@@ -557,7 +544,7 @@ function ChannelComposer({
         gap: 1,
       }}
     >
-      <ChannelIcon kind={toChannelKind(channel)} />
+      <ChannelIcon kind={channelIconKind(channel)} />
       <InputBase
         multiline
         maxRows={6}

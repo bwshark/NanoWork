@@ -10,7 +10,7 @@
 
 import { channelLabel } from '@/lib/channelLabel';
 import type { NanobotChannelSessionSummary } from '@/platform/types';
-import type { TaskDelivery, TaskDeliveryTarget } from '@/types';
+import type { TaskDelivery, TaskDeliveryOn, TaskDeliveryTarget } from '@/types';
 
 /**
  * 统一会话模式下所有渠道共用 `unified:default` 这一个键
@@ -61,6 +61,20 @@ export function deliveryOptionLabel(
 }
 
 /**
+ * 推送时机 → 摘要文案。
+ *
+ * 写成映射表而不是嵌套三元：档位再增一个时，漏写会**编译报错**（缺键），
+ * 而嵌套三元漏写只会静默落到最后一个分支——用户看到的是「每次执行后」，
+ * 与他实际选的档位不符。
+ */
+const DELIVERY_WHEN_LABEL: Record<TaskDeliveryOn, string> = {
+  complete: '每次执行后',
+  error: '仅失败时',
+  // 「开始 + 结果」：不能简写成「开始时」，那会读成「只推开始、不推结果」
+  start: '开始与结束时',
+};
+
+/**
  * 任务卡片上的推送摘要；没有配置时返回 null（调用方据此整行不渲染）。
  *
  * 只按**渠道**归并显示，不逐条列会话：卡片那一行是给人扫一眼的，
@@ -69,6 +83,5 @@ export function deliveryOptionLabel(
 export function describeDelivery(delivery?: TaskDelivery): string | null {
   if (!delivery || delivery.targets.length === 0) return null;
   const channels = [...new Set(delivery.targets.map((t) => channelLabel(t.channel)))];
-  const when = delivery.on === 'error' ? '仅失败时' : '每次执行后';
-  return `推送：${channels.join('、')}（${delivery.targets.length} 个会话）· ${when}`;
+  return `推送：${channels.join('、')}（${delivery.targets.length} 个会话）· ${DELIVERY_WHEN_LABEL[delivery.on]}`;
 }

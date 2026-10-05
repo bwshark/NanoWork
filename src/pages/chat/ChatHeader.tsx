@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   Box,
+  Chip,
   IconButton,
   InputBase,
   Tooltip,
@@ -10,8 +11,15 @@ import EditIcon from "@mui/icons-material/Edit";
 import { useSessionsStore } from "@/stores/sessionsStore";
 import { useSessionUiStore } from "@/stores/sessionUiStore";
 import { MemoryBar } from "@/components/MemoryBar";
+import { ChannelIcon } from "@/components/im/ChannelIcon";
 import { SessionQuickActions } from "@/components/session/SessionQuickActions";
 import { ChatSearchBar } from "@/components/chat/ChatSearchBar";
+import {
+  channelIconKind,
+  externalSourceHint,
+  externalSourceLabel,
+  isExternalSession,
+} from "@/lib/channelSession";
 
 /** 会话头部：当前任务名称（可编辑）/ 模型 / 记忆提示 / 消息数 / 会话快捷入口 */
 export function ChatHeader() {
@@ -26,6 +34,15 @@ export function ChatHeader() {
   const session = sessions.find((s) => s.id === activeId);
   const showMemoryBar = memoryLoaded.injected && !memoryLoaded.dismissed;
   const searchOpen = searchSessionId !== null && searchSessionId === activeId;
+  /**
+   * IM 频道会话（外部来源）。
+   *
+   * 标题**不做行内编辑**：它来自网关侧的会话记录，本地改名只改这一份镜像，
+   * 下一次轮询（`channelSessionsStore.refreshActiveIfChanged`）就把标题盖回去——
+   * 用户会看到「改了又自己变回去」。同样的理由，头部要显示来源标记，
+   * 否则用户无从知道这条会话是「别人在微信里跟机器人聊的」还是「本机新建的」。
+   */
+  const external = isExternalSession(session);
 
   return (
     <Box
@@ -39,11 +56,36 @@ export function ChatHeader() {
         gap: 1,
       }}
     >
-      {session && (
-        <EditableSessionTitle
-          title={session.title}
-          onRename={(title) => renameSession(session.id, title)}
-        />
+      {session &&
+        (external ? (
+          <Tooltip title={session.title}>
+            <Typography fontWeight={600} noWrap sx={{ maxWidth: 360 }}>
+              {session.title}
+            </Typography>
+          </Tooltip>
+        ) : (
+          <EditableSessionTitle
+            title={session.title}
+            onRename={(title) => renameSession(session.id, title)}
+          />
+        ))}
+      {external && session?.channel && (
+        <Tooltip title={externalSourceHint(session.channel)}>
+          <Chip
+            size="small"
+            variant="outlined"
+            data-testid="external-source-badge"
+            icon={<ChannelIcon kind={channelIconKind(session.channel)} />}
+            label={externalSourceLabel(session.channel)}
+            sx={{
+              height: 22,
+              fontSize: 11.5,
+              flexShrink: 0,
+              "& .MuiChip-label": { px: 1 },
+              "& .MuiChip-icon": { fontSize: 14, ml: 0.75, mr: -0.5 },
+            }}
+          />
+        </Tooltip>
       )}
       <Box sx={{ flex: 1 }} />
       {showMemoryBar && (

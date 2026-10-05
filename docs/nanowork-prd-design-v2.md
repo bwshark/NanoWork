@@ -253,7 +253,7 @@
 | FR-5.3 | 执行留痕              | P0     | ✅  | both     | `TaskRunRecord` 已有；**2026-10-03 补齐三处缺口**：① 成功率统计（`src/lib/taskRunStats.ts` 的 `summarizeRuns`/`summarizeRunsByTask`，运行记录页统计条 + 每条任务卡片上的成功率）；② **失败原因分类**（7 类 + `unknown`，判据取自引擎与客户端**真实会写入的文案**，见该文件头）；③ 运行详情（既有「展开看触发方式/耗时/原文 + 只读执行会话视图」即详情形态，**未单开独立页面**）。所有指标**从 `runs` 派生，不新增存储字段** |
 | FR-5.4 | **RFC 5545 循环规则** | **P1** | ✅  | both     | 支持 `RRULE`（如「每月 1、15、28 日 09:00」）、`valid_from` / `valid_until` 有效期窗口（对齐 WorkBuddy `automations` 表语义）。**2026-10-03 已落**：`TaskSchedule` 加 `rrule` 形态、`TaskConfig` 加 `validFrom`/`validUntil`、降级纯函数 `src/lib/rrule.ts`（含**明确拒绝**不可降级的规则）、同步链路 `computeNextRunMs` 按窗口算 `nextRunAtMs`、表单加「循环规则」档 + **降级结果实时回显**。**未做**：结果回推（FR-5.6）仍缺 **已落地（2026-10-03）**：`TaskSchedule.rule = { kind: 'rrule'; rrule; tz? }`、`TaskConfig.validFrom / validUntil`、降级纯函数 `src/lib/rrule.ts`（能降的降成单条 cron，不能降的**明确拒绝并给出人话原因**）、表单「循环规则」档 + 降级结果实时回显。当时唯一未做的是结果回推，已随 FR-5.6 落地 |
 | FR-5.5 | 自然语言建任务           | P0     | ✅  | both     | 对话内 hover → 创建定时任务（已实现）。**2026-10-03 补完语义推荐调度**：新建任务时从消息正文推断执行频率（`src/lib/scheduleFromText.ts`：「每周一早上9点」→ `0 9 * * 1`、「每个工作日18:00」→ `0 18 * * 1-5`、「每半小时」→ 引擎原生 30 分钟间隔），并在表单顶部说明识别结果。**识别不出就不填**（不猜 —— 自动化是会自动跑起来的东西，猜错的代价远高于「没帮你填」）；多日/工作日这类结构化表达不了的会落到 cron 原文，此时表单**默认展开「高级」**，让用户看见真正生效的那条规则                                            |
-| FR-5.6 | **结果回推渠道**        | **P1** | 🟡 | both     | 任务可配置推送到企微 / 微信 / 飞书。**2026-10-03 按路线 C 落地**（为什么不用「纯客户端」的路线 A，见 §15.3）：引擎 `[LOCAL PATCH]` 新增 `payload.delivery`，`run_bound_cron_job` 完成后再经 message bus **另发**一份到配置的目标；执行会话仍绑 `api:cron-{id}`（工作区 / 权限 / 留痕零回归）。**未做**：`milestone`（每个关键节点）、持久化 outbox（第一期由 `ChannelManager._send_with_retry` 的指数退避等价覆盖）                      |
+| FR-5.6 | **结果回推渠道**        | **P1** | ✅ | both     | 任务可配置推送到企微 / 微信 / 飞书。**2026-10-03 按路线 C 落地**（为什么不用「纯客户端」的路线 A，见 §15.3）：引擎 `[LOCAL PATCH]` 新增 `payload.delivery`，`run_bound_cron_job` 完成后再经 message bus **另发**一份到配置的目标；执行会话仍绑 `api:cron-{id}`（工作区 / 权限 / 留痕零回归）。**2026-10-05 补 `start` 档位**：在结果之外多推一条「已开始执行」，三档为包含关系（仅失败时 ⊂ 每次执行后 ⊂ 开始时），见 §20.8。**未做**：`milestone`（明确不做，理由见 §20.8.5）、持久化 outbox（第一期由 `ChannelManager._send_with_retry` 的指数退避等价覆盖）                      |
 | FR-5.7 | Webhook / 邮件触发器   | P2     | ⬜  | both     | 除定时外支持外部事件触发（V2）                                                                                     |
 | FR-5.8 | 工作目录上下文           | P1     | ✅ | both     | 任务可绑定工作目录。**2026-10-03 落地，且是纯客户端的**（引擎无需新增任何字段）：`TaskConfig.workdir` → job 的 `originMetadata.workspace_scope.project_path`，而 `originMetadata` 是引擎既有的透传字段，`bound_runner` 会把它原样搬成 cron turn 的 message metadata，引擎在 turn 边界按**会话作用域**解析出这一轮该在哪个目录里跑。表单加「工作目录」（目录选择器 + 绝对路径校验：相对路径会被引擎静默回落默认目录）。⚠️ 硬约束：任务的 origin 渠道必须保持 `api` —— 详见 §15.3                                                                    |
 
@@ -263,8 +263,8 @@
 | ------ | --------------- | ------ | -- | -------- | ------------------------------------------------------------------------------ |
 | FR-6.1 | 渠道配置与镜像         | P0     | ✅  | both     | 5 渠道（钉钉/飞书/Lark/微信/企微）+ 白名单 + 群策略，镜像进 `config.json`（已实现）                       |
 | FR-6.2 | 扫码接入            | P0     | ✅  | electron | 扫码完成应用创建与凭据回写（已实现）                                                             |
-| FR-6.3 | **结果回推 IM**     | **P0** | 🟡  | both     | 任务完成 / 长任务关键节点 → 通过原渠道回推结果；复用 `payload.deliver` 投递字段 **主体已落地、档位不全（2026-10-04 核实）**：FR-5.6 按路线 C 落地的 `CronDelivery` / `CronDeliveryTarget` 已把结果推到企微 / 微信 / 飞书渠道，`run_bound_cron_job` 完成后经 message bus 另发一份、出站复用 `_send_with_retry` 的指数退避。**未做**：`on` 档位只有 `complete` / `error` 两档，缺 `milestone`（关键节点）；持久化 outbox（跨重启补投）第一期由退避等价覆盖 |
-| FR-6.4 | **远程派活 → 会话归档** | **P0** | 🟡 | both     | IM 指令驱动本地 Agent 执行，执行记录在客户端可见（`channelSessionsStore` 已有数据通道；补「IM 来源」会话筛选与只读呈现） |
+| FR-6.3 | **结果回推 IM**     | **P0** | ✅  | both     | 任务完成 / 长任务关键节点 → 通过原渠道回推结果；复用 `payload.deliver` 投递字段 **已落地（2026-10-05 补齐档位）**：FR-5.6 按路线 C 落地的 `CronDelivery` / `CronDeliveryTarget` 已把结果推到企微 / 微信 / 飞书渠道，`run_bound_cron_job` 完成后经 message bus 另发一份、出站复用 `_send_with_retry` 的指数退避。**2026-10-05 补 `start` 档位**（「开始时」开跑通知，见 §20.8）。**未做**：`milestone`（明确不做，理由见 §20.8.5）、持久化 outbox（跨重启补投，第一期由退避等价覆盖） |
+| FR-6.4 | **远程派活 → 会话归档** | **P0** | ✅ | both     | IM 指令驱动本地 Agent 执行，执行记录在客户端可见（`channelSessionsStore` 已有数据通道）。**已落地（2026-10-05）**：来源判定收到 `src/lib/channelSession.ts`（单一事实源）；侧栏「助理」按渠道分组 + 渠道筛选（分组键用渠道**原始首段**，未知渠道不再被并进「钉钉」）；IM 会话头部显示「来自 xx」来源标记且**标题只读**（网关标题改了会被下一轮轮询盖回）。详见 §20.7 |
 | FR-6.5 | IM 内审批          | P1     | ⬜  | both     | 敏感操作可在 IM 里一键批准/拒绝，无需回桌面（对齐 WorkBuddy `Approval`）                              |
 | FR-6.6 | 渠道健康与告警         | P1     | 🟡 | both     | 渠道掉线检测与提示（`channelDisconnect.ts` 已有）；补自动重连与告警                                  |
 
@@ -384,7 +384,7 @@
 | **M1 引擎与事件地基** | D1 引擎契约层、D2 事件化会话与索引库、D3 工具网关骨架、**18.2 用户数据目录收敛** | `AgentRuntime` 接口 + `NanobotHttpRuntime`；JSONL 事件流 + JSON 索引（由 SQLite 改，见 9.4）；事件类型定义；`sessionsStore` 读写切至事件流（D2 A–E）；渲染层持久化迁出 `<userData>` 单文件；修复 `MEMORY.md` 落盘静默失败 | 全部旧功能经新契约跑通；`npm run build` 绿；单测不回退；`MEMORY.md` 在 Electron 下真实落盘且有测试覆盖；实时视图与事件投影等价（`tests/events/equivalence.test.ts`） |
 | **M2 安全与执行模式** | FR-1.4/1.5、FR-8.2/8.3/8.4、FR-2.2                  | Ask/Plan/Craft、计划审批、工具网关 + 回收站改道 + 默认拒绝写入 + Agent 工具白名单                                                                                                               | 绕过路径审计为 0；越权调用被拦截有测试；删除类操作 100% 进回收站                                                                                   |
 | **M3 扩展与提示词**  | FR-3.1/3.2/3.4、FR-4.2/4.3、P-提示词外置                 | Skill 目录扫描 + 三态覆盖、Plugin 包格式、用户级记忆、身份文件、模式×领域×风格模板                                                                                                                    | 装一个示例 Plugin 端到端可用；提示词可外置修改不重编译                                                                                        |
-| **M4 自动化与产物**  | FR-5.4/5.6、FR-6.3/6.4、FR-7.2/7.3                  | RRULE + 有效期、结果回推 IM、IM 会话归档、产物索引、文件回滚                                                                                                                                 | 任务结果能推回企微；回滚能恢复指定步前的文件状态                                                                                               |
+| **M4 自动化与产物 ✅**  | FR-5.4/5.6、FR-6.3/6.4、FR-7.2/7.3                  | RRULE + 有效期、结果回推 IM、IM 会话归档、产物索引、文件回滚                                                                                                                                 | 任务结果能推回企微；回滚能恢复指定步前的文件状态                                                                                               |
 | **M5 可观测**     | FR-11.1/11.2/11.3、FR-8.9                          | 用量成本报表、trace、日志分级、审计日志                                                                                                                                                | 能回答「这个会话花了多少钱、每一步调了什么工具」                                                                                               |
 | **M6 多端同步 ✅**  | R10 全部                                            | FastAPI 认证 + Sync API + SyncMeta 全量接入                                                                                                                                 | **已闭合（2026-10-04 核实）**：七个批次全部落地（批次 1 服务端 / 2 客户端引擎 / 3 前置欠账 / 4 实体接线 + 认证 UI / 5 事件流追加同步 / 6a 数据主权 + 墓碑 GC + conflict 快照 / 6b C 类文件型资产），逐批完成判据与门禁见 `architecture-m6-sync.md` §七；两条验收门禁（两端登录同账户后 Agent/会话双向一致；离线编辑联网合并无丢失）已由 `tests/sync/integration.twoDevice.test.ts` 与 `tests/sync/sessionEventsSync.test.ts` 自动化承担，不再依赖真机手测                                                                                      |
 | **M7 团队（V2）**  | FR-2.6、FR-4.7、FR-7.5、FR-12.7                      | 项目空间、知识库 RAG、人机双写                                                                                                                                                     | 团队共享资产可用；知识库检索权限过滤生效                                                                                                   |
@@ -550,7 +550,7 @@
 >
 > **两处诚实标注**：① `FR-7.4`（产物版本）数据层已落但**没有版本对比 UI 与「切回此版本」入口**，
 > 故保持 🟡；② `FR-6.3`（IM 结果回推）主体已由 FR-5.6 路线 C 覆盖，但投递档位只有
-> `complete` / `error`，缺 `milestone`。另 `FR-3.9`（扩展态同步边界）**仍未做**——它是 M6 唯一
+> `complete` / `error`，缺 `milestone`。**`FR-6.4`（IM 会话归档）已于 2026-10-05 落地**：来源判定单一事实源、侧栏按渠道筛选（未知渠道不再被并进钉钉组）、IM 会话头部只读 + 来源标记，见 §20.7。**`M4 自动化与产物` 已闭合（2026-10-05）**：`FR-5.4` / `FR-5.6` / `FR-6.3` / `FR-6.4` / `FR-7.2` / `FR-7.3` 六条全部落地（其中本轮补了投递的 `start` 档位与 IM 会话归档，见 §20.7–§20.8）。另 `FR-3.9`（扩展态同步边界）**仍未做**——它是 M6 唯一
 > 没进交付清单的洞（只同步启用态与版本引用集、包本体不上行），已列入后续批次。
 >
 > **M6 前置（Phase 0）· `SyncMeta` 落地（2026-09-25）**：这是一件**跨期地基**而非 M6 本体——`FR-10.1` 归 V1.5，但 §19.2 要求「V1 创建的实体必须当场带同步元数据」（晚做只能全量迁移或在同步层永久补字段），故在 V1 期提前落。三批全部完成：① 地基纯逻辑件（`types/sync.ts` + `lib/{syncMeta,syncSelect,deviceId}`）；② 五个 store 接线 + 技能覆盖表抽离（新增 `nanowork.skillOverrides`）；③ 会话 `rev`/`updatedBy`（递增点落 `updateSession`）+ `Settings` 字段级负载裁剪。**门禁**：三套 `tsc` 0 错误 / `vitest` **99 文件 1594 用例全绿** / `vite build`（`--emptyOutDir false`）绿；批次 2 动了 `electron/storageRoutes.ts`（新增 `skills/overrides.json` 路由）故**已重建 `main.cjs` + `preload.cjs`**。**当时未做、已于 2026-09-27 补齐**：会话删除的墓碑——`deleteSession` / `deleteSessions` 改走 `tombstoneSession`（写墓碑 + 覆盖索引条目 + 丢弃 JSONL 正文），`FR-10.1` 随之转 ✅，落地形状与偏差见 `architecture-syncmeta.md` §7.4。完整清单与逐批实现偏差见该文 §七；V1.5 开工前置（`SyncMeta` 之外先是 5 条，平台边界与会话墓碑已各清一条）见 `architecture-m6-sync.md` §2.2。
@@ -2177,17 +2177,27 @@ export type TaskSchedule =
   | { kind: 'once'; at: string };
 
 /**
- * 结果推送（FR-5.6）—— **2026-10-03 实施时的实际形态**。
+ * 结果推送（FR-5.6）—— **实际形态（2026-10-03 起，2026-10-05 加 `start` 档位）**。
  *
- * ⚠️ 与原设计稿有两处偏离，都是被实现逼出来的：
+ * ⚠️ 与原设计稿有三处偏离，都是被实现逼出来的：
  * 1. **必须带 `chatId`**：投递按 `(channel, chatId)` 路由，光有渠道名推不出去。可选目标
  *    取自引擎侧真实存在过的渠道会话（`platform.nanobotListChannelSessions()`），由用户在
  *    表单里挑一个 —— 用户无从知道某个群的 chat id，所以这个控件只能是「从已有对话里选」。
- * 2. **`milestone` 不在类型里**：它需要在引擎侧订阅进度事件，而第一期只挂在「执行结束」
- *    这一个点上。声明一个不生效的档位，只会让用户以为选了就会生效。
+ * 2. **`milestone` 不收进类型**：理由见下方 `on` 的说明。
+ * 3. **多了 `start`**：原设计稿只有 complete / error，而「长任务跑起来没有、跑到一半卡住」
+ *    是真实痛点；`start` 在结果之外**多推一条**开跑通知（引擎 `[LOCAL PATCH]`，见 §20.8）。
  *
- * `on` 的语义：`complete` = **每次执行结束都推**（成功推结果、失败推失败原因）；
- * `error` = 仅失败时推。两者是「包含」关系而不是并列 —— `error` 是更窄的过滤。
+ * `on` 的语义是**包含关系**而不是并列：
+ * - `complete` = 每次执行结束都推（成功推结果、失败推失败原因）；
+ * - `error` = 仅失败时推（比 `complete` 更窄的过滤）；
+ * - `start` = 在 `complete` 之外**多推一条**「已开始执行」。
+ *
+ * ⚠️ **为什么没有 `milestone`**（每个关键节点）：绑定的定时任务就是**一轮 agent turn**，
+ * 「轮内」不存在一个既对用户有意义、又能被引擎观察到、又不会把聊天变成日志流的节点。
+ * 引擎侧确实有进度事件（`ProgressEvent` / `tool_events`，见 §20.8 的勘查结论），但它们
+ * 本来就在发往**起源渠道**（受渠道级 `send_progress` / `send_tool_hints` 控制）；
+ * 把其中一部分镜像到 delivery targets 是**另一件事**，其核心未知量是节流策略
+ * （= 打扰预算），属产品决策，不随本轮落地。
  */
 export interface TaskDeliveryTarget {
   /** 引擎侧渠道名（可能是 owner 限定形态，如 `feishu.feishu`） */
@@ -2198,7 +2208,7 @@ export interface TaskDeliveryTarget {
 
 export interface TaskDelivery {
   targets: TaskDeliveryTarget[];
-  on: 'complete' | 'error';
+  on: 'complete' | 'error' | 'start';
 }
 
 export interface TaskConfig {
@@ -2424,7 +2434,7 @@ ChannelConfig（前端）
 | 缺口                  | 设计                                                                                                                                                                                                            |
 | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **结果回推（FR-6.3）**    | 任务配置增加 `delivery`；引擎侧通过 `payload.deliver=true` + `channel`/`to` 投递（当前 `toNanobotTask` 刻意置 `deliver:false`，因为 `_enforce_agent_binding` 会禁用带 legacy 投递上下文的任务）。实现路径：任务完成回调 → 客户端调引擎出站接口（或由引擎原生投递）→ 失败进 outbox 重试 |
-| **IM 会话归档（FR-6.4）** | 已在 `channelSessionsStore` 有数据通道。补：会话列表按来源渠道筛选、IM 来源会话标记为外部来源、结果可在客户端回看                                                                                                                                        |
+| **IM 会话归档（FR-6.4）** | **已落地（2026-10-05，见 §20.7）**。数据通道（`channelSessionsStore` → 网关轮询 → 详情注入）此前就在；本轮补齐三处：会话列表按来源渠道筛选、IM 来源会话标记为外部来源、结果可在客户端回看 |
 | **IM 内审批（FR-6.5）**  | 敏感操作触发时，向发起渠道推送一条带「批准/拒绝」按钮的消息；回调进 `permission-decision` 事件流                                                                                                                                                  |
 
 ## 16.3 渠道抽象
@@ -3148,6 +3158,176 @@ tools: { cliApps, imageGeneration, mcpServers, restrictToWorkspace, ssrfWhitelis
 - 界面锚点 `tests/settingsDialogSections.test.tsx` 补 `security` 的内容锚点。
 - 真机 `tasks/verify-security.mjs`：5 场景（展示与清单逐条 / 草稿+放弃 / 保存往返 / 桥拒绝保留草稿 /
   两种「不可用」两句话），`tasks/security.png`。
+
+## 20.7 IM 会话归档（FR-6.4）落地口径（2026-10-05）
+
+数据通道（`channelSessionsStore` → 网关轮询 → 详情注入）2026-09 就在了，本轮补的是
+**「这条会话从哪来」这件事本身**——来源判定、按渠道筛选、外部来源标记。
+
+### 20.7.1 来源判定的单一事实源是 `src/lib/channelSession.ts`
+
+此前同一个事实散在三处：id 前缀写在 `channelSessionsStore`、`session.channel` 的判空写在
+侧栏的任务列表过滤、图标映射在 `SidebarNav` 与 `ChatPage` 各写了一份（两份同义实现）。
+收在一个文件后，「引擎新增一个渠道」只需要改这一处。
+
+判据分两层，别合并：
+
+| 函数                  | 判据                    | 语义                       |
+| ------------------- | --------------------- | ------------------------ |
+| `isExternalSession` | `channel` trim 后非空    | 这条会话是**外部来源**（只读镜像）      |
+| `channelSessionKey` | id 以 `nb:` 开头         | 这条会话在本地**用什么 id** 存      |
+
+**判据是 `channel` 而不是 id 前缀**：前者是语义（属于外部渠道），后者是本地约定。
+历史数据（旧版落盘）可能只有其一，两个都成立才动手。
+
+`channelSessionKey` 对「只有前缀、键被截断」返回 **空串而不是 `null`**：`null` 表示
+「这不是频道会话」，`''` 表示「是频道会话但数据是半截的」——合成一类会让调用方的
+`if (!key) return` 读起来像前者，而实际是后者，排查方向完全不同。
+
+### 20.7.2 分组键用渠道**原始首段**，绝不用 `ChannelKind`
+
+`ChannelKind` 只有 5 个成员（钉钉/飞书/Lark/微信/企微），而引擎支持的渠道远不止这些。
+此前分组走 `toChannelKind`，而它的兜底是「未知 → `dingtalk`」——于是 Telegram / Slack 会话
+被**静默**并进「钉钉」组：代码里没有任何一行写着「把 telegram 当 dingtalk」，
+用户看到的是「钉钉」组里躺着一条英文会话。
+
+所以：
+
+- **分组键** = `channelGroupKey()` = 渠道名取 `.` 前首段（`feishu.feishu` → `feishu`），空 → `unknown`；
+- **展示名** = `channelLabel()`（已有唯一实现，未登记渠道原样显示）；
+- **图标** = `channelIconKind()`（未知回退 `dingtalk`，只负责画个近似符号）。
+
+三者的关系写进了函数注释：图标可以回退，分组键不能。
+
+### 20.7.3 筛选态放 store，不放组件 state
+
+侧栏「任务 / 助理」两个 Tab 是**条件渲染**（`tab === 'tasks' ? <SessionList/> : <ChannelSessionList/>`），
+切走再回来 `ChannelSessionList` 会重挂载。筛选态若留在组件内，用户每切一次 Tab 就要重选一遍渠道
+——而且这种「刚选完就没了」看起来像 bug 却查不出报错。
+
+所以放 `sessionUiStore.channelFilter`（与 `searchSessionId` 同类的跨组件会话 UI 态），
+存的是**分组键**（原始首段）而不是展示名：展示名会随后端渠道表变，拿它当键会在改名后静默筛空。
+
+### 20.7.4 IM 会话的标题为什么只读
+
+标题来自网关那份会话记录，本地改名只改这一份镜像，下一次轮询
+（`channelSessionsStore.refreshActiveIfChanged`）就把它盖回去——用户看到的是「改了又自己变回去」。
+所以 IM 会话头部**不渲染重命名入口**，改为显示「来自 微信」的来源标记
+（Tooltip 同时写清两个方向：历史只读 / 在此发送会投递回该渠道；少写后半句会让人以为只是本地留言）。
+
+快捷入口（搜索 / 历史提问 / 产物）**保留**：它们都是只读动作，与「不许改」不冲突。
+
+### 20.7.5 明确未做
+
+- **不做 IM 会话的本地删除**：它不是本地记录，删了下一轮轮询又回来。要断开关系应去渠道管理里断开。
+- **不做「按渠道看全部消息」的跨会话检索**：那是搜索域的活（FR-11.x），不是归档域的。
+- **不在客户端做渠道名归一**（如把 `lark` 显示成 `feishu`）：引擎里它们是不同渠道，
+  客户端替它归一会在「只连了 Lark」时显示成「飞书」，反而对不上。
+
+### 20.7.6 门禁与验收
+
+- 纯逻辑 `tests/lib/channelSession.test.ts` 14 例：判定的边界值（空串 / 全空白 / 只有前缀）、
+  owner 限定形态、未知渠道不自作主张并组、来源文案两个方向。
+- store `tests/sessionUiStoreChannelFilter.test.ts` 4 例：默认全部、可设置可复位、存的是分组键。
+- 侧栏渲染与筛选交互 `tests/channelListFilter.test.tsx` 7 例：筛选条的出现条件（多渠道才出现）、
+  「未知渠道自成一组」、筛选真的改变可见内容、选中的渠道消失时给退路。
+- 头部 `tests/chatHeaderExternal.test.tsx` 7 例：IM 会话的来源标记与**没有重命名入口**
+  （负向断言）+ 本机会话对照组。
+- 真机 `tasks/verify-channel-archive.mjs`：5 场景（分组的真实数据形态（含 Telegram 不被并进钉钉）/
+  筛选交互与「全部」复位 / 单渠道不出筛选条 / 点开会话进聊天页并显示来源标记与只读标题 /
+  标记跟着会话走），`tasks/channel-archive.png`。
+  「本机会话没有标记、可以重命名」的对照由上面那个组件测试承担——真机上造一条**有消息**的
+  本机会话需要真引擎（新会话没有消息 → ChatPage 走空态、头部根本不渲染，断言会变成
+  「0 === 0」的假通过）。
+
+## 20.8 投递档位 `start`（FR-5.6 / FR-6.3，2026-10-05）
+
+本轮把「结果回推」的档位从两档补到三档。**没有做 `milestone`** —— 下面 §20.8.4 是本轮
+最重要的一段：它把「为什么不做」从一句托词变成一条**有代码依据的结论**，并留好了将来要做的路径。
+
+### 20.8.1 三档是**包含**关系，不是并列
+
+| 档位            | 何时推                              | 关系            |
+| ------------- | -------------------------------- | ------------- |
+| `error`       | 仅失败时                             | 最窄            |
+| `complete`    | 每次结束（成功推结果、失败推原因）                | ⊃ `error`     |
+| `start`       | 在 `complete` 之外**多推一条**「已开始执行」   | ⊃ `complete`  |
+
+`start` 刻意**不**做成「只推开始」：那样用户永远拿不到结果，是个没人想要的档位。
+实现上两条路径各自独立（`_deliver_started` / `_deliver_result`），语义上 `start` 只是
+**多挂了一条通知**，不改结果推送的任何行为 —— 单测里有专门一条 `test_non_start_modes_never_get_the_start_notice`
+钉住「加档位不许影响既有档位」。
+
+### 20.8.2 `start` 的时机是「已派发」，不是「已生成第一个 token」
+
+通知发在 `run_bound_cron_job` 里、写完 `status="queued"` 之后、`submit_cron_turn` 之前。
+为什么不能再精确：cron turn 走 `CRON_DEFER_UNTIL_IDLE_META`，目标会话正忙时它会**排队**，
+真正开跑在引擎内部的 deferred 队列里，**没有任何回调通知外部**。
+
+所以这个档位的语义要照实写成「这次运行已开始排队/派发」。写成「正在执行」，
+在忙碌会话上就是**对用户撒谎**。真要做到「第一个 token 已生成」得在引擎里加一条
+turn-started 回调 —— 那是另一件事，本轮不做（§20.8.5）。
+
+### 20.8.3 落点
+
+- **引擎**（`nanobot/nanobot/`）：
+  - `cron/bound_runner.py`：`_DELIVERY_MODES = ("complete", "error", "start")`、
+    新增 `_DELIVERY_STARTED_TEXT` 与 `_deliver_started()`，在 `run_bound_cron_job` 的
+    queued 记录之后调用；
+  - `cron/types.py`：`CronDelivery.on` 的注释改为三档 + `milestone` 未实现的**理由**。
+- **客户端**：`types/task.ts` 抽出 `TaskDeliveryOn`（三档）、`ai/runtime/nanobotHttp/tasks.ts`
+  的 wire 契约同步、`lib/taskDelivery.ts` 的文案改成映射表、`DeliveryField` 第三个 ToggleButton。
+
+两处刻意的设计：
+
+1. **文案用 `Record<TaskDeliveryOn, string>` 映射表而不是嵌套三元**：将来再加档位，
+   漏写会**编译报错**（缺键）；嵌套三元漏写只会静默落到最后一个分支，用户看到「每次执行后」
+   却跟他选的不符。
+2. **`start` 的摘要文案是「开始与结束时」，不是「开始时」**：后者会被读成「只推开始、不推结果」。
+   同理，UI 上它必须与「每次执行后」并排出现。
+
+### 20.8.4 `milestone` 的勘查结论（为什么不做，以及将来怎么做）
+
+本轮把这条链路读到底，结论是**「缺的不是信号源，是打扰预算」**：
+
+1. **节点信号其实已经存在**。`TurnDeliveryFactory._default_route` 对 `channel != "system"`
+   一律置 `publish_lifecycle=True`，而 cron turn 的 channel 是 **origin 渠道**（不是 `system`）
+   → `progress_callback()` 非空 → turn 进行中的 `ProgressEvent`（含 **`tool_events`** /
+   `file_edit_events` / reasoning 片段）经 `bus.publish_outbound` 发出。
+2. **但它们发往 `origin`，不是 `delivery.targets`**。而且真发不发由渠道的
+   `send_progress` / `send_tool_hints` 两个开关决定（`ChannelManager._should_send_progress`）。
+3. **所以「milestone」= 把其中一部分镜像到 targets**，多出来的一层是**节流策略**：
+   一个跑 40 次工具调用的长任务，全镜像就是把 IM 变成日志流；隔多少、按什么维度隔
+   （工具数 / 时间 / 阶段），是**产品决策**而不是技术选择。
+4. 引擎还有一条**不引入新信号**的现成路径可供将来使用：`CronRunRecorder.write_run_record`
+   是 append-only 的运行记录，客户端已经能读运行记录（任务运行详情页），扩成「轮内进度」
+   只影响**回看**，不影响**推送** —— 与 FR-6.3 的「回推」是两件事，别混为一谈。
+
+因此本轮的取舍是：**先给长任务一个「有没有跑起来」的信号（`start`），
+而不是给它一串用户无法控制密度的进度消息**。
+
+### 20.8.5 明确未做
+
+- **`milestone`（每个关键节点）**：理由见 §20.8.4。核心未决量是节流策略（打扰预算），
+  以及「关键节点」到底由谁定义（工具批次 / 模型自报 / 阶段切换）。
+- **持久化 outbox（跨重启补投）**：第一期由 `ChannelManager._send_with_retry` 的指数退避
+  等价覆盖；要真做需要一张落盘队列 + 启动补投，属独立批次。
+- **`start` 通知的「真正开跑」时刻**：见 §20.8.2，需要引擎新增 turn-started 回调。
+
+### 20.8.6 门禁与验收
+
+- 引擎 `nanobot/tests/cron/test_bound_runner_delivery.py`：**23 例**（新增 8 例）——
+  `start` 先通知后推结果、失败时两条都推（包含关系）、无任务名时不拼出空行、
+  每个 target 都收到、**非 start 档位不许多收通知**、通知失败不中断任务、
+  以及一条登记表用例（`_DELIVERY_MODES` 必须登记所有已实现档位）。
+  `tests/cron` 全目录 **151 例**通过。
+- **变异验证**（两条，都确认转红）：① 从 `_DELIVERY_MODES` 去掉 `"start"` → 登记用例红；
+  ② 去掉 `_deliver_started` 里的档位判定（所有档位都推通知）→ `test_non_start_modes_*` 红。
+- 客户端：`tests/deliveryField.test.tsx`（三档渲染 + 切换带上现有目标）、
+  `tests/taskDelivery.test.ts`（`start` 摘要读作「开始与结束时」）。
+- 真机 `tasks/verify-task-delivery.mjs` 新增**第三趟**：界面切到「开始时」→ 保存 →
+  断言交给主进程的 `jobs.json` 片段里是 `"on":"start"`、卡片摘要为「推送：企业微信（1 个会话）· 开始与结束时」，
+  截图 `tasks/task-delivery-3-start.png`。
 
 # 第 21 章 接口清单
 

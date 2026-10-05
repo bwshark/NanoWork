@@ -58,7 +58,12 @@ export interface NanobotJobState {
  */
 export interface NanobotDelivery {
   targets: Array<{ channel: string; chatId: string }>;
-  on: 'complete' | 'error';
+  /**
+   * 推送时机。`start` = 结果之外多推一条「已开始执行」（引擎侧
+   * `bound_runner._DELIVERY_MODES`）。引擎对**未知**取值会告警后退化成
+   * `complete`，所以这里少写一个档位不会报错、只会静默降级——取值必须与引擎对齐。
+   */
+  on: 'complete' | 'error' | 'start';
 }
 
 /** nanobot CronJob 存储形态（camelCase，与 CronService._save_store 对齐） */

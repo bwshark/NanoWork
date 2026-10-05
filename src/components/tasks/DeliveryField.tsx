@@ -151,11 +151,16 @@ export function DeliveryField({ value, onChange, label }: DeliveryFieldProps) {
           }}
           sx={{ mt: 0.5, display: 'flex' }}
         >
+          <ToggleButton value="error" sx={{ textTransform: 'none', fontSize: '12px' }}>
+            仅失败时
+          </ToggleButton>
           <ToggleButton value="complete" sx={{ textTransform: 'none', fontSize: '12px' }}>
             每次执行后
           </ToggleButton>
-          <ToggleButton value="error" sx={{ textTransform: 'none', fontSize: '12px' }}>
-            仅失败时
+          {/* 「开始时」必须与「每次执行后」并排读：它是在结果之外多推一条，
+              不是「只推开始」——单看这三个字会理解反 */}
+          <ToggleButton value="start" sx={{ textTransform: 'none', fontSize: '12px' }}>
+            开始时
           </ToggleButton>
         </ToggleButtonGroup>
       )}

@@ -199,6 +199,26 @@ describe('DeliveryField：推送时机', () => {
     click(buttonByText(host, '每次执行后'));
     expect(onChange).not.toHaveBeenCalled();
   });
+
+  it('三档同时在，切到「开始时」原样带上现有目标', () => {
+    const { host, onChange } = render({
+      targets: [{ channel: 'wecom', chatId: 'chat-1' }],
+      on: 'complete',
+    });
+
+    // 「开始时」必须与「每次执行后」并排可见：它是在结果之外**多推一条**，
+    // 单看这三个字会读成「只推开始、不推结果」
+    const text = host.textContent ?? '';
+    expect(text).toContain('仅失败时');
+    expect(text).toContain('每次执行后');
+    expect(text).toContain('开始时');
+
+    click(buttonByText(host, '开始时'));
+    expect(onChange).toHaveBeenCalledWith({
+      targets: [{ channel: 'wecom', chatId: 'chat-1' }],
+      on: 'start',
+    });
+  });
 });
 
 describe('DeliveryField：没有可用会话时', () => {
