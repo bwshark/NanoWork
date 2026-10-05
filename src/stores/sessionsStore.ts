@@ -51,12 +51,14 @@ import {
   DEFAULT_PROMPT_STYLE,
 } from '@/lib/promptCatalog';
 import { assemblePromptSections } from '@/lib/promptAssembly';
+import { availablePresetIds, resolveTurnModel } from '@/lib/agentBinding';
 import { useAgentsStore } from './agentsStore';
 import { useArtifactsStore } from './artifactsStore';
 import { useExpertGroupsStore } from './expertGroupsStore';
 import { useSettingsStore } from './settingsStore';
 import { resolveDefaultWorkspacePath } from './storageInfoStore';
 import { useSkillsStore } from './skillsStore';
+import { useModelsStore } from './modelsStore';
 import {
   deletedFilePathFrom,
   deriveFileArtifacts,
@@ -866,8 +868,20 @@ async function streamAssistantReply(
     agentId: session.agentId,
     messages: history,
     stream: true,
-    // 会话级模型优先；未设置（Auto）时省略 model，由网关使用其配置默认模型
-    model: session.model ?? '',
+    // 模型：**会话显式选择 > 专家绑定（FR-2.3）> 空**（空 = 省略 model 字段，
+    // 由网关用它配置里的默认模型）。
+    //
+    // 两个候选都要过一遍「预设是否还在目录里」的校验：预设被删/改名后，绑定就成了
+    // 一个指向不存在东西的字符串，而引擎收到未知预设**直接报错**——不拦的话，
+    // 「设置里删掉一个预设」会表现为「所有绑过它的专家每一轮都发不出去」。
+    // 校验规则与「目录未加载时不校验」的理由见 `lib/agentBinding.ts`。
+    //
+    // 用 `getState()` 读一次而不订阅：这是发送动作里的取值，不是渲染依赖。
+    model: resolveTurnModel(
+      session.model,
+      agent?.model,
+      availablePresetIds(useModelsStore.getState().models),
+    ),
     sessionId,
     // 附件上传：仅在本次确实带文件时下发，nanobotClient 据此切 multipart
     ...(files && files.length > 0 ? { files } : {}),

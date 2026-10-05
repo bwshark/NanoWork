@@ -22,12 +22,30 @@ export const EXPERT_GROUP_MODE_LABEL: Record<ExpertGroupMode, string> = {
   coordinator: '主从协调',
 };
 
-/** 协作模式简介，hover 信息使用 */
+/** 协作模式简介，hover 信息使用（描述的是**该模式的语义**，不是「现在会生效」） */
 export const EXPERT_GROUP_MODE_DESC: Record<ExpertGroupMode, string> = {
   sequential: '按成员顺序逐个执行，前者结果作为后者输入。',
   parallel: '并行召唤所有成员，整合多视角结论。',
   coordinator: '由首位成员担任协调 Agent，调度其余成员协作。',
 };
+
+/**
+ * FR-2.4 现状说明：协作模式**当前只保存配置，不改变执行结果**。
+ *
+ * 原因（2026-10-05 勘查）：引擎没有「按具名成员编排」的能力 —— 它只有**匿名子代理**
+ * （`SubagentManager` / `spawn`，system prompt 固定来自 `subagent_system.md`，与团成员
+ * 无关联），而 `agent_id` 在引擎侧**只用于工具策略**、不是人设路由。所以无论选哪一档，
+ * 一轮对话始终由**团内首位启用成员**完成。
+ *
+ * ⚠️ 必须显示给用户：`EXPERT_GROUP_MODE_DESC` 里那三句是**将来时**的语义描述，
+ * 光看它用户会以为选了就会生效 —— 这与「声明一个不生效的档位」是同一类坑
+ * （参见投递档位 `milestone` 的处理）。
+ *
+ * 文案收在这一个常量里、由两个编辑表单共用：说明性文本一旦散成两份，
+ * 一处改了另一处不改，用户会在两个页面看到互相矛盾的说法。
+ */
+export const EXPERT_GROUP_MODE_NOT_EFFECTIVE_NOTICE =
+  '协作模式当前只保存配置，不改变执行结果 —— 一轮对话始终由团内首位启用成员完成（引擎尚未支持按具名成员编排）。';
 
 /** 专家团来源 */
 export type ExpertGroupSource = 'builtin' | 'user';

@@ -61,6 +61,10 @@ function mergeAgents(stored: Agent[]): Agent[] {
       // （内置 Agent 本身没声明时仍是 undefined = 跟随全局设置）。
       promptDomain: over.promptDomain ?? b.promptDomain,
       promptStyle: over.promptStyle ?? b.promptStyle,
+      // FR-2.3 模型绑定：清空时 UI 传的是**空串**（与任务表单的模型选择一致），
+      // `'' ?? b.model` 求值为 `''` —— 即「清掉就真的清掉」；传 undefined 则会
+      // 回落到内置绑定。所以两条路径的取值约定必须一致，别一处清成空串、一处删字段。
+      model: over.model ?? b.model,
       // 头像：内置 Agent 不接受用户上传，因此不取 over.avatar；
       // 派生占位（名称首字符 + hashColor）由 UI 层做
       // 同步元数据随用户覆盖一起保留：内置条目的真源是代码，`rev` 只有在用户
@@ -110,6 +114,11 @@ export const useAgentsStore = create<AgentsState>()(
           // 两条路径行为不一致的话，只有新建会遇到这个坑。
           promptDomain: partial?.promptDomain,
           promptStyle: partial?.promptStyle,
+          // FR-2.3 模型绑定。⚠️ 这个字段**必须**在白名单里：本函数是白名单式构造，
+          // 漏掉就等于「新建 Agent 时选的模型在保存瞬间消失」，而编辑已有 Agent 走
+          // `updateAgent` 的展开赋值不会有此问题——两条路径行为不一致的话，
+          // 只有「新建」会遇到这个坑，而它又最难被注意到。
+          model: partial?.model,
           imBinding: partial?.imBinding ?? null,
           enabled: partial?.enabled ?? true,
           createdAt: nowIso(),

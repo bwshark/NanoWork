@@ -55,6 +55,20 @@ export interface Agent extends SyncMetaFields {
   promptDomain?: string;
   /** 风格模板覆盖（§13.1 语气风格）；省略 = 用全局设置 `Settings.promptStyle` */
   promptStyle?: string;
+  /**
+   * 模型绑定（FR-2.3）：专家自带模型，省得每次召唤都再选一遍。
+   *
+   * 存的是**预设名**（`modelsStore` 下拉项的 `id`），与 `Session.model` 同一个取值域
+   * —— 两者同源才能比较、才能回落，否则会变成「专家绑的是模型名、会话存的是预设名」
+   * 这种看起来都对、实现里永远对不上的两套坐标。
+   *
+   * 省略 = 不绑定（跟随会话选择，会话也没选则用网关默认）。
+   *
+   * ⚠️ **下发前必须校验预设仍存在**（见 `lib/agentBinding.ts` 的 `resolveTurnModel`）：
+   * 预设被删或改名后这个字符串就失效了，而引擎收到未知预设会直接报错——
+   * 不拦的话，「删掉一个预设」会变成「所有绑过它的专家每一轮都发不出消息」。
+   */
+  model?: string;
   /** IM 远程控制绑定（FR-010）；null 表示未绑定 */
   imBinding: IMBinding | null;
   /** 是否启用 */

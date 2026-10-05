@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
+  Alert,
   Autocomplete,
   Avatar,
   Box,
@@ -38,6 +39,7 @@ import { useSessionsStore } from "@/stores/sessionsStore";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { SummonSlot } from "@/components/agents/SummonSlot";
 import { PromptProfileFields } from "@/components/prompts/PromptProfileFields";
+import { AgentModelPicker } from "@/components/models/AgentModelPicker";
 import { AGENT_TOOL_CATALOG, AGENT_TOOL_LABELS, ROUTES } from "@/lib/constants";
 import {
   avatarGlyph,
@@ -55,6 +57,7 @@ import {
   isBuiltinGroupId,
   EXPERT_GROUP_MODE_LABEL,
   EXPERT_GROUP_MODE_DESC,
+  EXPERT_GROUP_MODE_NOT_EFFECTIVE_NOTICE,
 } from "@/types";
 
 /** IM 平台中文标签 */
@@ -822,6 +825,12 @@ export function MyAgentsPage() {
             )}
           />
 
+          {/* 模型绑定（FR-2.3）：专家自带模型，省得每次召唤再选一遍 */}
+          <AgentModelPicker
+            value={form.model}
+            onChange={(v) => setForm({ ...form, model: v })}
+          />
+
           <Divider sx={{ my: 1.5 }} />
           <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
             <Typography sx={{ fontSize: 13, fontWeight: 600 }}>
@@ -978,6 +987,11 @@ export function MyAgentsPage() {
           <Typography variant="caption" color="text.secondary">
             {EXPERT_GROUP_MODE_DESC[groupForm.mode ?? "sequential"]}
           </Typography>
+          {/* FR-2.4 现状：模式只保存、不改变执行结果。必须紧贴选择控件 ——
+              用户正是在这里做选择，看到三档可选就会以为会生效 */}
+          <Alert severity="warning" sx={{ mt: 1, fontSize: 12.5 }}>
+            {EXPERT_GROUP_MODE_NOT_EFFECTIVE_NOTICE}
+          </Alert>
 
           <Typography sx={{ fontSize: 13, mt: 1.5, mb: 0.5 }}>
             成员专家（{groupForm.memberIds?.length ?? 0}）

@@ -64,6 +64,10 @@ WorkBuddy 式智能体客户端：React 18 + TS + Vite 渲染层 + Electron 主�
 | IM 会话来源（FR-6.4） | 分组/筛选键用**渠道原始首段**（`ChannelKind` 只 5 个成员，未知渠道会被**图标**的回退规则并进钉钉组）；来源判定（`channel` 非空）与本地 id 前缀是两个判据不许合并；筛选态放 store（Tab 是条件渲染，组件 state 会重挂载丢）；IM 标题只读（轮询会盖回） | §7.33 |
 | 投递档位（FR-5.6/6.3） | `_DELIVERY_MODES` 三档是**包含**关系 `error` ⊂ `complete` ⊂ `start`；加档位必须有「不影响既有档位」的用例 + 登记表用例 | §7.34.1/§7.34.5 |
 | ⚠️ cron 进度事件**早就在发** | `channel != "system"` 一律 `publish_lifecycle=True`，cron turn 的 channel 是 origin → `ProgressEvent`（含 `tool_events`）已经发出，受渠道 `send_progress`/`send_tool_hints` 控制。**做 milestone 的真实工作量是「镜像到 targets + 定节流」，不是「找信号源」** | §7.34.2 |
+| ⚠️ FR-2.4 专家团「真实执行」现状**做不了** | 引擎只有**匿名子代理**（`SubagentManager`/`spawn`，system prompt 固定来自 `subagent_system.md`），`agent_id` 只用于**工具策略**、不是人设路由 → 引擎没有「运行某具名 Agent」的概念；`mode` 全仓**无执行读取点**（仅持久化+展示）。要真做 = 引擎新增「按具名成员派发」能力 | `.workbuddy/memory/2026-10-05.md` |
+| ⚠️ 专家编辑表单**两份重复** | `AgentsPage` 与 `MyAgentsPage` 各一份专家 Dialog，**字段不一致**（前者缺工具白名单编辑）→ 同一个专家在两个页面能改的东西不同 | 同上 |
+| 专家模型绑定（FR-2.3） | `Agent.model` 存**预设名**（与 `Session.model` 同域）；优先级 会话 > 专家 > 空，**逐级回落**；⚠️ **下发前必须拦失效预设**（否则「删一个预设」=「所有绑过它的专家全部发不出消息」）；⚠️ 目录未加载返回 `null` 而非空集（否则冷启动第一轮静默丢选择） | §7.35.1/§7.35.2 |
+| ⚠️ store 两条写路径不对称 | `createAgent` 白名单构造 / `updateAgent` 展开赋值 / `mergeAgents` 逐字段覆盖 → 加新字段只改一处**不报错**，症状是「新建时选的 X 保存瞬间消失」或「改了内置条目重启后变回」。新增字段三处一起改 | §7.35.3 |
 | ⚠️ 诊断产物的清理 | 一律**浅删除**（`readdir`+`unlink`+`rmdir`），`fs.rm(recursive)` 会撞宿主批量删除守卫挂几十秒 | §7.29 第 9 条 |
 | ⚠️ 引擎 `Base` 收两种键名 | `alias_generator=to_camel` + `populate_by_name` → camel 与 snake **都认**；但 **未声明的键静默丢弃** → 新增声明式字段必须先改 `schema.py` + 加往返用例。**别从 grep 推断序列化行为** | §7.30.1 |
 | ⚠️ 「查不到 ≠ 不支持」 | 元数据缺失（Web / 引擎离线 / 手填模型名）一律**宽松**：读成 false 会让所有人静默丢功能且无报错可查 | §7.30.2 |
