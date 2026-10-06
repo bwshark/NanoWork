@@ -137,6 +137,14 @@ export function AgentFormDialog({
               .map((id) => skills.find((s) => s.id === id)?.name ?? id)
               .join('、')
           }
+          MenuProps={{
+            PaperProps: {
+              sx: {
+                maxHeight: 320,
+                overflow: 'auto',
+              },
+            },
+          }}
         >
           {skills.map((s) => (
             <MenuItem key={s.id} value={s.id}>
