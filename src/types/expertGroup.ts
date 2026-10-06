@@ -6,8 +6,9 @@
  * 内置专家团（source='builtin'）随应用发布，用户可在 UI 上启用停用、调整成员顺序；
  * 用户自定义专家团（source='user'）可任意编辑、删除。
  *
- * 真实调度 / 多 Agent 编排依赖 nanobot 运行时能力（P2）；
- * 当前 store 只负责持久化与 UI 展示，可由编排面板选择专家团启动会话。
+ * 多 Agent 编排（FR-2.4 路径②）由**引擎在服务端**完成：客户端在会话绑定专家团时
+ * 下发 `expert_group`（见 `lib/expertGroupRequest.ts`），引擎按 mode 派发成员。
+ * 本 store 只负责配置的持久化与 UI 展示。
  */
 
 import type { SyncMetaFields } from './sync';
@@ -22,7 +23,7 @@ export const EXPERT_GROUP_MODE_LABEL: Record<ExpertGroupMode, string> = {
   coordinator: '主从协调',
 };
 
-/** 协作模式简介，hover 信息使用（描述的是**该模式的语义**，不是「现在会生效」） */
+/** 协作模式简介，hover 信息使用 */
 export const EXPERT_GROUP_MODE_DESC: Record<ExpertGroupMode, string> = {
   sequential: '按成员顺序逐个执行，前者结果作为后者输入。',
   parallel: '并行召唤所有成员，整合多视角结论。',
@@ -30,22 +31,23 @@ export const EXPERT_GROUP_MODE_DESC: Record<ExpertGroupMode, string> = {
 };
 
 /**
- * FR-2.4 现状说明：协作模式**当前只保存配置，不改变执行结果**。
+ * FR-2.4 生效说明：协作模式**真的会改变执行结果**。
  *
- * 原因（2026-10-05 勘查）：引擎没有「按具名成员编排」的能力 —— 它只有**匿名子代理**
- * （`SubagentManager` / `spawn`，system prompt 固定来自 `subagent_system.md`，与团成员
- * 无关联），而 `agent_id` 在引擎侧**只用于工具策略**、不是人设路由。所以无论选哪一档，
- * 一轮对话始终由**团内首位启用成员**完成。
+ * 2026-10-06：引擎已具备「按具名成员派发 + 按 mode 调度」的能力
+ * （`nanobot/nanobot/agent/expert_group.py`）；客户端在会话绑定专家团时下发
+ * `expert_group`，因此上面 `EXPERT_GROUP_MODE_DESC` 的三句现在是**进行时**。
  *
- * ⚠️ 必须显示给用户：`EXPERT_GROUP_MODE_DESC` 里那三句是**将来时**的语义描述，
- * 光看它用户会以为选了就会生效 —— 这与「声明一个不生效的档位」是同一类坑
- * （参见投递档位 `milestone` 的处理）。
+ * 两处边界仍要说清，否则用户会误判：
+ * - **至少两名启用成员**才触发编排。只有一名时客户端**不**下发（与单专家在结果上
+ *   无差别，而引擎默认让 leader 收口会让同一名成员多跑一轮，白花一倍 token）。
+ * - 编排在服务端**一次请求内**完成：成员输出只作为过程事件，不进会话历史，
+ *   只有最终汇总成为一条 assistant 消息。
  *
  * 文案收在这一个常量里、由两个编辑表单共用：说明性文本一旦散成两份，
  * 一处改了另一处不改，用户会在两个页面看到互相矛盾的说法。
  */
-export const EXPERT_GROUP_MODE_NOT_EFFECTIVE_NOTICE =
-  '协作模式当前只保存配置，不改变执行结果 —— 一轮对话始终由团内首位启用成员完成（引擎尚未支持按具名成员编排）。';
+export const EXPERT_GROUP_MODE_NOTICE =
+  '以上描述会真实生效：专家团（至少两名启用成员）由引擎在服务端按所选模式编排，成员输出只作为过程事件，最终汇总成为一条回复。';
 
 /** 专家团来源 */
 export type ExpertGroupSource = 'builtin' | 'user';

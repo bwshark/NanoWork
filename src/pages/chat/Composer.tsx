@@ -908,7 +908,7 @@ export function Composer({
   };
 
   /** 切换专家团：与 handleAgentChange 同构；会话 agentId 同步为团内首位启用成员
-   *  （执行代表；完整多 Agent 编排依赖 nanobot 运行时，P2）。 */
+   *  （团长；全套编排由引擎按 mode 派发）。 */
   const handleGroupChange = (id: string) => {
     const group = groups.find((g) => g.id === id);
     if (!group) return;

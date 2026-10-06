@@ -215,15 +215,66 @@
 **验收**：派出的子代理用的是**指定成员的人设与工具集**，而不是固定那份 `subagent_system.md`。
 已配 6 例 + 2 条变异验证（移除授权门 / 改追加为覆盖，均确认转红）。
 
-### 第 2 步：编排调度
+### 第 2 步：编排调度 —— **已落地（2026-10-06，引擎侧 + 客户端接线）**
 
-- 请求侧新增 `expert_group`（成员清单 + mode + lead + 汇总方式，见 §3 草案）；
-- 按 mode 调度：`sequential` 串行并喂前序结果；`parallel` 并发（受 `maxConcurrentSubagents` 限制）；
-  `coordinator` 先让 lead 出计划再派发；
-- ⚠️ **落库形态要在这一步定死**（§2 的第 1、2 条）。建议：**只有最终汇总落成一条 assistant 消息**，
-  成员输出作为该消息的 process 事件——否则会话历史被 N 倍膨胀，且污染下一轮上下文。
+**引擎侧**：新增 `agent/expert_group.py`（纯调度；「跑一个成员」由调用方以 `run_member` 注入，
+生产实现是 `SubagentManager.run_inline`），加两处接线：
+
+| 落点 | 改动 |
+| --- | --- |
+| `nanobot/agent/expert_group.py`（新） | `parse_expert_group()` 严格校验（非法形状抛 `ExpertGroupError`，**不静默降级**）；`ExpertGroupOrchestrator` 按 mode 调度、按 `aggregate` 收口；`run_member` 依赖注入 → 调度语义**不依赖模型即可单测** |
+| `nanobot/agent/loop.py` | `_run_turn` 顶部命中 `expert_group` 即接管（`_maybe_run_expert_group`）——正常 agent loop **完全不跑** |
+| `nanobot/api/server.py` | JSON 请求体读 `expert_group` → `parse_expert_group` 校验 → 放进 turn metadata；非法形状 **400**。**multipart 也支持**（以 JSON 串承载，`_parse_multipart` → `_json.loads`），避免「带附件的一轮」成为编排旁路 |
+
+**客户端接线**（同一批落地，功能因此可从界面触达）：
+
+| 落点 | 改动 |
+| --- | --- |
+| `src/ai/runtime/types.ts` | 契约类型 `ExpertGroupMember` / `ExpertGroupRequest`（camelCase）+ `ChatRequest.expertGroup?` |
+| `src/lib/expertGroupRequest.ts`（新） | `buildExpertGroupRequest(group, agents, availablePresetIds)`：过滤已删/停用成员、逐字段映射、按预设有效性决定成员模型下发、**成员数 < 2 返回 `undefined`** |
+| `src/ai/runtime/nanobotHttp/chat.ts` | `expertGroupWire()`：camelCase → `expert_group`（`system_prompt` / `tool_allow` …）；JSON body 与 multipart（JSON 串）两路都带 |
+| `src/stores/sessionsStore.ts` | `streamAssistantReply` 由 `session.groupId` 解析团并塞进 `ChatRequest` |
+
+**客户端两个判据（都不会报错、只会静默改行为，故单测覆盖）**：
+
+- **单成员团不触发编排**：只有一名启用成员时不下发——与「单专家一轮」结果无差别，而引擎默认
+  `aggregate="lead"` 会让同一名成员再跑一轮收口，白花一倍 token；
+- **成员模型只在预设仍存在时下发**：目录未加载（`null`）时不筛，判据与 `resolveTurnModel` 一致。
+
+**权限上限**：本轮作用域的顶层 `tool_allow`（= 会话 Agent / 团长的策略）仍是**上限**，
+成员只能在其内进一步收窄（引擎侧 `_member_workspace_scope` 单调递减）。即「团长的工具策略界定
+整团的能力边界」——这是有意的最小权限选择，不是遗漏。
+
+**已定死的语义**（对应 §2 的 5 问）：
+
+1. **谁产出最终答案**：`aggregate="lead"`（默认）→ lead 再跑一轮收口；`"concat"` → 机械拼接。
+2. **上下文怎么传**：`sequential` 只把**成功成员**的产出喂给下一个；`parallel` 成员彼此不可见
+   （这是并行的定义，不是丢上下文）；`coordinator` 先让 lead 出计划，计划进每个执行成员的输入。
+   **不做摘要压缩**（token 优化留待后续）。
+3. **失败怎么办**：单成员失败被**隔离**（记进 `MemberOutcome.error` 并继续）；**全部**失败才抛错。
+4. **成本刹车**：`members ≤ 8`（`MAX_MEMBERS`）、`max_concurrent ≤ 8`，超限 400。
+5. **落库形态（定死）**：**只有最终汇总落成一条 assistant 消息**；成员输出不是消息，只随进度事件
+   出站（`member_started` / `member_finished` / `member_failed` / `group_planned` / `group_aggregating`）。
+   实现上靠 `ctx.all_messages` 的前缀让 `prepare_save_boundary` 算出正确追加边界（`_finish_expert_group_turn`）。
+
+**工具与模型**：成员作用域由父作用域派生——**白名单取交集、黑名单取并集**（权限只能单调递减，
+`_member_workspace_scope`），成员没声明工具策略时**原样继承**（而不是清空）；成员模型经
+`runtime_resolver` 解析（preset 名走 `resolve_preset`），解析不了退回本轮 runtime 并留痕。
+
+**测试**：`tests/agent/test_expert_group.py` **26 例全绿**（脚本化 `run_member`，无模型）——
+三种 mode 的顺序/并发上限、`concat`/`lead` 聚合、空汇总回退拼接、单成员失败隔离、全失败抛错、
+事件归属、事件监听器抛错不拖垮调度，以及 11 条非法形状的参数化校验。
 
 **验收**：一次请求内真的调了 N 个成员（引擎日志可见），顺序符合 mode 语义。
+
+**未做（第 2 步的剩余）**：
+
+- 成员的 token 用量没有汇总进 `_last_usage`（用量页暂时看不到这 N 倍成本）。
+- 过程事件的**前端按成员分组渲染**属第 3 步；当前服务端 `_on_progress` 会忽略这些未知 kwarg
+  （字段已就位，等第 3 步消费）。
+- 客户端 UI 还未暴露 `lead` / `aggregate` / `maxConcurrent` 三个旋钮（现用引擎默认值）。
+- 端到端真机验证（起真实网关跑一次两成员团）尚未做——沙箱拉不起 nanobot 网关，
+  客户端接线由单测 + 引擎源码静态闭环。
 
 ### 第 3 步：事件流补成员归属
 

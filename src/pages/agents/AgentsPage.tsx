@@ -53,7 +53,7 @@ import {
   isBuiltinGroupId,
   EXPERT_GROUP_MODE_LABEL,
   EXPERT_GROUP_MODE_DESC,
-  EXPERT_GROUP_MODE_NOT_EFFECTIVE_NOTICE,
+  EXPERT_GROUP_MODE_NOTICE,
 } from "@/types";
 
 /** IM 平台中文标签 */
@@ -161,7 +161,7 @@ export function AgentsPage() {
   };
 
   /** 召唤专家团：与召唤专家同构——设为当前 activeGroup，有活跃会话则同步绑过去，跳回 chat。
-   *  会话 agentId 同步为团内首位启用成员（执行代表；完整多 Agent 编排依赖 nanobot 运行时，P2）。 */
+   *  会话 agentId 同步为团内首位启用成员（团长；全套编排由引擎按 mode 派发）。 */
   const summonGroup = (g: ExpertGroup) => {
     const leader = g.memberIds
       .map((id) => agents.find((a) => a.id === id))
@@ -402,10 +402,10 @@ export function AgentsPage() {
           <Typography variant="caption" color="text.secondary">
             {EXPERT_GROUP_MODE_DESC[groupForm.mode ?? "sequential"]}
           </Typography>
-          {/* FR-2.4 现状：模式只保存、不改变执行结果。必须紧贴选择控件 ——
-              用户正是在这里做选择，看到三档可选就会以为会生效 */}
-          <Alert severity="warning" sx={{ mt: 1, fontSize: 12.5 }}>
-            {EXPERT_GROUP_MODE_NOT_EFFECTIVE_NOTICE}
+          {/* FR-2.4：模式已由引擎真实编排（≥2 名启用成员时生效）。说明紧贴选择控件 ——
+              用户正是在这里做选择，「什么时候生效 / 什么时候不生效」必须当场看到 */}
+          <Alert severity="info" sx={{ mt: 1, fontSize: 12.5 }}>
+            {EXPERT_GROUP_MODE_NOTICE}
           </Alert>
 
           <Typography sx={{ fontSize: 13, mt: 1.5, mb: 0.5 }}>

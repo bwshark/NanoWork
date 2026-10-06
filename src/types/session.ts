@@ -5,7 +5,7 @@ import type { PermissionLog } from './permission';
 /** 一个会话（绑定某个 Agent，含消息流与权限决策记录） */
 export interface Session {
   id: string;
-  /** 绑定的 Agent id（专家团模式下为团内执行代表，完整编排依赖 nanobot 运行时 P2） */
+  /** 绑定的 Agent id（专家团模式下为**团长**：其工具策略界定整团上限，成员由引擎按 mode 派发） */
   agentId: string;
   /** 绑定的专家团 id；召唤专家团时设置（与 agentId 绑定对称），null 表示显式解除团绑定 */
   groupId?: string | null;

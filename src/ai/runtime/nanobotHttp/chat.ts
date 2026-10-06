@@ -8,6 +8,7 @@ import type {
   ApprovalDecision,
   ChatHandle,
   ChatRequest,
+  ExpertGroupRequest,
   StreamHandlers,
   TranscribeRequest,
   UploadFile,
@@ -84,6 +85,30 @@ const HEALTH_ABSENT_STATUSES = new Set([404, 405, 501]);
  */
 function healthUrlOf(endpoint: string): string {
   return `${endpoint.replace(/\/v\d+$/, '')}/health`;
+}
+
+/**
+ * 契约层专家团 → 引擎 wire 形态（`expert_group`）。
+ *
+ * 键名 camelCase → snake_case 的转换收在这里（与 workspace / tool_allow 同款分工），
+ * 契约类型因此不必出现引擎的键名。可选字段只在**存在**时写出——不要用 `?? ''` 之类
+ * 把它们填成确定值，否则「未声明的人设」会变成一段空字符串人设发下去。
+ */
+function expertGroupWire(group: ExpertGroupRequest): Record<string, unknown> {
+  return {
+    mode: group.mode,
+    members: group.members.map((m) => ({
+      id: m.id,
+      name: m.name,
+      ...(m.systemPrompt ? { system_prompt: m.systemPrompt } : {}),
+      ...(m.toolAllow !== undefined ? { tool_allow: m.toolAllow } : {}),
+      ...(m.toolDeny !== undefined ? { tool_deny: m.toolDeny } : {}),
+      ...(m.model ? { model: m.model } : {}),
+    })),
+    ...(group.lead ? { lead: group.lead } : {}),
+    ...(group.aggregate ? { aggregate: group.aggregate } : {}),
+    ...(group.maxConcurrent !== undefined ? { max_concurrent: group.maxConcurrent } : {}),
+  };
 }
 
 /**
@@ -316,6 +341,8 @@ export class NanobotClient {
       ...(req.agentId ? { agent_id: req.agentId } : {}),
       ...(req.toolAllow !== undefined ? { tool_allow: req.toolAllow } : {}),
       ...(req.toolDeny !== undefined ? { tool_deny: req.toolDeny } : {}),
+      // 专家团编排（FR-2.4 路径②）：命中时由引擎按成员派发，本轮不再走单 Agent loop
+      ...(req.expertGroup ? { expert_group: expertGroupWire(req.expertGroup) } : {}),
     };
     const auth = this.authHeaders();
 
@@ -330,7 +357,8 @@ export class NanobotClient {
     //
     // 注意（已核对 nanobot/nanobot/api/server.py 的 _parse_multipart）：
     // multipart 路径只识别 message / session_id / model / workspace / access_mode /
-    // approval_mode / session_mode / agent_id / tool_allow / tool_deny / files，
+    // approval_mode / session_mode / agent_id / tool_allow / tool_deny /
+    // expert_group / files，
     // **不解析 stream**，该分支下 stream 恒为 False，
     // 网关只会回完整 JSON（非 SSE）。
     // 因此前端必须兼容非流式响应（见 streamFormRequest.handleNonStreamResponse）。
@@ -354,6 +382,12 @@ export class NanobotClient {
     if (req.agentId) form.append('agent_id', req.agentId);
     if (req.toolAllow !== undefined) form.append('tool_allow', req.toolAllow.join(','));
     if (req.toolDeny !== undefined) form.append('tool_deny', req.toolDeny.join(','));
+    // 带附件的一轮也必须带上专家团清单，否则「带附件」会成为专家团编排的旁路
+    // （与 session_mode / agent_id 同款漏法）。multipart 无嵌套对象，用 JSON 串承载，
+    // 引擎侧 `_parse_multipart` 会 json.loads 回来。
+    if (req.expertGroup) {
+      form.append('expert_group', JSON.stringify(expertGroupWire(req.expertGroup)));
+    }
     req.files.forEach((f: UploadFile) => {
       const mime = f.mimeType ?? inferMime(f.name);
       const bytes = Uint8Array.from(atob(f.content), (c) => c.charCodeAt(0));

@@ -52,6 +52,7 @@ import {
 } from '@/lib/promptCatalog';
 import { assemblePromptSections } from '@/lib/promptAssembly';
 import { availablePresetIds, resolveTurnModel } from '@/lib/agentBinding';
+import { buildExpertGroupRequest } from '@/lib/expertGroupRequest';
 import { useAgentsStore } from './agentsStore';
 import { useArtifactsStore } from './artifactsStore';
 import { useExpertGroupsStore } from './expertGroupsStore';
@@ -864,6 +865,24 @@ async function streamAssistantReply(
       }
     });
 
+  /**
+   * 专家团编排（FR-2.4 路径②）：会话绑定的团在「≥2 名启用成员」时由引擎接管本轮。
+   *
+   * 解析不到团 / 团已停用 / 启用成员不足 → `undefined`，退回「以团内首位启用成员为
+   * `agentId` 的单专家一轮」（既有行为），不产生任何额外调用。构造与判据收在
+   * `buildExpertGroupRequest` 里，便于单测。
+   *
+   * 用 `getState()` 读一次而不订阅：这是发送动作里的取值，不是渲染依赖。
+   */
+  const group = session.groupId
+    ? useExpertGroupsStore.getState().groups.find((g) => g.id === session.groupId)
+    : undefined;
+  const expertGroup = buildExpertGroupRequest(
+    group,
+    agents,
+    availablePresetIds(useModelsStore.getState().models),
+  );
+
   const req: ChatRequest = {
     agentId: session.agentId,
     messages: history,
@@ -908,6 +927,9 @@ async function streamAssistantReply(
     // 而不是某个陈旧的快照。`?? undefined` 保持「未设置」而非「空数组」。
     toolAllow: agent?.toolAllow ?? undefined,
     toolDeny: agent?.toolDeny ?? undefined,
+    // 专家团编排：命中时引擎按成员派发。注意顶层 `toolAllow`（团长的策略）仍是
+    // 本轮作用域的**上限**——成员只能在其内进一步收窄（引擎侧权限单调递减）。
+    ...(expertGroup ? { expertGroup } : {}),
   };
 
   /**
@@ -1333,7 +1355,8 @@ export const useSessionsStore = create<SessionsState>()(
       /**
        * 兜底优先级与召唤逻辑对齐：显式 agentId > 全局活跃专家团 > 全局活跃专家。
        * 专家团绑定仅在其启用且存在启用成员时生效；
-       * agentId 取团内首位启用成员作为执行代表（完整多 Agent 编排依赖 nanobot 运行时，P2）。
+       * agentId 取团内首位启用成员作为**团长**——引擎按 mode 派发其余成员
+       *（见 `lib/expertGroupRequest.ts`；团长策略是整团的权限上限）。
        */
       const groupsState = useExpertGroupsStore.getState();
       const candidateGroup =

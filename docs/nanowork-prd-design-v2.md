@@ -204,8 +204,8 @@
 | FR-1.4 | **三种执行模式 Ask / Plan / Craft** | **P0** | ✅  | both | Ask：只读，禁止任何写工具；Plan：先产出结构化计划，**经用户批准后**才进入执行；Craft：直接执行。模式在会话内可切换且落到会话元数据。**已落地**：`session.mode`（事件 `session-start` / `mode-change` + meta），引擎侧由工具网关强制，不靠提示词（见 10.1）         |
 | FR-1.5 | **计划审批流**                     | **P0** | ✅  | both | Plan 模式产出的计划以可勾选清单呈现；支持逐项批准 / 全批准 / 打回并附意见；未批准前引擎不得调用写类工具（由工具网关强制，见第 11 章）。**已落地**：引擎新增 `submit_plan` 工具 → `kind=plan` 事件 → 客户端 `PlanCard` 勾选清单 → `plan-decision` 事件（见 10.2） |
 | FR-1.6 | 事件化会话记录                       | **P0** | ✅  | both | 会话以 JSONL 追加事件流持久化；事件带 `id`/`parentId`；支持按 `parentId` 重建分支与重放。**已落地**：`src/events/` 双实现（Electron 主进程落盘 / Web 降级），迁移三步（双写 → 切读 → 清理）均已完成，见 §9.6                               |
-| FR-1.7 | 会话检索                          | P1     | 🟡 | both | 支持标题 / 全文 / 时间 / 工作区 / Agent 多条件检索（`lib/taskQuery.ts` 已有雏形，需扩展到事件流）                                                                                                          |
-| FR-1.8 | 会话导入导出                        | P2     | 🟡 | both | `lib/sessionImport.ts` 已有导入；补导出与跨端迁移格式（含事件流）                                                                                                                                 |
+| FR-1.7 | 会话检索                          | P1     | ✅ | both | **已落地（commit `39847f9`，2026-10-06 复核）**：`lib/sessionSearch.ts`（`searchSessions` 异步读事件流做全文匹配，按 `sessionId+updatedAt` 缓存投影正文）、`lib/taskQuery.ts`（状态/时间/Agent/工作空间同步维度 + 标题/工作空间/正文 `matchQuery`）、`TaskSearchDialog`（⌘K 居中搜索窗，键盘导航）、`TaskFilterPanel`（状态/时间/工作空间/Agent 四维度筛选，选项从现有会话与 Agent 目录动态推导）、`taskQueryStore`；`TitleBar` 挂载搜索窗+筛选面板、`SidebarNav` 消费同一份 `filters`；测试 `tests/lib/sessionSearch.test.ts` / `taskQuery.test.ts` / `stores/taskQueryStore.test.ts` 已覆盖。⚠️ 今日日志「V1 剩余纯客户端」清单把 FR-1.7 误列未做，实为陈旧备注——它已于 `39847f9` 实现并提交 |
+| FR-1.8 | 会话导入导出                        | P2     | ✅ | both | **已落地（批次 6a/6b）**：导入 `lib/sessionImport.ts`（`mapRecordsToMessages` / `cronRecordsToSession` / `toIso`）；导出与跨端迁移由 `lib/accountArchive.ts` 的 `buildArchive`/`parseArchive`/`applyArchive` 承担，`ArchiveSessions` 含 `meta[]` + `events: Record<sessionId, SessionEvent[]>`（逐会话事件流无损），`AccountSection`「导出全部数据」入口已接；导入忽略 `workdir`（落接收方自身分片，与批次 5 同口径）。今日日志「V1 剩余纯客户端」把 FR-1.8 误列未做，实为陈旧备注 |
 
 ## R2 Agent、专家与专家团
 
@@ -214,7 +214,7 @@
 | FR-2.1 | Agent CRUD 与启停 | P0     | ✅  | both | 完整 CRUD + 持久化；可作为会话目标                                                                                                                                                                                                            |
 | FR-2.2 | Agent 工具白名单    | **P0** | ✅  | both | 每个 Agent 可声明允许/禁止的工具集；默认最小权限；越权调用被工具网关拦截（不依赖提示词）。引擎侧：`WorkspaceScope.tool_allow/tool_deny` + 纯函数 `agent_blocks_tool` + `AgentToolPolicyHook`（挂在**基线**钩子链上，ephemeral turn 同样绕不过）；客户端：`Agent.toolAllow/toolDeny` + 编辑 UI + 随每轮请求下发 |
 | FR-2.3 | 专家（Expert）     | P0     | 🟡 | both | 专家 = 系统提示词 + 知识库绑定 + 工具白名单 + 模型绑定；内置招聘 / 法务 / 投研 / 财务 / 写作等模板。**2026-10-05 核实**：四类绑定里**三类已生效**（提示词走 agent-persona 段、工具白名单逐轮下发 `tool_allow`/`tool_deny`、领域/风格覆盖），本轮补上**模型绑定**（`Agent.model`，预设名与 `Session.model` 同域；优先级 会话 > 专家；下发前拦已失效的预设）；内置模板补齐到 8 条（写作由「文档写作专家」承担），法务/投研的能力边界写进 systemPrompt。**知识库绑定属 M7（V2）**（V1 全仓无知识库/RAG 概念）——因此保持 🟡。详见 §20.9 |
-| FR-2.4 | 专家团编排          | P0     | 🟡 | both | `sequential` / `parallel` / `coordinator` 三模式**真实执行**（当前仅持久化与展示）；编排过程在 ProcessView 中可见。**2026-10-05 勘查结论：现状下做不了**——引擎只有**匿名子代理**（`SubagentManager` / `spawn`，system prompt 固定来自 `subagent_system.md`），而 `agent_id` **只用于工具策略**、不是人设路由，即引擎没有「运行某具名 Agent」的概念；`mode` 全仓无执行读取点，团成员唯一被逻辑读取处是「取首位启用成员当 leader」（所以只有那一个成员生效）。要真做 = 引擎新增「按具名成员派发」+ 定义编排语义（谁汇总 / 失败怎么办 / 上下文怎么传）。**在此之前 UI 已如实说明「只保存配置、不改变执行结果」**。详见 §20.9.6 |
+| FR-2.4 | 专家团编排          | P0     | 🟡 | both | `sequential` / `parallel` / `coordinator` 三模式**真实执行**（当前仅持久化与展示）；编排过程在 ProcessView 中可见。**2026-10-05 勘查结论：现状下做不了**——引擎只有**匿名子代理**（`SubagentManager` / `spawn`，system prompt 固定来自 `subagent_system.md`），而 `agent_id` **只用于工具策略**、不是人设路由，即引擎没有「运行某具名 Agent」的概念；`mode` 全仓无执行读取点，团成员唯一被逻辑读取处是「取首位启用成员当 leader」（所以只有那一个成员生效）。要真做 = 引擎新增「按具名成员派发」+ 定义编排语义（谁汇总 / 失败怎么办 / 上下文怎么传）。**在此之前 UI 已如实说明「只保存配置、不改变执行结果」**。**2026-10-06 进展：引擎侧编排已落地**（第 1 步「按成员派发」+ 第 2 步「编排调度」）——新增 `nanobot/agent/expert_group.py`（`parse_expert_group` 严格校验 + `ExpertGroupOrchestrator` 三模式调度/聚合/失败隔离），`agent/loop.py` 的 `_run_turn` 命中 `expert_group` 即接管（**只落一条 assistant 汇总**），`api/server.py` 接收并校验该字段（非法 400）；`tests/agent/test_expert_group.py` **26 例全绿**。**2026-10-06 客户端接线同批落地**：`lib/expertGroupRequest.ts` 由会话绑定的团构造规格（过滤已删/停用成员、**成员 < 2 名不下发**、成员模型按预设有效性筛选）→ `sessionsStore.streamAssistantReply` 塞进 `ChatRequest.expertGroup` → `chat.ts` 映射 wire `expert_group`（JSON body 与 multipart 双路，避免「带附件」成为编排旁路）；UI 的两处警示改为「已生效」说明（常量 `EXPERT_GROUP_MODE_NOTICE`）。**仍未做**：成员 token 用量未汇总进 `_last_usage`；ProcessView 按成员分组渲染属第 3 步（事件字段已就位）。详见 `docs/design-fr-2-4-expert-orchestration.md` §7 |
 | FR-2.5 | 子 Agent 委派     | P1     | ⬜  | both | 主 Agent 可委派子任务（nanobot `spawn` 工具）；子 Agent 的工具权限不得超过父级（权限单调递减）                                                                                                                                                                   |
 | FR-2.6 | 组织级资产发布        | P2     | ⬜  | both | 管理员把个人 Skill / 专家 / 提示词模板发布为组织资产，全员可见（V2）                                                                                                                                                                                        |
 
@@ -230,7 +230,7 @@
 | FR-3.6 | 生命周期钩子           | P2     | ⬜  | both | 插件可在会话开始 / 工具调用前后 / 会话结束挂载钩子                                                                                                                                                                                                                                           |
 | FR-3.7 | **市场注册与来源分级**    | **P1** | ✅  | both | 市场注册表含 `type`（directory/remote）/ `isBuiltIn` / `autoUpdate` / `lastSyncAt`；目录型不联网；远程型按 `autoUpdate` 决定启动拉取或按需拉取；**这两字段即「能否离线 / 失败怎么办」的判据**（见 12.5）。**本轮落地口径**：注册表 + 目录型同步 + 归档（`main.cjs` 侧的 `registry.json`）已通；远程型**无服务端，本轮只留模型与开关**，界面上同步按钮**禁用并说明原因**，不偷偷联网                                                                                                                                                       |
 | FR-3.8 | **版本隔离缓存**       | **P1** | ✅  | both | 缓存目录为 `cache/<market>/<plugin>/<version>/`；市场刷新只覆盖 `marketplaces/`，不替换生效副本；活跃会话按 `{plugin, version}` **版本引用集**解析而非取最新版；无引用旧副本可 GC（见 12.6）。**本轮落地口径**：目录布局与 `marketplaces/<m>/<n>/<v>/` 归档已通；**用 `<version>/current` 指针代替「活跃会话版本引用集」达成同一目标**（引擎插件发现发生在 `ContextBuilder` 构造期、工作区级，拿不到会话引用集，见 12.6.1）；GC 的引用集由客户端按「磁盘扫描出的生效包根」给出（主进程不知道哪些在跑，硬塞进去只会误删）                                                                                                        |
-| FR-3.9 | 扩展态同步边界          | P1     | ⬜  | both | 多端同步仅同步**启用态**（`enabledPlugins` + 会话版本引用集），不同步包本体；专家身份资源走云端、失败降级内置默认（见 12.7）                                                                                                                                                                                           |
+| FR-3.9 | 扩展态同步边界          | P1     | 🟡 | both | 多端同步仅同步**启用态**（`enabledPlugins` + 会话版本引用集），不同步包本体；专家身份资源走云端、失败降级内置默认（见 12.7）。**2026-10-06 代码核实**：**已落**——① 启用态同步：`src/lib/settingsSync.ts:47-49` 把 `enabledPlugins` 列为**保留**（可上云），注释显式对齐 FR-3.9「只同步意图、包本体各设备自装」；② 版本引用集概念：`src/stores/pluginsStore.ts:123/405`（GC 的 `referenced` 由客户端按生效包根给出）、`src/platform/types.ts:1092`，FR-3.8 另以 `<version>/current` 指针达成同一目标。**未落**——① 会话版本引用集的**跨端同步**（当前引用集只服务本机 GC，未进同步负载）；② 专家身份资源走**账户级 CDN**（`avatarUrl` 两形态）：现仅 `Agent.avatar?: string` 本地字段 + 派生占位（`src/types/agent.ts:85`），无账户命名空间云端与内置默认回退                                                                                                                                                                                           |
 
 ## R4 知识与记忆
 
@@ -266,7 +266,7 @@
 | FR-6.3 | **结果回推 IM**     | **P0** | ✅  | both     | 任务完成 / 长任务关键节点 → 通过原渠道回推结果；复用 `payload.deliver` 投递字段 **已落地（2026-10-05 补齐档位）**：FR-5.6 按路线 C 落地的 `CronDelivery` / `CronDeliveryTarget` 已把结果推到企微 / 微信 / 飞书渠道，`run_bound_cron_job` 完成后经 message bus 另发一份、出站复用 `_send_with_retry` 的指数退避。**2026-10-05 补 `start` 档位**（「开始时」开跑通知，见 §20.8）。**未做**：`milestone`（明确不做，理由见 §20.8.5）、持久化 outbox（跨重启补投，第一期由退避等价覆盖） |
 | FR-6.4 | **远程派活 → 会话归档** | **P0** | ✅ | both     | IM 指令驱动本地 Agent 执行，执行记录在客户端可见（`channelSessionsStore` 已有数据通道）。**已落地（2026-10-05）**：来源判定收到 `src/lib/channelSession.ts`（单一事实源）；侧栏「助理」按渠道分组 + 渠道筛选（分组键用渠道**原始首段**，未知渠道不再被并进「钉钉」）；IM 会话头部显示「来自 xx」来源标记且**标题只读**（网关标题改了会被下一轮轮询盖回）。详见 §20.7 |
 | FR-6.5 | IM 内审批          | P1     | ⬜  | both     | 敏感操作可在 IM 里一键批准/拒绝，无需回桌面（对齐 WorkBuddy `Approval`）                              |
-| FR-6.6 | 渠道健康与告警         | P1     | 🟡 | both     | 渠道掉线检测与提示（`channelDisconnect.ts` 已有）；补自动重连与告警                                  |
+| FR-6.6 | 渠道健康与告警         | P1     | ✅ | both     | **已落地（2026-10-06）**：复用引擎既有 `GET /api/settings/nanobot-features`（`with_channel_runtime_status` 已叠加运行时状态，feishu/lark 按 `instances[].domain` 拆分），由主进程 IPC `nanobot:getChannelRuntimeStatus` 经 `api_token` 鉴权拉取，**零引擎改动**；`channelsStore` 30s 轮询、合并 health/gatewayUp、weixin 掉线按 1/2/4s 退避自动重连（≤3 次）；UI 顶部网关未运行 error Alert + 掉线渠道 warning Alert + 卡片 `ChannelHealthBadge`（在线/连接中/失败/停止/未知）+ 「重新连接」按钮（手动 `syncAll` 重载）。⚠️ 端口必须打 **gateway(9900 WS+HTTP)**，与 bootstrap/WS 桥同源——旧实现错打 serve(18900) 必 `gatewayUp=false`（当日已修复并核对引擎源码）；沙箱无法对真实网关做端到端实证，上线后若取不到状态先查 `config.gateway.port` 是否被改非 9900 |
 
 
 ## R7 产物与文件回滚
@@ -291,7 +291,7 @@
 | FR-8.6 | 数据防泄漏            | P1     | ⬜  | both     | 检索前按权限过滤；提示词注入检测；记忆可彻底删除（不出租户边界）                                                                                                                                                                                                                                                                                                                                                              |
 | FR-8.7 | 敏感操作审批           | P2     | ⬜  | both     | 外发邮件/消息、删除文件、访问敏感目录、超额 API 调用 → 人审批后执行（V3）                                                                                                                                                                                                                                                                                                                                                    |
 | FR-8.8 | 内容审计             | P2     | ⬜  | both     | 输入输出敏感词/合规扫描，支持自定义规则（V3）                                                                                                                                                                                                                                                                                                                                                                      |
-| FR-8.9 | 审计日志             | P1     | 🟡 | both     | 全量操作留痕（谁/何时/对哪个 Agent/什么指令/什么工具/触达什么数据）；append-only；含命令哈希（对齐 WorkBuddy `audit-log/*.jsonl`）。**已落地（引擎侧）**：`security/audit.py` 在工具执行的唯一收口点写 `audit/tool-gateway.ndjson`，逐行 append-only，含 `timestamp / tool / tier / outcome / approved_by / args / args_digest(sha256) / session_key / channel / approval_mode / agent_id / reason`；写失败静默吞掉（审计不得反向影响执行）。**未做**：客户端检索/导出 UI、非工具类操作（技能启停、配置变更）的留痕 |
+| FR-8.9 | 审计日志             | P1     | 🟡 | both     | 全量操作留痕（谁/何时/对哪个 Agent/什么指令/什么工具/触达什么数据）；append-only；含命令哈希（对齐 WorkBuddy `audit-log/*.jsonl`）。**已落地（引擎侧）**：`security/audit.py` 在工具执行的唯一收口点写 `audit/tool-gateway.ndjson`，逐行 append-only，含 `timestamp / tool / tier / outcome / approved_by / args / args_digest(sha256) / session_key / channel / approval_mode / agent_id / reason`；写失败静默吞掉（审计不得反向影响执行）。**已落地（客户端，commit `39847f9`）**：`lib/auditLog.ts`（NDJSON 解析/筛选/CSV 导出）、`pages/audit/AuditPage.tsx`（检索窗 + 档位/结果/来源筛选 + CSV 导出）、`platform.auditRead()`（electron 读盘 / web 降级 `exists:false`）、侧边栏「审计」入口与路由；测试 `tests/lib/auditLog.test.ts` 已覆盖。**未做**：非工具类操作（技能启停、配置变更）的留痕——引擎侧目前只审计工具网关这一收口点，需引擎新增 emit 才能闭环「全量」 |
 
 ## R9 模型与能力协商
 
@@ -557,8 +557,11 @@
 >
 > - **`FR-2.3`（专家）**：四类绑定里提示词 / 工具 / 模型都已生效，**只剩「知识库绑定」**，
 >   而知识库属 M7 团队（V2）——即 **V1 范围内已实质完成**（见 §20.9）。
-> - **`FR-2.4`（专家团编排）**：**依赖引擎新能力**，现状不可行的依据与三条可选路径见
->   `docs/design-fr-2-4-expert-orchestration.md`。
+> - **`FR-2.4`（专家团编排）**：**引擎侧与客户端接线均已落地（2026-10-06）**——引擎
+>   `agent/expert_group.py` + `loop.py` 接管分支 + `api/server.py` 接收（JSON/multipart 双路），
+>   客户端 `lib/expertGroupRequest.ts` → `ChatRequest.expertGroup` → wire `expert_group`。
+>   **仍差**：ProcessView 按成员分组渲染（第 3 步，事件字段已就位）、成员 token 用量未汇总。
+>   设计见 `docs/design-fr-2-4-expert-orchestration.md` §7。
 >
 > **P1 状态基线**：24 条中 18 条已 ✅，未完成的 12 条按「能不能在没有新引擎能力的前提下做」分两类：
 >
@@ -3430,7 +3433,7 @@ PRD 要求内置「招聘 / 法务 / 投研 / 财务 / 写作」，实际长期�
 新增的模型选择器 `src/components/models/AgentModelPicker.tsx` 同样是抽出来的共用组件，
 没有在两边各写一段。
 
-### 20.9.6 ⚠️ FR-2.4 三模式：现状下**做不了真实执行**（勘查结论）
+### 20.9.6 ⚠️ FR-2.4 三模式：勘查结论（**2026-10-06 已落地，本节保留作历史**）
 
 原文要求 `sequential` / `parallel` / `coordinator` 三模式真实执行。2026-10-05 把链路读到底，
 结论是**引擎侧没有可用的落点**：
@@ -3441,22 +3444,26 @@ PRD 要求内置「招聘 / 法务 / 投研 / 财务 / 写作」，实际长期�
 | 团成员唯一被逻辑读取处是「取首位启用成员当 leader」→ 所以**只有那一个成员生效** | `sessionsStore.createSession` |
 | 引擎只有**匿名子代理**：`SubagentManager` + `spawn`，其 system prompt 固定来自 `agent/subagent_system.md`，**与团成员（具名 Agent）无关联** | `nanobot/nanobot/agent/subagent.py`、`agent/tools/spawn.py` |
 | 引擎的 `agent_id` **只用于工具策略**，不是人设路由 → 没有「运行某具名 Agent」的概念 | `nanobot/nanobot/api/server.py`、`security/workspace_access.py` |
-| 附带缺陷：`/v1` 链路下 `spawn(wait=false)` 结果**必然丢失**（serve/gateway 两进程各持 MemoryBus） | `OVERVIEW.md` |
+| 附带缺陷：`/v1` 链路下 `spawn(wait=false)` 结果**必然丢失**（**根因 2026-10-06 更正**：不是「两进程各持 MemoryBus」，而是 serve 进程**没有 inbound 消费者**——`consume_inbound()` 只在 `AgentLoop.run()` 里，serve 从不调它） | `docs/design-fr-2-4-expert-orchestration.md` §7.0 |
 | `ProcessEvent` 无成员字段 → 「谁在跑」连数据源都没有 | `types/process.ts` |
 
 所以「真实执行」= 引擎新增「按具名成员派发」能力（可复用 `SubagentManager`，但要把成员的
 人设/工具/模型传下去）+ 产品定义编排语义（谁汇总、失败怎么办、上下文怎么传）。
 
 **在引擎具备该能力之前，UI 必须如实说明**：两个表单的「协作模式」下方都加了警示
-（文案常量 `EXPERT_GROUP_MODE_NOT_EFFECTIVE_NOTICE`，一处定义两处引用），
+（当时常量名 `EXPERT_GROUP_MODE_NOT_EFFECTIVE_NOTICE`，一处定义两处引用），
 写明「只保存配置、不改变执行结果，一轮对话始终由团内首位启用成员完成」。
 这与投递档位 `milestone` 是同一类坑：**声明一个不生效的选项，只会让用户以为选了就会生效**。
+
+**2026-10-06 该能力已落地**，警示随之改为**生效说明**（常量更名为 `EXPERT_GROUP_MODE_NOTICE`，
+severity 由 `warning` 降为 `info`）：三模式真的由引擎在服务端编排，界面上讲清两处边界——
+① 至少两名启用成员才触发编排；② 成员输出只作为过程事件，最终汇总成为一条回复。
 
 ### 20.9.7 明确未做
 
 - **知识库绑定**：V1 无知识库/RAG 概念，属 M7（V2）。FR-2.3 因此**保持 🟡**——
   四类绑定里这类没落，标 ✅ 会让人以为 V1 范围内全做完了。
-- **FR-2.4 三模式真实执行**：见 §20.9.6，依赖引擎新能力。
+- **FR-2.4 三模式真实执行**：见 §20.9.6（该结论写于 2026-10-05）。**2026-10-06 已落地**：引擎侧编排调度（`agent/expert_group.py` + `loop.py` 接管分支 + `api/server.py` 接收 JSON/multipart）+ **客户端接线**（`lib/expertGroupRequest.ts` → `ChatRequest.expertGroup` → wire `expert_group`）。只剩 ProcessView 按成员归属渲染（第 3 步，事件字段已就位）与成员用量汇总，见 design §7。
 - **`imBinding` / `avatar` 的消费**：仍是只持久化未消费（`imBinding` 的 UI 自己也写了
   「真实绑定推送依赖 nanobot 运行时」）。
 

@@ -47,6 +47,46 @@ export interface UploadFile {
 }
 
 /**
+ * 专家团成员（FR-2.4 路径②：引擎侧编排）。
+ *
+ * 契约层用 camelCase；wire 形态（`system_prompt` / `tool_allow` / `model` …）
+ * 由 `nanobotHttp/chat.ts` 转换——与 workspace / accessMode 等同款分工，这里**不得**
+ * 出现引擎的键名。
+ */
+export interface ExpertGroupMember {
+  /** 成员的稳定标识（取 Agent id）。引擎按它归属进度事件 */
+  id: string;
+  /** 成员展示名（进度事件里给用户看「谁在跑」） */
+  name: string;
+  /** 成员人设（`Agent.systemPrompt`）：作为该成员子代理的 persona 注入 */
+  systemPrompt?: string;
+  /** 成员工具白名单；`undefined` = 不限制，空数组 = 一个都不许（两者语义不同） */
+  toolAllow?: string[];
+  /** 成员工具黑名单；优先级高于 `toolAllow` */
+  toolDeny?: string[];
+  /** 成员模型覆盖（预设名，与 `Session.model` 同域）；缺省继承本轮模型 */
+  model?: string;
+}
+
+/**
+ * 专家团编排请求（FR-2.4 路径②）：**一次请求内**由引擎调度多名成员。
+ *
+ * 关键语义（设计 §7.2 定死）：成员输出不是消息、只作为过程事件，**只有最终汇总
+ * 成为一条 assistant 消息**——否则会话历史按成员数膨胀，并污染下一轮上下文。
+ */
+export interface ExpertGroupRequest {
+  mode: 'sequential' | 'parallel' | 'coordinator';
+  /** 成员清单（至少 2 名才由客户端下发；引擎硬上限 8） */
+  members: ExpertGroupMember[];
+  /** 协调者 / 收口成员 id；缺省由引擎取首位成员 */
+  lead?: string;
+  /** 汇总方式：`lead`（默认，leader 再跑一轮收口）/ `concat`（机械拼接） */
+  aggregate?: 'lead' | 'concat';
+  /** 并发上限；缺省由引擎定（4） */
+  maxConcurrent?: number;
+}
+
+/**
  * 发送给 `AgentRuntime.chat` 的会话请求。
  *
  * 注意：这里**不含** endpoint / token 等连接参数——连接信息由实现自行解析
@@ -96,6 +136,13 @@ export interface ChatRequest {
   toolAllow?: string[];
   /** Agent 工具黑名单（FR-2.2）；优先级高于 `toolAllow` */
   toolDeny?: string[];
+  /**
+   * 专家团编排（FR-2.4 路径②）：会话绑定了一个「≥2 名启用成员」的专家团时下发。
+   *
+   * 命中时**引擎接管本轮**——按成员各自的人设 / 工具 / 模型派发，最终汇总落成
+   * 唯一一条 assistant 消息。为 `undefined` 时本轮就是普通单 Agent 对话。
+   */
+  expertGroup?: ExpertGroupRequest;
   /** 随请求上传的文件 */
   files?: UploadFile[];
 }
