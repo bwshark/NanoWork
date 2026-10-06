@@ -64,7 +64,9 @@ WorkBuddy 式智能体客户端：React 18 + TS + Vite 渲染层 + Electron 主�
 | IM 会话来源（FR-6.4） | 分组/筛选键用**渠道原始首段**（`ChannelKind` 只 5 个成员，未知渠道会被**图标**的回退规则并进钉钉组）；来源判定（`channel` 非空）与本地 id 前缀是两个判据不许合并；筛选态放 store（Tab 是条件渲染，组件 state 会重挂载丢）；IM 标题只读（轮询会盖回） | §7.33 |
 | 投递档位（FR-5.6/6.3） | `_DELIVERY_MODES` 三档是**包含**关系 `error` ⊂ `complete` ⊂ `start`；加档位必须有「不影响既有档位」的用例 + 登记表用例 | §7.34.1/§7.34.5 |
 | ⚠️ cron 进度事件**早就在发** | `channel != "system"` 一律 `publish_lifecycle=True`，cron turn 的 channel 是 origin → `ProgressEvent`（含 `tool_events`）已经发出，受渠道 `send_progress`/`send_tool_hints` 控制。**做 milestone 的真实工作量是「镜像到 targets + 定节流」，不是「找信号源」** | §7.34.2 |
-| ⚠️ FR-2.4 专家团「真实执行」现状**做不了** | `spawn` 只有 `task/label/temperature/wait`（无人设/工具策略），子代理人设由固定模板构造，`agent_id` 只用于工具策略 → 引擎没有「运行某具名 Agent」的概念；`mode` 全仓无执行读取点。**三条路径与 5 个待产品决策的语义问题见方案文档** | `docs/design-fr-2-4-expert-orchestration.md` |
+| FR-2.4 路径② 引擎编排（**已选定**） | 第 1 步「按成员派发」**已落地**：`persona`（追加不覆盖）+ 子代理 `CompositeHook` 补 `AgentToolPolicyHook` + `LLMRuntime.with_model()`。第 2 步（编排调度）未做 | `docs/design-fr-2-4-expert-orchestration.md` §7 |
+| ⚠️ `spawn(wait=false)` 丢结果的真因 | **不是**跨进程：`/v1` 由 serve 处理 → 子代理也在 serve，`_announce_result` publish 到**同一个** bus。真因是 **serve 进程没有 inbound 消费者**（唯一 `consume_inbound()` 在 `AgentLoop.run()`，`serve` 只 `web.run_app()`）。⚠️ 与 FR-2.4 **无依赖**（编排用 `run_inline` 直接 await，不走总线） | 方案 §7.0 |
+| ⚠️ 子代理曾缺 `AgentToolPolicyHook` | 父 Agent 被 `tool_deny` 挡的工具，只要 `spawn` 还在白名单就能让子代理代劳 → **白名单旁路**（2026-10-06 已修）。修法是补 hook 而非新传策略：`SpawnTool` 已把父 `workspace_scope` 带进来 → 权限单调递减是**继承**出来的 | `subagent.py` §7.37 |
 | 专家表单已收口为共用组件 | `AgentFormDialog`（超集）供「专家管理 / 我的专家」两个入口共用；`PLATFORM_LABEL` 收口到 `lib/imPlatform.ts`；草稿重置用 `useEffect` 不用 `key`（保退出动画） | §7.35.6 |
 | ⚠️ 两个 MUI 实测坑 | `MuiFormControlLabel-label` 类名**不存在**（选择器会静默拿 null）；`FormControlLabel` 的负 margin 让开关与文字**零间距**（看着像压住字，几何上只是紧贴） | §7.35.7 |
 | ⚠️ 项目未开 `noUnusedLocals` | 搬迁代码后残留的未使用 import/变量默认 tsc **抓不到** → 用 `tsc --noEmit --noUnusedLocals` 自查（注意它会报全仓既有项，只清自己改的文件） | §7.35.6 |

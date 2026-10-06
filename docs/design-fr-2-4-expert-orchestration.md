@@ -18,7 +18,7 @@
 | 子代理人设由**固定模板**构造，函数签名里没有 agent 概念 | `agent/subagent.py:570` 的 `_build_subagent_prompt(workspace)` → `templates/agent/subagent_system.md` |
 | 引擎的 `agent_id`（请求参数）**只用于工具策略**，不是人设路由 | `api/server.py`、`security/workspace_access.py` |
 | 「带人设的专家」完全由**客户端**拼提示词实现（`assemblePromptSections` 的 agent-persona 段）+ 下发 `tool_allow`/`tool_deny` | `src/lib/promptAssembly.ts`、`sessionsStore.send` |
-| 已知缺陷：`/v1` 链路下 `spawn(wait=false)` 的**结果必然丢失**（serve / gateway 两进程各持 MemoryBus） | `OVERVIEW.md` |
+| 已知缺陷：`/v1` 链路下 `spawn(wait=false)` 的**结果必然丢失**——根因是 **serve 进程没有 inbound 消费者**（见 §7.0 更正），不是跨进程 | `OVERVIEW.md` |
 | `ProcessEvent` 无成员字段 → 「谁在跑」连数据源都没有 | `src/types/process.ts` |
 
 **结论**：引擎里没有「运行某个具名 Agent」这个概念。三模式要真跑，只有两条路——
@@ -95,7 +95,7 @@
 1. `SubagentManager.spawn() / run_inline()` 增加 `system_prompt`、`tool_allow`、`tool_deny`、`model`
    四个可选入参，并在 `_build_subagent_prompt` 里按 §2 决定「覆盖 vs 追加」；
 2. 一个新的调度器（或在 `run_turn` 里）读 `expert_group`，按 mode 依次 / 并发调用上面两条路径之一；
-3. **先修** `spawn(wait=false)` 在 `/v1` 链路丢结果的缺陷（否则背景成员的结果永远回不来）；
+3. 客户端需自行等待并发成员（不受 §7.0 缺陷影响——客户端编排用同步调用，不走总线）；
 4. 事件流补成员归属（`member_id` 进 `ProgressEvent`），否则 ProcessView 仍无法表达「谁在跑」。
 
 **优点**：一次请求搞定；成员在**同一 turn** 内跑 → 事件流天然可归属；客户端不必自己管并发/中断/上下文。
@@ -128,7 +128,7 @@
   理由：串行最容易讲清语义（一条接一条，天然有序）、最容易做进度归属、也不涉及并发与中断的复杂度。
   同时把 §2 的 5 个问题在实现里定下来并写进 PRD。
 - **第三期**：在路径 1 的三个模式都跑通、且用户对「N 倍 token」有感知之后，
-  再评估是否值得下沉到路径 2（引擎编排）。届时前置项是修 `spawn(wait=false)` 丢结果。
+  再评估是否值得下沉到路径 2（引擎编排），其起点是第 1 步「按成员派发」，不是 §7.0。
 
 ## 5. 验收（路径 1 · sequential 为例）
 
@@ -154,26 +154,66 @@
 
 ## 7. 路径 2 的实施步骤（已选定）
 
-四步有**强制顺序**：第 0 步是前置阻塞项，不先修好，后面的「并发成员」全是空谈。
+> **2026-10-06 更正**：本节初稿把第 0 步写成「前置阻塞项」，且把根因写成「两进程各持
+> MemoryBus」——**两条都错了**，见 §7.0。第 0 步与编排**无依赖**（编排器用 `run_inline`
+> 直接 await，不走消息总线），已降级为独立缺陷修复；第 1 步才是真正的起点。
 
-### 第 0 步（前置）：修 `/v1` 链路下 `spawn(wait=false)` 丢结果
+### 7.0 （独立缺陷，非前置）`/v1` 链路下 `spawn(wait=false)` 丢结果
 
-现状：`serve` 与 `gateway` 是两个进程、各持一个 MemoryBus；背景子代理完成后把结果
-`publish_outbound` 到**自己进程**的 bus，而 `/v1` 调用的响应走另一个进程 → 结果永远回不来。
-在修好之前，`parallel` / `coordinator` 只能退化成 `wait=true` 的同步等待（等于串行）。
+**根因更正（2026-10-06 实测）**。初稿写的「serve / gateway 两进程各持 MemoryBus」不成立：
 
-**验收**：起一个背景子代理，断言它的结果能被 `/v1` 侧的调用方拿到。
+- 子代理跑在**发起它的那个进程**里。`/v1` 请求由 `serve` 进程处理
+  （`nanobot/cli/commands.py:349` 起），所以 spawn 出的子代理也在 serve 进程，
+  `_announce_result` 把结果 `publish_inbound` 到**同一个** `MessageBus`
+  （`nanobot/agent/subagent.py:559`）→ 不涉及跨进程。
+- 真因是 **serve 进程里没有 inbound 消费者**：全仓唯一的 `consume_inbound()` 在
+  `AgentLoop.run()`（`nanobot/agent/loop.py:1315`），而 `serve` 只做
+  `web.run_app(...)`（`commands.py:448`），**从不调用 `run()`** → 注入消息永远躺在
+  `asyncio.Queue` 里，无人唤醒主 agent。
+  （两进程的说法对 **cron** 成立——调度由 gateway 独占——但与本缺陷无关。）
 
-### 第 1 步：让派发支持「按成员」
+**与 FR-2.4 的关系：无依赖**。编排器应当用 `SubagentManager.run_inline()`
+（`subagent.py:308`，`await inline_task` 直接返回结果、`announce=False`）并发 gather，
+**完全不经过消息总线**。所以丢结果不会阻塞编排；它只影响「用户手动让 agent 后台跑个任务」
+这个普通聊天场景——模型承诺了 "I'll notify you when it completes"，而这句话在本链路下
+**永远兑现不了**。
 
-- `SubagentManager.spawn() / run_inline()` 增加 `system_prompt` / `tool_allow` / `tool_deny` / `model`
-  四个可选入参；
-- `_build_subagent_prompt()` 明确「**追加**还是**覆盖**」（建议默认**追加**，保留模板里的
-  工作区与技能约束——覆盖会让子代理失去工作区边界，那是安全边界不是风格问题）；
-- 工具策略复用现有 workspace_access 机制，并**显式校验权限单调递减**（子集关系）——
-  FR-2.5 同样依赖这条约束。
+修法候选（待定，语义差异大，需先选）：
+
+| 方案 | 语义 | 代价 |
+| --- | --- | --- |
+| A 请求内等待 | HTTP 响应前等本会话后台任务完成，结果随响应返回 | 后台变前台等待，长任务会撞 `timeout_s` |
+| B serve 起消费者 | 保留真后台，续跑主 agent 汇总 | 客户端拿不到（HTTP 已关），需新通道 + 客户端配合 |
+| C 不撒谎 | 该链路下明确告知「后台结果不会自动回来」，或强制 `wait=true` | 不提供能力 |
+
+**验收**（任一方案）：起一个背景子代理，断言它的结果不再静默消失——要么回到调用方，
+要么被明确告知。
+
+### 第 1 步：让派发支持「按成员」—— **已落地（2026-10-06）**
+
+实测后比原计划**小得多**，因为三块里有两块早已具备，缺的是「接上」而不是「新建」：
+
+| 能力 | 原计划 | 实测 | 落点 |
+| --- | --- | --- | --- |
+| 人设 | 新增 `system_prompt` 入参 | 新增 `persona` 入参，**追加**而非覆盖 | `subagent.py:_build_subagent_prompt` |
+| 工具策略 | 新增 `tool_allow` / `tool_deny` | **已存在于 `WorkspaceScope`**，缺的是子代理侧没装授权门 | `subagent.py` 的 `CompositeHook` |
+| 模型 | 新增 `model` 入参 | **`LLMRuntime` 本就带 model**，加 `with_model()` 即可派生 | `utils/llm_runtime.py` |
+
+**顺带修了一个真实的安全旁路**：`_run_admitted_subagent` 的 hook 链里**没有**
+`AgentToolPolicyHook`（只有 `ToolApprovalHook` / `SessionModeHook`）→ 父 Agent 被
+`tool_deny` 挡住的工具，只要 `spawn` 还在白名单里，就能让子代理代劳（`_build_tools`
+是全量加载的，不受父策略约束）。最小权限退化成「只对直接调用生效的礼貌」。
+
+修法是**补上那一个 hook**，而不是新传一份策略：`SpawnTool` 已经把
+`current_workspace_scope()`（父作用域，含 tool_allow / tool_deny）原样带进来，本函数
+又 bind 了它——所以「权限单调递减」是**继承**出来的，不需要调用方记得再声明一遍
+（后者必然会被漏掉）。FR-2.5 依赖的同一条约束也随之成立。
+
+**人设为什么是追加**：`_build_subagent_prompt` 渲染的模板里装着**工作区边界与技能清单**，
+那是安全边界不是风格。允许覆盖等于让「派发给成员」顺手开出一条越界通道。
 
 **验收**：派出的子代理用的是**指定成员的人设与工具集**，而不是固定那份 `subagent_system.md`。
+已配 6 例 + 2 条变异验证（移除授权门 / 改追加为覆盖，均确认转红）。
 
 ### 第 2 步：编排调度
 
