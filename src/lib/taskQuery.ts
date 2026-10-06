@@ -11,6 +11,7 @@
  */
 import type { Session } from '@/types';
 import type { StreamStatus } from '@/stores/sessionsStore';
+import { isSameWorkspacePath } from '@/lib/workspaceLabel';
 
 /** 任务状态（筛选面板「状态」维度的取值） */
 export type TaskStatusKey =
@@ -30,6 +31,14 @@ export type TaskTimeFilter = 'all' | 'today' | 'week' | 'month';
 export interface TaskFilters {
   status: TaskStatusFilter;
   time: TaskTimeFilter;
+  /** Agent 维度：`'all'` 表示不按 Agent 筛选；其余为具体 Agent id（空串 `''` = 未绑定专家） */
+  agentId: string;
+  /**
+   * 工作空间维度：`'all'` 表示不按工作空间筛选；其余为工作空间分组键——
+   * 空串 `''` 表示「默认工作空间」分组，非空前为 `Session.workdir`（语义工作空间路径）。
+   * 取值与 `SidebarNav.groupSessionsByWorkdir` 的分组键同源，保证筛选与列表分组一致。
+   */
+  workspace: string;
 }
 
 /** 筛选面板「筛选状态」的选项表（顺序即面板中的展示顺序） */
@@ -71,17 +80,27 @@ export const TASK_STATUS_META: Record<
 export const DEFAULT_TASK_FILTERS: TaskFilters = {
   status: 'all',
   time: 'all',
+  agentId: 'all',
+  workspace: 'all',
 };
 
 /** 判断筛选条件是否为「默认（未筛选）」状态 */
 export function isFilterDefault(filters: TaskFilters): boolean {
-  return filters.status === 'all' && filters.time === 'all';
+  return (
+    filters.status === 'all' &&
+    filters.time === 'all' &&
+    filters.agentId === 'all' &&
+    filters.workspace === 'all'
+  );
 }
 
 /** 生效的筛选维度个数（用于筛选图标的激活态提示） */
 export function activeFilterCount(filters: TaskFilters): number {
   return (
-    (filters.status === 'all' ? 0 : 1) + (filters.time === 'all' ? 0 : 1)
+    (filters.status === 'all' ? 0 : 1) +
+    (filters.time === 'all' ? 0 : 1) +
+    (filters.agentId === 'all' ? 0 : 1) +
+    (filters.workspace === 'all' ? 0 : 1)
   );
 }
 
@@ -155,9 +174,53 @@ export function matchTime(
 }
 
 /**
+ * Agent 维度筛选。
+ *
+ * 空串 `''` 是「未绑定专家」的合法取值（新建任务的默认态），与「全部」(`'all'`)
+ * 必须区分——两者语义不同，不能互相替代。
+ */
+export function matchAgent(session: Session, agentId: string): boolean {
+  if (agentId === 'all') return true;
+  return session.agentId === agentId;
+}
+
+/**
+ * 取会话的工作空间分组键（与 `SidebarNav.groupSessionsByWorkdir` 同源）。
+ *
+ * 落到默认工作空间上的会话与没绑工作空间的会话合并成同一个组（key `''`）——
+ * 两者在语义上都是「设置里那个默认工作空间下的任务」，否则侧边栏会并排出
+ * 两个指向同一目录的组。
+ */
+export function workspaceKeyOf(
+  session: Session,
+  defaultWorkspacePath?: string,
+): string {
+  if (isSameWorkspacePath(session.workdir, defaultWorkspacePath)) return '';
+  return session.workdir ?? '';
+}
+
+/**
+ * 工作空间维度筛选。
+ *
+ * `'all'` 表示不筛选；空串 `''` 表示筛选「默认工作空间」分组（与 `workspaceKeyOf`
+ * 的默认组键一致）。`Session.workdir` 是**语义工作空间**（`meta.workspace ?? meta.workdir`，
+ * 见 `project.metaToSession`），因此与侧边栏分组口径一致。
+ */
+export function matchWorkspace(
+  session: Session,
+  workspace: string,
+  defaultWorkspacePath?: string,
+): boolean {
+  if (workspace === 'all') return true;
+  return workspaceKeyOf(session, defaultWorkspacePath) === workspace;
+}
+
+/**
  * 关键词匹配：标题 / 工作空间路径 / 消息正文。
  *
  * 命中消息正文是刻意为之——只匹配标题时「搜任务」几乎没用（用户记不住标题原文）。
+ * 注意：本函数只搜**已水合**消息（`session.messages`）；未点开过的会话消息留白，
+ * 它们的正文全文检索由 `@/lib/sessionSearch` 异步接管（见 FR-1.7）。
  */
 export function matchQuery(session: Session, query: string): boolean {
   const q = query.trim().toLowerCase();
@@ -177,12 +240,15 @@ export function matchTask(
     filters: TaskFilters;
     streamStatus?: StreamStatus;
     now?: number;
+    defaultWorkspacePath?: string;
   },
 ): boolean {
-  const { query = '', filters, streamStatus, now } = opts;
+  const { query = '', filters, streamStatus, now, defaultWorkspacePath } = opts;
   if (!matchQuery(session, query)) return false;
   if (!matchStatus(session, filters.status, streamStatus)) return false;
   if (!matchTime(session, filters.time, now)) return false;
+  if (!matchAgent(session, filters.agentId)) return false;
+  if (!matchWorkspace(session, filters.workspace, defaultWorkspacePath)) return false;
   return true;
 }
 
@@ -198,9 +264,10 @@ export function filterTasks(
     filters: TaskFilters;
     streams?: Record<string, { status: StreamStatus }>;
     now?: number;
+    defaultWorkspacePath?: string;
   },
 ): Session[] {
-  const { query = '', filters, streams, now } = opts;
+  const { query = '', filters, streams, now, defaultWorkspacePath } = opts;
   // 时间不可解析的会话排到最后，避免 NaN 让整个排序退化
   const updatedAtOf = (s: Session) => {
     const v = Date.parse(s.updatedAt);
@@ -213,6 +280,7 @@ export function filterTasks(
         filters,
         streamStatus: streams?.[s.id]?.status,
         now,
+        defaultWorkspacePath,
       }),
     )
     .sort((a, b) => updatedAtOf(b) - updatedAtOf(a));

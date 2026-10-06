@@ -12,7 +12,7 @@ import {
 import { ensureMetaList, withTombstone, withoutTombstone } from '@/lib/syncMeta';
 import { metaForDelete, metaForEdit, metaForNew } from '@/lib/syncStamp';
 import { getRuntime, type SyncResult } from '@/ai/runtime';
-import type { CredentialVaultStatus, SecretWriteResult } from '@/platform/types';
+import type { ChannelRuntimeHealth, CredentialVaultStatus, SecretWriteResult } from '@/platform/types';
 import type { ChannelConfig, ChannelKind, SyncTombstones } from '@/types';
 
 /**
@@ -44,6 +44,13 @@ const AUTO_SYNC_DEBOUNCE_MS = 600;
 
 /** 防抖定时器句柄（模块级，跨 store 调用共享） */
 let autoSyncTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** FR-6.6 健康轮询间隔（毫秒）：约 30s 拉一次渠道实时状态 */
+const HEALTH_POLL_MS = 30_000;
+/** FR-6.6 token 类渠道自动重连的最大尝试次数（退避，超出后交手动按钮） */
+const AUTO_RECONNECT_MAX = 3;
+/** 健康轮询定时器句柄（模块级，跨调用共享） */
+let healthTimer: ReturnType<typeof setInterval> | null = null;
 
 /** 最近一次同步结果摘要（供 UI 提示；不参与持久化） */
 export interface ChannelSyncSummary {
@@ -127,6 +134,35 @@ interface ChannelsState {
    * 引擎侧凭证已由主进程直写清除，卡片自然回到未连接态。
    */
   disconnectChannel: (kind: ChannelKind) => void;
+  /**
+   * FR-6.6 实时健康：按 ChannelKind 归一的渠道运行时状态（区别于磁盘配置）。
+   * 仅 electron 有效；web 恒为空（无网关）。
+   */
+  health: Partial<Record<ChannelKind, ChannelRuntimeHealth>>;
+  /** 最近一次健康查询结果（ok=false 时的原因）；不参与持久化 */
+  healthError: string | null;
+  /** 网关是否在运行且可达（null = 尚未查询 / web 端） */
+  gatewayUp: boolean | null;
+  /** 最近一次取数时间（ISO 8601 UTC）；不参与持久化 */
+  lastHealthAt: string | null;
+  /** 各渠道自动重连已尝试次数（模块级退避计数；不入持久化） */
+  reconnectAttempts: Partial<Record<ChannelKind, number>>;
+  /**
+   * 查询并合并渠道实时健康（FR-6.6）。失败 / web 端安全降级，不抛异常。
+   * 对 token 类渠道（weixin）检测到 failed/stopped 且已启用时，
+   * 按退避自动触发 syncAll 重连（最多 {@link AUTO_RECONNECT_MAX} 次）。
+   */
+  refreshHealth: () => Promise<void>;
+  /** 启动 ~30s 健康轮询（页面挂载时调用，幂等） */
+  startHealthPolling: () => void;
+  /** 停止健康轮询（页面卸载时调用） */
+  stopHealthPolling: () => void;
+  /**
+   * 手动重连某渠道：重置自动重连计数并触发重连。
+   * - weixin（token 类）：syncAll 重连（重新合并配置 + 重启网关）；
+   * - feishu / lark（QR 类）：需用户重新扫码，由 UI 唤起接入流程，本方法仅刷新健康。
+   */
+  reconnectChannel: (kind: ChannelKind) => Promise<void>;
 }
 
 /** 回读并发保护：启动期多次调用只执行一次 */
@@ -181,6 +217,11 @@ export const useChannelsStore = create<ChannelsState>()(
         lastSync: null,
         vaultAvailable: null,
         secretKeys: {},
+        health: {},
+        healthError: null,
+        gatewayUp: null,
+        lastHealthAt: null,
+        reconnectAttempts: {},
 
         refreshSecrets: async () => {
           const status = await platform.secretsStatus();
@@ -471,6 +512,78 @@ export const useChannelsStore = create<ChannelsState>()(
           }));
           // 保险库条目一并清除（主进程断开时也会删，这里是双保险，幂等）
           clearVaultEntry(kind);
+        },
+
+        refreshHealth: async () => {
+          try {
+            // web 端无网关：platform 直接返回 null，安全降级为空健康
+            const report = await platform.getChannelRuntimeStatus();
+            if (!report) {
+              set({ gatewayUp: null, healthError: null, lastHealthAt: null });
+              return;
+            }
+            set({
+              health: report.health,
+              gatewayUp: report.gatewayUp,
+              healthError: report.error ?? null,
+              lastHealthAt: report.fetchedAt,
+            });
+            // 自动重连：仅 token 类（weixin），且已启用却 failed/stopped
+            if (report.ok && report.gatewayUp) {
+              const configs = get().configs;
+              for (const cfg of configs) {
+                if (cfg.kind !== 'weixin') continue;
+                if (!cfg.enabled) {
+                  set((s) => ({ reconnectAttempts: { ...s.reconnectAttempts, weixin: 0 } }));
+                  continue;
+                }
+                const h = report.health.weixin;
+                const down = !!h && (h.state === 'failed' || h.state === 'stopped');
+                if (!down) {
+                  set((s) => ({ reconnectAttempts: { ...s.reconnectAttempts, weixin: 0 } }));
+                  continue;
+                }
+                const attempts = get().reconnectAttempts.weixin ?? 0;
+                if (attempts < AUTO_RECONNECT_MAX) {
+                  set((s) => ({
+                    reconnectAttempts: { ...s.reconnectAttempts, weixin: attempts + 1 },
+                  }));
+                  // 退避：指数间隔（1s / 2s / 4s，封顶 8s）后触发 syncAll 重连
+                  const delay = Math.min(8000, 1000 * 2 ** attempts);
+                  setTimeout(() => {
+                    void get().syncAll().catch(() => undefined);
+                  }, delay);
+                }
+              }
+            }
+          } catch {
+            set({ healthError: '渠道健康查询失败', gatewayUp: false });
+          }
+        },
+
+        startHealthPolling: () => {
+          if (healthTimer) return;
+          void get().refreshHealth();
+          healthTimer = setInterval(() => {
+            void get().refreshHealth();
+          }, HEALTH_POLL_MS);
+        },
+
+        stopHealthPolling: () => {
+          if (healthTimer) {
+            clearInterval(healthTimer);
+            healthTimer = null;
+          }
+        },
+
+        reconnectChannel: async (kind) => {
+          // 手动优先：重置该渠道自动重连计数
+          set((s) => ({ reconnectAttempts: { ...s.reconnectAttempts, [kind]: 0 } }));
+          // 重新合并配置 + 重启网关：所有渠道运行时随之重载。
+          // - token 类（weixin）：凭证在 config.json，重启即重连；
+          // - QR 类（feishu / lark）：若凭证仍在则重载恢复，若已失效用户可走「断开 + 重新扫码」。
+          await get().syncAll().catch(() => undefined);
+          void get().refreshHealth().catch(() => undefined);
         },
       };
     },

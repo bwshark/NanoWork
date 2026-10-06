@@ -1125,8 +1125,16 @@ async function readTokenIssueSecret(): Promise<string | null> {
   }
 }
 
-/** 经 /webui/bootstrap 签发一次性握手 token（node http GET，5s 超时） */
-function bootstrapGatewayToken(issueSecret: string): Promise<string> {
+/**
+ * 经 /webui/bootstrap 签发一次性握手 token 与（可选）API token。
+ * - `token`：WS 桥握手用（audience=webui）；
+ * - `apiToken`：HTTP `/api/*` 鉴权用（audience=api），仅当 config 配置了
+ *   `channels.websocket.tokenIssueSecret` 时由网关一并签发（nanowork 已配置）。
+ * node http GET，5s 超时。
+ */
+function bootstrapGatewayToken(
+  issueSecret: string,
+): Promise<{ token: string; apiToken: string | null }> {
   return new Promise((resolve, reject) => {
     const req = httpRequest(
       {
@@ -1146,9 +1154,12 @@ function bootstrapGatewayToken(issueSecret: string): Promise<string> {
             return;
           }
           try {
-            const parsed = JSON.parse(raw) as { token?: string };
-            if (parsed.token) resolve(parsed.token);
-            else reject(new Error('bootstrap 响应缺少 token'));
+            const parsed = JSON.parse(raw) as { token?: string; api_token?: string };
+            if (parsed.token) {
+              resolve({ token: parsed.token, apiToken: parsed.api_token ?? null });
+            } else {
+              reject(new Error('bootstrap 响应缺少 token'));
+            }
           } catch {
             reject(new Error('bootstrap 响应解析失败'));
           }
@@ -1171,7 +1182,7 @@ async function getGatewayBridge(): Promise<GatewayBridge> {
   gatewayBridgeConnecting = (async () => {
     const secret = await readTokenIssueSecret();
     if (!secret) throw new Error('config.json 缺少 channels.websocket.tokenIssueSecret');
-    const token = await bootstrapGatewayToken(secret);
+    const { token } = await bootstrapGatewayToken(secret);
     const ws = new WebSocket(`ws://${GATEWAY_WS_HOST}:${GATEWAY_WS_PORT}/?token=${token}`);
     const bridge: GatewayBridge = { ws, pending: new Map() };
     // close / error 清理监听在握手前注册：握手失败路径也能清在途请求并释放连接，
@@ -1280,6 +1291,190 @@ async function channelConnectViaGateway(
       ok: false,
       error: `网关未运行或连接失败：${err instanceof Error ? err.message : String(err)}`,
     };
+  }
+}
+
+/**
+ * 带超时的 HTTP GET，返回解析后的 JSON（非 200 或解析失败抛错）。
+ * 用于 FR-6.6 向运行中的网关查询渠道实时运行时状态。
+ */
+function httpGetJson(url: string, timeoutMs: number): Promise<unknown> {
+  const u = new URL(url);
+  return new Promise((resolve, reject) => {
+    const req = httpRequest(
+      {
+        host: u.hostname,
+        port: Number(u.port) || 80,
+        path: `${u.pathname}${u.search}`,
+        method: 'GET',
+        timeout: timeoutMs,
+      },
+      (res) => {
+        let raw = '';
+        res.on('data', (d) => (raw += d.toString()));
+        res.on('end', () => {
+          if (res.statusCode !== 200) {
+            reject(new Error(`网关返回 ${res.statusCode}`));
+            return;
+          }
+          try {
+            resolve(JSON.parse(raw));
+          } catch {
+            reject(new Error('网关响应解析失败'));
+          }
+        });
+      },
+    );
+    req.on('timeout', () => req.destroy(new Error('网关请求超时')));
+    req.on('error', (err) => reject(err));
+    req.end();
+  });
+}
+
+/**
+ * 解析 FR-6.6 查询所用的网关 HTTP 地址。
+ *
+ * ⚠️ **必须指向 gateway 进程（GATEWAY_WS_PORT=9900），而非 serve（DEFAULT_GATEWAY_PORT=18900）**：
+ * - serve 仅提供 OpenAI 兼容的 `/v1` API，**不承载** `/webui/bootstrap` 与 `/api/settings/*`；
+ * - gateway 进程同时托管 websocket 频道（9900）、health（18790）与 **WebUI 设置路由**
+ *   （含 `/webui/bootstrap` 与 `/api/settings/nanobot-features`）；
+ * - `/webui/bootstrap` 签发的 `api_token` 与 `nanobot-features` 的 `check_api_token` 校验
+ *   共用同一份 `GatewayTokenStore`（gateway_services.build_gateway_services 单实例），
+ *   故二者必须落在同一进程端口——即 9900。
+ * 若错指到 serve(18900)，真实运行时 GET 会因路径不存在 / token store 隔离而 `gatewayUp=false`。
+ *
+ * gateway 命令以 `--foreground` 启动且未传 `--port`，因此 WS+HTTP 始终绑定 9900
+ * （与 bootstrapGatewayToken / getGatewayBridge 的硬编码端口一致）。
+ */
+async function gatewayHttpEndpoint(): Promise<{ host: string; port: number }> {
+  return { host: GATEWAY_WS_HOST, port: GATEWAY_WS_PORT };
+}
+
+/** 仅取 bootstrap 签发的 API token（HTTP `/api/*` 鉴权用）。失败返回 null。 */
+async function bootstrapGatewayApiToken(): Promise<string | null> {
+  try {
+    const secret = await readTokenIssueSecret();
+    if (!secret) return null;
+    const { apiToken } = await bootstrapGatewayToken(secret);
+    return apiToken;
+  } catch {
+    return null;
+  }
+}
+
+/** 单条渠道实时健康（主进程内部归一结构；与渲染层 ChannelRuntimeHealth 同形）。 */
+interface ChannelRuntimeHealthLocal {
+  kind: string;
+  state: string;
+  running: boolean;
+  error: string | null;
+}
+
+/** 渠道实时健康报告（主进程内部归一结构）。 */
+interface ChannelRuntimeHealthReportLocal {
+  ok: boolean;
+  gatewayUp: boolean;
+  health: Record<string, ChannelRuntimeHealthLocal>;
+  fetchedAt: string;
+  error?: string;
+}
+
+const CHANNEL_RUNTIME_STATES = new Set(['running', 'starting', 'failed', 'stopped']);
+
+function mkChannelHealth(
+  kind: string,
+  state: unknown,
+  running: unknown,
+  error: unknown,
+): ChannelRuntimeHealthLocal {
+  const s = CHANNEL_RUNTIME_STATES.has(String(state)) ? String(state) : 'unknown';
+  return {
+    kind,
+    state: s,
+    running: Boolean(running),
+    error: error ? String(error) : null,
+  };
+}
+
+/**
+ * 从 `/api/settings/nanobot-features` 的 features 列表提取并归一渠道实时状态。
+ * - 普通渠道（weixin / dingtalk / wecom）：按 feature.name 映射；
+ * - feishu：多实例并存，按各实例 `domain`（feishu / lark）拆分为两条 kind。
+ * 仅 type=='channel' 的 feature 参与；缺字段降级为 unknown。
+ */
+function normalizeChannelRuntimeStatus(payload: unknown): Record<string, ChannelRuntimeHealthLocal> {
+  const out: Record<string, ChannelRuntimeHealthLocal> = {};
+  const features = (payload as { features?: unknown[] } | null)?.features;
+  if (!Array.isArray(features)) return out;
+  for (const raw of features) {
+    if (!raw || typeof raw !== 'object') continue;
+    const f = raw as Record<string, unknown>;
+    if (f.type !== 'channel') continue;
+    const name = f.name;
+    if (name === 'feishu' || name === 'lark') {
+      const instances = Array.isArray(f.instances) ? (f.instances as unknown[]) : [];
+      if (instances.length === 0) {
+        out[name] = mkChannelHealth(name, f.runtime_status, f.running, f.runtime_error);
+      } else {
+        for (const instRaw of instances) {
+          if (!instRaw || typeof instRaw !== 'object') continue;
+          const inst = instRaw as Record<string, unknown>;
+          const domain = inst.domain === 'lark' ? 'lark' : 'feishu';
+          out[domain] = mkChannelHealth(
+            domain,
+            inst.runtime_status,
+            inst.running,
+            inst.runtime_error,
+          );
+        }
+      }
+    } else if (name === 'weixin' || name === 'dingtalk' || name === 'wecom') {
+      out[name] = mkChannelHealth(name, f.runtime_status, f.running, f.runtime_error);
+    }
+  }
+  return out;
+}
+
+/**
+ * FR-6.6：查询运行中网关的渠道实时运行时状态。
+ * 复用 /webui/bootstrap 签发的 API token（nanowork 已配置 tokenIssueSecret），
+ * 对网关 HTTP 端口 GET `/api/settings/nanobot-features`（该端点已通过
+ * `with_channel_runtime_status` 叠加 Live 状态，无需改动引擎）。
+ * 网关不可达 / 鉴权失败均返回 ok=false，gatewayUp 精确标记可达性。
+ */
+async function getChannelRuntimeStatus(): Promise<ChannelRuntimeHealthReportLocal> {
+  const fetchedAt = new Date().toISOString();
+  let endpoint: { host: string; port: number };
+  try {
+    endpoint = await gatewayHttpEndpoint();
+  } catch {
+    return { ok: false, gatewayUp: false, health: {}, fetchedAt, error: '无法解析网关地址' };
+  }
+  try {
+    const apiToken = await bootstrapGatewayApiToken();
+    if (!apiToken) {
+      return {
+        ok: false,
+        gatewayUp: true,
+        health: {},
+        fetchedAt,
+        error: '无法签发网关 API token（缺少 tokenIssueSecret）',
+      };
+    }
+    const payload = await httpGetJson(
+      `http://${endpoint.host}:${endpoint.port}/api/settings/nanobot-features?token=${encodeURIComponent(apiToken)}`,
+      5000,
+    );
+    return {
+      ok: true,
+      gatewayUp: true,
+      health: normalizeChannelRuntimeStatus(payload),
+      fetchedAt,
+    };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    // 连接拒绝 / 超时 = 网关未运行；鉴权或解析错误同样视为不可达
+    return { ok: false, gatewayUp: false, health: {}, fetchedAt, error: message };
   }
 }
 
@@ -2805,6 +3000,37 @@ ipcMain.handle('file-backup:put', async (_e, hash: string, content: string) => {
 });
 ipcMain.handle('file-backup:get', async (_e, hash: string) => eventStore.getBackup(hash));
 
+// —— FR-8.9 工具网关审计日志（只读）——
+/**
+ * 解析审计日志路径：优先 `NANOBOT_TOOL_AUDIT_LOG`（引擎可重定向 / 可关闭），
+ * 否则按 nanobot 启动配置（与拉起网关时传给 `--config` 的是同一份）的 parent
+ * 推断 `<configParent>/audit/tool-gateway.ndjson`——引擎默认就这么落盘。
+ */
+async function resolveAuditLogPath(): Promise<string> {
+  const envOverride = process.env.NANOBOT_TOOL_AUDIT_LOG;
+  if (envOverride && envOverride.trim()) {
+    return join(envOverride.trim());
+  }
+  const cfg = await readLaunchConfigFromDisk();
+  const cfgPath =
+    cfg.config && cfg.config.trim()
+      ? cfg.config.trim()
+      : join(app.getPath('userData'), 'nanowork.config.json');
+  return join(dirname(cfgPath), 'audit', 'tool-gateway.ndjson');
+}
+
+ipcMain.handle('audit:read', async () => {
+  const target = await resolveAuditLogPath();
+  try {
+    const data = await fs.readFile(target, 'utf-8');
+    return { path: target, exists: true, content: data };
+  } catch {
+    // 文件不存在 / 读失败一律按「暂无审计」处理——读取审计日志绝不该让界面崩，
+    // 与引擎侧「审计绝不影响执行」同一哲学。
+    return { path: target, exists: false, content: '' };
+  }
+});
+
 // —— 通知桥 ——
 ipcMain.on('app:notify', (_e, title: string, body: string) => {
   new Notification({ title, body }).show();
@@ -3306,6 +3532,8 @@ ipcMain.handle('nanobot:getChannels', async () => {
     return null;
   }
 });
+// FR-6.6：查询运行中网关的渠道实时运行时状态（HTTP GET nanobot-features + api_token）
+ipcMain.handle('nanobot:getChannelRuntimeStatus', async () => getChannelRuntimeStatus());
 // 扫码接入：经网关认证 WS 桥执行 settings.channel.connect.{start|poll|cancel}
 ipcMain.handle(
   'nanobot:channelConnect',

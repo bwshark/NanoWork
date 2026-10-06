@@ -1,4 +1,4 @@
-import type { ArtifactIndexEntry, McpToolInfo, Skill } from '@/types';
+import type { ArtifactIndexEntry, ChannelKind, McpToolInfo, Skill } from '@/types';
 import type {
   MarketGcResult,
   MarketIndex,
@@ -56,6 +56,36 @@ export interface ChannelSyncResult {
   changed?: boolean;
   /** 配置已写入但网关由外部进程托管，需用户自行重启网关才生效 */
   needsRestart?: boolean;
+}
+
+/**
+ * FR-6.6 渠道实时运行时状态。
+ * 由主进程向运行中网关查询 `/api/settings/nanobot-features` 并归一得到，
+ * 反映渠道进程是否真正连上 IM（与磁盘配置无关）。
+ */
+export type ChannelRuntimeState = 'running' | 'starting' | 'failed' | 'stopped' | 'unknown';
+
+/** 单条渠道的实时健康 */
+export interface ChannelRuntimeHealth {
+  kind: ChannelKind;
+  state: ChannelRuntimeState;
+  running: boolean;
+  /** 失败原因（面向用户，已本地化）；非失败态为 null */
+  error: string | null;
+}
+
+/** 渠道实时健康报告（主进程返回；web 端恒为 null） */
+export interface ChannelRuntimeHealthReport {
+  /** 是否成功取到状态 */
+  ok: boolean;
+  /** 网关是否在运行且可达 */
+  gatewayUp: boolean;
+  /** 按 ChannelKind 归一的实时健康；配置中但不在 features 里的渠道缺省 unknown */
+  health: Partial<Record<ChannelKind, ChannelRuntimeHealth>>;
+  /** 取数时间（ISO 8601 UTC） */
+  fetchedAt: string;
+  /** 失败原因（ok=false 时） */
+  error?: string;
 }
 
 /** nanobot MCP 同步结果（主进程返回） */
@@ -912,6 +942,12 @@ export interface PlatformAdapter {
    */
   getNanobotChannels(): Promise<NanobotChannelsSnapshot | null>;
   /**
+   * FR-6.6 查询运行中网关的渠道实时运行时状态（区别于磁盘配置）。
+   * - electron：主进程 HTTP GET 网关 `/api/settings/nanobot-features` 并归一；
+   * - web：无网关，返回 null。
+   */
+  getChannelRuntimeStatus(): Promise<ChannelRuntimeHealthReport | null>;
+  /**
    * 将定时任务片段同步进 nanobot 运行时（幂等合并写入
    * `{workspace}/cron/jobs.json` 并通知 gateway 热加载）。
    * - electron：主进程完成合并与热加载，返回结果；
@@ -1161,6 +1197,13 @@ export interface PlatformAdapter {
    * web 端返回 `{ ok: false, error: … }`（没有保存对话框可用）。
    */
   exportDiagnostics(): Promise<DiagnosticsExportResult>;
+  /**
+   * 读取工具网关审计日志（FR-8.9）。
+   * - electron：主进程解析路径（优先 `NANOBOT_TOOL_AUDIT_LOG`，否则按 nanobot 启动
+   *   配置的 parent/audit/tool-gateway.ndjson）并读盘；
+   * - web：无文件系统权限，`exists:false`、空内容。
+   */
+  auditRead(): Promise<AuditLogReadResult>;
 }
 
 /** 本地文件 base64 读取结果 */
@@ -1169,6 +1212,16 @@ export interface ReadFileBase64Result {
   base64?: string;
   size?: number;
   error?: string;
+}
+
+/** FR-8.9 审计日志读取结果：主进程解析路径、读盘，渲染层负责解析 NDJSON 文本。 */
+export interface AuditLogReadResult {
+  /** 审计日志文件绝对路径（用于界面展示与「在文件管理器中打开」）。 */
+  path: string;
+  /** 文件是否存在（不存在 = 审计尚未开始 / 路径未命中）。 */
+  exists: boolean;
+  /** NDJSON 原始文本（每行一个 JSON）；不存在或读失败时为空串。 */
+  content: string;
 }
 
 /**
@@ -1428,6 +1481,8 @@ export interface ElectronAPI {
   nanobotSyncChannels(channelsJson: string): Promise<ChannelSyncResult>;
   /** 只读回读 nanobot config.json 的 channels 段；不存在返回 null */
   nanobotGetChannels(): Promise<NanobotChannelsSnapshot | null>;
+  /** FR-6.6 查询运行中网关的渠道实时运行时状态（web 端无网关返回 null） */
+  nanobotGetChannelRuntimeStatus(): Promise<ChannelRuntimeHealthReport | null>;
   /** 同步 MCP Server 片段到 nanobot（主进程合并写入 tools.mcpServers 并按需重启 serve） */
   nanobotSyncMcp(mcpJson: string): Promise<MCPSyncResult>;
   /** 只读回读 nanobot config.json 的 tools.mcpServers 段；不存在返回 null */
@@ -1545,6 +1600,11 @@ export interface ElectronAPI {
   diagnosticsStats(): Promise<DiagnosticsStats>;
   /** 导出诊断包（zip）：弹保存对话框 → 打包 → 写盘 */
   exportDiagnostics(): Promise<DiagnosticsExportResult>;
+  /**
+   * 读取工具网关审计日志（FR-8.9）：返回引擎写入 `<data_dir>/audit/tool-gateway.ndjson`
+   * 的 NDJSON 原始文本与其路径、存在性。解析由渲染层完成。
+   */
+  auditRead(): Promise<AuditLogReadResult>;
   /** 窗口最小化 */
   windowMinimize(): void;
   /** 窗口最大化/还原切换 */

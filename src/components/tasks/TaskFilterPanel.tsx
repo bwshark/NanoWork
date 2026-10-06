@@ -9,12 +9,22 @@
  * 不用 Menu 是因为它自带键盘导航与关闭副作用，而这里希望「点选项后面板不关」，
  * 便于连续调整状态 + 时间两个维度。
  */
-import type { ReactNode } from 'react';
+import { useMemo, type ReactNode } from 'react';
 import { Box, Divider, MenuItem, Popover, Typography } from '@mui/material';
 import FilterAltOutlinedIcon from '@mui/icons-material/FilterAltOutlined';
 import CheckIcon from '@mui/icons-material/Check';
 import { TASK_STATUS_OPTIONS, TASK_TIME_OPTIONS } from '@/lib/taskQuery';
+import {
+  DEFAULT_WORKSPACE_LABEL,
+  isSameWorkspacePath,
+  resolveWorkspaceLabel,
+} from '@/lib/workspaceLabel';
+import { UNBOUND_AGENT_LABEL } from '@/lib/constants';
 import { useTaskQueryStore } from '@/stores/taskQueryStore';
+import { useSessionsStore } from '@/stores/sessionsStore';
+import { useAgentsStore } from '@/stores/agentsStore';
+import { useSettingsStore } from '@/stores/settingsStore';
+import { useDefaultWorkspacePath } from '@/stores/storageInfoStore';
 
 interface TaskFilterPanelProps {
   /** 锚点元素（漏斗图标按钮）；null 时面板不显示 */
@@ -27,7 +37,46 @@ export function TaskFilterPanel({ anchorEl, open, onClose }: TaskFilterPanelProp
   const filters = useTaskQueryStore((s) => s.filters);
   const setStatusFilter = useTaskQueryStore((s) => s.setStatusFilter);
   const setTimeFilter = useTaskQueryStore((s) => s.setTimeFilter);
+  const setAgentFilter = useTaskQueryStore((s) => s.setAgentFilter);
+  const setWorkspaceFilter = useTaskQueryStore((s) => s.setWorkspaceFilter);
   const resetFilters = useTaskQueryStore((s) => s.resetFilters);
+
+  // 工作空间 / Agent 选项是**动态**的：前者从现有会话推导（与侧边栏分组键同源），
+  // 后者来自 Agent 目录；两者都带一个「全部」项。
+  const sessions = useSessionsStore((s) => s.sessions);
+  const agents = useAgentsStore((s) => s.agents);
+  const aliases = useSettingsStore((s) => s.settings.workspaceAliases);
+  const defaultWorkspacePath = useDefaultWorkspacePath();
+
+  const workspaceOptions = useMemo(() => {
+    const labels = new Map<string, string>();
+    for (const s of sessions) {
+      const key = isSameWorkspacePath(s.workdir, defaultWorkspacePath) ? '' : (s.workdir ?? '');
+      if (!labels.has(key)) {
+        const label =
+          key === '' ? DEFAULT_WORKSPACE_LABEL : resolveWorkspaceLabel(key, aliases);
+        labels.set(key, label);
+      }
+    }
+    const items = Array.from(labels.entries()).map(([value, label]) => ({ value, label }));
+    // 默认工作空间排在最前（与侧边栏置底相反：这里是筛选清单，置顶更易点选）
+    items.sort((a, b) => {
+      if (a.value === '' && b.value !== '') return -1;
+      if (a.value !== '' && b.value === '') return 1;
+      return a.label.localeCompare(b.label, 'zh-Hans-CN');
+    });
+    return [{ value: 'all', label: '全部工作空间' }, ...items];
+  }, [sessions, aliases, defaultWorkspacePath]);
+
+  const agentOptions = useMemo(() => {
+    const items = agents.map((a) => ({ value: a.id, label: a.name }));
+    items.sort((a, b) => a.label.localeCompare(b.label, 'zh-Hans-CN'));
+    return [
+      { value: 'all', label: '全部 Agent' },
+      { value: '', label: UNBOUND_AGENT_LABEL },
+      ...items,
+    ];
+  }, [agents]);
 
   return (
     <Popover
@@ -90,6 +139,30 @@ export function TaskFilterPanel({ anchorEl, open, onClose }: TaskFilterPanelProp
 
       <Divider sx={{ my: 0.75, borderColor: 'divider' }} />
 
+      <FilterGroupLabel>筛选工作空间</FilterGroupLabel>
+      {workspaceOptions.map((option) => (
+        <FilterOptionRow
+          key={`ws:${option.value}`}
+          label={option.label}
+          selected={filters.workspace === option.value}
+          onSelect={() => setWorkspaceFilter(option.value)}
+        />
+      ))}
+
+      <Divider sx={{ my: 0.75, borderColor: 'divider' }} />
+
+      <FilterGroupLabel>筛选 Agent</FilterGroupLabel>
+      {agentOptions.map((option) => (
+        <FilterOptionRow
+          key={`agent:${option.value}`}
+          label={option.label}
+          selected={filters.agentId === option.value}
+          onSelect={() => setAgentFilter(option.value)}
+        />
+      ))}
+
+      <Divider sx={{ my: 0.75, borderColor: 'divider' }} />
+
       {/* 重置只清状态与时间（关键词由关闭搜索窗清），所以文案是「重置筛选条件」而非「清除全部」 */}
       <MenuItem
         onClick={resetFilters}
@@ -145,7 +218,10 @@ function FilterOptionRow({
       }}
     >
       <Typography
+        noWrap
         sx={{
+          flex: 1,
+          minWidth: 0,
           fontSize: 13.5,
           fontWeight: selected ? 600 : 400,
           color: 'text.primary',

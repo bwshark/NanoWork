@@ -20,6 +20,7 @@ import {
 import { notify } from './notification';
 import type {
   AppInfo,
+  AuditLogReadResult,
   ChannelConnectAction,
   ChannelSyncResult,
   CredentialVaultStatus,
@@ -110,6 +111,13 @@ export const platform: PlatformAdapter = {
       return window.electronAPI.nanobotGetChannels();
     }
     // Web 端无文件系统权限：无法回读 nanobot 配置
+    return Promise.resolve(null);
+  },
+  getChannelRuntimeStatus: () => {
+    if (isElectron() && window.electronAPI) {
+      return window.electronAPI.nanobotGetChannelRuntimeStatus();
+    }
+    // Web 端无网关：无实时状态可查
     return Promise.resolve(null);
   },
   syncNanobotChannels: async (channelsJson: string): Promise<ChannelSyncResult> => {
@@ -517,6 +525,11 @@ export const platform: PlatformAdapter = {
       ok: false,
       error: '浏览器环境没有本地数据目录与保存对话框，无法导出诊断包',
     });
+  },
+  /** FR-8.9 读取工具网关审计日志（NDJSON 文本）；Web 端无文件系统权限 → exists:false */
+  auditRead: (): Promise<AuditLogReadResult> => {
+    if (isElectron() && window.electronAPI) return window.electronAPI.auditRead();
+    return Promise.resolve({ path: '', exists: false, content: '' });
   },
   // —— 桌面端集成（窗口控制 / 托盘配置 / 主进程指令）——
   // 这一组统一走 `electronBridge()`（而非上面那种 `isElectron() && window.electronAPI`

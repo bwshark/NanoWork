@@ -10,13 +10,19 @@
  * - 高亮行用 `data-row-index` + `scrollIntoView({block:'nearest'})` 跟随，
  *   而不是 ref 数组——行会被结果集变化重排，索引比元素身份更稳。
  */
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import {
+  useEffect,
+  useDeferredValue,
+  useRef,
+  useState,
+  type KeyboardEvent,
+} from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Box, Dialog, IconButton, InputBase, Typography } from '@mui/material';
 import SearchIcon from '@mui/icons-material/Search';
 import CloseIcon from '@mui/icons-material/Close';
 import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
-import { filterTasks } from '@/lib/taskQuery';
+import { searchSessions } from '@/lib/sessionSearch';
 import { DEFAULT_WORKSPACE_LABEL, resolveWorkspaceLabel } from '@/lib/workspaceLabel';
 import { ROUTES } from '@/lib/constants';
 import { useTaskQueryStore } from '@/stores/taskQueryStore';
@@ -49,14 +55,32 @@ export function TaskSearchDialog() {
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
-  // 关闭时不参与计算：省掉「关了窗还在过滤全量会话」的无谓开销
-  const results = useMemo(
-    () =>
-      searchOpen
-        ? filterTasks(sessions, { query, filters, streams }).slice(0, SEARCH_LIMIT)
-        : [],
-    [searchOpen, sessions, query, filters, streams],
-  );
+  // 用 useDeferredValue 平滑关键词输入：每次敲键不立刻触发事件流 IO，
+  // 而是先渲染上一次结果，等输入短暂停顿再算（React 并发特性）。
+  const deferredQuery = useDeferredValue(query);
+
+  const [results, setResults] = useState<Session[]>([]);
+
+  // 异步检索：维度筛选（同步）+ 全文（按需读事件流）。searchSessions 内部已按
+  // 维度收窄并维持倒序；这里只负责把结果落到渲染用的 state，并处理竞态与关窗。
+  useEffect(() => {
+    if (!searchOpen) {
+      setResults([]);
+      return;
+    }
+    let cancelled = false;
+    void searchSessions(sessions, {
+      query: deferredQuery,
+      filters,
+      streams,
+      defaultWorkspacePath,
+    }).then((r) => {
+      if (!cancelled) setResults(r.slice(0, SEARCH_LIMIT));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [searchOpen, sessions, deferredQuery, filters, streams, defaultWorkspacePath]);
 
   const hasQuery = query.trim();
 

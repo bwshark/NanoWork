@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import {
+  Alert,
   Box,
   Button,
   Card,
@@ -16,6 +17,7 @@ import {
 } from "@mui/material";
 import EditIcon from "@mui/icons-material/Edit";
 import LinkOffIcon from "@mui/icons-material/LinkOff";
+import ReplayIcon from "@mui/icons-material/Replay";
 import PersonIcon from "@mui/icons-material/Person";
 import cowAvatar from "@/assets/cow-avatar.png";
 import { CHANNEL_METAS } from "@/lib/channelMeta";
@@ -24,6 +26,7 @@ import { ChannelIcon } from "@/components/im/ChannelIcon";
 import { ChannelConfigDialog } from "@/components/im/ChannelConfigDialog";
 import { toast } from "@/components/Toast";
 import { platform } from "@/platform";
+import type { ChannelRuntimeState } from "@/platform/types";
 import type { ChannelKind, ChannelSyncStatus } from "@/types";
 
 /** 同步状态 → 展示标签 */
@@ -74,6 +77,28 @@ function ChannelsContent({
   const lastSync = useChannelsStore((s) => s.lastSync);
   const secretKeys = useChannelsStore((s) => s.secretKeys);
   const syncing = configs.some((c) => c.syncStatus === "syncing");
+  // FR-6.6：渠道实时健康
+  const health = useChannelsStore((s) => s.health);
+  const gatewayUp = useChannelsStore((s) => s.gatewayUp);
+  const healthError = useChannelsStore((s) => s.healthError);
+  const refreshHealth = useChannelsStore((s) => s.refreshHealth);
+  const startHealthPolling = useChannelsStore((s) => s.startHealthPolling);
+  const stopHealthPolling = useChannelsStore((s) => s.stopHealthPolling);
+  const reconnectChannel = useChannelsStore((s) => s.reconnectChannel);
+
+  // FR-6.6：挂载即启动 ~30s 健康轮询，卸载停止
+  useEffect(() => {
+    startHealthPolling();
+    return () => stopHealthPolling();
+  }, [startHealthPolling, stopHealthPolling]);
+
+  // 已启用却掉线的渠道（failed / stopped）→ 顶部告警条
+  const downChannels = configs.filter((c) => {
+    if (!c.enabled) return false;
+    const h = health[c.kind];
+    return !!h && (h.state === "failed" || h.state === "stopped");
+  });
+  const showDownAlert = gatewayUp === true && downChannels.length > 0;
 
   // 断开连接确认弹窗状态（仅扫码渠道且已连接时才会打开）
   const [disconnectKind, setDisconnectKind] = useState<ChannelKind | null>(
@@ -146,6 +171,31 @@ function ChannelsContent({
         </Typography>
       )}
 
+      {/* FR-6.6：网关未运行 / 不可达 → 顶部错误条 */}
+      {gatewayUp === false && (
+        <Alert severity="error" sx={{ mb: 1.5 }}>
+          网关未运行或不可达，无法获取渠道实时状态。
+        </Alert>
+      )}
+      {/* FR-6.6：有已启用渠道掉线 → 顶部告警条 */}
+      {showDownAlert && (
+        <Alert
+          severity="warning"
+          sx={{ mb: 1.5, alignItems: "center" }}
+        >
+          <Typography component="span" variant="body2">
+            以下已启用渠道已断开：
+            {downChannels
+              .map(
+                (c) =>
+                  CHANNEL_METAS.find((m) => m.kind === c.kind)?.name ?? c.kind,
+              )
+              .join("、")}
+            。可点击对应卡片的「重新连接」。
+          </Typography>
+        </Alert>
+      )}
+
       {CHANNEL_METAS.map((meta) => {
         const cfg = configs.find((c) => c.kind === meta.kind);
         /*
@@ -165,6 +215,15 @@ function ChannelsContent({
           cfg.enabled &&
           hasCredential
         );
+        // FR-6.6：实时健康（仅网关在线时才有意义）
+        const h = health[meta.kind];
+        const healthState: ChannelRuntimeState =
+          gatewayUp === true ? h?.state ?? "unknown" : "unknown";
+        const down =
+          gatewayUp === true &&
+          !!cfg?.enabled &&
+          !!h &&
+          (h.state === "failed" || h.state === "stopped");
         return (
           <Card key={meta.kind} sx={{ mb: 1.5 }}>
             <CardContent
@@ -228,6 +287,17 @@ function ChannelsContent({
                 <Typography variant="body2" color="text.secondary" noWrap>
                   {meta.description}
                 </Typography>
+                {/* FR-6.6：掉线原因（failed 态优先展示） */}
+                {h?.error && gatewayUp === true && (
+                  <Typography
+                    variant="caption"
+                    color="error"
+                    noWrap
+                    sx={{ display: "block", mt: 0.25 }}
+                  >
+                    {h.error}
+                  </Typography>
+                )}
               </Box>
 
               {cfg ? (
@@ -254,6 +324,8 @@ function ChannelsContent({
                       />
                     </span>
                   </Tooltip>
+                  {/* FR-6.6：实时健康徽标 */}
+                  <ChannelHealthBadge state={healthState} />
                   <Tooltip title={cfg.enabled ? "停用" : "启用"}>
                     <span>
                       <Switch
@@ -274,6 +346,18 @@ function ChannelsContent({
                       onClick={() => setDisconnectKind(meta.kind)}
                     >
                       断开连接
+                    </Button>
+                  )}
+                  {/* FR-6.6：掉线渠道「重新连接」（网关在线 + 已启用 + failed/stopped） */}
+                  {down && (
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      startIcon={<ReplayIcon sx={{ fontSize: 15 }} />}
+                      sx={{ fontSize: 12, flexShrink: 0 }}
+                      onClick={() => void reconnectChannel(meta.kind)}
+                    >
+                      重新连接
                     </Button>
                   )}
                   <IconButton
@@ -353,6 +437,31 @@ function ChannelsContent({
         </DialogActions>
       </Dialog>
     </Box>
+  );
+}
+
+/** FR-6.6 渠道实时健康徽标 */
+const CHANNEL_HEALTH_BADGE: Record<
+  ChannelRuntimeState,
+  { label: string; color: "success" | "info" | "error" | "warning" | "default" }
+> = {
+  running: { label: "在线", color: "success" },
+  starting: { label: "连接中", color: "info" },
+  failed: { label: "连接失败", color: "error" },
+  stopped: { label: "已停止", color: "warning" },
+  unknown: { label: "状态未知", color: "default" },
+};
+
+function ChannelHealthBadge({ state }: { state: ChannelRuntimeState }) {
+  const badge = CHANNEL_HEALTH_BADGE[state];
+  return (
+    <Chip
+      size="small"
+      variant="outlined"
+      color={badge.color}
+      label={badge.label}
+      sx={{ fontSize: 11, flexShrink: 0, height: 22 }}
+    />
   );
 }
 

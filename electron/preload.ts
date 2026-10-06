@@ -80,6 +80,8 @@ const api: ElectronAPI = {
   nanobotSyncChannels: (channelsJson: string) =>
     ipcRenderer.invoke('nanobot:syncChannels', channelsJson),
   nanobotGetChannels: () => ipcRenderer.invoke('nanobot:getChannels'),
+  nanobotGetChannelRuntimeStatus: () =>
+    ipcRenderer.invoke('nanobot:getChannelRuntimeStatus'),
   nanobotSyncMcp: (mcpJson: string) =>
     ipcRenderer.invoke('nanobot:syncMcp', mcpJson),
   nanobotGetMcp: () => ipcRenderer.invoke('nanobot:getMcp'),
@@ -160,6 +162,8 @@ const api: ElectronAPI = {
   writeTrace: (file) => ipcRenderer.send('trace:write', file),
   diagnosticsStats: () => ipcRenderer.invoke('diagnostics:stats'),
   exportDiagnostics: () => ipcRenderer.invoke('diagnostics:export'),
+  /** FR-8.9 工具网关审计日志：读 `<data_dir>/audit/tool-gateway.ndjson` 的 NDJSON 文本 */
+  auditRead: () => ipcRenderer.invoke('audit:read'),
   // ——— 窗口控制（自绘标题栏）———
   windowMinimize: () => ipcRenderer.send('window:minimize'),
   windowToggleMaximize: () => ipcRenderer.send('window:toggle-maximize'),

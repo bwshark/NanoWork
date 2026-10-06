@@ -26,7 +26,11 @@ interface TaskQueryState {
   filters: TaskFilters;
   setStatusFilter: (status: TaskStatusFilter) => void;
   setTimeFilter: (time: TaskTimeFilter) => void;
-  /** 重置为「全部状态 + 全部时间」，关键词不动（关键词由关闭搜索窗清空） */
+  /** Agent 维度：`'all'` 或具体 Agent id（含空串 = 未绑定专家） */
+  setAgentFilter: (agentId: string) => void;
+  /** 工作空间维度：`'all'` 或分组键（空串 = 默认工作空间） */
+  setWorkspaceFilter: (workspace: string) => void;
+  /** 重置为「全部状态 + 全部时间 + 全部 Agent + 全部工作空间」，关键词不动 */
   resetFilters: () => void;
   /** 关闭搜索窗时清空关键词，避免下次打开看到上次的残留检索 */
   resetQuery: () => void;
@@ -44,6 +48,10 @@ export const useTaskQueryStore = create<TaskQueryState>()((set) => ({
   setStatusFilter: (status) =>
     set((s) => ({ filters: { ...s.filters, status } })),
   setTimeFilter: (time) => set((s) => ({ filters: { ...s.filters, time } })),
+  setAgentFilter: (agentId) =>
+    set((s) => ({ filters: { ...s.filters, agentId } })),
+  setWorkspaceFilter: (workspace) =>
+    set((s) => ({ filters: { ...s.filters, workspace } })),
   resetFilters: () => set({ filters: { ...DEFAULT_TASK_FILTERS } }),
   resetQuery: () => set({ query: '' }),
 }));

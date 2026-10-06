@@ -89,6 +89,8 @@ export const ROUTES = {
    */
   settings: '/settings',
   artifacts: '/artifacts',
+  /** 安全审计（FR-8.9）：工具网关审计日志检索 / 导出 */
+  audit: '/audit',
   /**
    * 登录 / 注册页（批次 4，FR-10）。
    *

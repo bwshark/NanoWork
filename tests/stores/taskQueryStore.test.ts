@@ -53,6 +53,8 @@ describe('taskQueryStore: 筛选条件', () => {
     expect(useTaskQueryStore.getState().filters).toEqual({
       status: 'done',
       time: 'week',
+      agentId: 'all',
+      workspace: 'all',
     });
   });
 
@@ -64,6 +66,8 @@ describe('taskQueryStore: 筛选条件', () => {
     expect(useTaskQueryStore.getState().filters).toEqual({
       status: 'failed',
       time: 'today',
+      agentId: 'all',
+      workspace: 'all',
     });
   });
 
@@ -86,5 +90,47 @@ describe('taskQueryStore: 筛选条件', () => {
 
     expect(after).not.toBe(before);
     expect(before.status).toBe('all');
+  });
+});
+
+describe('taskQueryStore: Agent / 工作空间 维度', () => {
+  beforeEach(reset);
+
+  it('setAgentFilter 只改 Agent 维度，保留其它维度', () => {
+    const s = useTaskQueryStore.getState();
+    s.setStatusFilter('done');
+    s.setAgentFilter('a2');
+
+    expect(useTaskQueryStore.getState().filters).toEqual({
+      status: 'done',
+      time: 'all',
+      agentId: 'a2',
+      workspace: 'all',
+    });
+  });
+
+  it('setWorkspaceFilter 只改工作空间维度，保留其它维度', () => {
+    const s = useTaskQueryStore.getState();
+    s.setTimeFilter('month');
+    s.setWorkspaceFilter('D:/proj/x');
+
+    expect(useTaskQueryStore.getState().filters).toEqual({
+      status: 'all',
+      time: 'month',
+      agentId: 'all',
+      workspace: 'D:/proj/x',
+    });
+  });
+
+  it('resetFilters 回到默认（四维全 all），且不触碰关键词', () => {
+    const s = useTaskQueryStore.getState();
+    s.setAgentFilter('a1');
+    s.setWorkspaceFilter('');
+    s.setQuery('牧场');
+
+    useTaskQueryStore.getState().resetFilters();
+
+    expect(useTaskQueryStore.getState().filters).toEqual(DEFAULT_TASK_FILTERS);
+    expect(useTaskQueryStore.getState().query).toBe('牧场');
   });
 });

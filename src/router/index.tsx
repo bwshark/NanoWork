@@ -10,6 +10,7 @@ import { McpPage } from '@/pages/mcp/McpPage';
 import { TasksPage } from '@/pages/tasks/TasksPage';
 import { SettingsRoute } from '@/pages/settings/SettingsRoute';
 import { ArtifactsPage } from '@/pages/artifacts/ArtifactsPage';
+import { AuditPage } from '@/pages/audit/AuditPage';
 import { AuthPage } from '@/pages/auth/AuthPage';
 
 /**
@@ -51,6 +52,7 @@ export const router = createBrowserRouter([
           { path: ROUTES.tasks, element: <TasksPage /> },
           { path: ROUTES.settings, element: <SettingsRoute /> },
           { path: ROUTES.artifacts, element: <ArtifactsPage /> },
+          { path: ROUTES.audit, element: <AuditPage /> },
           { path: '*', element: <Navigate to={ROUTES.chat} replace /> },
         ],
       },

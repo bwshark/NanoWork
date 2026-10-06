@@ -31,6 +31,7 @@ import PsychologyIcon from "@mui/icons-material/Psychology";
 import GridViewIcon from "@mui/icons-material/GridView";
 import AutoFixHighIcon from "@mui/icons-material/AutoFixHigh";
 import HubIcon from "@mui/icons-material/Hub";
+import HistoryIcon from "@mui/icons-material/History";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import FolderIcon from "@mui/icons-material/Folder";
 import ExpandLessIcon from "@mui/icons-material/ExpandLess";
@@ -99,6 +100,7 @@ interface NavRouteItem extends NavLinkItem {
 
 const TOP_ACTION_ITEMS: NavRouteItem[] = [
   { label: "定时任务", icon: <AccessAlarmIcon />, to: ROUTES.tasks },
+  { label: "审计", icon: <HistoryIcon />, to: ROUTES.audit },
 ];
 
 /**
@@ -943,8 +945,8 @@ function SessionList() {
     () =>
       isFilterDefault(filters)
         ? visibleSessions
-        : filterTasks(visibleSessions, { filters, streams }),
-    [visibleSessions, filters, streams],
+        : filterTasks(visibleSessions, { filters, streams, defaultWorkspacePath }),
+    [visibleSessions, filters, streams, defaultWorkspacePath],
   );
 
   const groups = useMemo(() => {
