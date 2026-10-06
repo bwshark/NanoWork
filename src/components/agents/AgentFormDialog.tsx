@@ -171,11 +171,11 @@ export function AgentFormDialog({
             关掉开关 = 不声明限制（undefined）；打开 = 声明白名单。
             两者必须保持可区分——把「没设置」落成空数组会把这个 Agent 直接锁死。
             ⚠️ 这个区此前只在「我的专家」页存在，是两份表单字段不一致的根源。 */}
-        <Divider sx={{ my: 1.5 }} />
+        <Divider sx={{ my: 2 }} />
         <Typography sx={{ fontSize: 13, fontWeight: 600 }}>
           工具权限（FR-2.2）
         </Typography>
-        <Typography sx={{ fontSize: 12, color: 'text.secondary', mt: 0.5 }}>
+        <Typography sx={{ fontSize: 12, color: 'text.secondary', mt: 0.5, mb: 1.5 }}>
           白名单在引擎侧强制：不在名单里的工具连调用都会被拒，改提示词也绕不过。
         </Typography>
         <FormControlLabel
@@ -183,7 +183,7 @@ export function AgentFormDialog({
           // （为了让开关轨道的**视觉**左缘与上面的输入框对齐），代价是轨道右侧与文字
           // 之间**零间距**——真机上看着像开关压住了「仅允许指定工具」几个字，
           // 而几何上只是紧贴（实测 轨道右缘 393.0 == 文字左缘 393.0）。
-          sx={{ mt: 0.5, gap: 1 }}
+          sx={{ gap: 1 }}
           control={
             <Switch
               size="small"
@@ -209,13 +209,14 @@ export function AgentFormDialog({
             multiple
             freeSolo
             size="small"
-            sx={{ mt: 1 }}
+            sx={{ mt: 1.5 }}
             options={[...AGENT_TOOL_CATALOG]}
             getOptionLabel={(o) => String(o)}
             value={form.toolAllow}
             onChange={(_e, value) =>
               setForm({ ...form, toolAllow: value.map((v) => String(v)) })
             }
+            ListboxProps={{ sx: { maxHeight: 280, overflow: 'auto' } }}
             renderOption={(props, option) => (
               <li {...props} key={option}>
                 <Box>
@@ -242,7 +243,7 @@ export function AgentFormDialog({
           multiple
           freeSolo
           size="small"
-          sx={{ mt: 1 }}
+          sx={{ mt: 1.5, mb: 1 }}
           options={[...AGENT_TOOL_CATALOG]}
           getOptionLabel={(o) => String(o)}
           value={form.toolDeny ?? []}
@@ -250,6 +251,19 @@ export function AgentFormDialog({
             const next = value.map((v) => String(v));
             setForm({ ...form, toolDeny: next.length ? next : undefined });
           }}
+          ListboxProps={{ sx: { maxHeight: 280, overflow: 'auto' } }}
+          renderOption={(props, option) => (
+            <li {...props} key={option}>
+              <Box>
+                <Typography sx={{ fontSize: 13 }}>{option}</Typography>
+                {AGENT_TOOL_LABELS[option] && (
+                  <Typography sx={{ fontSize: 11, color: 'text.secondary' }}>
+                    {AGENT_TOOL_LABELS[option]}
+                  </Typography>
+                )}
+              </Box>
+            </li>
+          )}
           renderInput={(params) => (
             <TextField
               {...params}
