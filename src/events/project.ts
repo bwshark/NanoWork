@@ -325,6 +325,23 @@ export function projectMessages(path: readonly SessionEvent[]): Message[] {
         });
         break;
       }
+      case 'expert-group-member': {
+        if (!ev.messageId) break;
+        // 追加进过程时间线（与实时路径 `handleProcessMember` 同一形状）。
+        // 行 id 取事件 id：实时路径也用它，两条路径的 React key 因此一致，
+        // 刷新前后不会整块重建。
+        const rows = processOf(ev.messageId);
+        rows.push({
+          id: ev.id,
+          kind: 'member',
+          memberId: ev.memberId,
+          memberName: ev.memberName,
+          phase: ev.phase,
+          ...(ev.text !== undefined ? { text: ev.text } : {}),
+          ...(ev.error !== undefined ? { error: ev.error } : {}),
+        });
+        break;
+      }
       case 'artifact': {
         if (!ev.messageId) break;
         const list = artifacts.get(ev.messageId) ?? [];

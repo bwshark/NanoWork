@@ -37,5 +37,36 @@ export interface ProcessToolRow {
   error?: string;
 }
 
+/**
+ * 专家团成员的生命周期相位（FR-2.4 第 3 步）。
+ *
+ * 与工具行不同，成员**内部**的工具调用不上报（成员跑在子代理里，没有回传通道），
+ * 所以能拿到的就是这五个相位。够表达「谁在做、做完没有、产出是什么」，
+ * 不够表达「成员内部每一步做了什么」——**这是引擎侧的现状，不是渲染层的省略**。
+ */
+export type MemberEventPhase = 'planned' | 'started' | 'finished' | 'failed' | 'aggregating';
+
+/**
+ * 专家团成员事件（过程时间线里的「成员」行）。
+ *
+ * ⚠️ 为什么它是**独立**一类过程行，而不是给工具行加个 `memberId`：
+ * 成员产出根本没有对应的工具行（既不是工具调用、也不是深度思考），
+ * 硬塞进 `ProcessToolRow` 会让「工具」这个词再也说不清自己指什么；
+ * 而按成员分组渲染又要求同一成员的事件能被稳定地认出来（靠 `memberId`）。
+ */
+export interface MemberEvent {
+  id: string;
+  kind: 'member';
+  /** 成员 id（同一成员的多个相位共用 → 分组键） */
+  memberId: string;
+  /** 成员名（展示用；引擎在缺名时回退成 id） */
+  memberName: string;
+  phase: MemberEventPhase;
+  /** 产出文本（finished）/ 团队计划（planned）——按 phase 二选一 */
+  text?: string;
+  /** 失败原因（failed 时携） */
+  error?: string;
+}
+
 /** 过程时间线事件联合 */
-export type ProcessEvent = ReasoningEvent | ProcessToolRow;
+export type ProcessEvent = ReasoningEvent | ProcessToolRow | MemberEvent;

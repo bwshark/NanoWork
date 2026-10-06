@@ -120,6 +120,20 @@ function mockRichTurn() {
         tool: 'files',
         args: { operation: 'read' },
       });
+      // 专家团成员（FR-2.4 第 3 步）：成员行必须**同时**进内存视图与事件流。
+      // 只改内存的写法在实时那一轮看起来完全正常，刷新后成员归属凭空消失——
+      // 这正是本文件要守的那条不变量，所以成员事件必须进这个「什么都来一点」的场景。
+      handlers.onProcessMember?.({
+        memberId: 'm1',
+        memberName: '架构师',
+        phase: 'started',
+      });
+      handlers.onProcessMember?.({
+        memberId: 'm1',
+        memberName: '架构师',
+        phase: 'finished',
+        text: '现状如下。',
+      });
       handlers.onStatus('done');
       handlers.onDone();
       return { done: Promise.resolve(), abort: () => {} };
@@ -240,10 +254,22 @@ describe('事件投影等价性：实时增量视图 ≡ 批量重放投影', ()
     // 4) 关键结构确实被覆盖到（避免「两边都空」也能通过的假绿）
     const assistant = replayed.messages.find((m) => m.role === 'assistant')!;
     expect(assistant.content).toBe('这是回答。');
-    expect(assistant.process?.map((p) => (p.kind === 'tool' ? p.tool : p.content))).toEqual([
+    // 穷举三类过程行（含 FR-2.4 的成员）。落库保持「一个相位一行」的原始事实，
+    // 按成员分组是渲染时的事（见 `lib/processDetail.ts`）——所以这里能看到两个成员行。
+    expect(
+      assistant.process?.map((p) =>
+        p.kind === 'tool'
+          ? p.tool
+          : p.kind === 'reasoning'
+            ? p.content
+            : `member:${p.memberId}/${p.phase}`,
+      ),
+    ).toEqual([
       '先思考一下',
       'read_file',
       '再确认',
+      'member:m1/started',
+      'member:m1/finished',
     ]);
     expect(assistant.artifacts?.[0]?.title).toBe('示例片段');
     // 计划本体随事件复原：步骤与待裁决状态都在，刷新后仍能批准

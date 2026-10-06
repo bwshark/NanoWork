@@ -39,8 +39,9 @@
 import type { ArtifactChange, ArtifactType } from './artifact';
 import type { Role } from './message';
 import type { PlanVerdict } from './message';
+import type { MemberEventPhase } from './process';
 
-/** 事件类型全集（对齐设计文档 9.2；16 种） */
+/** 事件类型全集（对齐设计文档 9.2；17 种） */
 export type EventType =
   | 'session-start' // 会话开始（记录 agent / workdir / mode / model）
   | 'message' // 用户或助手消息
@@ -50,6 +51,7 @@ export type EventType =
   | 'permission-decision' // 权限决策（允许 / 拒绝 + 策略来源）
   | 'plan' // Plan 模式产出的计划
   | 'plan-decision' // 计划审批结果
+  | 'expert-group-member' // 专家团成员生命周期（FR-2.4）
   | 'artifact' // 产物
   | 'file-history-snapshot' // 文件快照（回滚锚点）
   | 'commit' // commitSeq 推进（回滚边界）
@@ -357,6 +359,28 @@ export interface SessionEndEvent extends BaseEvent {
   reason?: 'done' | 'error' | 'aborted' | 'interrupted';
 }
 
+/**
+ * 专家团成员的生命周期（FR-2.4 第 3 步）。
+ *
+ * 与 `reasoning` / `function-call` 同类：它是**回合内**的过程事件，靠 `messageId`
+ * 归到承载它的助手消息上（成员产出不是消息，只随过程事件出站）。
+ *
+ * ⚠️ **必须落盘、不能只改内存里的 `Message.process`**：打开会话时消息是由事件流
+ * 重建的（`projectMessages`），不落盘就会「退出重进后成员归属凭空消失」——
+ * 而实时那一轮看起来完全正常，属于最难自查的一类。
+ */
+export interface ExpertGroupMemberEvent extends BaseEvent, MessageScoped {
+  type: 'expert-group-member';
+  /** 成员 id（同一成员会连续发多个相位，分组键） */
+  memberId: string;
+  memberName: string;
+  phase: MemberEventPhase;
+  /** 产出文本（finished）/ 团队计划（planned） */
+  text?: string;
+  /** 失败原因（failed） */
+  error?: string;
+}
+
 /** 事件联合（判别字段为 `type`） */
 export type SessionEvent =
   | SessionStartEvent
@@ -367,6 +391,7 @@ export type SessionEvent =
   | PermissionDecisionEvent
   | PlanEvent
   | PlanDecisionEvent
+  | ExpertGroupMemberEvent
   | ArtifactEvent
   | FileSnapshotEvent
   | CommitEvent

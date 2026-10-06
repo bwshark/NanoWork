@@ -30,6 +30,7 @@ import type {
   UsageStats,
 } from '@/types';
 import type { ExecutionMode, PlanStep } from '@/types/event';
+import type { MemberEventPhase } from '@/types/process';
 import type { PluginEngineIndex } from '@/types/plugin';
 
 // 领域类型（模型目录 / 连接状态 / 运行记录）由 `@/types` 定义，
@@ -180,6 +181,23 @@ export interface ProcessToolEvent {
   error?: string;
 }
 
+/**
+ * 专家团成员进度事件（FR-2.4 第 3 步）。
+ *
+ * 与 `ProcessToolEvent` 的关键差异：成员**没有引擎侧调用 id**——成员身份是
+ * `memberId`，同一个成员会依次发多个相位（甚至同一相位在 coordinator 下重复出现），
+ * 所以过程行 id 由客户端在落事件时分配，而不是取自引擎（见 `sessionsStore`）。
+ */
+export interface ProcessMemberEvent {
+  memberId: string;
+  memberName: string;
+  phase: MemberEventPhase;
+  /** 产出文本（finished）/ 团队计划（planned） */
+  text?: string;
+  /** 失败原因（failed 时携） */
+  error?: string;
+}
+
 /** 工具调用事件载荷（权限门控用） */
 export interface ToolCallEvent {
   id: string;
@@ -267,6 +285,13 @@ export interface StreamHandlers {
   onReasoningEnd?(): void;
   /** 工具执行进度行 */
   onProcessTool?(ev: ProcessToolEvent): void;
+  /**
+   * 专家团成员进度（FR-2.4 第 3 步）：一次多成员编排里「谁在做什么」。
+   *
+   * 只在会话绑定了专家团且引擎真的派了成员时触发；单成员团由客户端直接不下发
+   * （见 `lib/expertGroupRequest.ts`），因此这里不会收到无意义的单成员事件。
+   */
+  onProcessMember?(ev: ProcessMemberEvent): void;
   /**
    * 逐条批准请求：引擎已挂起该工具调用，等待 `respondApproval()` 回话。
    *

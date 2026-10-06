@@ -172,6 +172,13 @@ export class EventFactory {
     return this.emit('plan-decision', payload, opts);
   }
 
+  expertGroupMember(
+    payload: EventPayload<'expert-group-member'>,
+    opts?: EmitOptions,
+  ): EventOfType<'expert-group-member'> {
+    return this.emit('expert-group-member', payload, opts);
+  }
+
   artifact(payload: EventPayload<'artifact'>, opts?: EmitOptions): EventOfType<'artifact'> {
     return this.emit('artifact', payload, opts);
   }

@@ -1,4 +1,10 @@
-import type { ProcessDetailLevel, ProcessEvent, ProcessToolRow, ToolCall } from '@/types';
+import type {
+  ProcessDetailLevel,
+  ProcessEvent,
+  ProcessToolRow,
+  ReasoningEvent,
+  ToolCall,
+} from '@/types';
 
 /**
  * 过程时间线的「档位派生层」：把持久化的事件序列按展示档位过滤 / 聚合成一次性的
@@ -17,8 +23,8 @@ import type { ProcessDetailLevel, ProcessEvent, ProcessToolRow, ToolCall } from 
  * - **渲染视图模型**：`ProcessViewRow` / `AggregateRow`——本模块就地派生，
  *   只活在一次渲染里，**绝不写回 `Message.process`**。
  *
- * 聚合行（`AggregateRow`）是派生产物，所以它刻意不放进 `types/process.ts`：
- * 让它紧挨 `ProcessEvent` 会诱使他人误扩那条持久化契约的联合类型。
+ * 派生行（`AggregateRow` / `MemberGroupRow`）刻意**不**放进 `types/process.ts`：
+ * 让它们紧挨 `ProcessEvent` 会诱使他人误扩那条持久化契约的联合类型。
  */
 
 /**
@@ -48,8 +54,39 @@ export interface AggregateRow {
   summary: string;
 }
 
-/** 渲染视图行：思考段原样保留；工具行或为单行、或被聚合行替代。 */
-export type ProcessViewRow = ProcessEvent | AggregateRow;
+/**
+ * 成员组行：把**同一个成员**的全部相位（计划 / 开始 / 完成 / 失败 / 汇总）
+ * 合成一块。这是渲染视图模型，**绝不写回 `Message.process`**。
+ */
+export interface MemberGroupRow {
+  kind: 'member-group';
+  /** 稳定 React key：成员 id（同一成员多相位共用一个身份） */
+  id: string;
+  memberId: string;
+  memberName: string;
+  status: MemberGroupStatus;
+  /** 最后一次观察到的动作（仅 `running` 时用于文案） */
+  activity: MemberGroupActivity;
+  /** 承载文本（计划或产出）；`textKind` 说明它是哪一种 */
+  text?: string;
+  textKind: 'plan' | 'output';
+  /** 失败原因（任一相位失败即带上；失败不可折叠，见组件） */
+  error?: string;
+}
+
+/** 成员组状态：仍在跑 / 已收口 / 失败 */
+export type MemberGroupStatus = 'running' | 'done' | 'failed';
+/** 成员当前动作（决定 `running` 文案：制定计划中 / 执行中 / 汇总中） */
+export type MemberGroupActivity = 'planning' | 'working' | 'aggregating';
+
+/**
+ * 渲染视图行。
+ *
+ * ⚠️ 刻意**逐个列出**而不是写成 `ProcessEvent | …`：裸的 `MemberEvent` 永远不会
+ * 单独成行——它必被合进 `MemberGroupRow`（见 `groupMemberEvents`）。把它留在联合里
+ * 会让每个消费方都多出「这个 case 怎么画」的问号，而正确答案是「画不到」。
+ */
+export type ProcessViewRow = ReasoningEvent | ProcessToolRow | AggregateRow | MemberGroupRow;
 
 /**
  * 档位过滤 + 连续段聚合的**唯一入口**。
@@ -62,7 +99,10 @@ export type ProcessViewRow = ProcessEvent | AggregateRow;
  *     - full → 逐行保留。
  *     - result → 丢弃。
  *     - key → 关键工具逐行保留；非关键工具并入当前连续段，遇屏障 flush 成 `AggregateRow`。
- * - 屏障 = 思考段 / 关键工具 / running / error（任何「不并入当前聚合段」的行都要先 flush）。
+ * - member（FR-2.4 第 3 步）：同一成员的全部相位合成一个 `MemberGroupRow`（跨事件分组，
+ *   见下）；result 档只留**失败**的成员——「异常永不隐身」在成员这一层同样成立，
+ *   否则一次「两个成员里有一个挂了」的编排，在最简档下会显示成完全成功。
+ * - 屏障 = 思考段 / 关键工具 / running / error / 成员（任何「不并入当前聚合段」的行都要先 flush）。
  */
 export function buildProcessRows(
   events: ProcessEvent[],
@@ -82,6 +122,14 @@ export function buildProcessRows(
     segment = [];
   };
 
+  /*
+   * 成员事件**先跨事件分组**，不能沿用「相邻段」的聚合思路：
+   * `parallel` 模式下事件是交错的（A 开始 → B 开始 → A 完成 → B 完成），
+   * 按相邻分组会把同一个成员劈成两块、在界面上出现两次——正是验收里要防的「事件串了」。
+   */
+  const groups = groupMemberEvents(events, tier);
+  const emitted = new Set<string>();
+
   for (const ev of events) {
     // 关键档下，非关键的 done 工具行并入当前连续段（等待屏障 flush）
     if (tier === 'key' && ev.kind === 'tool' && ev.status === 'done' && !isKeyTool(ev.tool)) {
@@ -91,6 +139,16 @@ export function buildProcessRows(
 
     // 其余一切行都是「屏障」：先结算当前聚合段，再决定本行去留
     flush();
+
+    if (ev.kind === 'member') {
+      // 组在**首次出现处**落位，同一成员的后续相位被它吸收（不再单开一行）
+      const group = groups.get(ev.memberId);
+      if (group && !emitted.has(ev.memberId)) {
+        emitted.add(ev.memberId);
+        out.push(group);
+      }
+      continue;
+    }
 
     if (ev.kind === 'reasoning') {
       // 聚焦结果档丢弃思考段；key / full 原样保留
@@ -105,6 +163,75 @@ export function buildProcessRows(
 
   flush();
   return out;
+}
+
+/**
+ * 成员事件 → 按 `memberId` 分组，保持**首次出现顺序**（即引擎的调度顺序：
+ * sequential 是成员表顺序，parallel 是 `gather` 的启动顺序）。
+ *
+ * 状态判定取「最强的终态」：只要出现过 `failed` 就是失败（哪怕之后又跑了一轮），
+ * 否则出现过 `finished` 就是完成，都没有才是仍在跑。这样「中途失败过一次」
+ * 不会被后续动作洗白——渲染层不该比事实更乐观。
+ */
+function groupMemberEvents(
+  events: readonly ProcessEvent[],
+  tier: ProcessDetailLevel,
+): Map<string, MemberGroupRow> {
+  const groups = new Map<string, MemberGroupRow>();
+  for (const ev of events) {
+    if (ev.kind !== 'member') continue;
+
+    let group = groups.get(ev.memberId);
+    if (!group) {
+      group = {
+        kind: 'member-group',
+        id: `member:${ev.memberId}`,
+        memberId: ev.memberId,
+        memberName: ev.memberName,
+        status: 'running',
+        activity: 'working',
+        textKind: 'output',
+      };
+      groups.set(ev.memberId, group);
+    }
+
+    /*
+     * 名字取**第一个非空值**，之后不再改。
+     *
+     * 不用「最新一次覆盖」：引擎在成员缺名时会把 id 当名字（`_parse_member`），
+     * 于是同一成员的事件里可能既有真名又有 id——「最新覆盖」会让一个没带名字的
+     * 后续相位把已经拿到的真名冲掉，界面上成员名就会莫名其妙变成 `m1`。
+     * 而「团内改名」在引擎侧不可能发生（成员表是本轮冻结的 spec），
+     * 所以首个非空值就是终值。
+     */
+    if (!group.memberName && ev.memberName) group.memberName = ev.memberName;
+
+    if (ev.text) {
+      group.text = ev.text;
+      group.textKind = ev.phase === 'planned' ? 'plan' : 'output';
+    }
+
+    if (ev.phase === 'failed') {
+      group.status = 'failed';
+      if (ev.error) group.error = ev.error;
+      continue;
+    }
+    if (ev.phase === 'finished') {
+      if (group.status !== 'failed') group.status = 'done';
+      continue;
+    }
+    // planned / started / aggregating：仍未收口，记下「此刻在做什么」
+    group.activity =
+      ev.phase === 'planned' ? 'planning' : ev.phase === 'aggregating' ? 'aggregating' : 'working';
+  }
+
+  // 聚焦结果档只保留失败成员（与工具行的档位豁免同一条原则：异常不隐身）
+  if (tier === 'result') {
+    for (const [id, group] of groups) {
+      if (group.status !== 'failed') groups.delete(id);
+    }
+  }
+  return groups;
 }
 
 /**

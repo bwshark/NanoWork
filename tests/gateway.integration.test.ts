@@ -10,7 +10,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NanobotClient } from '@/ai/runtime/nanobotHttp/chat';
-import type { ChatRequest, StreamHandlers } from '@/ai/runtime/types';
+import type { ChatRequest, ProcessMemberEvent, StreamHandlers } from '@/ai/runtime/types';
 import { useSettingsStore } from '@/stores/settingsStore';
 
 // 合法 SSE：每个事件以「双换行」结束（`data: {...}\n\n`）。
@@ -267,6 +267,113 @@ describe('NanobotClient 网关端到端（OpenAI 兼容 SSE）', () => {
     );
     await handle.done;
     expect(tokens.join('')).toBe('已处理文件。');
+  });
+});
+
+/**
+ * 专家团成员事件的**传输层**（FR-2.4 第 3 步）：`nanobot_event.kind=member` 的解析。
+ *
+ * 分工：「引擎有没有把这些事件发出来」由 nanobot 的 pytest 覆盖
+ * （`tests/test_api_stream.py::test_stream_forwards_expert_group_member_events`）；
+ * 这里只管「收到了之后怎么翻译成契约层事件」。
+ */
+describe('NanobotClient 专家团成员事件 (FR-2.4)', () => {
+  let client: NanobotClient;
+
+  beforeEach(() => {
+    useSettingsStore.getState().setSettings({
+      gatewayEndpoint: 'http://127.0.0.1:8765/v1',
+      apiToken: '',
+    });
+    client = new NanobotClient();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  /** 只含一条成员事件的 SSE 流 */
+  function memberSse(ev: Record<string, unknown>): string {
+    return sseStream([JSON.stringify({ choices: [{ delta: { nanobot_event: ev } }] })]);
+  }
+
+  async function collect(sse: string): Promise<ProcessMemberEvent[]> {
+    vi.stubGlobal('fetch', vi.fn(async () => makeResponse(sse)));
+    const seen: ProcessMemberEvent[] = [];
+    const handle = client.sendMessage(
+      { agentId: 'a', messages: [{ role: 'user', content: 'hi' }], stream: true },
+      {
+        onToken: () => undefined,
+        onToolCall: () => undefined,
+        onArtifact: () => undefined,
+        onStatus: () => undefined,
+        onProcessMember: (e) => seen.push(e),
+        onDone: () => undefined,
+        onError: () => undefined,
+      },
+    );
+    await handle.done;
+    return seen;
+  }
+
+  it('解析 member / member_event，并按相位取透传载荷', async () => {
+    const seen = await collect(
+      memberSse({
+        kind: 'member',
+        member: { id: 'm1', name: '架构师' },
+        member_event: 'member_finished',
+        output: '现状如下……',
+      }),
+    );
+    expect(seen).toEqual([
+      { memberId: 'm1', memberName: '架构师', phase: 'finished', text: '现状如下……' },
+    ]);
+  });
+
+  it('planned 的 plan 载荷与 failed 的 error 载荷分别映射到 text / error', async () => {
+    const planned = await collect(
+      memberSse({
+        kind: 'member',
+        member: { id: 'lead', name: '团长' },
+        member_event: 'group_planned',
+        plan: '先分头看，再收口',
+      }),
+    );
+    expect(planned).toEqual([
+      { memberId: 'lead', memberName: '团长', phase: 'planned', text: '先分头看，再收口' },
+    ]);
+
+    const failed = await collect(
+      memberSse({
+        kind: 'member',
+        member: { id: 'm2', name: '审校' },
+        member_event: 'member_failed',
+        error: 'provider 429',
+      }),
+    );
+    expect(failed).toEqual([
+      { memberId: 'm2', memberName: '审校', phase: 'failed', error: 'provider 429' },
+    ]);
+  });
+
+  it('未知相位直接忽略——不猜，也不硬塞成某个已知相位', async () => {
+    const seen = await collect(
+      memberSse({
+        kind: 'member',
+        member: { id: 'm1', name: 'A' },
+        member_event: 'member_teleported',
+      }),
+    );
+    expect(seen).toEqual([]);
+  });
+
+  it('缺 id 时退回名字当分组键（否则同一成员会被拆成多组）', async () => {
+    const seen = await collect(
+      memberSse({ kind: 'member', member: { name: '审校' }, member_event: 'member_started' }),
+    );
+    expect(seen).toEqual([
+      { memberId: '审校', memberName: '审校', phase: 'started' },
+    ]);
   });
 });
 

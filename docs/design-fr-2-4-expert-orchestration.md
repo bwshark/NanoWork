@@ -276,9 +276,38 @@
 - 端到端真机验证（起真实网关跑一次两成员团）尚未做——沙箱拉不起 nanobot 网关，
   客户端接线由单测 + 引擎源码静态闭环。
 
-### 第 3 步：事件流补成员归属
+### 第 3 步：事件流补成员归属 —— **已落地（2026-10-06）**
 
-- 给过程事件加成员标识（需先核对是否已有 `subagent_label` 之类的字段可复用）；
-- 客户端按成员分组渲染，而不是与主 agent 的思考混在一条时间线里。
+引擎侧此前**已经**在 `_on_member_event` 里把 `member` / `member_event` 送进 `on_progress`
+（第 2 步就位），缺的是「接上」——而且接到一半会静默丢事件：
 
-**验收**：ProcessView 能标出「成员 A / 成员 B」，且事件不串。
+| 落点 | 改动 |
+| --- | --- |
+| `nanobot/agent/loop.py` | `extra` 改**整体**塞进 `member_extra`（原先平铺）。`group_planned` 的载荷带一个 `plan` 键，而 `/v1` 的 `_on_progress` 恰好有同名形参（语义是 Plan 模式的结构化计划、期望 dict）→ 平铺会绑成它并走 `{**plan}` 对 str 解包 → TypeError。异常被 orchestrator 的 `_emit` 吞掉，现象是「计划事件凭空消失、什么都不报」 |
+| `nanobot/api/server.py` | `_on_progress` 显式收 `member` / `member_event` / `member_extra`，下发 `kind: "member"`（透传载荷先展开、固定键后覆盖，归属字段不允许被载荷同名键改写） |
+| `src/types/process.ts` | 新增过程行 `MemberEvent`（`kind: 'member'`，五相位）。**独立一类**而不是给工具行加 `memberId`：成员产出既不是工具调用也不是思考，塞进工具行会让「工具」这个词再也说不清自己指什么 |
+| `src/types/event.ts` + `events/{factory,project}.ts` | 新增事件 `expert-group-member`。**必须落盘**：打开会话时消息由事件流重建，只改内存会「刷新后成员归属凭空消失」，而实时那一轮看起来完全正常 |
+| `src/ai/runtime/types.ts` + `nanobotHttp/chat.ts` | 契约 `ProcessMemberEvent` + `onProcessMember`；相位走**白名单映射**，未知相位**忽略**而不是猜（猜错会把「团长在汇总」显示成「成员开始执行」） |
+| `src/stores/sessionsStore.ts` | `handleProcessMember`：闭合思考段 → 记事件 → 更新 `Message.process`；行 id 取**落盘事件 id**，让实时与重放两条路径的 key 一致 |
+| `src/lib/processDetail.ts` | `MemberGroupRow` + **跨事件分组**；`result` 档只留失败成员 |
+| `src/pages/chat/ProcessView.tsx` | 成员组行：成员名 + 状态 + 按需展开的产出/计划；**失败原因不折叠** |
+| `src/lib/processDigest.ts` | 署名头步数**按成员计，不按相位计**（相位相加会让「3 个成员的团」显示成「8 步」） |
+
+**几条定死的展示口径**（都不会报错、只会显示错话，故每条都有用例）：
+
+- **按成员 id 归组，不按相邻段**：`parallel` 的事件是交错的（A 开始 → B 开始 → A 完成 → B 完成），
+  按相邻分组会把同一成员劈成两块、界面上出现两次——验收里「事件不串」说的正是它。
+- **失败优先、不洗白**：成员只要失败过一次就判失败，之后的产出不改写这个结论。
+- **回合结束后停在中途 → 「结果未返回」**（不说「失败」：可能已经跑完、只是相位没送到）；
+  **最后动作是汇总 → 「已结束」**（汇总的产出就是下面那条最终回答，写「结果未返回」
+  会与用户正读到的正文自相矛盾）。
+- **`result` 档只留失败成员**：与工具行的档位豁免同一条原则——异常永不隐身。
+
+**未做**：成员**内部**的工具调用不上报（成员跑在子代理里，`run_inline` 没有回传通道），
+所以成员块只显示相位与产出，不显示它内部每一步做了什么。**这是引擎侧的现状，不是渲染层的省略**——
+界面如实只画拿得到的东西。
+
+**验收**：ProcessView 能标出「成员 A / 成员 B」，且事件不串。覆盖：
+`nanobot/tests/test_api_stream.py`（引擎真的发出来了）、`tests/gateway.integration.test.ts`（相位映射）、
+`tests/lib/processDetail.test.ts` + `tests/chatProcessTimeline.test.tsx`（分组与渲染）、
+`tests/events/equivalence.test.ts`（刷新前后逐字段一致）。

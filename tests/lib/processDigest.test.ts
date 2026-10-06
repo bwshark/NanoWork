@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { digestProcess, formatDuration } from '@/lib/processDigest';
-import type { ProcessEvent } from '@/types';
+import type { MemberEvent, ProcessEvent } from '@/types';
 
 /**
  * 过程时间线统计层单测。
@@ -21,6 +21,11 @@ function tool(
 /** 构造思考段 */
 function reasoning(id: string, closed = true): ProcessEvent {
   return { id, kind: 'reasoning', content: '...', closed };
+}
+
+/** 构造成员相位事件（FR-2.4 第 3 步） */
+function member(id: string, memberId: string, phase: MemberEvent['phase']): ProcessEvent {
+  return { id, kind: 'member', memberId, memberName: memberId, phase };
 }
 
 describe('formatDuration', () => {
@@ -87,5 +92,48 @@ describe('digestProcess', () => {
     const seq = [tool('t1'), tool('t2', 'error'), reasoning('r1')];
     const rev = [...seq].reverse();
     expect(digestProcess(seq)).toEqual(digestProcess(rev));
+  });
+});
+
+/**
+ * 成员统计：署名头那句「N 步 / M 出错」必须把专家团成员算进去，
+ * 否则「两个成员里挂了一个」在最外层看不见——那正是最该被看见的一种失败。
+ */
+describe('digestProcess：专家团成员', () => {
+  it('按成员计数，不按相位计数（一个成员平均两三条相位事件）', () => {
+    const d = digestProcess([
+      member('e1', 'm1', 'started'),
+      member('e2', 'm1', 'finished'),
+      member('e3', 'm2', 'started'),
+      member('e4', 'm2', 'finished'),
+    ]);
+    expect(d).toEqual({ steps: 2, running: 0, errors: 0, thinkingCount: 0 });
+  });
+
+  it('成员失败计入 errors，且不会被「之后又完成」洗白', () => {
+    const d = digestProcess([
+      member('e1', 'm1', 'started'),
+      member('e2', 'm1', 'failed'),
+      member('e3', 'm1', 'finished'),
+    ]);
+    expect(d).toEqual({ steps: 1, running: 0, errors: 1, thinkingCount: 0 });
+  });
+
+  it('只发了 started 的成员算「执行中」；started 后 finished 必须拨回 0', () => {
+    expect(digestProcess([member('e1', 'm1', 'started')])).toEqual({
+      steps: 1,
+      running: 1,
+      errors: 0,
+      thinkingCount: 0,
+    });
+    // 顺序颠倒同样成立（统计不依赖到达顺序）
+    expect(
+      digestProcess([member('e1', 'm1', 'finished'), member('e2', 'm1', 'started')]),
+    ).toMatchObject({ steps: 1, running: 1 });
+  });
+
+  it('成员与工具行一起计入 steps', () => {
+    const d = digestProcess([tool('t1'), member('e1', 'm1', 'started'), member('e2', 'm1', 'finished')]);
+    expect(d).toEqual({ steps: 2, running: 0, errors: 0, thinkingCount: 0 });
   });
 });

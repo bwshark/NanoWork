@@ -33,30 +33,61 @@ export function formatDuration(ms: number): string {
 
 /** 过程统计（供署名头渲染异常提示） */
 export interface ProcessDigest {
-  /** 工具执行行总数 */
+  /** 过程步骤总数：工具执行行 + 专家团成员（FR-2.4） */
   steps: number;
-  /** 仍在执行中的行数 */
+  /** 仍在执行中的步骤数 */
   running: number;
-  /** 出错行数 */
+  /** 出错的步骤数 */
   errors: number;
   /** 深度思考段数量 */
   thinkingCount: number;
 }
 
-/** 统计过程事件：只做计数，不关心顺序（顺序由 timeline 自己保证）。 */
+/**
+ * 统计过程事件：只做计数，不关心顺序（顺序由 timeline 自己保证）。
+ *
+ * 成员按**成员**计数而不是按相位计数：一个成员会发两三条相位事件，
+ * 相位相加会让「3 个成员的团」显示成「8 步」，比一个诚实的「3」更难读。
+ * 状态取该成员最强的终态（失败 > 仍在跑 > 完成），与 `groupMemberEvents` 一致。
+ */
 export function digestProcess(events: ProcessEvent[]): ProcessDigest {
   let steps = 0;
   let running = 0;
   let errors = 0;
   let thinkingCount = 0;
+  /** memberId → 是否仍在跑（false = 已收口或已失败） */
+  const members = new Map<string, { running: boolean; failed: boolean }>();
+
   for (const ev of events) {
     if (ev.kind === 'reasoning') {
       thinkingCount += 1;
       continue;
     }
+    if (ev.kind === 'member') {
+      const cur = members.get(ev.memberId) ?? { running: false, failed: false };
+      // 收口相位（finished）必须把 running 拨回 false：否则「先 started 后 finished」
+      // 的成员会一直算成仍在执行，署名头永远显示「N 步执行中」。
+      if (ev.phase === 'failed') {
+        cur.failed = true;
+        cur.running = false;
+      } else if (ev.phase === 'finished') {
+        cur.running = false;
+      } else {
+        cur.running = true;
+      }
+      members.set(ev.memberId, cur);
+      continue;
+    }
     steps += 1;
     if (ev.status === 'running') running += 1;
     else if (ev.status === 'error') errors += 1;
+  }
+
+  for (const m of members.values()) {
+    steps += 1;
+    // 失败优先：一个失败的成员不该因为「之前跑过」而被算成正常步骤
+    if (m.failed) errors += 1;
+    else if (m.running) running += 1;
   }
   return { steps, running, errors, thinkingCount };
 }

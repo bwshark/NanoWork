@@ -6,7 +6,14 @@ import { ReasoningBlock } from '@/pages/chat/ReasoningBlock';
 import { AssistantMessage } from '@/pages/chat/AssistantMessage';
 import { useSessionsStore } from '@/stores/sessionsStore';
 import { useSettingsStore } from '@/stores/settingsStore';
-import type { Message, ProcessEvent, ProcessToolRow, ReasoningEvent, Session } from '@/types';
+import type {
+  MemberEvent,
+  Message,
+  ProcessEvent,
+  ProcessToolRow,
+  ReasoningEvent,
+  Session,
+} from '@/types';
 
 /**
  * 对话消息「过程时间线」行为回归测试。
@@ -45,6 +52,24 @@ function tool(id: string, status: 'running' | 'done' | 'error' = 'done'): Proces
 
 function reasoning(id: string, content: string, closed = true): ReasoningEvent {
   return { id, kind: 'reasoning', content, closed };
+}
+
+/** 构造成员相位事件（FR-2.4 第 3 步） */
+function memberEv(
+  id: string,
+  memberId: string,
+  phase: MemberEvent['phase'],
+  extra: { name?: string; text?: string; error?: string } = {},
+): ProcessEvent {
+  return {
+    id,
+    kind: 'member',
+    memberId,
+    memberName: extra.name ?? memberId,
+    phase,
+    ...(extra.text !== undefined ? { text: extra.text } : {}),
+    ...(extra.error !== undefined ? { error: extra.error } : {}),
+  };
 }
 
 const MD = '# 思考\n\n- 第一点\n- 第二点';
@@ -218,6 +243,110 @@ describe('ProcessView', () => {
     const settled = mount(<ProcessView events={events} live={false} tier="full" />);
     expect(settled.html).not.toContain('MuiCircularProgress');
     expect(settled.html).toContain('结果未返回');
+  });
+
+  /**
+   * 专家团成员行（FR-2.4 第 3 步）。
+   *
+   * 这一层的验收标准是「**能标出成员 A / 成员 B，且事件不串**」，所以断言落在
+   * 成员名与各成员的产出上；另加两条诚实性规则，它们都是「不说反话」的具体化：
+   * - 回合结束但成员停在中途 → 「结果未返回」，不转圈（同 `running` 工具行）；
+   * - 回合结束且最后动作是**汇总** → 「已结束」：汇总的产出就是下面那条最终回答，
+   *   写「结果未返回」会与用户正读到的正文自相矛盾。
+   */
+  it('成员组：名字 + 状态可见，产出默认折叠、点开才铺出', () => {
+    const events: ProcessEvent[] = [
+      memberEv('e1', 'm1', 'started', { name: '架构师' }),
+      memberEv('e2', 'm1', 'finished', { name: '架构师', text: '## 结论\n\n先做 A 再做 B' }),
+    ];
+    const { html } = mount(<ProcessView events={events} live={false} tier="key" />);
+
+    expect(html).toContain('架构师');
+    expect(html).toContain('完成');
+    // 同一成员的两个相位合成一行：只有一处成员名
+    expect(html.split('架构师').length - 1).toBe(1);
+    // 产出默认折叠
+    expect(html).not.toContain('先做 A 再做 B');
+
+    const header = host!.querySelector('[aria-label="展开成员产出"]')!;
+    expect(header.getAttribute('aria-expanded')).toBe('false');
+    act(() => {
+      header.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    expect(header.getAttribute('aria-expanded')).toBe('true');
+    expect(host!.innerHTML).toContain('先做 A 再做 B');
+  });
+
+  it('成员组：流式中显示动作并转圈；回合结束后停在中途的成员说「结果未返回」', () => {
+    const events: ProcessEvent[] = [memberEv('e1', 'm1', 'started', { name: '审校' })];
+
+    const streaming = mount(<ProcessView events={events} live tier="full" />);
+    expect(streaming.html).toContain('执行中');
+    expect(streaming.html).toContain('MuiCircularProgress');
+    expect(streaming.html).not.toContain('结果未返回');
+
+    const settled = mount(<ProcessView events={events} live={false} tier="full" />);
+    expect(settled.html).not.toContain('MuiCircularProgress');
+    expect(settled.html).toContain('结果未返回');
+    // 说「结果未返回」而不是「失败」：成员可能已经跑完，只是相位没送到
+    expect(settled.html).not.toContain('失败');
+  });
+
+  it('团长汇总中：流式中说「汇总中」，回合结束后说「已结束」（不与最终回答自相矛盾）', () => {
+    const events: ProcessEvent[] = [
+      memberEv('e1', 'lead', 'planned', { name: '团长', text: '先分头看，再收口' }),
+      memberEv('e2', 'lead', 'aggregating', { name: '团长' }),
+    ];
+
+    const streaming = mount(<ProcessView events={events} live tier="full" />);
+    expect(streaming.html).toContain('汇总中');
+    // full 档默认展开：计划正文直接可见（key 档则要一次点击，下面另有用例锁）
+    expect(streaming.html).toContain('收起团队计划');
+    expect(streaming.html).toContain('先分头看，再收口');
+
+    const settled = mount(<ProcessView events={events} live={false} tier="full" />);
+    expect(settled.html).toContain('已结束');
+    expect(settled.html).not.toContain('结果未返回');
+  });
+
+  it('成员失败：状态说「失败」，原因是常驻文案（不折进一次点击里）', () => {
+    const events: ProcessEvent[] = [
+      memberEv('e1', 'm1', 'started', { name: '审校' }),
+      memberEv('e2', 'm1', 'failed', { name: '审校', error: 'provider 429' }),
+    ];
+    const { html } = mount(<ProcessView events={events} live={false} tier="key" />);
+
+    expect(html).toContain('失败');
+    expect(html).toContain('provider 429');
+    // 失败且无产出 → 没有可展开的内容，头部不该是可点的
+    expect(host!.querySelector('[role="button"]')).toBeNull();
+  });
+
+  it('result 档：正常成员不渲染，失败成员照旧可见（异常永不隐身）', () => {
+    const events: ProcessEvent[] = [
+      memberEv('e1', 'ok', 'finished', { name: '正常成员', text: '产出' }),
+      memberEv('e2', 'bad', 'failed', { name: '翻车成员', error: 'boom' }),
+    ];
+    const { html } = mount(<ProcessView events={events} live={false} tier="result" />);
+
+    expect(html).not.toContain('正常成员');
+    expect(html).toContain('翻车成员');
+    expect(html).toContain('boom');
+  });
+
+  it('parallel 交错的成员事件：界面上每个成员只出现一次（事件不串）', () => {
+    const events: ProcessEvent[] = [
+      memberEv('e1', 'a', 'started', { name: '成员A' }),
+      memberEv('e2', 'b', 'started', { name: '成员B' }),
+      memberEv('e3', 'a', 'finished', { name: '成员A', text: 'A 的结论' }),
+      memberEv('e4', 'b', 'finished', { name: '成员B', text: 'B 的结论' }),
+    ];
+    const { html } = mount(<ProcessView events={events} live={false} tier="full" />);
+
+    expect(html.split('成员A').length - 1).toBe(1);
+    expect(html.split('成员B').length - 1).toBe(1);
+    // 各自的产出归到各自名下：A 在前、B 在后（首次出现顺序）
+    expect(html.indexOf('成员A')).toBeLessThan(html.indexOf('成员B'));
   });
 });
 

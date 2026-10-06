@@ -397,7 +397,7 @@
 > - **18.2 用户数据目录收敛**：渲染层持久化从 `<userData>/nanowork-store.json` 单文件拆为**一 key 一文件**并按归属路由（① 用户资产 / ② 运行时），旧数据一次性可回滚迁移，`MEMORY.md` 落盘缺陷修复（见 18.2.5）。`storageRoutes` 单测覆盖路由归属与路径安全。
 > - **D1 引擎契约层**：四个散落的引擎模块搬进 `src/ai/runtime/nanobotHttp/`，渲染层改为只经 `AgentRuntime` 与引擎交互；`src/ai/types.ts` 并入 `runtime/types.ts`；键名归一并入 `codec.ts`；顺带清掉 5 处死代码/重复实现（见 8.4.1）。
 > - **D3 工具调用逐条批准**：给引擎的 `before_execute_tool` 加**否决通道**，引擎可在副作用工具执行前挂起、经 SSE 下发审批请求、由 `POST /v1/tool-approvals/{id}` 接收裁决；客户端新增 `capabilities.toolApproval` / `approvalMode` / `onApprovalRequest` / `respondApproval()`，并把原先**纯本地的假门控**（拦不住引擎、工具照常执行，见 FR-8.1）替换为真实回环。会话级开关与 `fullAccess` 为**正交两轴**，`full` 覆盖之（见 10.3.1 / 11.1.1 / ADR-021）。
-> - **D2 事件化会话（A–E 全部完成）**：`sessionsStore` 的读写路径已整体切到事件流——`send()` 派发事件落盘、列表读索引、消息按需从 JSONL 重建、旧 `persist` 与 `nanowork.sessions` 键已移除。事件模型（16 种 + `EventFactory`）+ 存储抽象（路由 / 索引纯逻辑 / IO / IPC / 契约 / 双实现）+ 投影（`project` / `activePath`）+ 记录器（`recordFor`）见 9.6。索引层由 SQLite 改为 **JSON 索引**（零原生依赖，见 9.4）。**两条推导路径的等价性由 `tests/events/equivalence.test.ts` 守卫**（ADR-023）。
+> - **D2 事件化会话（A–E 全部完成）**：`sessionsStore` 的读写路径已整体切到事件流——`send()` 派发事件落盘、列表读索引、消息按需从 JSONL 重建、旧 `persist` 与 `nanowork.sessions` 键已移除。事件模型（现 17 种 + `EventFactory`）+ 存储抽象（路由 / 索引纯逻辑 / IO / IPC / 契约 / 双实现）+ 投影（`project` / `activePath`）+ 记录器（`recordFor`）见 9.6。索引层由 SQLite 改为 **JSON 索引**（零原生依赖，见 9.4）。**两条推导路径的等价性由 `tests/events/equivalence.test.ts` 守卫**（ADR-023）。
 > - **M2 首轮：Ask / Plan / Craft + 计划审批（FR-1.4 / FR-1.5）**：
 >   - **引擎侧**：执行模式与工作空间 / 权限 / 逐条批准同处会话级 `WorkspaceScope`（第四根轴 `session_mode`，未知取值报错而非静默降级）；`SessionModeHook` 在工具执行前 deny 被模式禁止的调用，并在 Plan 模式下把 `submit_plan` 的结果经 SSE（`kind=plan`）下发（新增 `progress_events.invoke_plan_event` 通道）。子代理补上模式/审批组合，避免成为旁路。
 >   - **客户端**：契约层新增 `ChatRequest.sessionMode` / `StreamHandlers.onPlan` / `capabilities.executionModes`；`sessionsStore` 新增 `setSessionMode`（落 `mode-change` 事件）、`handlePlan`、`resolvePlan`；`ComposerControls` 的模式选择器受能力门控（不支持就隐藏，不留点了不生效的开关）；计划随 `plan` / `plan-decision` 事件落盘，`PlanCard` 提供勾选 / 批准并执行 / 仅批准 / 打回带意见四种出口。
@@ -560,7 +560,10 @@
 > - **`FR-2.4`（专家团编排）**：**引擎侧与客户端接线均已落地（2026-10-06）**——引擎
 >   `agent/expert_group.py` + `loop.py` 接管分支 + `api/server.py` 接收（JSON/multipart 双路），
 >   客户端 `lib/expertGroupRequest.ts` → `ChatRequest.expertGroup` → wire `expert_group`。
->   **仍差**：ProcessView 按成员分组渲染（第 3 步，事件字段已就位）、成员 token 用量未汇总。
+>   **第 3 步（成员归属）也已落地（2026-10-06）**：成员生命周期经 `/v1` SSE 出站
+>   （`kind: "member"`）→ 新事件 `expert-group-member` 落盘 → ProcessView 按成员分组渲染。
+>   **仍差**：成员 token 用量未汇总进 `_last_usage`；成员**内部**的工具调用不上报
+>   （子代理无回传通道，界面如实只画相位与产出）。
 >   设计见 `docs/design-fr-2-4-expert-orchestration.md` §7。
 >
 > **P1 状态基线**：24 条中 18 条已 ✅，未完成的 12 条按「能不能在没有新引擎能力的前提下做」分两类：
@@ -881,6 +884,7 @@ export type EventType =
   | 'permission-decision'    // 权限决策（allow/deny + 策略来源）
   | 'plan'                   // Plan 模式产出的计划
   | 'plan-decision'          // 计划审批结果
+  | 'expert-group-member'    // 专家团成员生命周期（FR-2.4 第 3 步）
   | 'artifact'               // 产物
   | 'file-history-snapshot'  // 文件快照（回滚锚点）
   | 'commit'                 // commitSeq 推进（回滚边界）
@@ -1035,7 +1039,7 @@ D2 分五阶段推进，**A 事件模型 / B 存储抽象 / C 双写 / D 切读 
 
 ### Phase A：事件模型（`src/types/event.ts` + `src/events/factory.ts`）
 
-- 16 种事件 + `BaseEvent`（`id` / `sessionId` / `parentId` / `seq` / `timestamp` / `provider`），  
+- 17 种事件（原 16 种 + FR-2.4 的 `expert-group-member`）+ `BaseEvent`（`id` / `sessionId` / `parentId` / `seq` / `timestamp` / `provider`），  
   联合以 `type` 判别；另有 `SessionMeta` / `SessionIndexEntry` / `SessionIndexFile`。
 - `EventFactory`：`seq` 单调分配、`parentId` 成链、`now` / `genId` 可注入（便于单测），  
   并支持从历史事件 `resumeFrom` 续写——打开旧会话继续追加时序号不重置。
@@ -3463,7 +3467,7 @@ severity 由 `warning` 降为 `info`）：三模式真的由引擎在服务端�
 
 - **知识库绑定**：V1 无知识库/RAG 概念，属 M7（V2）。FR-2.3 因此**保持 🟡**——
   四类绑定里这类没落，标 ✅ 会让人以为 V1 范围内全做完了。
-- **FR-2.4 三模式真实执行**：见 §20.9.6（该结论写于 2026-10-05）。**2026-10-06 已落地**：引擎侧编排调度（`agent/expert_group.py` + `loop.py` 接管分支 + `api/server.py` 接收 JSON/multipart）+ **客户端接线**（`lib/expertGroupRequest.ts` → `ChatRequest.expertGroup` → wire `expert_group`）。只剩 ProcessView 按成员归属渲染（第 3 步，事件字段已就位）与成员用量汇总，见 design §7。
+- **FR-2.4 三模式真实执行**：见 §20.9.6（该结论写于 2026-10-05，**已被推翻**）。**2026-10-06 已落地**：引擎侧编排调度（`agent/expert_group.py` + `loop.py` 接管分支 + `api/server.py` 接收 JSON/multipart）+ **客户端接线**（`lib/expertGroupRequest.ts` → `ChatRequest.expertGroup` → wire `expert_group`）+ **成员归属可见**（第 3 步：`kind: "member"` SSE → `expert-group-member` 事件 → ProcessView 按成员分组）。只剩成员用量汇总与「成员内部工具调用不上报」（后者是引擎侧无回传通道的现状），见 design §7。
 - **`imBinding` / `avatar` 的消费**：仍是只持久化未消费（`imBinding` 的 UI 自己也写了
   「真实绑定推送依赖 nanobot 运行时」）。
 

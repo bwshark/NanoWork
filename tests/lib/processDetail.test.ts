@@ -7,9 +7,15 @@ import {
   isKeyTool,
   isToolCallRepresentedInProcess,
 } from '@/lib/processDetail';
-import type { AggregateRow } from '@/lib/processDetail';
+import type { AggregateRow, MemberGroupRow } from '@/lib/processDetail';
 import { useSettingsStore } from '@/stores/settingsStore';
-import type { ProcessEvent, ProcessToolRow, ToolCall, ToolCallStatus } from '@/types';
+import type {
+  MemberEvent,
+  ProcessEvent,
+  ProcessToolRow,
+  ToolCall,
+  ToolCallStatus,
+} from '@/types';
 
 /**
  * 「过程时间线的档位派生层」单测（`src/lib/processDetail.ts`）。
@@ -42,6 +48,24 @@ function reasoning(id: string, content = '...', closed = true): ProcessEvent {
 
 function toolCall(id: string, status: ToolCallStatus, sensitive = false): ToolCall {
   return { id, tool: 'shell', args: {}, sensitive, status };
+}
+
+/** 构造成员事件（FR-2.4 第 3 步） */
+function member(
+  id: string,
+  memberId: string,
+  phase: MemberEvent['phase'],
+  extra: { name?: string; text?: string; error?: string } = {},
+): ProcessEvent {
+  return {
+    id,
+    kind: 'member',
+    memberId,
+    memberName: extra.name ?? memberId,
+    phase,
+    ...(extra.text !== undefined ? { text: extra.text } : {}),
+    ...(extra.error !== undefined ? { error: extra.error } : {}),
+  };
 }
 
 beforeEach(() => {
@@ -237,6 +261,130 @@ describe('buildProcessRows：full 档 —— 原样同序', () => {
     expect(buildProcessRows([], 'result')).toEqual([]);
     expect(buildProcessRows([], 'key')).toEqual([]);
     expect(buildProcessRows([], 'full')).toEqual([]);
+  });
+});
+
+/**
+ * 成员分组（FR-2.4 第 3 步）。
+ *
+ * 这一组的核心不变量是**跨事件归组**：成员事件在 `parallel` 下是交错的
+ * （A 开始 → B 开始 → A 完成 → B 完成），一旦退化成「按相邻段聚合」，
+ * 同一个成员就会在界面上出现两次——验收里那条「事件不串」说的正是它。
+ */
+describe('buildProcessRows：专家团成员分组', () => {
+  it('同一成员的多个相位合成一块（不逐相位铺开）', () => {
+    const rows = buildProcessRows(
+      [
+        member('e1', 'm1', 'planned', { name: '架构师', text: '先看现状再动手' }),
+        member('e2', 'm1', 'aggregating'),
+      ],
+      'key',
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      kind: 'member-group',
+      id: 'member:m1',
+      memberId: 'm1',
+      memberName: '架构师',
+      status: 'running',
+      activity: 'aggregating',
+      text: '先看现状再动手',
+      textKind: 'plan',
+    });
+  });
+
+  it('parallel 交错到达：按 memberId 归组，两组各归各', () => {
+    const rows = buildProcessRows(
+      [
+        member('e1', 'a', 'started', { name: 'A' }),
+        member('e2', 'b', 'started', { name: 'B' }),
+        member('e3', 'a', 'finished', { name: 'A', text: 'A 的结论' }),
+        member('e4', 'b', 'finished', { name: 'B', text: 'B 的结论' }),
+      ],
+      'key',
+    );
+    expect(rows.map((r) => r.id)).toEqual(['member:a', 'member:b']);
+    expect(rows.map((r) => (r as MemberGroupRow).status)).toEqual(['done', 'done']);
+    expect(rows.map((r) => (r as MemberGroupRow).text)).toEqual(['A 的结论', 'B 的结论']);
+    // 完成后不再显示「在做什么」
+    expect(rows.map((r) => (r as MemberGroupRow).activity)).toEqual(['working', 'working']);
+  });
+
+  it('失败优先：之后又完成的成员仍判失败（不洗白）', () => {
+    const rows = buildProcessRows(
+      [
+        member('e1', 'm1', 'started'),
+        member('e2', 'm1', 'failed', { error: 'provider 429' }),
+        member('e3', 'm1', 'finished', { text: '补救产出' }),
+      ],
+      'key',
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ status: 'failed', error: 'provider 429' });
+  });
+
+  it('result 档只留失败成员（异常永不隐身）', () => {
+    const rows = buildProcessRows(
+      [
+        member('e1', 'ok', 'finished', { name: '正常成员', text: '产出' }),
+        member('e2', 'bad', 'failed', { name: '翻车成员', error: 'boom' }),
+      ],
+      'result',
+    );
+    expect(rows.map((r) => r.id)).toEqual(['member:bad']);
+    expect(rows[0]).toMatchObject({ kind: 'member-group', status: 'failed', error: 'boom' });
+  });
+
+  it('成员是屏障：两侧非关键工具行不得跨它合并成一段', () => {
+    const rows = buildProcessRows(
+      [
+        toolRow('a', 'read_file'),
+        member('e1', 'm1', 'started'),
+        member('e2', 'm1', 'finished', { text: 'x' }),
+        toolRow('b', 'read_file'),
+      ],
+      'key',
+    );
+    expect(rows.map((r) => r.kind)).toEqual(['aggregate', 'member-group', 'aggregate']);
+    expect((rows[0] as AggregateRow).rows.map((r) => r.id)).toEqual(['a']);
+    expect((rows[2] as AggregateRow).rows.map((r) => r.id)).toEqual(['b']);
+  });
+
+  it('显示名取第一个非空值：后续相位缺名不得把已拿到的真名冲掉', () => {
+    const rows = buildProcessRows(
+      [
+        member('e1', 'm1', 'planned', { name: '架构师', text: '计划' }),
+        // 引擎在缺名时把 id 当名字，所以真实事件里可能混着 id——
+        // 「最新覆盖」的写法会在这里把「架构师」冲成 `m1`
+        member('e2', 'm1', 'aggregating'),
+      ],
+      'key',
+    );
+    expect((rows[0] as MemberGroupRow).memberName).toBe('架构师');
+  });
+
+  it('full 档同样合成一块（分组是结构，不是档位压缩的产物）', () => {
+    const rows = buildProcessRows(
+      [
+        member('e1', 'm1', 'started'),
+        member('e2', 'm1', 'finished', { text: 'z' }),
+      ],
+      'full',
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ kind: 'member-group', textKind: 'output', text: 'z' });
+  });
+
+  it('入参冻结时调用不抛错（成员分组同样不得就地改写）', () => {
+    const events: ProcessEvent[] = [
+      member('e1', 'm1', 'started'),
+      member('e2', 'm1', 'finished', { text: 'z' }),
+    ];
+    for (const ev of events) Object.freeze(ev);
+    Object.freeze(events);
+
+    expect(() => buildProcessRows(events, 'key')).not.toThrow();
+    expect(() => buildProcessRows(events, 'result')).not.toThrow();
   });
 });
 

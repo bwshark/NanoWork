@@ -25,6 +25,7 @@ import {
   type PluginToggleOutcome,
 } from './plugins';
 import { readUsageFromRuntime, type UsageRequestContext } from './usage';
+import type { MemberEventPhase } from '@/types/process';
 import type { PluginEngineIndex } from '@/types/plugin';
 
 /**
@@ -32,7 +33,8 @@ import type { PluginEngineIndex } from '@/types/plugin';
  * kind=reasoning：深度思考片段；kind=reasoning_end：思考段结束；
  * kind=tool：工具执行阶段事件（phase=start/end/error，含 call_id/name/arguments/result/error）；
  * kind=approval_request：逐条批准请求（引擎已挂起，等待 POST /v1/tool-approvals/{id}）；
- * kind=plan：Plan 模式下 submit_plan 产出的结构化计划（plan_id / steps，FR-1.5）。
+ * kind=plan：Plan 模式下 submit_plan 产出的结构化计划（plan_id / steps，FR-1.5）；
+ * kind=member：专家团成员生命周期（member / member_event + 该相位的透传载荷，FR-2.4）。
  */
 interface NanobotStreamEvent {
   kind?: string;
@@ -50,6 +52,14 @@ interface NanobotStreamEvent {
   /** kind=plan：计划 id 与步骤清单 */
   plan_id?: string;
   steps?: Array<{ id?: string; text?: string; status?: string }>;
+  /**
+   * kind=member：归属成员（`id` / `name`）与生命周期相位 `member_event`；
+   * `plan` / `output` / `error` 是该相位的透传载荷（按相位取其一）。
+   */
+  member?: { id?: string; name?: string };
+  member_event?: string;
+  output?: string;
+  plan?: string;
 }
 
 /** 结果/错误展示文本截断上限（过程时间线仅做摘要展示） */
@@ -58,6 +68,21 @@ const PROCESS_TEXT_MAX = 4000;
 /** plan 步骤的合法状态（与 `@/types/event` 的 `PlanStep` 一致，此处窄化成字面量元组以便收窄未知值） */
 const PLAN_STEP_STATUSES = ['pending', 'running', 'done', 'skipped'] as const;
 type PlanStepStatus = (typeof PLAN_STEP_STATUSES)[number];
+
+/**
+ * 成员生命周期相位：引擎的 `member_event` → 契约层的窄联合。
+ *
+ * 用**白名单映射**而不是「原样透传」：引擎将来加了新相位时，旧客户端应当忽略它
+ * （少显示一条），而不是把一个自己都不认识的字符串渲染出去——后者迟早会被
+ * 某处当成已知相位处理，把「团长在汇总」显示成「成员开始执行」。
+ */
+const MEMBER_PHASES: Record<string, MemberEventPhase> = {
+  group_planned: 'planned',
+  member_started: 'started',
+  member_finished: 'finished',
+  member_failed: 'failed',
+  group_aggregating: 'aggregating',
+};
 
 /** 任意工具结果转展示文本：字符串原样、其余 JSON 序列化，超长截断 */
 function toDisplayText(value: unknown): string | undefined {
@@ -793,6 +818,27 @@ export class NanobotClient {
               ...(nbEvent.call_id ? { callId: String(nbEvent.call_id) } : {}),
             });
             handlers.onStatus('tooling');
+          } else if (nbEvent.kind === 'member' && nbEvent.member_event) {
+            // FR-2.4 第 3 步：成员归属。未知相位**直接忽略**，不猜——
+            // 猜错会把「团长在汇总」渲染成「成员开始执行」，比少显示一条更误导。
+            const phase = MEMBER_PHASES[nbEvent.member_event];
+            if (phase) {
+              const rawId = nbEvent.member?.id;
+              const rawName = nbEvent.member?.name;
+              // 分组键必须稳定且非空，否则同一个成员会被拆成多组：id 缺了就退回名字，
+              // 两者都缺才用占位（那时确实无从归属，宁可显示「未知成员」）。
+              const memberId = String(rawId || rawName || 'unknown');
+              const text = toDisplayText(nbEvent.output ?? nbEvent.plan);
+              handlers.onProcessMember?.({
+                memberId,
+                memberName: String(rawName || rawId || memberId),
+                phase,
+                ...(text !== undefined ? { text } : {}),
+                ...(nbEvent.error !== undefined
+                  ? { error: toDisplayText(nbEvent.error) }
+                  : {}),
+              });
+            }
           } else if (nbEvent.kind === 'plan' && nbEvent.plan_id) {
             // 计划是「给用户看的清单」，不是待办数据流：步骤缺字段时按引擎
             // 已归一化的形状补齐，绝不因一条脏数据把这轮的全部内容丢掉。

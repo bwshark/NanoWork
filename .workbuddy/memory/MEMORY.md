@@ -15,13 +15,15 @@ WorkBuddy 式智能体客户端：React 18 + TS + Vite 渲染层 + Electron 主�
 - 门禁**三套 tsc 一起跑**（`typecheck`/`typecheck:electron`/`typecheck:tests`）；`typecheck:tests` 不在 `build` 内。
 - 改 `electron/**.ts` 必须**重建 `main.cjs` + `preload.cjs`**。
 - ⚠️ 门禁命令带 **`--maxWorkers=3`**（并行拉满时 `tests/electron/` 互相干扰）。
+- ⚠️ 跑全量门禁要带 **`CODEBUDDY_SAFE_DELETE_ENABLED=0`**，否则 4 个预存文件的 `afterEach` `fs.rm(recursive)` 被安全删除守卫拦截超时 → 假报 12 个失败。判定**永远看退出码**。
 - ⚠️ **`tests/` 被 `.gitignore` 整目录忽略** → 新测试要 `git add -f`；同坑 `tasks/`（已补前导斜杠）。
 - 写 `platform.storage.set` 新 key 必须先登记 `STORAGE_KEYS`；**裸字符串别落 json 路由**（主进程 `JSON.parse` 必崩，写入静默丢）。
 
 ## 高频踩坑（保命，细节见 docs/README.md §九 看板）
 
 - ⚠️ **`spawn(wait=false)` 丢结果**：serve 进程无 inbound 消费者（唯一 `consume_inbound()` 在 `AgentLoop.run()`）。与 FR-2.4 **无依赖**——编排用 `run_inline` 直接 await，不走总线。
-- ⚠️ **专家团 FR-2.4 现状不可行**：引擎只有匿名子代理，`agent_id` 只用于工具策略非人设路由；UI 已如实说明「只保存配置、不改变执行结果」。
+- ⚠️ **专家团 FR-2.4 已真实编排，但成员人设未注入**：`ExpertGroupOrchestrator`（sequential/parallel/coordinator）实际派发成员；但 `ExpertMember.system_prompt` **只被解析、从未使用**——`_compose_member_prompt` 仅取 `member.name`，成员跑在子代理里、沿用团长 system prompt。**改「成员人设」相关需求先看这里，别假设已生效**。
+- ⚠️ **`**kwargs` 透传撞形参 = 无声改变语义**：`_on_progress` 的成员载荷若把 `extra` 平铺成 kwarg，coordinator 的 `plan` 键会命中同名形参（期望 dict）→ `**str` TypeError → 被 `_emit` 的 `except Exception` 吞掉 → 「事件凭空消失、不报错」。透传一律**整体进 `member_extra`** 这类具名容器。
 - ⚠️ **专家模型绑定 FR-2.3**：`Agent.model` 存预设名（与 `Session.model` 同域）；下发前必须拦失效预设；目录未加载返回 `null` 非空集。
 - ⚠️ **store 两条写路径不对称**（`createAgent`/`updateAgent`/`mergeAgents`）→ 加新字段三处一起改，否则「保存瞬间消失/重启变回」。
 - ⚠️ **StrictMode**：换请求清状态用 `key={id}` 卸载重挂，别用渲染期 ref+setState；测试入口 `mountStrict()`。

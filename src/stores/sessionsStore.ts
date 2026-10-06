@@ -76,6 +76,7 @@ import type {
   MessagePlan,
   PermissionLog,
   PlanVerdict,
+  ProcessEvent,
   ProcessToolRow,
   Session,
   SyncMeta,
@@ -88,6 +89,7 @@ import type {
   ArtifactEvent,
   ChatRequest,
   PlanProposal,
+  ProcessMemberEvent,
   ProcessToolEvent,
   ToolCallEvent,
   UploadFile,
@@ -329,6 +331,14 @@ interface SessionsState {
   closeReasoning: (sessionId: string, messageId: string) => void;
   /** 工具执行进度行（start=新增 running 行 / end=done / error=error） */
   handleProcessTool: (sessionId: string, messageId: string, ev: ProcessToolEvent) => void;
+  /**
+   * 专家团成员进度行（FR-2.4）：一次多成员编排里「谁在做什么」。
+   *
+   * 与工具行不同，**同一成员会有多行**（开始 / 完成 / 失败…），归属靠
+   * `MemberEvent.memberId`；渲染时才按它分组（见 `lib/processDetail.ts`）。
+   * 这里不做聚合：聚合是展示档位的事，落库保持「一个相位一行」的原始事实。
+   */
+  handleProcessMember: (sessionId: string, messageId: string, ev: ProcessMemberEvent) => void;
   /**
    * 引擎发来逐条批准请求（引擎已挂起该工具调用）：入队 + 在消息上记一条
    * pending 行，并把会话状态置为 tooling。
@@ -985,6 +995,8 @@ async function streamAssistantReply(
         useSessionsStore.getState().closeReasoning(sessionId, assistantId),
       onProcessTool: (ev) =>
         useSessionsStore.getState().handleProcessTool(sessionId, assistantId, ev),
+      onProcessMember: (ev) =>
+        useSessionsStore.getState().handleProcessMember(sessionId, assistantId, ev),
       onApprovalRequest: (r) =>
         useSessionsStore.getState().handleApprovalRequest(sessionId, assistantId, r),
       onPlan: (plan) =>
@@ -2583,6 +2595,44 @@ export const useSessionsStore = create<SessionsState>()(
           });
         }
       }
+    },
+
+    /**
+     * 专家团成员进度行（FR-2.4 第 3 步）。
+     *
+     * 与 `handleProcessTool` 同构：先闭合当前思考段（成员开始意味着上一段思考写完了，
+     * 否则「思考 → 成员」在时间线上会呈现成思考还没结束成员就开始了），
+     * 再落事件、最后更新视图——三者顺序与 `seq` 一致，重放才是同样的排列。
+     */
+    handleProcessMember: (sessionId, messageId, ev) => {
+      flushReasoning(sessionId, messageId);
+      const recorded = recordFor(sessionId, (f) =>
+        f.expertGroupMember({
+          messageId,
+          memberId: ev.memberId,
+          memberName: ev.memberName,
+          phase: ev.phase,
+          ...(ev.text !== undefined ? { text: ev.text } : {}),
+          ...(ev.error !== undefined ? { error: ev.error } : {}),
+        }),
+      );
+      // 行 id 取**落盘事件 id**：重放路径（`project.ts`）也用事件 id，
+      // 两条路径的 key 因此一致——否则刷新一次整块成员区会重建（展开态丢失）。
+      // 事件流会话（channel / readonly / cron）不落盘，退回现生成一个 id。
+      const rowId = recorded[0]?.id ?? genId();
+      get().updateMessage(sessionId, messageId, (m) => {
+        const base = closeOpenReasoning(m);
+        const row: ProcessEvent = {
+          id: rowId,
+          kind: 'member',
+          memberId: ev.memberId,
+          memberName: ev.memberName,
+          phase: ev.phase,
+          ...(ev.text !== undefined ? { text: ev.text } : {}),
+          ...(ev.error !== undefined ? { error: ev.error } : {}),
+        };
+        return { ...base, process: [...(base.process ?? []), row] };
+      });
     },
 
     retry: async () => {
