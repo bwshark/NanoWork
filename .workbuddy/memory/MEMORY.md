@@ -22,7 +22,9 @@ WorkBuddy 式智能体客户端：React 18 + TS + Vite 渲染层 + Electron 主�
 ## 高频踩坑（保命，细节见 docs/README.md §九 看板）
 
 - ⚠️ **`spawn(wait=false)` 丢结果**：serve 进程无 inbound 消费者（唯一 `consume_inbound()` 在 `AgentLoop.run()`）。与 FR-2.4 **无依赖**——编排用 `run_inline` 直接 await，不走总线。
-- ⚠️ **专家团 FR-2.4 已真实编排，但成员人设未注入**：`ExpertGroupOrchestrator`（sequential/parallel/coordinator）实际派发成员；但 `ExpertMember.system_prompt` **只被解析、从未使用**——`_compose_member_prompt` 仅取 `member.name`，成员跑在子代理里、沿用团长 system prompt。**改「成员人设」相关需求先看这里，别假设已生效**。
+- ✅ **专家团 FR-2.4 三模式已真实执行（2026-10-06 落地、10-07 真机验证）**：引擎 `agent/expert_group.py` 调度、`loop.py` 命中即接管本轮；成员的人设/工具/模型**均已接线并配生产接线测试**（`tests/agent/test_expert_group_wiring.py` 13 例 + 4 条变异验证）。⚠️ 历史教训：`_run_member` 曾为闭包 → 这段逻辑**永远测不到**，才有了「人设只被解析从未使用」的静默缺陷。给不可测的接线段留闭包＝埋雷。
+- ⚠️ **引擎两套 logger 并存，占位符不同**：`loop.py` 用 **loguru（`{}`）**、`expert_group.py` 用**标准 logging（`%s`）**。写反不报错——loguru 里 `%s` 只是不替换（告警无具体值），标准 logging 里 `{}` 要等真有 handler 才炸 `TypeError`。已有守卫 `tests/test_log_placeholder_contract.py`（AST 全仓扫描）。**改日志前先看该文件的 import**。
+- ⚠️ **成员模型/专家模型不要在未校验时透传给 provider**：配了预设目录却没命中 → 必须退回本轮 runtime + 告警，否则 provider 回 `The model 'x' does not exist`，**一个成员写错会拖垮整团**。但「目录为空」时必须允许透传（没配预设 ≠ 全部失效）。
 - ⚠️ **`**kwargs` 透传撞形参 = 无声改变语义**：`_on_progress` 的成员载荷若把 `extra` 平铺成 kwarg，coordinator 的 `plan` 键会命中同名形参（期望 dict）→ `**str` TypeError → 被 `_emit` 的 `except Exception` 吞掉 → 「事件凭空消失、不报错」。透传一律**整体进 `member_extra`** 这类具名容器。
 - ⚠️ **专家模型绑定 FR-2.3**：`Agent.model` 存预设名（与 `Session.model` 同域）；下发前必须拦失效预设；目录未加载返回 `null` 非空集。
 - ⚠️ **store 两条写路径不对称**（`createAgent`/`updateAgent`/`mergeAgents`）→ 加新字段三处一起改，否则「保存瞬间消失/重启变回」。

@@ -261,20 +261,80 @@
 `_member_workspace_scope`），成员没声明工具策略时**原样继承**（而不是清空）；成员模型经
 `runtime_resolver` 解析（preset 名走 `resolve_preset`），解析不了退回本轮 runtime 并留痕。
 
-**测试**：`tests/agent/test_expert_group.py` **26 例全绿**（脚本化 `run_member`，无模型）——
-三种 mode 的顺序/并发上限、`concat`/`lead` 聚合、空汇总回退拼接、单成员失败隔离、全失败抛错、
-事件归属、事件监听器抛错不拖垮调度，以及 11 条非法形状的参数化校验。
+**测试**：
 
-**验收**：一次请求内真的调了 N 个成员（引擎日志可见），顺序符合 mode 语义。
+- `tests/agent/test_expert_group.py` **26 例**——调度语义：三种 mode 的顺序/并发上限、
+  `concat`/`lead` 聚合、空汇总回退拼接、单成员失败隔离、全失败抛错、事件归属、
+  事件监听器抛错不拖垮调度，以及 11 条非法形状的参数化校验（脚本化 `run_member`，无模型）。
+- `tests/agent/test_expert_group_wiring.py` **13 例**（2026-10-07 补）——**生产接线**：
+  见下方「为什么要有第二个测试文件」。4 条变异验证均确认转红：
+  ① 不传 `persona` ② 白名单取成员声明而非交集 ③ 成员用独立 `session_key`
+  ④ 日志占位符写回 `%s`。
+
+**为什么要有第二个测试文件**。上面那个文件的 `run_member` 是**注入的假函数**，所以它只能
+证明「编排按预期顺序跑完」，无法证明「成员的人设 / 工具策略 / 模型真的到了子代理手上」。
+这三项是最容易脱钩的一类——脱钩后编排照样跑完、事件照样发、`final_text` 照样有内容，
+唯一现象是「成员答得像个通才」「工具策略像没设」「模型像没绑」，**一条报错都不会触发**。
+FR-2.3 时代「专家 `systemPrompt` 只被解析、从未使用」正是这个形状。
+
+因此第二个文件把 `AgentLoop` 的生产接线（`_make_member_runner` / `_member_workspace_scope` /
+`_member_runtime`）当作被测对象，并且不是断言「它构造出的 scope 长什么样」，而是让它驱动
+**真的 `SubagentManager`** 跑一轮，去断言子代理的**行为**：工具是被放行还是被拒、
+system message 里有没有那句人设、告警里有没有具体的成员与模型名。
+
+> ⚠️ `_run_member` 原本是 `_maybe_run_expert_group` **内部的闭包**，闭包的代价是这段逻辑
+> 永远测不到。本轮把它提成工厂方法 `_make_member_runner(...)`——这不是为了好看，
+> 而是因为「成员绑定是否生效」这个问题只有这一段能回答。
+
+**工具与模型的两种情况**（`_member_runtime`）：
+
+- 名字是**已配置的预设** → `resolver.resolve_preset()`；
+- 名字不在预设目录、但目录**非空** → 按失效处理，退回本轮 runtime 并**告警**。
+  真机证据（2026-10-07）：此前会把这个名字原样发给 provider，整团以
+  `The model 'x' does not exist` 告终——一个成员的模型名写错会拖垮整个专家团；
+- 目录**为空**（未配置预设）→ 允许透传。**「没配预设」不等于「模型名全部失效」**，
+  把它读成后者会让成员的自定义模型永远不生效，而开发者自用配置里没预设是常态。
+
+**验收（已做，2026-10-07）**：起真实网关（`nanobot serve --port 18997 -v`）并打一次
+两成员 `sequential` 请求，日志可见成员被真实派发：
+
+```
+WARNING | expert group member 'probe-member': model 'ghost-preset-nonexistent' is not a configured preset; using turn runtime
+INFO    | Running inline subagent [6da7e6b4]: expert-group:探针     ← 成员 1
+INFO    | Running inline subagent [25f719aa]: expert-group:财务     ← 成员 2
+INFO    | Running inline subagent [c4757fe9]: expert-group:探针     ← lead 收口（aggregate=lead）
+```
+
+同一探针在修复前是 `Response: Error: The model 'ghost-preset-nonexistent' does not exist`——
+前后对比既证明了「编排真的接入了」，也顺带暴露并修掉了上面那条「成员模型校验」缺失。
+另三条形状校验（非法 mode / 空成员 / lead 不在成员里）在真机上均返回 **400 并带明确原因**。
 
 **未做（第 2 步的剩余）**：
 
 - 成员的 token 用量没有汇总进 `_last_usage`（用量页暂时看不到这 N 倍成本）。
-- 过程事件的**前端按成员分组渲染**属第 3 步；当前服务端 `_on_progress` 会忽略这些未知 kwarg
-  （字段已就位，等第 3 步消费）。
 - 客户端 UI 还未暴露 `lead` / `aggregate` / `maxConcurrent` 三个旋钮（现用引擎默认值）。
-- 端到端真机验证（起真实网关跑一次两成员团）尚未做——沙箱拉不起 nanobot 网关，
-  客户端接线由单测 + 引擎源码静态闭环。
+- 编排过程未完成一轮**带真实 LLM 输出**的端到端跑通——本机 provider 账户配额已耗尽
+  （`out of quota`），所以上面的真机验证停在「成员被派发 + 模型/工具/会话归属正确」，
+  真实回答内容仍需配额恢复后补验。
+
+### 7.2.1 `logger` 占位符契约（2026-10-07 发现）
+
+引擎里**并存两套 logger**，占位符语法不同：
+
+| 实现 | 占位符 | 写反的后果 |
+| --- | --- | --- |
+| `from loguru import logger` | `{}` | 写 `%s`：**不报错**，占位符原样输出——告警照发但看不到具体是哪个成员 / 模型 / 工具 |
+| `logging.getLogger(__name__)` | `%s` | 写 `{}`：`TypeError: not all arguments converted`（只在有 handler 接管时才炸） |
+
+本轮先是自己把 4 处 loguru 日志写成 `%s`（成员模型解析失败的告警因此没有任何具体值），
+随后「统一改成 `{}`」又踩了另一头——`expert_group.py` 用的是**标准 logging**，改动当时就让
+3 例既有测试转红。**改日志前必须看这个文件 `import` 的是哪一个。**
+
+处理方式：① 修两处（`expert_group.py` 改回 `%s`；`loop.py` 三处保持 `{}`）；
+② 顺带修掉全仓 AST 扫描出的 2 处既有违规（`agent/tools/loader.py:109/114`，
+工具名冲突告警看不到是哪个工具）；
+③ 加守卫测试 `tests/test_log_placeholder_contract.py`——这类错误两种都「看起来没事」，
+只能靠机器拦。
 
 ### 第 3 步：事件流补成员归属 —— **已落地（2026-10-06）**
 

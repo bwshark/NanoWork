@@ -214,7 +214,7 @@
 | FR-2.1 | Agent CRUD 与启停 | P0     | ✅  | both | 完整 CRUD + 持久化；可作为会话目标                                                                                                                                                                                                            |
 | FR-2.2 | Agent 工具白名单    | **P0** | ✅  | both | 每个 Agent 可声明允许/禁止的工具集；默认最小权限；越权调用被工具网关拦截（不依赖提示词）。引擎侧：`WorkspaceScope.tool_allow/tool_deny` + 纯函数 `agent_blocks_tool` + `AgentToolPolicyHook`（挂在**基线**钩子链上，ephemeral turn 同样绕不过）；客户端：`Agent.toolAllow/toolDeny` + 编辑 UI + 随每轮请求下发 |
 | FR-2.3 | 专家（Expert）     | P0     | 🟡 | both | 专家 = 系统提示词 + 知识库绑定 + 工具白名单 + 模型绑定；内置招聘 / 法务 / 投研 / 财务 / 写作等模板。**2026-10-05 核实**：四类绑定里**三类已生效**（提示词走 agent-persona 段、工具白名单逐轮下发 `tool_allow`/`tool_deny`、领域/风格覆盖），本轮补上**模型绑定**（`Agent.model`，预设名与 `Session.model` 同域；优先级 会话 > 专家；下发前拦已失效的预设）；内置模板补齐到 8 条（写作由「文档写作专家」承担），法务/投研的能力边界写进 systemPrompt。**知识库绑定属 M7（V2）**（V1 全仓无知识库/RAG 概念）——因此保持 🟡。详见 §20.9 |
-| FR-2.4 | 专家团编排          | P0     | 🟡 | both | `sequential` / `parallel` / `coordinator` 三模式**真实执行**（当前仅持久化与展示）；编排过程在 ProcessView 中可见。**2026-10-05 勘查结论：现状下做不了**——引擎只有**匿名子代理**（`SubagentManager` / `spawn`，system prompt 固定来自 `subagent_system.md`），而 `agent_id` **只用于工具策略**、不是人设路由，即引擎没有「运行某具名 Agent」的概念；`mode` 全仓无执行读取点，团成员唯一被逻辑读取处是「取首位启用成员当 leader」（所以只有那一个成员生效）。要真做 = 引擎新增「按具名成员派发」+ 定义编排语义（谁汇总 / 失败怎么办 / 上下文怎么传）。**在此之前 UI 已如实说明「只保存配置、不改变执行结果」**。**2026-10-06 进展：引擎侧编排已落地**（第 1 步「按成员派发」+ 第 2 步「编排调度」）——新增 `nanobot/agent/expert_group.py`（`parse_expert_group` 严格校验 + `ExpertGroupOrchestrator` 三模式调度/聚合/失败隔离），`agent/loop.py` 的 `_run_turn` 命中 `expert_group` 即接管（**只落一条 assistant 汇总**），`api/server.py` 接收并校验该字段（非法 400）；`tests/agent/test_expert_group.py` **26 例全绿**。**2026-10-06 客户端接线同批落地**：`lib/expertGroupRequest.ts` 由会话绑定的团构造规格（过滤已删/停用成员、**成员 < 2 名不下发**、成员模型按预设有效性筛选）→ `sessionsStore.streamAssistantReply` 塞进 `ChatRequest.expertGroup` → `chat.ts` 映射 wire `expert_group`（JSON body 与 multipart 双路，避免「带附件」成为编排旁路）；UI 的两处警示改为「已生效」说明（常量 `EXPERT_GROUP_MODE_NOTICE`）。**仍未做**：成员 token 用量未汇总进 `_last_usage`；ProcessView 按成员分组渲染属第 3 步（事件字段已就位）。详见 `docs/design-fr-2-4-expert-orchestration.md` §7 |
+| FR-2.4 | 专家团编排          | P0     | ✅  | both | `sequential` / `parallel` / `coordinator` 三模式**真实执行**；编排过程在 ProcessView 中可见（按成员分组）。**2026-10-06 落地**：走方案里的路径 2（**引擎侧编排**，而非客户端编排）。引擎侧新增 `agent/expert_group.py`（`parse_expert_group` 严格校验、**形状非法一律 400 不静默降级**；`ExpertGroupOrchestrator` 按 mode 调度、按 `aggregate` 收口；`run_member` 依赖注入 → 调度语义不依赖模型即可单测），`loop.py` 命中即接管本轮、正常 agent loop 完全不跑；客户端 `lib/expertGroupRequest.ts` 下发 `expert_group`（camelCase→snake_case 在 `expertGroupWire`），`sessionsStore` 由 `session.groupId` 解析团。**落库形态定死**：成员输出不是消息、只随进度事件出站，**只有最终汇总落成一条 assistant 消息**（否则会话历史 N 倍膨胀并污染下一轮）。成员的三项绑定（人设 / 工具策略 / 模型）均已接线并配生产接线测试（13 例 + 4 条变异验证），工具白名单取**交集**、黑名单取**并集**（权限单调递减，FR-2.5 依赖同一约束）。**2026-10-07 真机已验证**：起真实网关打两成员请求，日志可见成员被真实派发与 lead 收口。**未做**：成员 token 用量未汇总进 `_last_usage`（用量页看不到这 N 倍成本）、客户端未暴露 `lead`/`aggregate`/`maxConcurrent` 三个旋钮、带真实 LLM 输出的整轮跑通待 provider 配额恢复。详见 `docs/design-fr-2-4-expert-orchestration.md` |
 | FR-2.5 | 子 Agent 委派     | P1     | ⬜  | both | 主 Agent 可委派子任务（nanobot `spawn` 工具）；子 Agent 的工具权限不得超过父级（权限单调递减）                                                                                                                                                                   |
 | FR-2.6 | 组织级资产发布        | P2     | ⬜  | both | 管理员把个人 Skill / 专家 / 提示词模板发布为组织资产，全员可见（V2）                                                                                                                                                                                        |
 
@@ -552,16 +552,21 @@
 > 故保持 🟡；② `FR-6.3`（IM 结果回推）主体已由 FR-5.6 路线 C 覆盖，但投递档位只有
 > `complete` / `error`，缺 `milestone`。**`FR-6.4`（IM 会话归档）已于 2026-10-05 落地**：来源判定单一事实源、侧栏按渠道筛选（未知渠道不再被并进钉钉组）、IM 会话头部只读 + 来源标记，见 §20.7。**`M4 自动化与产物` 已闭合（2026-10-05）**：`FR-5.4` / `FR-5.6` / `FR-6.3` / `FR-6.4` / `FR-7.2` / `FR-7.3` 六条全部落地（其中本轮补了投递的 `start` 档位与 IM 会话归档，见 §20.7–§20.8）。另 `FR-3.9`（扩展态同步边界）**仍未做**——它是 M6 唯一
 
-> **P0 状态基线（2026-10-05 盘点）**：V1 的 **P0 共 33 条，31 条已 ✅**，未完成的只剩两条，
-> 且两条都有明确归属——
+> **P0 状态基线（2026-10-07 更新）**：V1 的 **P0 共 33 条，32 条已 ✅**，未完成只剩一条——
+> `FR-2.3`：四类绑定里提示词 / 工具 / 模型都已生效，**只剩「知识库绑定」**，而知识库属
+> M7 团队（V2）——即 **V1 范围内已实质完成**（见 §20.9）。
 >
-> - **`FR-2.3`（专家）**：四类绑定里提示词 / 工具 / 模型都已生效，**只剩「知识库绑定」**，
->   而知识库属 M7 团队（V2）——即 **V1 范围内已实质完成**（见 §20.9）。
-> - **`FR-2.4`（专家团编排）**：**引擎侧与客户端接线均已落地（2026-10-06）**——引擎
->   `agent/expert_group.py` + `loop.py` 接管分支 + `api/server.py` 接收（JSON/multipart 双路），
+> - **`FR-2.4`（专家团编排）**：**已 ✅（2026-10-06 落地、2026-10-07 真机验证）**。走方案里的
+>   路径 2（引擎侧编排）：引擎 `agent/expert_group.py` + `loop.py` 接管分支 +
+>   `api/server.py` 接收（JSON/multipart 双路，形状非法一律 400 不静默降级），
 >   客户端 `lib/expertGroupRequest.ts` → `ChatRequest.expertGroup` → wire `expert_group`。
->   **第 3 步（成员归属）也已落地（2026-10-06）**：成员生命周期经 `/v1` SSE 出站
->   （`kind: "member"`）→ 新事件 `expert-group-member` 落盘 → ProcessView 按成员分组渲染。
+>   **成员归属（第 3 步）同批落地**：成员生命周期经 `/v1` SSE 出站（`kind: "member"`）
+>   → 事件落盘 → ProcessView 按成员分组渲染。
+>   **落库形态定死**：成员输出不是消息、只随进度事件出站，**只有最终汇总落成一条 assistant 消息**。
+>   **真机验证（2026-10-07）**：起真实网关打两成员请求，日志可见成员真实派发与 lead 收口。
+>   **未做**：成员 token 用量未汇总进 `_last_usage`、客户端未暴露 `lead`/`aggregate`/`maxConcurrent`
+>   三个旋钮、带真实 LLM 输出的整轮跑通待 provider 配额恢复。详见
+>   `docs/design-fr-2-4-expert-orchestration.md`。
 >   **仍差**：成员 token 用量未汇总进 `_last_usage`；成员**内部**的工具调用不上报
 >   （子代理无回传通道，界面如实只画相位与产出）。
 >   设计见 `docs/design-fr-2-4-expert-orchestration.md` §7。
