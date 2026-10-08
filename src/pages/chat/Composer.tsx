@@ -35,6 +35,7 @@ import { useSkillsStore } from "@/stores/skillsStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useModelsStore, describeModelId } from "@/stores/modelsStore";
 import { ComposerMenu } from "./ComposerMenu";
+import { ComposerContextMenu } from "./ComposerContextMenu";
 import { chatColumnSx } from "./chatColumnSx";
 import { ComposerControls } from "@/components/ComposerControls";
 import { InlineAttachmentChip } from "@/components/composer/InlineAttachmentChip";
@@ -131,6 +132,14 @@ const KIND_LABEL: Record<AttachmentKind, string> = {
 /** `/compact` 指令插入的压缩提示词 */
 const COMPACT_PROMPT =
   "请压缩并总结以上对话，保留关键结论、待办事项与未决问题：";
+
+/** 输入区右键菜单的打开状态：锚点视口坐标 + 此刻是否有可剪贴的选区 */
+interface CtxMenuState {
+  top: number;
+  left: number;
+  /** 有非折叠选区（或整枚徽章）时为真 → 剪切 / 复制可用 */
+  canEdit: boolean;
+}
 
 /**
  * 输入区高度口径：一律以「可见行数」为单位表达，别在 sx 里写裸像素。
@@ -387,6 +396,16 @@ export function Composer({
   // —— 附件 ——
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [dragOver, setDragOver] = useState(false);
+  /** 输入区右键菜单状态；`null` = 未打开 */
+  const [ctxMenu, setCtxMenu] = useState<CtxMenuState | null>(null);
+  /**
+   * 右键那一刻的选区快照。
+   *
+   * 菜单打开会抢走焦点（`autoFocus`），contentEditable 的窗口选区可能随之丢失。
+   * 各菜单动作执行前先还原这份 Range，剪切 / 复制才作用于用户真正选中的那段
+   * ——而不是「点了复制，粘出来却是空的」。
+   */
+  const ctxRangeRef = useRef<Range | null>(null);
   /** 当前附件快照：供「卸载清理」「数量校验」在不重建回调的前提下读取 */
   const attachmentsRef = useRef<Attachment[]>([]);
   /**
@@ -814,11 +833,18 @@ export function Composer({
     };
   }, []);
 
-  /** Ctrl+C / 菜单「复制」：写入剪贴板，不动输入区 */
-  const handleCopy = (e: React.ClipboardEvent<HTMLDivElement>) => {
+  /**
+   * 复制选区（含徽章及其附件）到剪贴板。
+   *
+   * 抽成与事件无关的动作，是因为它有**两条触发路径**：键盘 Ctrl+C（`handleCopy`）
+   * 与右键菜单「复制」。菜单那次没有 `ClipboardEvent` 可 `preventDefault`，
+   * 若把逻辑留在事件处理函数里，就只能二选一复制一遍。
+   *
+   * @returns 是否命中有效选区；false = 调用方应交给浏览器默认行为
+   */
+  const performCopy = useCallback((): boolean => {
     const data = copySelection();
-    if (!data) return; // 无选区 → 走浏览器默认
-    e.preventDefault();
+    if (!data) return false;
     void writeRichClipboard(
       data.plain,
       data.payload,
@@ -826,14 +852,26 @@ export function Composer({
     ).then((ok) => {
       if (!ok) toast.error("复制失败");
     });
+    return true;
+  }, [copySelection]);
+
+  /** Ctrl+C：无有效选区时不拦截，交浏览器默认（例如选区在输入区外） */
+  const handleCopy = (e: React.ClipboardEvent<HTMLDivElement>) => {
+    if (performCopy()) e.preventDefault();
   };
 
-  /** Ctrl+X / 菜单「剪贴」：写入剪贴板后删除选区（含徽章与对应附件） */
-  const handleCut = (e: React.ClipboardEvent<HTMLDivElement>) => {
+  /**
+   * 剪切选区：写剪贴板成功后删除选区（含徽章与对应附件）。
+   *
+   * 与 `performCopy` 同理，键盘与菜单共用这一份；两处都不该各自实现一遍
+   * 「写失败就不删」这条关键顺序。
+   *
+   * @returns 是否命中有效选区
+   */
+  const performCut = useCallback((): boolean => {
     const root = editableRef.current;
     const data = copySelection();
-    if (!root || !data) return;
-    e.preventDefault();
+    if (!root || !data) return false;
     void writeRichClipboard(
       data.plain,
       data.payload,
@@ -856,6 +894,12 @@ export function Composer({
       // 强制入栈：撤销可恢复被剪掉的文本 + 附件 + 徽章
       pushUndo(0);
     });
+    return true;
+  }, [copySelection, emitText, syncTrigger, pushUndo]);
+
+  /** Ctrl+X：无有效选区时不拦截，交浏览器默认 */
+  const handleCut = (e: React.ClipboardEvent<HTMLDivElement>) => {
+    if (performCut()) e.preventDefault();
   };
 
   const onSend = () => {
@@ -1422,6 +1466,175 @@ export function Composer({
     syncTriggerFromInput();
   };
 
+  /**
+   * 把焦点收回输入区，并还原右键那一刻的选区。
+   *
+   * 菜单打开时焦点会被 `autoFocus` 抢走，contentEditable 的窗口选区可能随之
+   * 消失；不还原就会让 `copySelection` / `deleteSelection` 读到空选区，表现为
+   * 「点了剪切/复制却什么都没发生」。
+   */
+  const restoreCtxSelection = useCallback(() => {
+    const root = editableRef.current;
+    if (!root) return;
+    root.focus();
+    const r = ctxRangeRef.current;
+    if (!r) return;
+    const sel = window.getSelection();
+    sel?.removeAllRanges();
+    sel?.addRange(r);
+  }, []);
+
+  /**
+   * 菜单「粘贴」：菜单触发没有 `ClipboardEvent`，只能主动读剪贴板。
+   *
+   * 优先级与 `handlePaste` **保持一致**，保证「键盘 Ctrl+V」与「右键粘贴」
+   * 得到同一结果：
+   *   ① 自定义 MIME 直命中（应用内富复制的正常路径）
+   *   ② 剪贴板里是图片（截图 / 复制图片）→ 作为附件插入
+   *   ③ 纯文本键命中应用层富缓存 → 还原内联附件布局
+   *   ④ 纯文本按光标处插入
+   * `clipboard.read()` 被拒（无权限 / 非安全上下文）时降级到 `readText()`，
+   * 仍能走通 ③ / ④。
+   */
+  const pasteFromClipboard = async () => {
+    /** ③④ 纯文本落点：先试应用层富缓存，命不中再按纯文本插入 */
+    const insertPlain = (plain: string): void => {
+      const cached = peekRichPayload(plain);
+      if (cached) {
+        void insertRichClipboard(cached);
+        return;
+      }
+      insertAtCaret(plain);
+    };
+
+    const clip = navigator.clipboard;
+    try {
+      if (clip?.read) {
+        const items = await clip.read();
+        // ① 自定义 MIME 直命中
+        for (const item of items) {
+          if (!item.types.includes(RICH_CLIP_MIME)) continue;
+          const raw = await (await item.getType(RICH_CLIP_MIME)).text();
+          if (raw) {
+            await insertRichClipboard(raw);
+            return;
+          }
+        }
+        // ② 图片文件
+        for (const item of items) {
+          const imageType = item.types.find((t) => t.startsWith("image/"));
+          if (!imageType) continue;
+          const blob = await item.getType(imageType);
+          const ext = imageType.split("/")[1] || "png";
+          void addFiles([
+            new File([blob], `pasted-${Date.now()}.${ext}`, { type: imageType }),
+          ]);
+          return;
+        }
+        // ③④ 纯文本
+        for (const item of items) {
+          if (!item.types.includes("text/plain")) continue;
+          const plain = await (await item.getType("text/plain")).text();
+          if (plain) {
+            insertPlain(plain);
+            return;
+          }
+        }
+      }
+    } catch (err) {
+      // 读权限被拒 / 非安全上下文：降级到 readText（只拿得到纯文本）
+      console.warn("[composer] clipboard.read 不可用，降级为纯文本:", err);
+    }
+
+    try {
+      const plain = await clip?.readText?.();
+      if (plain) {
+        insertPlain(plain);
+        return;
+      }
+    } catch (err) {
+      console.warn("[composer] clipboard.readText 失败:", err);
+    }
+
+    toast.error("无法读取剪贴板内容");
+  };
+
+  /**
+   * 输入区右键：拦掉系统默认菜单，改弹自定义菜单（剪切 / 复制 / 粘贴 / 全选）。
+   *
+   * 选区处理只遵循一条规则 —— **右键不改变输入区内已有的选区**：
+   * 选区还在，剪切/复制就作用在它上面；没有选区时，才把光标移到右键落点，
+   * 让「粘贴」有一个确定的插入位置（落点无法判定时退到末尾）。
+   * 比原生「点在选区外即取消选中」保守：不会手一滑就丢掉刚选好的一段。
+   * （系统菜单为什么会丢附件，见 `ComposerContextMenu` 的文件头。）
+   */
+  const handleEditableContextMenu = (e: React.MouseEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const root = editableRef.current;
+    if (!root) return;
+    const sel = window.getSelection();
+    const current = sel && sel.rangeCount > 0 ? sel.getRangeAt(0) : null;
+
+    // ① 区内已有非折叠选区：原样保留
+    let active: Range | null =
+      current && !current.collapsed && root.contains(current.startContainer)
+        ? current
+        : null;
+
+    // ② 右键落在附件徽章上：把整枚徽章设为选区（与左键点徽章同一心智），
+    //    否则「剪切/复制这枚附件」无从下手
+    if (!active) {
+      const chipEl = (e.target as Element | null)?.closest?.("[data-att-id]");
+      if (chipEl && root.contains(chipEl)) {
+        const r = document.createRange();
+        r.selectNode(chipEl);
+        active = r;
+      }
+    }
+
+    // ③ 无选区：把光标放到落点；落点不可判定（jsdom / 旧浏览器）时退到末尾
+    if (!active) {
+      const doc = document as Document & {
+        caretRangeFromPoint?: (x: number, y: number) => Range;
+      };
+      const hit = doc.caretRangeFromPoint?.(e.clientX, e.clientY);
+      if (hit && root.contains(hit.startContainer)) {
+        active = hit;
+      } else {
+        const r = document.createRange();
+        r.selectNodeContents(root);
+        r.collapse(false);
+        active = r;
+      }
+    }
+
+    // 落实到窗口选区，并让输入区拿到焦点（后续动作据此取选区 / 插入）
+    root.focus();
+    sel?.removeAllRanges();
+    sel?.addRange(active);
+    ctxRangeRef.current = active.cloneRange();
+
+    setCtxMenu({
+      top: e.clientY,
+      left: e.clientX,
+      canEdit: !active.collapsed,
+    });
+  };
+
+  /** 右键菜单三项剪贴动作：先还原选区，再走与键盘完全一致的实现 */
+  const ctxCut = () => {
+    restoreCtxSelection();
+    performCut();
+  };
+  const ctxCopy = () => {
+    restoreCtxSelection();
+    performCopy();
+  };
+  const ctxPaste = () => {
+    restoreCtxSelection();
+    void pasteFromClipboard();
+  };
+
   const isHero = variant === "hero";
 
   return (
@@ -1574,6 +1787,7 @@ export function Composer({
           onKeyDown={handleInputKeyDown}
           onKeyUp={syncTriggerFromInput}
           onClick={handleEditableClick}
+          onContextMenu={handleEditableContextMenu}
           onPaste={handlePaste}
           onCopy={handleCopy}
           onCut={handleCut}
@@ -1621,6 +1835,17 @@ export function Composer({
               )
             : null;
         })}
+
+        {/* 输入区右键菜单：剪切 / 复制 / 粘贴 / 全选（锚在鼠标落点，经 Portal 渲染） */}
+        <ComposerContextMenu
+          position={ctxMenu ? { top: ctxMenu.top, left: ctxMenu.left } : null}
+          canEdit={ctxMenu?.canEdit ?? false}
+          onClose={() => setCtxMenu(null)}
+          onCut={ctxCut}
+          onCopy={ctxCopy}
+          onPaste={ctxPaste}
+          onSelectAll={selectAllComposer}
+        />
 
         {/* 工具栏：+ 菜单 / Agent / 闪光 / 模型 / 语音 / 发送 */}
         <Box
