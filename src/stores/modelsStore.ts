@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { connectionManager } from '@/ai/connectionManager';
 import { platform } from '@/platform';
 import type {
+  ModelsSyncResult,
   NanobotFallbackCandidate,
   NanobotModelsMutation,
   NanobotModelsSnapshot,
@@ -182,17 +183,24 @@ interface ModelsState {
    * 明确要「以磁盘为准确认一次」的场合（进入模型分区、保存 / 删除之后）传 true。
    */
   loadManaged: (force?: boolean) => Promise<void>;
-  /** 新增或更新一个模型；成功返回 true */
-  saveModel: (value: ModelFormValue) => Promise<boolean>;
-  /** 删除一个模型；成功返回 true */
-  removeModel: (name: string) => Promise<boolean>;
-  /** 把一个已有模型设为默认；成功返回 true */
-  setDefaultModel: (name: string) => Promise<boolean>;
-  /** 整链替换回退链 + 重试模式；成功返回 true */
+  /**
+   * 新增或更新一个模型；成功返回 true。
+   *
+   * 返回值是主进程的**完整**同步结果而不是布尔：serve 由外部进程托管（或上一实例
+   * 残留的进程被「复用」）时，配置已写盘但 `/v1/models` 还是旧目录，主进程只能以
+   * `needsRestart` 告知——把它吞成 `false`/`true`，调用方就无法提示「重启网关后才
+   * 生效」，用户会一直对着旧下拉以为保存没生效（2026-10-07 实测事故）。
+   */
+  saveModel: (value: ModelFormValue) => Promise<ModelsSyncResult>;
+  /** 删除一个模型；返回值语义同 `saveModel`（要透传 `needsRestart`） */
+  removeModel: (name: string) => Promise<ModelsSyncResult>;
+  /** 把一个已有模型设为默认；返回值语义同 `saveModel`（要透传 `needsRestart`） */
+  setDefaultModel: (name: string) => Promise<ModelsSyncResult>;
+  /** 整链替换回退链 + 重试模式；返回值语义同 `saveModel`（要透传 `needsRestart`） */
   setFailover: (
     fallbacks: NanobotFallbackCandidate[],
     providerRetryMode: ProviderRetryMode,
-  ) => Promise<boolean>;
+  ) => Promise<ModelsSyncResult>;
 }
 
 /** 进行中的拉取任务（并发去重句柄） */
@@ -420,11 +428,11 @@ export const useModelsStore = create<ModelsState>()((set, get) => ({
   saveModel: async (value) => {
     const mutation = buildMutation(value);
     const result = await platform.syncNanobotModels(JSON.stringify(mutation));
-    if (!result.ok) return false;
+    if (!result.ok) return result;
     await get().loadManaged(true);
     // 预设目录在 serve 启动时构建 → 必须强制重拉，否则下拉里看不到新模型
     await get().refresh(true);
-    return true;
+    return result;
   },
 
   removeModel: async (name) => {
@@ -435,30 +443,30 @@ export const useModelsStore = create<ModelsState>()((set, get) => ({
       providerKey: target?.custom ? target.providerKey : undefined,
     };
     const result = await platform.syncNanobotModels(JSON.stringify(mutation));
-    if (!result.ok) return false;
+    if (!result.ok) return result;
     await get().loadManaged(true);
     await get().refresh(true);
-    return true;
+    return result;
   },
 
   setDefaultModel: async (name) => {
     const mutation: NanobotModelsMutation = { op: 'setDefault', preset: name };
     const result = await platform.syncNanobotModels(JSON.stringify(mutation));
-    if (!result.ok) return false;
+    if (!result.ok) return result;
     await get().loadManaged(true);
     await get().refresh(true);
-    return true;
+    return result;
   },
 
   setFailover: async (fallbacks, providerRetryMode) => {
     const mutation: NanobotModelsMutation = { op: 'setFailover', fallbacks, providerRetryMode };
     const result = await platform.syncNanobotModels(JSON.stringify(mutation));
-    if (!result.ok) return false;
+    if (!result.ok) return result;
     // 以磁盘为准回读：主进程会做「引用归一」（字符串引用 ↔ 两态联合），
     // 拿本地那份乐观状态继续显示就可能与文件里的实际内容不一致
     await get().loadManaged(true);
     await get().refresh(true);
-    return true;
+    return result;
   },
 }));
 

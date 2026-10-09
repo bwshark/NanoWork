@@ -123,9 +123,9 @@ describe('setFailover', () => {
     syncModels.mockResolvedValue({ ok: true, changed: true, message: '已写入' });
     getModels.mockResolvedValue(snapshot({ fallbacks: chain, providerRetryMode: 'persistent' }));
 
-    const ok = await useModelsStore.getState().setFailover(chain, 'persistent');
+    const result = await useModelsStore.getState().setFailover(chain, 'persistent');
 
-    expect(ok).toBe(true);
+    expect(result.ok).toBe(true);
     expect(syncModels).toHaveBeenCalledTimes(1);
     expect(JSON.parse(syncModels.mock.calls[0]![0])).toEqual({
       op: 'setFailover',
@@ -134,15 +134,31 @@ describe('setFailover', () => {
     });
   });
 
-  it('⭐ 桥拒绝时返回 false 且**不回读**（不装作已保存）', async () => {
+  it('⭐ 桥拒绝时返回 ok:false 且**不回读**（不装作已保存）', async () => {
     syncModels.mockResolvedValue({ ok: false, changed: false, message: '回退链格式非法' });
 
-    const ok = await useModelsStore.getState().setFailover(chain, 'standard');
+    const result = await useModelsStore.getState().setFailover(chain, 'standard');
 
-    expect(ok).toBe(false);
+    expect(result.ok).toBe(false);
     // 没落盘就不该去读盘：回读会把「界面上那份还没保存的链」换成磁盘上的旧链，
     // 用户会看到自己刚做的编辑被无声回退
     expect(getModels).not.toHaveBeenCalled();
+  });
+
+  it('⭐ needsRestart 原样透传（serve 外部托管时 UI 靠它提示「重启网关才生效」，吞掉 = 静默旧目录）', async () => {
+    syncModels.mockResolvedValue({
+      ok: true,
+      changed: true,
+      message: '已写入，serve 由外部进程托管，请重启该网关后生效',
+      needsRestart: true,
+    });
+    getModels.mockResolvedValue(snapshot({ fallbacks: chain, providerRetryMode: 'standard' }));
+
+    const result = await useModelsStore.getState().setFailover(chain, 'standard');
+
+    expect(result.ok).toBe(true);
+    expect(result.needsRestart).toBe(true);
+    expect(result.message).toContain('重启');
   });
 
   it('成功后以磁盘为准回读（主进程会做引用归一，本地乐观状态可能与文件不一致）', async () => {

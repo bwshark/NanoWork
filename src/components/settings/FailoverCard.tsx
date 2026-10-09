@@ -103,14 +103,17 @@ export function FailoverCard() {
   const handleSave = async (): Promise<void> => {
     setBusy(true);
     try {
-      const ok = await setFailover(chain, retryMode);
-      if (!ok) {
+      const result = await setFailover(chain, retryMode);
+      if (!result.ok) {
         // 不把草稿清掉：写盘失败时把用户的编辑丢掉是最坏的结果
-        toast.error('保存失败，请查看网关日志');
+        toast.error(result.message || '保存失败，请查看网关日志');
         return;
       }
       setDraft(null);
-      toast.success('故障转移设置已保存');
+      // needsRestart = serve 由外部进程托管，写盘了但没重启 → 引擎行为纹丝不动。
+      // 必须把主进程的原话警告出来，不能报「已保存」装作生效（2026-10-07 教训）。
+      if (result.needsRestart) toast.warning(result.message);
+      else toast.success('故障转移设置已保存');
     } finally {
       setBusy(false);
     }

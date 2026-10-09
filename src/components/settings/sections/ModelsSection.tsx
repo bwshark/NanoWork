@@ -64,9 +64,18 @@ export function ModelsSection() {
   const handleSubmit = async (value: ModelFormValue): Promise<boolean> => {
     setBusy(true);
     try {
-      const ok = await saveModel(value);
-      if (ok) toast.success(editing ? '模型已更新' : '模型已添加');
-      return ok;
+      const result = await saveModel(value);
+      if (!result.ok) {
+        // 主进程明确拒绝（如预设名为空）：把原因带出来，别让弹窗无声地停在原地
+        toast.error(result.message || '保存失败，请查看网关日志');
+        return false;
+      }
+      // needsRestart = 配置已写盘、但 serve 由外部进程托管（或启动时复用了残留进程）
+      // 没重启 → 下拉里的目录还是旧的。此时不能报「已添加」装作万事大吉，
+      // 必须把主进程那句「请重启网关」原样警告出来（2026-10-07 静默吞掉的教训）。
+      if (result.needsRestart) toast.warning(result.message);
+      else toast.success(editing ? '模型已更新' : '模型已添加');
+      return true;
     } catch {
       toast.error('保存失败，请查看网关日志');
       return false;
@@ -78,8 +87,13 @@ export function ModelsSection() {
   const handleSetDefault = async (item: ManagedModel) => {
     setBusy(true);
     try {
-      const ok = await setDefaultModel(item.name);
-      if (ok) toast.success(`已将「${item.name}」设为默认模型`);
+      const result = await setDefaultModel(item.name);
+      if (!result.ok) {
+        toast.error(result.message || '操作失败，请查看网关日志');
+        return;
+      }
+      if (result.needsRestart) toast.warning(result.message);
+      else toast.success(`已将「${item.name}」设为默认模型`);
     } finally {
       setBusy(false);
     }
@@ -91,8 +105,13 @@ export function ModelsSection() {
     setPendingDelete(null);
     setBusy(true);
     try {
-      const ok = await removeModel(target.name);
-      if (ok) toast.success(`已删除「${target.name}」`);
+      const result = await removeModel(target.name);
+      if (!result.ok) {
+        toast.error(result.message || '删除失败，请查看网关日志');
+        return;
+      }
+      if (result.needsRestart) toast.warning(result.message);
+      else toast.success(`已删除「${target.name}」`);
     } finally {
       setBusy(false);
     }
