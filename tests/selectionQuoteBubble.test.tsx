@@ -15,7 +15,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, useRef } from 'react';
 import { ThemeProvider } from '@mui/material';
-import { SelectionQuoteBubble } from '@/pages/chat/SelectionQuoteBubble';
+import {
+  BUBBLE_H,
+  computeBubblePlacement,
+  SelectionQuoteBubble,
+  type SelectionBox,
+} from '@/pages/chat/SelectionQuoteBubble';
 import { muiTheme } from '@/theme/muiTheme';
 import { useSessionUiStore } from '@/stores/sessionUiStore';
 import { click, flush, mount, unmount } from './helpers/reactMount';
@@ -64,6 +69,15 @@ function mouseUpOn(el: Element): void {
   });
 }
 
+/** 右键（`contextmenu` 那一轮）：mousedown / mouseup 都要派发，button = 2 */
+function rightClickOn(el: Element): void {
+  act(() => {
+    el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 2 }));
+    el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 2 }));
+    el.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+  });
+}
+
 const bubbleEl = () => document.querySelector('[data-selection-bubble]');
 
 /** 走一遍「选中 → 松手」，返回气泡根节点 */
@@ -87,6 +101,155 @@ beforeEach(() => {
 afterEach(() => {
   unmount();
   window.getSelection()?.removeAllRanges();
+});
+
+/**
+ * 气泡落位：**必须在选区外侧**，绝不能压住选中的文字。
+ *
+ * 这组用例守的是一次真机回归：原先按「选区**最后一行**」定位
+ * （`getClientRects()` 取末个 rect），单行选区看着没问题，多行就露馅 ——
+ * 最后一行的**上方**正好是倒数第二行的位置，而气泡高 34px，于是选了 3 行、
+ * 气泡压在第 2 行上（用户截图）。
+ *
+ * 位置计算抽成纯函数是因为 jsdom 没有布局（量不到真实几何），
+ * 真机那边另有 `tasks/verify-selection-quote.mjs` 量实际矩形。
+ */
+describe('气泡落位：整体外框 + 放不下才下翻', () => {
+  const VIEWPORT = 1440;
+  const box = (over: Partial<SelectionBox> = {}): SelectionBox => ({
+    left: 100,
+    right: 500,
+    top: 300,
+    bottom: 400,
+    ...over,
+  });
+  /** 气泡实际的上下沿（transform 决定朝上还是朝下展开） */
+  const bubbleEdges = (r: ReturnType<typeof computeBubblePlacement>) =>
+    r.placement === 'above'
+      ? { top: r.top - BUBBLE_H, bottom: r.top }
+      : { top: r.top, bottom: r.top + BUBBLE_H };
+
+  it('多行选区：落在**第一行**上方（不是最后一行上方）', () => {
+    const target = box({ top: 300, bottom: 420 });
+    const r = computeBubblePlacement(target, VIEWPORT);
+
+    expect(r.placement).toBe('above');
+    expect(r.top).toBe(292);
+    // 核心不变式：气泡与选区**零重叠**
+    const edges = bubbleEdges(r);
+    expect(edges.bottom <= target.top).toBe(true);
+  });
+
+  it('单行选区：同样落在该行上方', () => {
+    const target = box({ top: 300, bottom: 328 });
+    const r = computeBubblePlacement(target, VIEWPORT);
+
+    expect(r.placement).toBe('above');
+    expect(r.top).toBe(292);
+    expect(bubbleEdges(r).bottom <= target.top).toBe(true);
+  });
+
+  it('选区贴着视口顶、上方放不下 → 翻到选区下方（而不是塞出视口）', () => {
+    const target = box({ top: 10, bottom: 110 });
+    const r = computeBubblePlacement(target, VIEWPORT);
+
+    expect(r.placement).toBe('below');
+    expect(r.top).toBe(118);
+    expect(bubbleEdges(r).top >= target.bottom).toBe(true);
+  });
+
+  it('水平以选区**整体**中心对齐（用最后一行的中心会偏在一侧）', () => {
+    const target = box({ left: 100, right: 500 });
+    expect(computeBubblePlacement(target, VIEWPORT).left).toBe(300);
+  });
+
+  it('贴视口左右边缘时夹取到视口内，不被裁掉', () => {
+    expect(computeBubblePlacement(box({ left: -100, right: 20 }), VIEWPORT).left).toBe(96);
+    // 88 = BUBBLE_W/2；夹取上界 = 1440 - 88 - 8
+    expect(computeBubblePlacement(box({ left: 1300, right: 1420 }), VIEWPORT).left).toBe(1344);
+  });
+
+  it('视口窄到放不下气泡时也不会算出负坐标', () => {
+    const r = computeBubblePlacement(box(), 100);
+    expect(r.left).toBeGreaterThanOrEqual(0);
+  });
+});
+
+/**
+ * 组件真实路径上的落位（jsdom 桩布局）。
+ *
+ * 上面那组只钉纯函数；这条钉的是**组件实际用哪个矩形**—— 用户截图里的那个 bug
+ * 正是「喂了最后一行给纯函数」，纯函数怎么测都抓不到。
+ *
+ * jsdom 干脆**没有** `Range.prototype.getBoundingClientRect` / `getClientRects`
+ * （生产代码里那句 `typeof … !== 'function'` 判的就是它），所以只能**直接定义**，
+ * 不能 `vi.spyOn`。两个都桩上：
+ * - `getBoundingClientRect` 给**整体**外框（三行，top 300 / bottom 420）；
+ * - `getClientRects` 给**三行**的 rect（末行 top = 400）。
+ * 于是「用整体」得到 `top: 292px`，「用最后一行」得到 `412px` —— 两者可区分。
+ */
+describe('气泡落位：组件真实路径', () => {
+  const WHOLE = { left: 100, right: 500, top: 300, bottom: 420 };
+  const LINES = [
+    { left: 100, right: 500, top: 300, bottom: 328 },
+    { left: 100, right: 500, bottom: 378, top: 350 },
+    { left: 100, right: 500, bottom: 420, top: 400 },
+  ];
+
+  /** 定义两个几何 API，返回还原函数 */
+  function stubRangeGeometry(
+    whole: Partial<DOMRect>,
+    lines: Array<Partial<DOMRect>>,
+  ): () => void {
+    const proto = Range.prototype as unknown as Record<string, unknown>;
+    proto.getBoundingClientRect = () => ({ ...WHOLE, ...whole }) as DOMRect;
+    proto.getClientRects = () => lines.map((l) => ({ ...l })) as unknown as DOMRectList;
+    return () => {
+      delete proto.getBoundingClientRect;
+      delete proto.getClientRects;
+    };
+  }
+
+  it('多行选区时气泡顶边落在选区**整体**上沿之上', () => {
+    const restore = stubRangeGeometry({}, LINES);
+    try {
+      const host = mount(<Harness />);
+      const body = host.querySelector('[data-quote-body]') as HTMLElement;
+      selectText(body, QUOTE_FROM, QUOTE_TO);
+      mouseUpOn(body);
+
+      const bubble = document.querySelector('[data-selection-bubble]') as HTMLElement | null;
+      expect(bubble, '气泡应该弹出').toBeTruthy();
+      const cs = window.getComputedStyle(bubble!);
+      // 300 - 8（间距）；旧写法会用末行 top=400 → 412
+      expect(cs.top).toBe('292px');
+      // `above` 落位：整体再上移一个自身高度（底边即选区上沿）
+      expect(cs.transform).toContain('-100%');
+      // 水平：`left` 存的是**中心**坐标（减半宽由 `translateX(-50%)` 负责），
+      // 整体中心 = (100 + 500) / 2 = 300
+      expect(cs.left).toBe('300px');
+    } finally {
+      restore();
+    }
+  });
+
+  it('选区贴视口顶、上方放不下 → 改为落在选区下方（transform 不再上移）', () => {
+    const restore = stubRangeGeometry({ top: 10, bottom: 130 }, []);
+    try {
+      const host = mount(<Harness />);
+      const body = host.querySelector('[data-quote-body]') as HTMLElement;
+      selectText(body, QUOTE_FROM, QUOTE_TO);
+      mouseUpOn(body);
+
+      const bubble = document.querySelector('[data-selection-bubble]') as HTMLElement | null;
+      expect(bubble).toBeTruthy();
+      const cs = window.getComputedStyle(bubble!);
+      expect(cs.top).toBe('138px'); // 130 + 8
+      expect(cs.transform).not.toContain('-100%');
+    } finally {
+      restore();
+    }
+  });
 });
 
 describe('选中文本气泡：弹出与动作', () => {
@@ -189,5 +352,20 @@ describe('选中文本气泡：不响应的场景', () => {
     });
 
     expect(bubbleEl()).toBeNull();
+  });
+
+  it('⭐ 右键不弹气泡（那一轮归右键菜单，两个浮层不能叠在一起）', () => {
+    // 真机抓到的：右键**不折叠选区**，于是 `mouseup` 里读到的选区仍有效 → 气泡重新弹出，
+    // 而此时 `MessageTextContextMenu` 已经把右键菜单弹出来了，两个浮层互相压着。
+    // 修法是气泡只认左键（`e.button !== 0` 直接返回）。
+    const host = mount(<Harness />);
+    const body = host.querySelector('[data-quote-body]') as HTMLElement;
+    selectText(body, QUOTE_FROM, QUOTE_TO);
+
+    rightClickOn(body);
+
+    expect(bubbleEl()).toBeNull();
+    // 选区仍在（浏览器行为：右键不折叠选区）—— 这是「菜单能复制到字」的前提
+    expect(window.getSelection()?.toString()).toBe(QUOTE_TEXT);
   });
 });

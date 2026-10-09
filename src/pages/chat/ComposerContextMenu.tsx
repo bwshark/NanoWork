@@ -23,6 +23,20 @@ export interface ComposerContextMenuProps {
   position: { top: number; left: number } | null;
   /** 输入区内此刻有可剪贴的选区（剪切 / 复制可用） */
   canEdit: boolean;
+  /**
+   * 剪切是否可用；缺省跟随 `canEdit`。
+   *
+   * 单拎出来是因为**只读场景**（消息正文）：那里复制有意义，剪切没有 ——
+   * 剪下来的字往哪儿放？置灰比留一个「点了没反应」好。
+   */
+  canCut?: boolean;
+  /**
+   * 粘贴是否可用；缺省 `true`（输入区总能粘贴）。
+   * 只读正文传 `false`：往渲染出来的历史消息里粘东西没有意义。
+   */
+  canPaste?: boolean;
+  /** 剪切 / 粘贴被置灰时的原因（挂到禁用项的 title 上，要说清为什么不能） */
+  readOnlyHint?: string;
   onClose: () => void;
   onCut: () => void;
   onCopy: () => void;
@@ -35,11 +49,16 @@ interface ItemDef {
   label: string;
   enabled: boolean;
   run: () => void;
+  /** 禁用原因（仅在禁用时有意义） */
+  hint?: string;
 }
 
 export function ComposerContextMenu({
   position,
   canEdit,
+  canCut,
+  canPaste,
+  readOnlyHint,
   onClose,
   onCut,
   onCopy,
@@ -57,11 +76,14 @@ export function ComposerContextMenu({
     run();
   };
 
+  const cutEnabled = canCut ?? canEdit;
+  const pasteEnabled = canPaste ?? true;
+
   const items: ItemDef[] = [
     // 没有选区时置灰，而不是「点了没反应」—— 与系统原生编辑菜单一致
-    { label: "剪切", enabled: canEdit, run: onCut },
+    { label: "剪切", enabled: cutEnabled, run: onCut, hint: readOnlyHint },
     { label: "复制", enabled: canEdit, run: onCopy },
-    { label: "粘贴", enabled: true, run: onPaste },
+    { label: "粘贴", enabled: pasteEnabled, run: onPaste, hint: readOnlyHint },
     { label: "全选", enabled: true, run: onSelectAll },
   ];
 
@@ -106,6 +128,8 @@ export function ComposerContextMenu({
            * 「无选区却执行剪切」这类会改数据的操作，契约要落在代码里。
            */
           onClick={item.enabled ? fire(item.run) : undefined}
+          // 禁用项要说清为什么不能，否则用户只会以为坏了
+          title={item.enabled ? undefined : item.hint}
           sx={{ fontSize: 13.5, minHeight: 34, px: 1.5, py: 0.5 }}
         >
           {item.label}

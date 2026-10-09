@@ -31,11 +31,18 @@ export interface SelectionQuoteBubbleProps {
   sessionId: string;
 }
 
-/** 气泡预估尺寸：只用于把位置夹取到视口内，真实尺寸由内容决定 */
-const BUBBLE_W = 176;
-const BUBBLE_H = 34;
-/** 气泡底边与选区之间的间距 */
+/** 气泡预估尺寸：只用于把位置夹取到视口内 / 判断放不放得下，真实尺寸由内容决定 */
+export const BUBBLE_W = 176;
+export const BUBBLE_H = 34;
+/** 气泡与选区之间的间距 */
 const GAP = 8;
+
+/**
+ * 气泡相对选区的落位。
+ *
+ * `above` 是常态；选区贴着视口顶、上方实在放不下时才翻到 `below`。
+ */
+type Placement = 'above' | 'below';
 
 /** 一次待处理的选区（`mouseup` 时定格，之后不再重读窗口选区） */
 interface PendingSelection {
@@ -45,30 +52,65 @@ interface PendingSelection {
   messageId: string;
   /** 气泡中心点 X（fixed 坐标） */
   left: number;
-  /** 气泡底边 Y（fixed 坐标；配合 translate(-50%, -100%) 呈现在选区上方） */
+  /** 气泡顶部的 fixed 坐标（配合 `placement` 的 translate 决定最终落位） */
   top: number;
+  placement: Placement;
 }
 
 /**
- * 量出选区最后一行的位置。
+ * 量出**整个选区**的外框（不是某一行）。
  *
- * - 多行选区取**最后一行**：跟着鼠标松开的位置走，和参考实现一致；
- * - 布局接口并非处处可用（jsdom 就没有，同 `textHighlight.scrollRangeIntoView` 的判断），
- *   取不到就给零矩形——单测只关心状态与交互，真实位置由真机脚本量。
+ * ## 为什么必须用整体框
+ *
+ * 曾按「最后一行」定位（`getClientRects()` 取末个），单行选区看着没问题，
+ * 多行就露馅了：最后一行的**上方**正好是倒数第二行所在的位置，而气泡高 34px ——
+ * 于是气泡必然压在倒数第二行的文字上，真机截图里就是这个效果（选了 3 行、
+ * 气泡盖住第 2 行）。
+ *
+ * 改成整体外框后，气泡落在**选区外侧**（第一行上方），任何行数都不遮挡；
+ * 水平方向也改用整体中心，而不是最后一行的行尾（后者会让气泡偏在一侧）。
+ *
+ * 布局接口并非处处可用（jsdom 就没有，同 `textHighlight.scrollRangeIntoView`
+ * 的判断），取不到就给零矩形 —— 单测只关心状态与交互，真实位置由真机脚本量。
  */
-function measureSelectionRange(range: Range): {
+function measureSelectionBox(range: Range): {
   left: number;
-  width: number;
+  right: number;
   top: number;
+  bottom: number;
 } {
-  if (typeof range.getBoundingClientRect !== 'function') {
-    return { left: 0, width: 0, top: 0 };
-  }
-  const rects = typeof range.getClientRects === 'function' ? range.getClientRects() : null;
-  const picked =
-    rects && rects.length > 0 ? rects[rects.length - 1] : range.getBoundingClientRect();
-  if (!picked) return { left: 0, width: 0, top: 0 };
-  return { left: picked.left, width: picked.width, top: picked.top };
+  const empty = { left: 0, right: 0, top: 0, bottom: 0 };
+  if (typeof range.getBoundingClientRect !== 'function') return empty;
+  const rect = range.getBoundingClientRect();
+  if (!rect) return empty;
+  return { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom };
+}
+
+/** 选区外框（fixed 视口坐标） */
+export type SelectionBox = ReturnType<typeof measureSelectionBox>;
+
+/**
+ * 由选区外框算气泡落位。**纯函数**，好单测（jsdom 没有布局，量不到真实几何）。
+ *
+ * 三条规则，每条都对应一个真机上踩过的坑：
+ *
+ * 1. **落在选区外侧**（默认上方）—— 落在选区内部就会遮挡选中的文字；
+ * 2. **上方放不下才翻到下方**（选区贴着视口顶时），而不是硬塞到视口外；
+ * 3. **水平夹取到视口内**并以**整体**中心对齐 —— 用最后一行的中心会让气泡偏在一侧。
+ */
+export function computeBubblePlacement(
+  box: SelectionBox,
+  viewportWidth: number,
+  size: { width: number; height: number } = { width: BUBBLE_W, height: BUBBLE_H },
+  gap = GAP,
+): { left: number; top: number; placement: Placement } {
+  const half = size.width / 2;
+  const minLeft = half + 8;
+  const maxLeft = Math.max(viewportWidth - half - 8, minLeft);
+  const left = Math.min(Math.max((box.left + box.right) / 2, minLeft), maxLeft);
+  const placement: Placement = box.top - gap - size.height >= 0 ? 'above' : 'below';
+  const top = placement === 'above' ? box.top - gap : box.bottom + gap;
+  return { left, top, placement };
 }
 
 export function SelectionQuoteBubble({ rootRef, sessionId }: SelectionQuoteBubbleProps) {
@@ -99,22 +141,19 @@ export function SelectionQuoteBubble({ rootRef, sessionId }: SelectionQuoteBubbl
       if (normalizeQuoteText(raw) === '') return null;
       const text = clampQuoteText(raw);
       if (text === '') return null;
-      // 锚在**选区最后一行**的上方：多行选区取整体 rect 的顶边会飘到第一行去，
-      // 而参考实现的气泡跟着鼠标松开的位置走（即最后一行的行尾附近）。
-      // 布局接口并非处处可用（jsdom 就没有，见 textHighlight 的同款判断）：
-      // 取不到就给一个零矩形 —— 单测只关心状态与交互，真实位置由真机脚本量。
-      const box = measureSelectionRange(range);
-      const half = BUBBLE_W / 2;
+      // 锚在整个选区的**外侧上方**，绝不能压到选中的文字（见 computeBubblePlacement）
       const viewport = typeof window !== 'undefined' ? window.innerWidth : 1024;
-      const left = Math.min(
-        Math.max(box.left + box.width / 2, half + 8),
-        Math.max(viewport - half - 8, half + 8),
+      const { left, top, placement } = computeBubblePlacement(
+        measureSelectionBox(range),
+        viewport,
       );
-      const top = Math.max(box.top - GAP, BUBBLE_H + 8);
-      return { text, messageId, left, top };
+      return { text, messageId, left, top, placement };
     };
 
     const onMouseUp = (e: MouseEvent) => {
+      // 只响应左键。右键那一轮要留给 `MessageTextContextMenu`：右键**不会**折叠选区，
+      // 所以这里若也弹，右键菜单与气泡会同时挂在屏幕上互相遮挡。
+      if (e.button !== 0) return;
       const target = e.target as Element | null;
       // 点在气泡自身（Portal 到 body，不在 root 内）：保持当前 pending 不动
       if (target?.closest?.('[data-selection-bubble]')) return;
@@ -190,7 +229,10 @@ export function SelectionQuoteBubble({ rootRef, sessionId }: SelectionQuoteBubbl
         position: 'fixed',
         left: pending.left,
         top: pending.top,
-        transform: 'translate(-50%, -100%)',
+        // `above` 时气泡顶边对齐 `top` 并整体上移（底边即选区上沿）；
+        // 翻到下方时不再上移，只把顶边压在选区下沿之下。
+        transform:
+          pending.placement === 'above' ? 'translate(-50%, -100%)' : 'translate(-50%, 0)',
         zIndex: (theme) => theme.zIndex.tooltip,
         display: 'flex',
         alignItems: 'center',

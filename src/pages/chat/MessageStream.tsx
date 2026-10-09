@@ -17,6 +17,7 @@ import { chatColumnSx } from './chatColumnSx';
 import { UserMessage } from './UserMessage';
 import { AssistantMessage } from './AssistantMessage';
 import { SelectionQuoteBubble } from './SelectionQuoteBubble';
+import { MessageTextContextMenu } from './MessageTextContextMenu';
 
 /** 定位高亮的保留时长（毫秒）：短暂点亮后自动消退，不长期占据视觉焦点 */
 const HIGHLIGHT_MS = 3600;
@@ -243,6 +244,8 @@ export function MessageStream() {
       </Box>
       {/* 选中文本气泡：Portal 到 body，挂在滚动容器之外（fixed 定位才不会被裁掉） */}
       <SelectionQuoteBubble rootRef={scrollRef} sessionId={session.id} />
+      {/* 正文右键菜单（剪切 / 复制 / 粘贴 / 全选）：应用菜单置空后原生菜单不弹 */}
+      <MessageTextContextMenu rootRef={scrollRef} sessionId={session.id} />
     </Box>
   );
 }
