@@ -36,6 +36,8 @@ WorkBuddy 式智能体客户端：React 18 + TS + Vite 渲染层 + Electron 主�
 - ⚠️ **`input_tokens` 已含缓存读取** → 计价三档（未命中/缓存读/输出），缓存单价缺省按输入价。
 - ⚠️ **绿灯 ≠ 门禁过**：全绿但 `exit=1` = Unhandled Error（MUI 过渡 `setTimeout` 不归 React 管）→ 该文件 `afterEach` 卸组件 + 等 400ms。**判门禁看退出码**。
 - ⚠️ **`.gitignore` 裸目录名匹配任意层级**：`tasks/` 曾误吞 `src/**/tasks/` 源码（已补前导斜杠）。
+- ⚠️ **可选的 prop 不能当功能开关**：`Composer` 的编辑桥接 `registerComposerEdit(...)` 曾写在 `if (!apiRef) return` 之后，而 `ChatPage` 里**只有空态那个 hero 输入区**传 `apiRef` → 一进对话桥接整体为 `null`：「添加到对话」送不去焦点、标题栏「编辑」菜单三动作一起失灵，**且都不报错**。已改为无条件注册（变异验证：退回旧写法 → 单测 `expected null not to be null` 变红）。
+- ⚠️ **改输入区「有没有内容」的判据要两处同改**：`onSend` 的前置判断与发送按钮的 `disabled` 必须同源，否则出现「按钮亮的、点了没反应」（引用胶囊曾踩）。
 
 ## 记忆功能现状
 

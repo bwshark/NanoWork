@@ -93,29 +93,47 @@ export function collectSearchRanges(root: HTMLElement, query: string): Range[] {
 }
 
 /**
+ * 按名字登记一组高亮 Range。
+ *
+ * 抽成通用底座，是因为「会话内搜索命中」与「加入对话的引用下划线」是**同一件事**：
+ * 都只把 `Range` 交给浏览器着色，**完全不改动 DOM**（与 React 渲染结果零冲突）。
+ * 空数组 = 撤掉该名字的高亮，不留一个空 Highlight 常驻注册表。
+ *
+ * 返回 false 表示环境不支持（调用方据此降级为「不着色」）。
+ */
+export function setHighlight(name: string, ranges: Range[]): boolean {
+  const ctor = getHighlightCtor();
+  const registry = getRegistry();
+  if (!ctor || !registry) return false;
+  if (ranges.length === 0) {
+    registry.delete(name);
+    return true;
+  }
+  registry.set(name, new ctor(...ranges));
+  return true;
+}
+
+/** 撤掉某个名字的高亮；环境不支持时静默无事 */
+export function clearHighlight(name: string): void {
+  getRegistry()?.delete(name);
+}
+
+/**
  * 把命中 Range 交给浏览器着色：全部命中走 `search-hit`，
  * 当前选中项走更醒目的 `search-hit-active`。
  * 返回 false 表示环境不支持（调用方应降级）。
  */
 export function paintSearchRanges(ranges: Range[], activeIndex: number): boolean {
-  const ctor = getHighlightCtor();
-  const registry = getRegistry();
-  if (!ctor || !registry) return false;
-
-  registry.set(SEARCH_HL_ALL, new ctor(...ranges));
-
+  if (!setHighlight(SEARCH_HL_ALL, ranges)) return false;
   const active = ranges[activeIndex];
-  if (active) registry.set(SEARCH_HL_ACTIVE, new ctor(active));
-  else registry.delete(SEARCH_HL_ACTIVE);
+  setHighlight(SEARCH_HL_ACTIVE, active ? [active] : []);
   return true;
 }
 
 /** 清空搜索高亮（收起搜索条 / 切换会话时调用） */
 export function clearSearchHighlights(): void {
-  const registry = getRegistry();
-  if (!registry) return;
-  registry.delete(SEARCH_HL_ALL);
-  registry.delete(SEARCH_HL_ACTIVE);
+  clearHighlight(SEARCH_HL_ALL);
+  clearHighlight(SEARCH_HL_ACTIVE);
 }
 
 /**

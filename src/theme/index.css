@@ -91,6 +91,16 @@ body {
   color: #04211f;
 }
 
+/* 「加入对话」的引用下划线（同一个 CSS Custom Highlight API 底座）。
+   被加进输入区的那段原文留在消息里继续留痕：虚线下划线足以说明「引的是哪一段」，
+   又不抢夺正文字色——实底高亮会让人以为那段话本身有问题。 */
+::highlight(quote-ref) {
+  text-decoration: underline dashed;
+  text-decoration-color: rgba(148, 163, 184, 0.9);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+
 /* Markdown 基础排版（与 MUI 主题协调） */
 .md-body {
   line-height: 1.7;

@@ -250,6 +250,8 @@ export function UserMessage({ message, sessionId }: UserMessageProps) {
                   theme.palette.mode === 'dark' ? '#ffffff' : '#1f2430',
                 borderRadius: '12px 12px 2px 12px',
               }}
+              // 正文容器：与助手气泡同一口径，选中用户自己发过的话也能加进对话
+              data-quote-body=""
             >
               {hasInlineChips ? (
                 // 内联混排：徽章保持在输入时的原始位置（对齐参考应用）

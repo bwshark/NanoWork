@@ -353,6 +353,10 @@ export function AssistantMessage({ message, agentId, sessionId }: AssistantMessa
       {hasContent && (
         <Paper
           elevation={0}
+          // 正文容器：消息流据此判定「这个选区属于助手正文」并在这里找引用原文。
+          // 只标正文，不标过程时间线 / 工具卡片 / 产物卡片——从那些地方拖一段文字
+          // 弹不出气泡，是因为它们不是助手在「回答」什么。
+          data-quote-body=""
           sx={{
             width: '100%',
             px: 1.5,

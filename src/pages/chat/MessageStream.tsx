@@ -8,9 +8,15 @@ import {
   paintSearchRanges,
   scrollRangeIntoView,
 } from '@/lib/textHighlight';
+import {
+  clearQuoteHighlights,
+  findTextRange,
+  paintQuoteHighlights,
+} from '@/lib/selectionQuote';
 import { chatColumnSx } from './chatColumnSx';
 import { UserMessage } from './UserMessage';
 import { AssistantMessage } from './AssistantMessage';
+import { SelectionQuoteBubble } from './SelectionQuoteBubble';
 
 /** 定位高亮的保留时长（毫秒）：短暂点亮后自动消退，不长期占据视觉焦点 */
 const HIGHLIGHT_MS = 3600;
@@ -141,6 +147,45 @@ export function MessageStream() {
     scrollRangeIntoView(ranges[idx], scrollRef.current);
   }, [searchActive, searchQuery, searchActiveMatch, session?.messages]);
 
+  // —— 「添加到对话」的引用下划线 ——
+  const quotes = useSessionUiStore((s) => s.quotes);
+  const activeSessionId = session?.id;
+
+  // 按引用在**消息 DOM** 上重新找回原文并登记高亮。
+  // 刻意不存 DOM 偏移：那是渲染细节，消息一变（流式追加 / 产物挂载 / 档位切换）
+  // 就失效，下划线会静默飘到别的字上。改用归一化文本查找，重渲染后依然找得到
+  //（`findTextRange` 的原理见 lib/selectionQuote.ts 文件头）。
+  useEffect(() => {
+    const root = scrollRef.current;
+    if (!root || !activeSessionId) {
+      clearQuoteHighlights();
+      return;
+    }
+    const ranges: Range[] = [];
+    for (const q of quotes) {
+      // 别的会话的引用在当前 DOM 里指不到任何东西（切换时由下面那个 effect 清理）
+      if (q.sessionId !== activeSessionId) continue;
+      const host = document.getElementById(anchorId(q.messageId));
+      if (!host) continue;
+      // 查找限定在正文容器内，与选区判定同一口径（data-quote-body）：
+      // 否则工具卡片 / 过程时间线里的同名字样也会被画上下划线
+      const body = host.querySelector('[data-quote-body]');
+      if (!body) continue;
+      const range = findTextRange(body as HTMLElement, q.text);
+      if (range) ranges.push(range);
+    }
+    paintQuoteHighlights(ranges);
+  }, [quotes, activeSessionId, session?.messages]);
+
+  // 卸载时撤掉下划线，别把它留给下一个会话的消息
+  useEffect(() => clearQuoteHighlights, []);
+
+  // 切换会话即清理上一会话的引用：引用的消息 id 在新会话里指不到东西，
+  // 留着只会攒出「胶囊删不掉、下划线又不见」的幽灵状态
+  useEffect(() => {
+    useSessionUiStore.getState().pruneQuotes(activeSessionId ?? null);
+  }, [activeSessionId]);
+
   if (!session) {
     return (
       <Box
@@ -172,6 +217,8 @@ export function MessageStream() {
           <Box
             key={m.id}
             id={anchorId(m.id)}
+            // 选中文本 → 加入对话 时用它认出「这段文字属于哪条消息」
+            data-message-id={m.id}
             sx={{
               borderRadius: 2,
               transition: 'background-color 400ms ease',
@@ -194,6 +241,8 @@ export function MessageStream() {
         ))}
         <div ref={bottomRef} />
       </Box>
+      {/* 选中文本气泡：Portal 到 body，挂在滚动容器之外（fixed 定位才不会被裁掉） */}
+      <SelectionQuoteBubble rootRef={scrollRef} sessionId={session.id} />
     </Box>
   );
 }

@@ -25,6 +25,7 @@ import DeleteSweepIcon from "@mui/icons-material/DeleteSweep";
 import CompressIcon from "@mui/icons-material/Compress";
 import TuneIcon from "@mui/icons-material/Tune";
 import NoteAddIcon from "@mui/icons-material/NoteAdd";
+import FormatQuoteIcon from "@mui/icons-material/FormatQuote";
 import {
   useSessionsStore,
   selectSessionStreamStatus,
@@ -34,6 +35,7 @@ import { useExpertGroupsStore } from "@/stores/expertGroupsStore";
 import { useSkillsStore } from "@/stores/skillsStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useModelsStore, describeModelId } from "@/stores/modelsStore";
+import { useSessionUiStore } from "@/stores/sessionUiStore";
 import { ComposerMenu } from "./ComposerMenu";
 import { ComposerContextMenu } from "./ComposerContextMenu";
 import { chatColumnSx } from "./chatColumnSx";
@@ -58,6 +60,7 @@ import {
   revokeAttachmentPreview,
 } from "@/lib/attachments";
 import { genId } from "@/lib/id";
+import { buildQuotedMessage, quoteChipLabel } from "@/lib/selectionQuote";
 import { avatarGlyph, entityAvatarSx } from "@/lib/cardSx";
 // 触发符判定是纯函数，已抽到 lib 便于单测；此处再导出一次，保持旧引用路径可用
 import { detectTrigger, type TriggerState } from "@/lib/composerTrigger";
@@ -346,6 +349,17 @@ export function Composer({
       : undefined,
   );
   const updateSession = useSessionsStore((s) => s.updateSession);
+
+  // —— 「选中文本 → 添加到对话」的引用胶囊 ——
+  // 引用由消息流里的气泡写进 store；这里读**当前会话**的那几条并画成可删胶囊。
+  // 按会话过滤而不是照单全收：别的会话的引用在当前输入区里指不到任何东西
+  //（切会话时 MessageStream 会顺手清掉它们，这里只是把窗口收窄到当下）。
+  const quotes = useSessionUiStore((s) => s.quotes);
+  const removeQuote = useSessionUiStore((s) => s.removeQuote);
+  const clearQuotes = useSessionUiStore((s) => s.clearQuotes);
+  const sessionQuotes = activeSessionId
+    ? quotes.filter((q) => q.sessionId === activeSessionId)
+    : [];
 
   const agents = useAgentsStore((s) => s.agents);
   const activeAgentId = useAgentsStore((s) => s.activeAgentId);
@@ -790,17 +804,21 @@ export function Composer({
   // 一路透传到 AppLayout。undo/redo 必须走自管快照栈，浏览器原生 execCommand
   // 对手动插入的附件徽章无效。
   useEffect(() => {
-    if (!apiRef) return;
     const api: ComposerApi = {
       focus: focusEditable,
       undo: doUndo,
       redo: doRedo,
       selectAll: selectAllComposer,
     };
-    apiRef.current = api;
+    if (apiRef) apiRef.current = api;
+    // ⚠️ 桥接**无条件**注册，不能挂在 `apiRef` 上。
+    // `apiRef` 是可选入参，只有**空态**那个 hero 输入区传了它（ChatPage 里
+    // floating 那个没传）。一旦把注册绑在它身上，「开始对话之后」桥接就整体失效：
+    // 标题栏「编辑」菜单的三个动作静默失灵，消息流「添加到对话」也送不去焦点。
+    // 两者都不报错，只是点了没反应 —— 所以这里必须与 `apiRef` 解耦。
     registerComposerEdit(api);
     return () => {
-      apiRef.current = null;
+      if (apiRef) apiRef.current = null;
       registerComposerEdit(null);
     };
   }, [apiRef, focusEditable, doUndo, doRedo, selectAllComposer]);
@@ -904,18 +922,25 @@ export function Composer({
 
   const onSend = () => {
     if (isStreaming) return;
-    if (!text.trim() && attachments.length === 0) return;
+    // 引用也算「有内容」：只挂引用不输入文字是合法的一次发送（发出去就是纯引用块）。
+    // 判据必须与发送按钮的 disabled 完全一致，否则会出现「按钮亮的、点了没反应」。
+    if (!text.trim() && attachments.length === 0 && sessionQuotes.length === 0) return;
     const payload = attachments;
     const root = editableRef.current;
     // 清空 DOM 前先抽取富文本副本（徽章 token 占位），供气泡内联渲染
     const rich =
       root && payload.length > 0 ? extractEditableRichText(root) : undefined;
+    // 引用块拼在待发文本之前（引用在前、输入在后）。拼接规则只此一处
+    //（lib/selectionQuote.buildQuotedMessage），别在这里另拼一套。
+    const outgoing = buildQuotedMessage(text, sessionQuotes);
     if (root) clearEditableContent(root);
     emitText("");
     chipSpans.current.clear();
     setAttachments([]);
+    // 引用已随消息发出：胶囊与消息里的虚线下划线一起收掉
+    if (sessionQuotes.length > 0) clearQuotes();
     closePicker();
-    void send(text, undefined, payload, rich).then(() => {
+    void send(outgoing, undefined, payload, rich).then(() => {
       // 消息已入库（持久化副本不含 object URL）后再释放预览地址，避免图片闪一下空白
       payload.forEach(revokeAttachmentPreview);
     });
@@ -1704,8 +1729,8 @@ export function Composer({
           </Box>
         )}
 
-        {/* 模式 Skill 徽章 + 已挂载技能 chips */}
-        {(heroSkill || activeSkills.length > 0) && (
+        {/* 模式 Skill 徽章 + 已挂载技能 chips + 「加入到对话」的引用胶囊 */}
+        {(heroSkill || activeSkills.length > 0 || sessionQuotes.length > 0) && (
           <Box
             sx={{
               px: 1.5,
@@ -1771,6 +1796,42 @@ export function Composer({
                   },
                 }}
               />
+            ))}
+            {/* 引用胶囊：消息流里「添加到对话」的选中文本。
+                悬停看全文（正文被截断到一行），点 × 删除 —— 原文的虚线下划线也随之消失。
+                发出去时由 buildQuotedMessage 拼成 Markdown 引用块。 */}
+            {sessionQuotes.map((q) => (
+              <Tooltip key={q.id} title={q.text}>
+                <Chip
+                  size="small"
+                  icon={<FormatQuoteIcon sx={{ fontSize: 14 }} />}
+                  label={quoteChipLabel(q.text)}
+                  deleteIcon={<CloseIcon fontSize="small" />}
+                  onDelete={() => removeQuote(q.id)}
+                  sx={{
+                    bgcolor: "action.hover",
+                    color: "text.secondary",
+                    fontSize: 12,
+                    height: 24,
+                    maxWidth: 240,
+                    "& .MuiChip-icon": {
+                      mr: -0.2,
+                      color: "text.disabled",
+                      fontSize: 14,
+                    },
+                    "& .MuiChip-deleteIcon": {
+                      color: "text.secondary",
+                      fontSize: 14,
+                      "&:hover": { color: "text.primary" },
+                    },
+                    // 截断交给 label：超过一行宽度的引用（尤其带空格的折行）不能把卡片撑开
+                    "& .MuiChip-label": {
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                    },
+                  }}
+                />
+              </Tooltip>
             ))}
           </Box>
         )}
@@ -2098,7 +2159,7 @@ export function Composer({
             <IconButton
               size="small"
               onClick={onSend}
-              disabled={!text.trim() && attachments.length === 0}
+              disabled={!text.trim() && attachments.length === 0 && sessionQuotes.length === 0}
               sx={{
                 bgcolor: "primary.main",
                 color: "primary.contrastText",

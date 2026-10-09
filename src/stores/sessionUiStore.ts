@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { genId } from '@/lib/id';
+import type { QuoteRef } from '@/lib/selectionQuote';
 
 /**
  * 会话级辅助功能的 UI 状态（非持久化，仅运行期）。
@@ -124,6 +125,28 @@ interface SessionUiState {
    */
   channelFilter: string | null;
   setChannelFilter: (key: string | null) => void;
+
+  /**
+   * 「选中文本 → 添加到对话」的引用列表。
+   *
+   * 放在 store 而非输入区组件内，是因为它有**两个读者**：消息流要按它在原文上
+   * 画虚线下划线（原文在消息 DOM 里，不在输入区），输入区要把它画成可删除的胶囊。
+   *
+   * 刻意**不持久化**：它是「这一次输入还没发出去」的临时附着物；落了盘的话，
+   * 重启后凭空冒出几个引用胶囊，用户没有任何办法解释它们从哪来。
+   */
+  quotes: QuoteRef[];
+  /**
+   * 新增一条引用（胶囊里出现 + 原文画下划线）。
+   * 按「会话 + 消息 + 原文」去重：同一段文字加两次只会得到一枚胶囊。
+   */
+  addQuote: (quote: Omit<QuoteRef, 'id'>) => void;
+  /** 删除一条引用（胶囊上的 ×）：原文的下划线随之消失 */
+  removeQuote: (id: string) => void;
+  /** 清空全部引用（发送成功后调用） */
+  clearQuotes: () => void;
+  /** 只保留某个会话的引用（切会话时调用；`null` = 全部清掉） */
+  pruneQuotes: (sessionId: string | null) => void;
 
   /** 会话内搜索条：展开时记录目标会话 id，null 表示收起 */
   searchSessionId: string | null;
@@ -304,6 +327,44 @@ export const useSessionUiStore = create<SessionUiState>()((set, get) => ({
 
   channelFilter: null,
   setChannelFilter: (key) => set({ channelFilter: key }),
+
+  quotes: [],
+
+  addQuote: (quote) =>
+    set((s) => {
+      // 同一段原文重复添加 → 幂等：连点两次不该出现两枚一模一样的胶囊
+      const exists = s.quotes.some(
+        (q) =>
+          q.sessionId === quote.sessionId &&
+          q.messageId === quote.messageId &&
+          q.text === quote.text,
+      );
+      if (exists) return {};
+      /** 单会话上限：超出时从最旧开始丢（引用只是临时附着物，不该无限堆在输入区） */
+      const MAX_QUOTES = 20;
+      const next = [...s.quotes, { ...quote, id: genId() }];
+      // 上限只约束**同一个会话**：别的会话的引用在切回去之前一直有效，
+      // 拿它们占额度会出现「在 A 里加满 → 回到 B 加不进去」这种怪事
+      const sameSession = next.filter((q) => q.sessionId === quote.sessionId);
+      if (sameSession.length <= MAX_QUOTES) return { quotes: next };
+      const drop = new Set(
+        sameSession.slice(0, sameSession.length - MAX_QUOTES).map((q) => q.id),
+      );
+      return { quotes: next.filter((q) => !drop.has(q.id)) };
+    }),
+
+  removeQuote: (id) => set((s) => ({ quotes: s.quotes.filter((q) => q.id !== id) })),
+
+  clearQuotes: () => set({ quotes: [] }),
+
+  pruneQuotes: (sessionId) =>
+    set((s) => {
+      // 没有可清理的东西时返回空补丁：MessageStream 在会话切换时无条件调它，
+      // 每次都回一个「新数组」会让订阅它的组件白重渲染一轮
+      if (sessionId === null) return s.quotes.length === 0 ? {} : { quotes: [] };
+      const kept = s.quotes.filter((q) => q.sessionId === sessionId);
+      return kept.length === s.quotes.length ? {} : { quotes: kept };
+    }),
 
   searchSessionId: null,
   openSearch: (sessionId) =>
