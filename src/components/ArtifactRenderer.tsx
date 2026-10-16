@@ -7,6 +7,7 @@ import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import type { Artifact } from '@/types';
 import { isHtmlArtifact } from '@/lib/fileArtifact';
 import { MarkdownView } from './MarkdownView';
+import { ARTIFACT_PREVIEW_CSP } from './artifacts/artifactCsp';
 
 /** 胶囊式小按钮的两种选中态（与产物面板「全部 / 变更」同一套视觉语言） */
 const chipSx = (active: boolean) => ({
@@ -78,12 +79,15 @@ function DualView({
  *
  * 正文来自模型或文件，所以只给 `allow-scripts`、**不给** `allow-same-origin`——
  * 它摸不到父页面的 DOM（我们只是要它把页面画出来）。
+ * 叠加 `csp`（FR-8.12）：产物里的 `fetch` / WebSocket 等出网通道被 `connect-src 'none'`
+ * 掐断，堵住把对话内容外传的口子。
  */
 function HtmlPreview({ html, title }: { html: string; title?: string }) {
   return (
     <iframe
       title={title ?? 'html 预览'}
       sandbox="allow-scripts"
+      csp={ARTIFACT_PREVIEW_CSP}
       srcDoc={html}
       style={{
         width: '100%',

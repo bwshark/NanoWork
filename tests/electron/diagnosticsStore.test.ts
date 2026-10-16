@@ -337,4 +337,76 @@ describe('diagnostics：诊断包', () => {
     }
     expect(JSON.stringify(names)).not.toContain('sk-secret');
   });
+
+  it('出口脱敏：日志里夹带的凭据被打码，磁盘原文不动', async () => {
+    const userData = caseRoot();
+    const at = Date.now();
+    const secretLine = '调用失败 api_key=sk-abcdef1234567890XYZ  upstream 401';
+    await appendLogLine(userData, { at, module: 'chat', level: 'error', message: secretLine });
+    // 磁盘上的原文必须留着：排查「为什么这把密钥 401」时，脱敏过的日志是废纸
+    const onDisk = await fs.readFile(logFileFor(userData, at, 'chat'), 'utf-8');
+    expect(onDisk).toContain('sk-abcdef1234567890XYZ');
+
+    const bundle = await buildDiagnosticsBundle({ userData, now: Date.now() });
+    const text = readZipText(bundle.bytes);
+    const logEntry = Object.keys(text).find((n) => n.endsWith('chat.log'))!;
+    expect(text[logEntry]).not.toContain('sk-abcdef1234567890XYZ');
+    expect(text[logEntry]).toContain('sk-a...0XYZ');
+
+    const meta = JSON.parse(text['meta.json']!);
+    expect(meta.redaction).toEqual({ applied: true, hits: 1 });
+    expect(text['README.txt']).toContain('命中 1 处');
+  });
+
+  it('token 统计字段不被误脱敏（脱敏不得毁掉诊断能力）', async () => {
+    const userData = caseRoot();
+    await appendLogLine(userData, {
+      at: Date.now(),
+      module: 'chat',
+      level: 'info',
+      message: 'input_tokens=1234 total_tokens: 5678',
+    });
+    const bundle = await buildDiagnosticsBundle({ userData, now: Date.now() });
+    const text = readZipText(bundle.bytes);
+    const logEntry = Object.keys(text).find((n) => n.endsWith('chat.log'))!;
+    expect(text[logEntry]).toContain('input_tokens=1234');
+    expect(text[logEntry]).toContain('total_tokens: 5678');
+    expect(JSON.parse(text['meta.json']!).redaction.hits).toBe(0);
+  });
+
+  it('进程/端口快照：给了就进包，且只读不删', async () => {
+    const userData = await seededRoot();
+    const snapshot = {
+      self: { pid: 4242, uptimeSec: 12 },
+      listeners: [
+        { port: 18900, pid: 86424, listening: true },
+        { port: 18790, pid: null, listening: false },
+        { port: 9900, pid: null, listening: false },
+      ],
+      gatewayStates: [{ file: 'gateway.abc.json', pid: 999999, verdict: 'stale-dead-pid' as const }],
+      listenerSource: 'netstat' as const,
+    };
+    const bundle = await buildDiagnosticsBundle({
+      userData,
+      now: Date.now(),
+      processSnapshot: snapshot,
+    });
+    const text = readZipText(bundle.bytes);
+    expect(JSON.parse(text['processes.json']!)).toEqual(snapshot);
+    expect(text['README.txt']).toContain('processes.json');
+    expect(text['README.txt']).toContain('gatewayStates');
+    // 快照本体只落 processes.json，meta 里只留指针（一个事实一个落点）
+    const meta = JSON.parse(text['meta.json']!);
+    expect(meta.processSnapshot).toBeUndefined();
+    expect(meta.processSnapshotIncluded).toBe(true);
+    expect(meta.listenerSource).toBe('netstat');
+  });
+
+  it('不给快照就不生成 processes.json（向后兼容）', async () => {
+    const userData = await seededRoot();
+    const bundle = await buildDiagnosticsBundle({ userData, now: Date.now() });
+    const names = Object.keys(readZipText(bundle.bytes));
+    expect(names).not.toContain('processes.json');
+    expect(names).not.toContain('meta.json/processSnapshot');
+  });
 });

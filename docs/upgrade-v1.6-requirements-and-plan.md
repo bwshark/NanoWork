@@ -31,8 +31,27 @@ WorkBuddy 三轮逆向共给出 **51 条候选**（插件机制 12 条 / 平台�
 | 批次 | 状态 | 日期 | 证据 |
 |---|---|---|---|
 | **B1 事故止血** | ✅ **已落地** | 2026-10-16 | 19 条新单测 + 4 项变异验证全红后转绿；三套 tsc 0 错误；`vitest` 213 文件 3218 用例全绿；`vite build` 绿；`main.cjs`/`preload.cjs` 已重建；真机一轮 12 项全绿 + **旧行为前后对比**（还原旧写法后「退出后端口 18900 已释放」FAIL） |
-| B2–B8 | ⬜ 未开工 | — | — |
+| **B2 卫生与诊断** | 🟡 **4/5 项落地，B2-02 前提被实测推翻而不做** | 2026-10-16 | 新增 57 条单测 + 4 项变异验证；三套 tsc 0 错误；`vitest` **215 文件 3258 用例全绿**；`vite build` 绿；cjs 已重建。真机：`run/` 三份僵尸全部判为 `stale-dead-pid` 并清除；端口→占用者 pid 链路实测通过。**B2-02 见下方专列** |
+| **B3 安全纵深** | ✅ **已落地** | 2026-10-16 | 新增 `windowPreferences.ts`(12 单测+变异红后转绿) / `safeDelete.ts`(5 单测+fail-closed 变异) / `artifactCsp.ts`(4 单测+connect-src 变异) / `iframe-csp.d.ts`；`main.ts` 走 `createWindowPreferences`(主窗口 `sandbox:true` + 显式认领 `webSecurity:false`，notes 落 warn)；`eventStore`/`pluginPackage` 删除改 `safeDelete`(FR-8.11)；`ArtifactRenderer`/`WebTabView` 仅 docMode 套 CSP(FR-8.12)。三套 tsc 0 错误；`vitest` **218 文件 3279 用例全绿 exit=0**；`vite build` 绿；cjs 已重建。V-1(sandbox+preload 兼容)通过、V-2(引擎无 CORS→主窗口显式认领 webSecurity:false 保留)落定 |
+| B4–B8 | ⬜ 未开工 | — | — |
 
+> **⚠️ B2-02（SQLite WAL checkpoint worker）本期不做——原前提被实测推翻。**
+> 分析时的证据是「`llm_usage.sqlite3-wal` 4.13 MB vs 主库 143 KB（≈29:1），从未 checkpoint」。
+> 复核发现这是**误读**：
+> ① 4.13 MB ≈ 恰好 1000 页 × 4096 B = SQLite 默认 `wal_autocheckpoint` 阈值，而引擎
+> （`llm_usage/store.py:189-192`）只设了 `journal_mode=WAL`，**没有关** autocheckpoint；
+> ② autocheckpoint 走的是 PASSIVE——会把 WAL 内容写回主库但**不截断文件**，所以文件
+>   大小停在历史高水位是**正常行为**，不是「从不 checkpoint」；
+> ③ 现在实测 WAL 只有 **52 KB**（主库 180 KB）：干净关闭最后一个连接时 SQLite 会
+>   checkpoint 并删掉 WAL，之后重新长；
+> ④ 引擎的 `_read_connection()` 有正确的 `finally: connection.close()`，**没有泄漏的读快照**
+>   去阻塞 checkpoint。
+> **结论**：WAL 行为正常，做一个跨进程 checkpoint worker 是给不存在的问题加复杂度，
+> 还会与写入者（Python 引擎）争锁。且 `better-sqlite3` 本机未安装、Electron 37 的
+> `node:sqlite` 不可用——原「选项 A」需要新增原生依赖。**建议改为**：若仍想在诊断包里
+> 看见库体积，就在 `processes.json` 里加一项 sqlite 文件尺寸（只读，无争锁），
+> 需要时再立项；要真做 checkpoint 应改引擎侧（写入者），但那需要引擎契约变更。
+>
 > B1 的完整落地记录（文件清单、真机判据、踩到的环境坑）见 §四 批次明细与 `tasks/verify-b1-process-lifecycle.mjs` 头注释。
 
 ---
@@ -149,11 +168,11 @@ WorkBuddy 三轮逆向共给出 **51 条候选**（插件机制 12 条 / 平台�
 | ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 优先级   | **P0**                                                                                                                                                                                                                                                                                          |
 | 来源    | 分析③ C3-d                                                                                                                                                                                                                                                                                        |
-| 现状    | `run/gateway.{2643f60c,c2eaae52,4e20da55}.json` **三份已死**（pid 46184 / 31796 / 70856 实测均不存在），其中一份还指向**另一个项目的 config**，无人回收。引擎侧有完整的 lease/supervisor（`nanobot/nanobot/gateway/runtime.py:509-518` + `_live_state()` 的 PID 裁剪），但 **Electron 侧从不 acquire**——`spawn('gateway --foreground')` 绕过整套引用计数 |
-| 需求    | ① 启动时扫 `run/gateway.*.json`，比对 pid 存活，死文件移入 `run/stale/`（或直接删，见下）；② **文件名带 config 指纹**的那些状态文件，若不属于当前 config 一律视为 stale；③ 清理动作写运行日志（FR-11.3 的模块白名单内）；④ 评估是否让 Electron 侧改为「acquire lease」模式——**本批次只做清理，不做契约变更**（acquire 涉及引擎改动，另立）                                                                |
-| 验收标准  | ① 单测：给定一份 pid 不存在的状态文件 → 被清理且计数为 1；给定一份 pid 存活且 config 匹配 → 保留；② 真机：清理后 `run/` 下只剩当前实例的状态文件；③ 清理失败不阻塞启动（fail-open，仅告警——**理由：这是卫生问题不是安全问题**）                                                                                                                                                     |
-| 落点    | 新增 `electron/gatewayRuntimeState.ts`；在 `app.whenReady()` 早期调用                                                                                                                                                                                                                                   |
-| 前置/风险 | 低。⚠️ 删除口径：`run/` 属 `<userData>` 运行时目录（非用户资产），可直删；但**必须走 FR-8.11 的 `safeDelete` 封装**以保持口径一致                                                                                                                                                                                                      |
+| 现状    | ✅ **已落地（2026-10-16）**。原状：`run/gateway.{2643f60c,c2eaae52,4e20da55}.json` 三份堆积，其中一份的 `config_path` 指向**另一个项目**，无人回收。引擎侧有完整 lease/supervisor（`nanobot/nanobot/gateway/runtime.py:509-518` + `_live_state()` 的 PID 裁剪），但 **Electron 侧从不 acquire**——`spawn('gateway --foreground')` 绕过整套引用计数 |
+| 需求（已实现） | ① 启动时扫 `run/gateway.*.json`，五档判据：解析失败 → pid 缺失 → pid 已死 → config 指纹不属当前项目 → live；② 文件名精确匹配 `^gateway(\.[0-9a-f]{6,64})?\.json$`，**排除 `.clients.json` 与两把 `.lock`**（那是引擎 lease 的现场，删了会破坏引用计数）；③ 清理动作写运行日志；④ **fail-open**：清理失败不阻塞启动（这是卫生问题不是安全问题）；⑤ **只删文件，从不杀进程**——看到活 pid 就 taskkill 是替用户做决定，那可能是用户自己手动拉起的网关 |
+| 验收标准  | ① 单测：死 pid 被清、活 pid 且 config 匹配保留、指向他项目 config 的状态文件被清、删失败如实记 `failed` 且不抛、目录不存在不抛；② 真机：`run/` 三份僵尸全部判为 `stale-dead-pid` 并清除、目录已空；③ `EPERM` 保守判活（误判活的代价只是多留一个文件，误判死会删掉别人正在用的状态） |
+| 落点    | 新增 `electron/gatewayRuntimeState.ts`；`main.ts` 的 `sweepGatewayRuntimeState()` 在 `app.whenReady()` 中、**拉起引擎之前** await（成本只是几次 readdir+readFile，不值得为它异步） |
+| 前置/风险 | 低。`run/` 是 `<config 所在目录>/run`（非用户资产），走普通 `fs.unlink`；**不**走 FR-8.11 的 `safeDelete`——那个是给用户资产用的回收站通道 |
 
 #### FR-13.5 首屏体积治理
 
@@ -324,25 +343,15 @@ WorkBuddy 三轮逆向共给出 **51 条候选**（插件机制 12 条 / 平台�
 
 | 项 | 内容 |
 |---|---|
-| 优先级 | **P1** |
+| 优先级 | **本期不做（前提被推翻）** |
 | 来源 | 分析③ C2 |
-| 现状 | **`llm_usage.sqlite3-wal` 4.13 MB vs 主库 143 KB（≈29:1），从未 checkpoint** |
-| 需求 | 抄 `wal-checkpoint-worker.js` 的整体形状：周期 `wal_checkpoint(TRUNCATE)`；**`TRUNCATE` 撞 `database is locked` → 降级 `PASSIVE` 并把 trigger 标成 `:fallback-passive`（降级路径必须可见）**；`setInterval().unref()`；关闭序列 = clearInterval → 最后 TRUNCATE → close → `shutdown-done` → `setTimeout(exit,50)`。落点二选一：**选项 A（推荐）** Electron 侧加 worker 用 `better-sqlite3` 对同一库做 checkpoint（**必须与引擎写入协调**：设 `busy_timeout`，接受偶尔 PASSIVE 降级）；**选项 B** 在引擎侧 `llm_usage/store.py` 加调用点（更贴合写入者，但要注意 Python 线程/锁语义） |
-| 验收标准 | ① **硬判据（可直接前后对比）**：`ls -l llm_usage.sqlite3-wal` 从前值 4.13 MB 在数秒内压到接近 0；② `TRUNCATE` 失败路径有独立用例（模拟 locked → 断言降级为 PASSIVE 且 trigger 带 `:fallback-passive`）；③ 与引擎并发写入时不产生 `SQLITE_BUSY` 未捕获异常（真机跑一轮长对话验证） |
-| 落点 | 新增 `electron/walCheckpointWorker.ts`（选项 A）或 `nanobot/nanobot/llm_usage/store.py`（选项 B） |
-| 前置/风险 | 中。**先量后改**——前后数值必须实测记录 |
+| 原判据 | ~~`llm_usage.sqlite3-wal` 4.13 MB vs 主库 143 KB（≈29:1），从未 checkpoint~~ |
+| **复核结论（2026-10-16）** | **原判据是误读，WAL 行为正常**：① 4.13 MB ≈ 恰好 1000 页 × 4096 B = SQLite 默认 `wal_autocheckpoint` 阈值，而引擎（`nanobot/nanobot/llm_usage/store.py:189-192`）只设 `journal_mode=WAL`，**没有关** autocheckpoint；② autocheckpoint 走 PASSIVE，会写回主库但**不截断文件**，大小停在历史高水位是正常行为；③ 现实测 WAL **52 KB** / 主库 180 KB——干净关闭最后一个连接时 SQLite 会 checkpoint 并删 WAL；④ 引擎 `_read_connection()` 有正确 `finally: connection.close()`，无泄漏读快照阻塞 checkpoint |
+| 结论 | 做一个**跨进程** checkpoint worker 是给不存在的问题加复杂度，还会与写入者（Python 引擎）争锁。且 `better-sqlite3` 本机未安装、Electron 37 的 `node:sqlite` 不可用——原「选项 A」需新增原生依赖 |
+| 替代口径 | ① 想在诊断包里看见库体积 → 在 `processes.json` 加一项 sqlite 文件尺寸（只读、无争锁），需要时立项；② 要真做 checkpoint 应改**引擎侧**（写入者），但需引擎契约变更（`nanobot/` 只读，另立） |
+| 落点 | 本期无 |
 
-#### FR-11.9 诊断包增强：进程维度 + 日志出口凭据过滤
-
-| 项 | 内容 |
-|---|---|
-| 优先级 | **P1** |
-| 来源 | 分析③ C3-e、J3 |
-| 现状 | ① 诊断包（`electron/diagnostics.ts:150-171`）无进程维度；② `diagnostics.ts:15-19` 已有「刻意排除含凭据文件」的**正确的意识**，但那是**清单级排除**，缺**内容级扫描** |
-| 需求 | ① 诊断包加**进程/端口维度**：pid 列表 + 端口绑定快照 + `run/*.json` 与 pid 存活比对；分类手法抄 `core-process-roles.js` 的四桶模型；② 日志/诊断**出口**加一遍**内容级凭据过滤**（不是再补一个文件清单）——只借 `log-acl-guard.js` 的**位置**，不抄实现 |
-| 验收标准 | ① 导出的 zip 中含进程快照，且能看出「状态文件指向的 pid 是否存活」；② 故意往日志写一行形如密钥的字符串 → 导出包中**被脱敏**；③ 变异验证：去掉内容级过滤 → 用例变红；④ 脱敏不得破坏日志可读性（保留前 4 后 4 之类的可辨识格式） |
-| 落点 | `electron/diagnostics.ts`、`electron/logStore.ts` |
-| 前置/风险 | 低。与 FR-13.4 共用「pid 存活比对」的实现 |
+| **FR-11.9 诊断包增强：进程维度 + 日志出口凭据过滤** | **P1** | ✅ **已落地（2026-10-16）** | ① 诊断包加**进程/端口维度**：`processes.json`（本进程 pid/uptime、三个引擎端口的监听者 pid、`run/` 状态文件逐份 verdict）；分类手法抄 `core-process-roles.js` 的四桶模型。② 日志/诊断**出口**加一遍**内容级凭据过滤**（四类模式，保留首 4 尾 4）——只借「过滤位置」的设计，不抄 1.94 MB 的 `log-acl-guard.js` 实现。⚠️ 边界已如实写进 README 与模块注释：**模式匹配覆盖不了长得不像凭据的凭据**，真正的保证仍是「含凭据的文件根本不进包」 |
 
 ---
 
@@ -445,6 +454,36 @@ B8 ADR（并行）
 | B2-04 | 诊断包加进程/端口维度 | FR-11.9 | `electron/diagnostics.ts` | 导出 zip 含进程快照可判 pid 存活 |
 | B2-05 | 日志出口内容级凭据过滤 | FR-11.9 | `electron/logStore.ts` | 写入形似密钥的串 → 导出被脱敏；变异验证变红 |
 
+> **✅ 已落地（2026-10-16，B2-01 / B2-04 / B2-05；B2-02 + B2-03 见顶部专列，不做）**
+>
+> **新增模块**：
+> - `electron/gatewayRuntimeState.ts` —— 状态文件解析/五档判定/清理 + `netstat` 端口内省。
+>   五档判据：`stale-unparseable` → `stale-no-pid` → `stale-dead-pid` → `stale-foreign-config` → `live`。
+>   **只删文件，从不杀进程**（看到活 pid 就 taskkill 是替用户做决定）。
+>   文件名用 `^gateway(\.[0-9a-f]{6,64})?\.json$` 精确匹配，**排除 `.clients.json` 与两把 `.lock`**
+>   ——那是引擎 lease 的现场，删了会破坏引用计数。
+> - `electron/secretRedaction.ts` —— 四类模式（键值对 / Bearer / `sk-` / JWT），
+>   保留首 4 尾 4；**刻意不脱敏长十六进制串**（`args_digest` 的 sha256 是定位调用的线索）。
+>
+> **`main.ts` 接线**：① `sweepGatewayRuntimeState()` 在**拉起引擎之前** await（目录干净时引擎
+> 写自己的状态文件，不与上轮残留互相干扰），失败 fail-open 只记日志；② `diagnostics:export`
+> 传入 `buildProcessSnapshot()`；③ `DIAGNOSTIC_PORTS` 必须声明在 `GATEWAY_HEALTH_PORT` **之后**
+> （模块级 const 踩 TDZ，已写进注释）。
+>
+> **`diagnostics.ts` 改动**：新增 `processes.json` 条目；日志/trace 进包前过一遍脱敏，
+> `meta.json` 记 `redaction.{applied,hits}`、README 说明「这是模式匹配、覆盖不了不像凭据的凭据」。
+> 快照本体只落 `processes.json`，meta 里只留 `processSnapshotIncluded` 指针（一个事实一个落点）。
+> 计数改为按**实际进包的内容**统计——脱敏后体积会变小，按原始体积报数字会对不上。
+>
+> **真机验证**（不需要 GUI，直接对真实目录跑）：`run/` 三份僵尸全部判为 `stale-dead-pid`
+> 并清除、`run/` 已空；另起一个真监听端口，`collectPortListeners` 正确归属到占用者 pid。
+>
+> **新测试**：`tests/electron/{gatewayRuntimeState,secretRedaction}.test.ts` 共 36 例，
+> `diagnosticsStore.test.ts` 补 5 例。**4 项变异验证**：去掉 foreign-config 判据 /
+> 放开文件名匹配 / 把 `tokens` 加进凭据键名 / 跳过出口脱敏——各自精确红一条。
+> ⚠️ 其中「`input_tokens` 不误伤」原本用 `input_tokens=1234`（4 字符）做负向用例，
+> **因为长度门槛就通不了，等于因错误的原因通过**；已改成 10 字符值后才具备证伪能力。
+
 #### 批次 B3 —— 安全纵深（P1）
 
 | 任务号 | 任务 | 需求 | 产出 | DoD |
@@ -516,8 +555,11 @@ B8 ADR（并行）
 | FR-8.11 | 加一行「失败则 `fs.rm`」 | 「trashItem 失败不降级」用例变红 |
 | FR-8.12 | 去掉 `connect-src 'none'` | 「产物 fetch 被拦」用例变红 |
 | FR-8.13 | 把复合动作降级为单一 allow/deny | 「`write=deny` 不禁读」用例变红 |
-| FR-11.8 | 去掉 PASSIVE 降级分支 | 「locked 时降级」用例变红 |
-| FR-11.9 | 去掉内容级凭据过滤 | 「密钥被脱敏」用例变红 |
+| FR-11.8 | ~~去掉 PASSIVE 降级分支~~ | **本期不做**（前提被推翻，见 §〇 专列） |
+| FR-11.9 | 去掉内容级凭据过滤 | 「密钥被脱敏」用例变红 ✅ 已验证 |
+| FR-13.4 | 去掉 `stale-foreign-config` 分支 | 「活着的他项目状态文件被清」用例变红 ✅ 已验证 |
+| FR-13.4 | 放开文件名匹配（`startsWith('gateway')`） | 「`.clients.json` / `.lock` 不碰」用例变红 ✅ 已验证 |
+| FR-13.4 | 把 `tokens` 加进凭据键名（脱敏侧） | 「`input_tokens` 不误伤」用例变红 ✅ 已验证 |
 | FR-13.5 | 恢复静态 import | 「首屏 preload 总量」断言变红 |
 | FR-3.10 | 去掉 ChainLoader 第一级 | 「demo 插件片段进提示词」用例变红 |
 | FR-3.12 | 交集改并集 | 「`tools:[shell]` 不得绕过审批」用例变红 |
@@ -567,8 +609,9 @@ B8 ADR（并行）
 | 文件 | 批次 | 作用 |
 |---|---|---|
 | `electron/childProcesses.ts` | B1 | 子进程创建与进程树清理（可单测） |
-| `electron/gatewayRuntimeState.ts` | B2 | `run/gateway.*.json` 存活判定与 stale 清理 |
-| `electron/walCheckpointWorker.ts` | B2 | SQLite WAL 周期 checkpoint（含降级标注） |
+| `electron/gatewayRuntimeState.ts` | B2 | `run/gateway.*.json` 五档判定 + stale 清理 + `netstat` 端口内省 |
+| `electron/secretRedaction.ts` | B2 | 日志出口的内容级凭据脱敏（四类模式） |
+| ~~`electron/walCheckpointWorker.ts`~~ | ~~B2~~ | **本期不做**（WAL 前提被推翻，见 §〇） |
 | `electron/windowPreferences.ts` | B3 | 窗口安全档位表（危险档位缺前置即 throw） |
 | `electron/safeDelete.ts` | B3 | 删除统一走回收站、失败不降级 |
 | `electron/startupProfile.ts` | B4 | 启动剖析（默认零 I/O、独立模块图） |
@@ -629,18 +672,18 @@ B8 ADR（并行）
 | 分析② B9 | 扩展 = fork + activate | **FR-3.14（ADR）** |
 | 分析② B10~B15 | PTY / ripgrep / 多形态 / 骨架屏 / Guest SDK / IM 幂等 | 按需，未纳入本期 |
 | 分析③ C1 | 窗口安全档位表 | **FR-8.10** |
-| 分析③ C2 | WAL checkpoint worker | **FR-11.8** |
-| 分析③ C3-a | 生命周期钩子 + will-quit | **FR-13.2** |
-| 分析③ C3-b | 单实例锁 | **FR-13.1** |
-| 分析③ C3-c | restartServe + 超时短路 | **FR-13.3** |
-| 分析③ C3-d | run/ 僵尸清理 | **FR-13.4** |
-| 分析③ C3-e | 诊断包进程维度 | **FR-11.9** |
+| 分析③ C2 | WAL checkpoint worker | ~~FR-11.8~~ → **本期不做（原判据误读，见 §〇 专列）** |
+| 分析③ C3-a | 生命周期钩子 + will-quit | **FR-13.2** ✅ |
+| 分析③ C3-b | 单实例锁 | **FR-13.1** ✅ |
+| 分析③ C3-c | restartServe + 超时短路 | **FR-13.3** ✅ |
+| 分析③ C3-d | run/ 僵尸清理 | **FR-13.4** ✅ |
+| 分析③ C3-e | 诊断包进程维度 | **FR-11.9** ✅ |
 | 分析③ C3-f | Job Object（重） | 不排期（等 B1 效果） |
 | 分析③ C4 | lazy chunk + manifest 契约 | **FR-13.5**（manifest 契约部分留待扩展目录加载） |
 | 分析③ C5 | CLI 预热池 | 不排期（等 B4 数据） |
 | 分析③ C6 | 启动剖析器 | **FR-11.6** |
 | 分析③ J1 | 三层进程拓扑 | 决策项：**保持 foreground + 补兜底**（不走 detached daemon） |
-| 分析③ J3 | 日志出口凭据过滤（借位置不借实现） | **FR-11.9** |
+| 分析③ J3 | 日志出口凭据过滤（借位置不借实现） | **FR-11.9** ✅ |
 | 分析③ J5 | `self-check` / `memory-check` | 合并进 **FR-13.6** |
 | 分析③ J2 / J4 / J6 | AsyncLocalStorage / 凭据保护 / 稳定 ID | 登记，本期不做 |
 | 分析②/③ 三工程习惯 | fail-closed 纵深 / 注释即设计文档 / 运行期无法自证交构建期 | **横向纪律**，落在每条需求的「落点」注释里（不单独立需求） |

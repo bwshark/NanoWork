@@ -9,6 +9,7 @@ import { randomUUID } from 'node:crypto';
 import WebSocket from 'ws';
 import { parseWebuiResponseFrame } from './webuiFrames';
 import { canBindPort, resolveGatewayPort } from './gatewayPort';
+import { createWindowPreferences } from './windowPreferences';
 import { isDevToolsShortcut } from './devtoolsShortcut';
 import { normalizeEngineChannelAllowFrom } from './channelAllowFrom';
 import { disconnectChannelInConfig, resolveWeixinAccountPath, type DisconnectChannelKind } from './channelDisconnect';
@@ -93,6 +94,13 @@ import {
   SERVE_PORT_RELEASE_TIMEOUT_MS,
   type ServeRestartDeps,
 } from './serveRestart';
+import {
+  buildListenerRows,
+  collectPortListeners,
+  scanGatewayStates,
+  sweepStaleGatewayStates,
+  type ProcessSnapshot,
+} from './gatewayRuntimeState';
 // 只取类型（esbuild 会擦掉）：用 `as never` 之类的硬转会在字段改名时静默失守，
 // 而这里的字段名是渲染层与主进程的**线上契约**。
 import type { LogLevel, LogModule } from '../src/observability/logging';
@@ -587,13 +595,20 @@ async function createWindow(): Promise<void> {
     ...(process.platform === 'darwin'
       ? { trafficLightPosition: { x: 14, y: 13 } }
       : {}),
-    webPreferences: {
-      preload: join(__dirname, 'preload.cjs'),
-      contextIsolation: true,
-      nodeIntegration: false,
-      // 允许从 file:// 页面访问本地 nanobot 网关（端口见 DEFAULT_GATEWAY_PORT，可能被自动顺延），避免 CORS 导致离线
-      webSecurity: false,
-    },
+    webPreferences: (() => {
+      const { webPreferences, notes } = createWindowPreferences({
+        kind: 'main',
+        preload: join(__dirname, 'preload.cjs'),
+        // 主窗口渲染层是 file:// 页面（origin 为 null），直连本地 nanobot 网关会被 CORS 拦截；
+        // 引擎侧 /v1 无 CORS 中间件（见 B3-00 V-2 验证），本期无法走 Scheme A（加 CORS），
+        // 故主窗口显式认领 webSecurity:false——理由写入 notes，由档位表统一校验。
+        // sandbox:true 由档位表给出（preload 仅 import 'electron'，见 B3-00 V-1）。
+        allowInsecureWebSecurity: true,
+      });
+      // 档位表产出 notes（认领未被采纳 / 未沙箱化等事实）不静默丢弃，落日志便于审计
+      if (notes.length) console.warn(`[window-prefs] main: ${notes.join('; ')}`);
+      return webPreferences;
+    })(),
   });
 
   // `mainWindow` 是模块级 `let`，在闭包里会丢掉 `new` 之后的那次非空 narrowing
@@ -1183,6 +1198,74 @@ async function restartNanobotGateway(): Promise<boolean> {
 /** 网关 websocket 频道监听地址（与 serve DEFAULT_GATEWAY_PORT / health 18790 均不冲突） */
 const GATEWAY_WS_HOST = '127.0.0.1';
 const GATEWAY_WS_PORT = 9900;
+
+/**
+ * 清理 `<config 所在目录>/run/` 里的僵尸网关状态文件（FR-13.4）。
+ *
+ * 引擎每次拉起 gateway 都会在那里写一份 `{pid, port, config_path, …}`，正常退出时自己删；
+ * 被 kill / 崩了 / 换了项目跑就留下来。实测本机堆过 3 份，其中一份的 `config_path`
+ * 指向**另一个项目**——两个项目的引擎会把对方的状态文件当成自己的。
+ *
+ * 三条判据（解析失败 / pid 已死 / config 指纹不属当前项目）与 fail-open 都在
+ * `gatewayRuntimeState.ts` 里，并有单测；这里只负责接线与记日志。
+ *
+ * ⚠️ **只删文件，从不杀进程**：看到活着的 pid 就 taskkill 是替用户做决定——那可能是
+ * 用户自己手动拉起的网关。进程该不该死归引擎的 lease 管。
+ */
+async function sweepGatewayRuntimeState(): Promise<void> {
+  try {
+    const configPath = await resolveNanobotConfigPath();
+    if (!configPath) return;
+    const runDir = join(dirname(configPath), 'run');
+    const result = await sweepStaleGatewayStates({ runDir, currentConfigPath: configPath });
+    // 只有真清掉了东西（或想清没清掉）才记日志：干净的目录不该每次启动都刷一行。
+    if (result.removed.length > 0 || result.failed.length > 0) {
+      userDataLog('app', 'info', '清理僵尸网关状态文件', {
+        runDir,
+        removed: result.removed,
+        kept: result.kept,
+        failed: result.failed,
+      });
+    }
+  } catch (err) {
+    // fail-open：这是卫生问题不是安全问题，没有理由让它把启动链路挡住。
+    userDataLog('app', 'warn', '清理网关状态文件失败', { error: String(err) });
+  }
+}
+
+/**
+ * 诊断包用的进程/端口快照（FR-11.9）。
+ *
+ * 回答的是「网关到底起没起来、被谁占着、run/ 里那些状态文件是死是活」——
+ * 这三个问题此前只能靠用户自己开任务管理器，而工单里最常见的就是它们。
+ *
+ * 只读：`scanGatewayStates` 不删任何东西（`buildDiagnosticsBundle` 的契约是只读）。
+ */
+async function buildProcessSnapshot(): Promise<ProcessSnapshot> {
+  const { listeners, source } = await collectPortListeners(DIAGNOSTIC_PORTS);
+  let gatewayStates: ProcessSnapshot['gatewayStates'] = [];
+  try {
+    const configPath = await resolveNanobotConfigPath();
+    if (configPath) {
+      const files = await scanGatewayStates(join(dirname(configPath), 'run'), {
+        currentConfigPath: configPath,
+      });
+      gatewayStates = files.map((f) => ({
+        file: f.file,
+        pid: f.info?.pid ?? null,
+        verdict: f.verdict,
+      }));
+    }
+  } catch {
+    /* 快照取不到就留空：诊断包不该因为这一步整个导不出来 */
+  }
+  return {
+    self: { pid: process.pid, uptimeSec: Math.round(process.uptime()) },
+    listeners: buildListenerRows(DIAGNOSTIC_PORTS, listeners),
+    gatewayStates,
+    listenerSource: source,
+  };
+}
 
 /** 扫码接入统一返回（不抛异常，错误走 ok=false，风格对齐 sendChannelMessage） */
 interface ChannelConnectResponse {
@@ -3303,6 +3386,9 @@ ipcMain.handle('diagnostics:export', async () => {
         osVersion: `${osRelease()} (${osArch()})`,
         arch: process.arch,
       },
+      // 进程/端口维度（FR-11.9）：回答「网关起没起来、被谁占、run/ 状态文件是死是活」。
+      // 取不到也不该让整个导出失败，所以放在 try 内、失败只影响这一个文件。
+      processSnapshot: await buildProcessSnapshot(),
     });
     await fs.writeFile(picked.filePath, bundle.bytes);
     return {
@@ -3740,6 +3826,15 @@ ipcMain.handle('nanobot:getChannelSession', async (_e, key: string) => {
 /** gateway 出站端点（health server 同端口，仅本地回环监听） */
 const GATEWAY_HEALTH_HOST = '127.0.0.1';
 const GATEWAY_HEALTH_PORT = 18790;
+
+/**
+ * 诊断快照关心的三个引擎端口：serve /v1、gateway health、gateway WS 频道。
+ *
+ * ⚠️ 必须声明在 `GATEWAY_HEALTH_PORT` **之后**：它是模块级 const，声明在前面会踩
+ * TDZ（初始化时引用尚未求值的 const → ReferenceError），而 `DEFAULT_GATEWAY_PORT`
+ * 与 `GATEWAY_WS_PORT` 都在它前面，正好。
+ */
+const DIAGNOSTIC_PORTS = [DEFAULT_GATEWAY_PORT, GATEWAY_HEALTH_PORT, GATEWAY_WS_PORT];
 
 /**
  * 智能体侧主动发送消息到 IM 频道用户：POST gateway `/v1/send`。
@@ -4625,6 +4720,11 @@ app.whenReady().then(async () => {
   // 注册全局唤起快捷键；被占用时仅告警，不影响主流程（用户可在设置页换键）
   const hotkeyResult = registerHotkey(desktopConfig.hotkey, toggleMainWindow);
   if (!hotkeyResult.ok) console.warn(`[hotkey] ${hotkeyResult.error}`);
+
+  // 先把 `run/` 里的僵尸状态文件扫掉，再拉引擎：目录干净时引擎写自己的状态文件，
+  // 不会与上一轮残留的互相干扰（引擎侧有 lease/supervisor，但 Electron 从不 acquire，
+  // 所以这一遍得客户端自己扫）。成本是几次 readdir+readFile，不值得为它异步。
+  await sweepGatewayRuntimeState();
 
   // 桌面端：并行拉起 serve（/v1 API）与 gateway（IM channels 长连接），
   // 两者齐备智能体才能既对话又与飞书等机器人互通（失败不影响主程序，仅记录警告）

@@ -9,6 +9,7 @@ import { toast } from '@/components/Toast';
 import { platform } from '@/platform';
 import { useSessionUiStore } from '@/stores/sessionUiStore';
 import type { ArtifactPanelTab } from '@/stores/sessionUiStore';
+import { ARTIFACT_PREVIEW_CSP } from './artifactCsp';
 
 /** 网页标签（`kind: 'web'`）的完整形态 */
 export type WebTab = Extract<ArtifactPanelTab, { kind: 'web' }>;
@@ -247,6 +248,10 @@ export function WebFrame({ tab, reloadKey }: { tab: WebTab; reloadKey: number })
         key={`${tab.doc ?? tab.url}#${reloadKey}`}
         title={title}
         {...(docMode ? { srcDoc: tab.doc } : { src: tab.url })}
+        // 文档预览模式（docMode）是模型/Agent 生成的不可控 HTML → 套严格 CSP（FR-8.12），
+        // 把 fetch/WebSocket 等出网通道用 connect-src 'none' 掐断，防对话内容外传。
+        // 真机浏览标签页（url 模式）不套 CSP，否则普通网页打不开。
+        {...(docMode ? { csp: ARTIFACT_PREVIEW_CSP } : {})}
         // 不给 `allow-top-navigation`：页面不能把顶层窗口导走
         sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
         style={{ width: '100%', height: '100%', border: 'none', display: 'block' }}

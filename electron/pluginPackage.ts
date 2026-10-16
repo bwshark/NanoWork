@@ -31,6 +31,7 @@
  */
 import { promises as fs } from 'node:fs';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { safeDelete } from './safeDelete';
 import type {
   InstalledPlugin,
   PluginInstallResult,
@@ -425,9 +426,9 @@ export async function installPluginPackage(
 
   try {
     await fs.mkdir(pluginsRoot, { recursive: true });
-    // `force: true` 让覆盖成为"整目录替换语义"。先删再加比 cp 覆盖更干净：
-    // 旧版本留下的文件不会被新版本"继承"。
-    await fs.rm(containedTarget, { recursive: true, force: true });
+    // 覆盖安装前先清旧目录。"整目录替换语义"：先删再加比 cp 覆盖更干净，
+    // 旧版本文件不会被新版本"继承"。旧版本是用户资产 → 走回收站（FR-8.11）。
+    await safeDelete(containedTarget);
     await fs.cp(sourceDir, containedTarget, {
       recursive: true,
       force: true,
@@ -464,7 +465,8 @@ export async function uninstallPluginPackage(pluginsRoot: string, name: string):
   } catch {
     return false;
   }
-  await fs.rm(target, { recursive: true, force: true });
+  // 卸载是明确的用户删除：插件是用户资产，走回收站（FR-8.11），误卸可在回收站找回。
+  await safeDelete(target);
   return true;
 }
 

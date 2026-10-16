@@ -6,9 +6,17 @@
  * ```
  * meta.json      应用版本 / 运行时版本 / 平台 / 设备 ID / 各类文件数与体量
  * README.txt     这份包是什么、怎么读、**包含什么隐私**
- * logs/<date>/<module>.log     运行日志（按模块分文件）
- * traces/<pid>/<traceId>.json  全链路 trace（按进程分目录）
+ * processes.json 进程与端口快照（本进程 pid、引擎端口被谁占、run/ 状态文件死活）
+ * logs/<date>/<module>.log     运行日志（按模块分文件，**已脱敏**）
+ * traces/<pid>/<traceId>.json  全链路 trace（按进程分目录，**已脱敏**）
  * ```
+ *
+ * ## 出口脱敏（FR-11.9）
+ *
+ * 日志与 trace 进包前会过一遍 `secretRedaction`（键值对 / Bearer / sk- / JWT 四类模式）。
+ * **本地日志保持原文**——排查「为什么这把密钥 401」时脱敏过的日志是废纸；只有要被
+ * 发出去的这份才脱敏。⚠️ 模式匹配覆盖不了「长得不像凭据的凭据」，这一层不自称完备，
+ * 真正的保证仍然是下面那条「含凭据的文件根本不进包」。
  *
  * ## 刻意**不**装进包里的东西
  *
@@ -32,6 +40,8 @@ import { DEFAULT_TRACE_KEEP_DAYS, TRACE_DIR_NAME } from '../src/observability/tr
 import { listLogFiles, type DiagnosticFileStat } from './logStore';
 import { listTraceFiles } from './traceStore';
 import { createZip, type ZipEntryInput } from './zipWriter';
+import { redactSecrets } from './secretRedaction';
+import type { ProcessSnapshot } from './gatewayRuntimeState';
 
 /** 诊断包体积上限（解压前）；超出的按 mtime 从旧到新丢弃 */
 export const DIAGNOSTICS_MAX_BYTES = 25 * 1024 * 1024;
@@ -64,6 +74,8 @@ export interface DiagnosticsBundle {
 export interface BuildDiagnosticsOptions {
   userData: string;
   appInfo?: DiagnosticsAppInfo;
+  /** 进程/端口快照（FR-11.9）；不给就不生成 processes.json */
+  processSnapshot?: ProcessSnapshot;
   now?: number;
   maxBytes?: number;
   maxTraces?: number;
@@ -90,13 +102,18 @@ function readmeText(counts: {
   traceFiles: number;
   skipped: number;
   now: number;
+  hasProcesses: boolean;
+  redactedHits: number;
 }): string {
   return [
     'NanoWork 诊断包',
     `生成时间：${new Date(counts.now).toISOString()}`,
     '',
     '内容：',
-    '  meta.json     应用与运行时版本、平台、设备 ID',
+    '  meta.json       应用与运行时版本、平台、设备 ID',
+    ...(counts.hasProcesses
+      ? ['  processes.json  进程与端口快照（本进程 pid / 引擎端口占用者 / run 状态文件死活）']
+      : []),
     `  ${LOG_DIR_NAME}/  运行日志（按日期目录 / 模块分文件，一行一条）`,
     `  ${TRACE_DIR_NAME}/  全链路 trace（按进程 pid 分目录，一个回合一份）`,
     `  本次装入：日志 ${counts.logFiles} 个、trace ${counts.traceFiles} 个` +
@@ -106,6 +123,17 @@ function readmeText(counts: {
     '  日志行形如 [ISO 时间] [模块] 级别 消息 [JSON 详情]，直接 grep 模块名或级别即可。',
     '  trace 是 { trace, spans }：trace 给整个回合的起止与状态，spans 给每一步工具调用',
     '  的参数、结果与耗时；排查「哪一步慢 / 哪一步失败 / 为什么被拒」看 spans。',
+    ...(counts.hasProcesses
+      ? [
+          '  processes.json 的 listeners 回答「18900 / 18790 / 9900 有没有被占、被谁占」；',
+          '  gatewayStates 回答「run/ 里每份状态文件是活的还是僵尸（verdict 字段）」。',
+        ]
+      : []),
+    '',
+    '脱敏说明：',
+    `  日志与 trace 进包前已做凭据脱敏（本次命中 ${counts.redactedHits} 处，形如 ab12...wxyz）。`,
+    '  脱敏是模式匹配，覆盖不了长得不像凭据的凭据；真正的保证是含凭据的配置文件',
+    '  （nanowork.config.json / channels.json / connectors/）根本不进这个包。',
     '',
     '⚠️ 隐私提示：',
     '  本包含有工具调用的参数与结果，可能涉及文件路径、代码片段与命令输出；',
@@ -134,32 +162,66 @@ export async function buildDiagnosticsBundle(
     Math.max(0, maxBytes - reserve - logsTake.taken.reduce((n, f) => n + f.bytes, 0)),
   );
 
-  const meta = {
-    generatedAt: new Date(now).toISOString(),
-    app: options.appInfo ?? {},
-    retention: { logKeepDays: DEFAULT_LOG_KEEP_DAYS, traceKeepDays: DEFAULT_TRACE_KEEP_DAYS },
-    counts: {
-      logFiles: logsTake.taken.length,
-      logBytes: logsTake.taken.reduce((n, f) => n + f.bytes, 0),
-      traceFiles: tracesTake.taken.length,
-      traceBytes: tracesTake.taken.reduce((n, f) => n + f.bytes, 0),
-      totalAvailable: { logs: allLogs.length, traces: allTraces.length },
-    },
-  };
-
-  const entries: ZipEntryInput[] = [
-    { name: 'README.txt', data: readmeText({ ...meta.counts, skipped: logsTake.skipped + tracesTake.skipped, now }) },
-    { name: 'meta.json', data: `${JSON.stringify(meta, null, 2)}\n` },
-  ];
-
+  // 先把文件读出来并脱敏，再按**实际进包的内容**统计——脱敏后体积会变小，
+  // 若按原始体积报数字，拿到包的人会对不上数。
+  const fileEntries: ZipEntryInput[] = [];
+  let redactedHits = 0;
+  let logBytes = 0;
+  let traceBytes = 0;
   for (const f of [...logsTake.taken, ...tracesTake.taken]) {
     try {
-      const data = await fs.readFile(join(options.userData, ...f.relativePath.split('/')));
-      entries.push({ name: f.relativePath, data, mtimeMs: f.mtimeMs });
+      const raw = await fs.readFile(join(options.userData, ...f.relativePath.split('/')));
+      // 出口脱敏（FR-11.9）：只有进包的这份被改，磁盘上的原文不动。
+      const { text, hits } = redactSecrets(raw.toString('utf-8'));
+      redactedHits += hits;
+      const data = Buffer.from(text, 'utf-8');
+      if (f.relativePath.startsWith(`${LOG_DIR_NAME}/`)) logBytes += data.length;
+      else traceBytes += data.length;
+      fileEntries.push({ name: f.relativePath, data, mtimeMs: f.mtimeMs });
     } catch {
       /* 单个文件读不到就跳过：能带走多少带多少 */
     }
   }
+
+  const counts = {
+    logFiles: fileEntries.filter((e) => e.name.startsWith(`${LOG_DIR_NAME}/`)).length,
+    logBytes,
+    traceFiles: fileEntries.length - fileEntries.filter((e) => e.name.startsWith(`${LOG_DIR_NAME}/`)).length,
+    traceBytes,
+    totalAvailable: { logs: allLogs.length, traces: allTraces.length },
+  };
+
+  const meta = {
+    generatedAt: new Date(now).toISOString(),
+    app: options.appInfo ?? {},
+    retention: { logKeepDays: DEFAULT_LOG_KEEP_DAYS, traceKeepDays: DEFAULT_TRACE_KEEP_DAYS },
+    counts,
+    // 脱敏是「出口」行为：如实记下这包被改过、改了多少处，别让拿到包的人
+    // 以为里面的值就是日志里的原值。
+    redaction: { applied: true, hits: redactedHits },
+    // 快照本体只放 processes.json，meta 里只留一个「有没有」的指针——
+    // 同一份事实放两处，早晚会不一致（一个事实一个落点）。
+    ...(options.processSnapshot
+      ? { processSnapshotIncluded: true, listenerSource: options.processSnapshot.listenerSource }
+      : { processSnapshotIncluded: false }),
+  };
+
+  const readme = readmeText({
+    ...counts,
+    skipped: logsTake.skipped + tracesTake.skipped,
+    now,
+    hasProcesses: Boolean(options.processSnapshot),
+    redactedHits,
+  });
+
+  const entries: ZipEntryInput[] = [
+    { name: 'README.txt', data: readme },
+    { name: 'meta.json', data: `${JSON.stringify(meta, null, 2)}\n` },
+    ...(options.processSnapshot
+      ? [{ name: 'processes.json', data: `${JSON.stringify(options.processSnapshot, null, 2)}\n` }]
+      : []),
+    ...fileEntries,
+  ];
 
   // 计数必须来自**真的进了包**的条目：读失败的文件如果也算进去，
   // 拿到包的人会对着一份少几个文件的包以为「就这些」。
@@ -168,6 +230,6 @@ export async function buildDiagnosticsBundle(
     bytes: createZip(entries, now),
     entryCount: pushed.length,
     entries: pushed,
-    skipped: allLogs.length + allTraces.length - (pushed.length - 2 /* README + meta */),
+    skipped: allLogs.length + allTraces.length - fileEntries.length,
   };
 }

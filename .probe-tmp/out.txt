@@ -1,0 +1,11 @@
+
+[91300:1016/200004.295:ERROR:gpu_process_host.cc(1002)] GPU process exited unexpectedly: exit_code=-1073741819
+[91300:1016/200004.343:ERROR:gpu_process_host.cc(1002)] GPU process exited unexpectedly: exit_code=-1073741819
+[91300:1016/200004.403:ERROR:gpu_process_host.cc(1002)] GPU process exited unexpectedly: exit_code=-1073741819
+[91300:1016/200004.451:ERROR:gpu_process_host.cc(1002)] GPU process exited unexpectedly: exit_code=-1073741819
+[91300:1016/200004.501:ERROR:gpu_process_host.cc(1002)] GPU process exited unexpectedly: exit_code=-1073741819
+[91300:1016/200004.546:ERROR:gpu_process_host.cc(1002)] GPU process exited unexpectedly: exit_code=-1073741819
+[91300:1016/200004.624:ERROR:gpu_process_host.cc(1002)] GPU process exited unexpectedly: exit_code=-1073741819
+[91300:1016/200004.666:ERROR:gpu_process_host.cc(1002)] GPU process exited unexpectedly: exit_code=-1073741819
+[91300:1016/200004.734:ERROR:gpu_process_host.cc(1002)] GPU process exited unexpectedly: exit_code=-1073741819
+[91300:1016/200004.734:FATAL:gpu_data_manager_impl_private.cc(449)] GPU process isn't usable. Goodbye.

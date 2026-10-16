@@ -19,6 +19,7 @@ import {
   serializeSessionIndex,
   tombstoneEntry,
 } from './eventIndex';
+import { safeDelete } from './safeDelete';
 import type { StorageRoots } from './storageRoutes';
 import type { EventAppendParams, EventAppendResult } from '../src/platform/types';
 import type { SessionCounters } from '../src/events/indexFile';
@@ -233,8 +234,10 @@ export function createEventStore(roots: StorageRoots): EventStore {
     },
 
     async remove(sessionId, workdir) {
-      await fs.rm(sessionJsonlPath(roots, sessionId, workdir), { force: true });
-      await fs.rm(sessionMetaPath(roots, sessionId, workdir), { force: true });
+      // 会话是用户资产：删改走系统回收站（FR-8.11），误删可在回收站找回。
+      // safeDelete 在未加载 Electron 的测试环境回落物理删除，行为与旧 fs.rm 等价。
+      await safeDelete(sessionJsonlPath(roots, sessionId, workdir));
+      await safeDelete(sessionMetaPath(roots, sessionId, workdir));
       const indexPath = sessionIndexPath(roots);
       await enqueueWrite(indexPath, async () => {
         const index = parseSessionIndex(await readTextFileOrNull(indexPath));
@@ -247,8 +250,9 @@ export function createEventStore(roots: StorageRoots): EventStore {
     },
 
     async tombstone(meta) {
-      // ① 正文丢弃：删除之后它不该再留在盘上（JSONL 也可能是最大的那个文件）
-      await fs.rm(sessionJsonlPath(roots, meta.id, meta.workdir), { force: true });
+      // ① 正文丢弃：删除之后它不该再留在盘上（JSONL 也可能是最大的那个文件）。
+      // 会话正文是用户资产 → 走回收站（FR-8.11），误删可找回。
+      await safeDelete(sessionJsonlPath(roots, meta.id, meta.workdir));
 
       // ② meta **不删**，覆写成墓碑版本——它是删除能跨设备传播的载体之一
       const metaPath = sessionMetaPath(roots, meta.id, meta.workdir);
