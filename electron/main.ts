@@ -82,6 +82,17 @@ import {
 import { appendLogLine, createFileLogger, logStats, pruneLogs } from './logStore';
 import { pruneTraces, traceStats, writeTrace } from './traceStore';
 import { buildDiagnosticsBundle } from './diagnostics';
+import { acquireSingleInstance } from './singleInstance';
+import {
+  cleanupChildProcesses,
+  killProcessTree,
+  waitForProcessExit,
+} from './childProcesses';
+import {
+  restartServe,
+  SERVE_PORT_RELEASE_TIMEOUT_MS,
+  type ServeRestartDeps,
+} from './serveRestart';
 // 只取类型（esbuild 会擦掉）：用 `as never` 之类的硬转会在字段改名时静默失守，
 // 而这里的字段名是渲染层与主进程的**线上契约**。
 import type { LogLevel, LogModule } from '../src/observability/logging';
@@ -124,6 +135,30 @@ import {
   type MarketplaceEntry,
 } from './pluginMarketplace';
 import type { SessionMeta } from '../src/types/event';
+
+// —— 单实例锁（FR-13.1）——
+//
+// **必须放在所有带副作用的模块级代码之前**：下面是 createEventStore（建目录）、
+// 读配置、装托盘依赖……第二实例一样都不该做。放在 `app.whenReady()` 之前是不够的——
+// 那时这些初始化早就跑完了。
+//
+// 双开的真实危害不是「多一个窗口」：第二实例会走「复用端口」分支，于是两个窗口共用
+// 一个引擎，而**第二实例退出时会 taskkill 掉它以为是自己拉起的进程**，第一个实例
+// 瞬间失连。详见 `electron/singleInstance.ts` 的模块注释。
+const singleInstance = acquireSingleInstance(
+  {
+    requestSingleInstanceLock: () => app.requestSingleInstanceLock(),
+    // 只透传 argv / 工作目录：本进程不需要知道第二个实例带了什么参数，
+    // 只需要知道「有人想唤起我」。
+    onSecondInstance: (listener) =>
+      app.on('second-instance', (_e, argv, workingDirectory) => listener(argv, workingDirectory)),
+    exit: (code) => app.exit(code),
+  },
+  () => showMainWindow(),
+);
+
+/** 本进程是否是主实例。第二个实例在上面就已经 exit 了，这里是双保险 */
+const isPrimaryInstance = singleInstance.isPrimary;
 
 const isDev = !app.isPackaged;
 
@@ -804,6 +839,14 @@ function isPortInUse(host: string, port: number): Promise<boolean> {
 const LAUNCH_READY_TIMEOUT_MS = 30_000;
 
 /**
+ * 退出时等待单个引擎子进程真正消失的上限。
+ *
+ * 取 3 秒：`taskkill /T /F` 正常在几百毫秒内完成，3 秒已经覆盖「句柄被占用、
+ * 内核排队」的慢路径。**不能再长**——用户点了退出，3 秒还没反应就会被当成卡死。
+ */
+const CHILD_PROCESS_EXIT_TIMEOUT_MS = 3_000;
+
+/**
  * 轮询等待 host:port 进入监听（服务真正就绪）。
  * spawn 返回只代表进程已创建，nanobot 是 Python 进程还需数秒才会 listen；
  * 此处必须等到端口可连，否则渲染层的首次探测会直接 ECONNREFUSED。
@@ -866,6 +909,12 @@ async function startNanobot(): Promise<boolean> {
     nanobotProcess = spawn(bin, serveArgs, {
       stdio: ['ignore', 'pipe', 'pipe'],
       shell: process.platform === 'win32',
+      // `windowsHide`：经 shell 拉起时 Windows 会闪一个 cmd 黑框（冷启动必现），
+      // 用户会以为应用带了控制台窗口。
+      // `detached: false`：默认值，写出来是为了钉住意图——一旦 detached，子进程会
+      // 独立于本进程存活，退出时留下的孤儿从此不再受我们管控。
+      windowsHide: true,
+      detached: false,
       env: sanitizeGatewayEnv(),
     });
     nanobotProcess.stdout?.on('data', (d) => console.log(`[nanobot] ${d.toString().trim()}`));
@@ -907,20 +956,13 @@ async function startNanobot(): Promise<boolean> {
 }
 
 /**
- * 结束单个 nanobot 子进程（Windows 下经 shell 拉起，需 taskkill 递归结束进程树）。
- * @param proc 目标子进程句柄
+ * 结束单个 nanobot 子进程。
+ *
+ * 实现搬到 `electron/childProcesses.ts`：那里同时提供「等进程真退」的
+ * `waitForProcessExit`——只发起 taskkill 是不够的，详见该模块注释。
  */
 function killNanobotProcess(proc: ChildProcess): void {
-  const pid = proc.pid;
-  try {
-    if (process.platform === 'win32' && pid) {
-      spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore' });
-    } else {
-      proc.kill('SIGTERM');
-    }
-  } catch {
-    /* ignore */
-  }
+  killProcessTree(proc);
 }
 
 /** 停止 nanobot API 服务子进程（serve） */
@@ -937,6 +979,26 @@ function stopNanobotGateway(): void {
     killNanobotProcess(nanobotGatewayProcess);
     nanobotGatewayProcess = null;
   }
+}
+
+/**
+ * 停止两个引擎子进程**并等它们真正退出**（FR-13.2）。
+ *
+ * 与 `stopNanobot()` + `stopNanobotGateway()` 的区别只在「等」：那两个是同步的
+ * 「发起即返回」，用于重启路径（马上要拉新的，端口由 `waitForPortFree` 兜）；
+ * 这个用于**退出路径**——主进程随即消失，不等就必然留孤儿占端口。
+ *
+ * @param timeoutMs 单个进程等待退出的上限
+ * @returns 已确认退出的进程数（< 2 说明有进程没死透，调用方应记日志）
+ */
+async function stopNanobotAndWait(timeoutMs: number): Promise<number> {
+  const { reaped } = await cleanupChildProcesses(
+    [nanobotProcess, nanobotGatewayProcess],
+    { exitTimeoutMs: timeoutMs },
+  );
+  nanobotProcess = null;
+  nanobotGatewayProcess = null;
+  return reaped;
 }
 
 /**
@@ -961,6 +1023,9 @@ async function startNanobotGateway(): Promise<boolean> {
     nanobotGatewayProcess = spawn(bin, gatewayArgs, {
       stdio: ['ignore', 'pipe', 'pipe'],
       shell: process.platform === 'win32',
+      // 同 serve：藏掉 cmd 黑框，并明确不与本进程脱钩（见 startNanobot 的同款注释）
+      windowsHide: true,
+      detached: false,
       env: sanitizeGatewayEnv(),
     });
     nanobotGatewayProcess.stdout?.on('data', (d) =>
@@ -998,6 +1063,31 @@ async function waitForPortFree(host: string, port: number, timeoutMs: number): P
     await new Promise((r) => setTimeout(r, 300));
   }
   return !(await isPortInUse(host, port));
+}
+
+/**
+ * `restartServe` 的主进程适配层：把全局态（当前 serve 句柄 / 实际监听地址）
+ * 收成一组注入，纯逻辑留在 `electron/serveRestart.ts` 里可测。
+ */
+const serveRestartDeps: ServeRestartDeps = {
+  stopServe: () => stopNanobot(),
+  waitPortFree: (timeoutMs) =>
+    waitForPortFree(nanobotServeHost, nanobotServePort ?? DEFAULT_GATEWAY_PORT, timeoutMs),
+  startServe: () => startNanobot(),
+  isServeRunning: () => nanobotProcess !== null,
+};
+
+/**
+ * 改配置后重启 serve 的统一收尾（FR-13.3）。
+ *
+ * 三处调用点（MCP / 模型+工具策略 / 技能覆盖）以前是同一段复制粘贴，且都
+ * **丢弃了 `waitForPortFree` 的返回值**——端口没释放也照样启动，必撞 EADDRINUSE。
+ * 现在只有这一份实现，「端口没释放就不许启动」由 `serveRestart.ts` 的用例钉住。
+ *
+ * @param doneMessage 「已经写进磁盘」的那句主文案，由调用方按自己动了哪一段给
+ */
+function restartServeForConfig(doneMessage: string): Promise<ModelsSyncResult> {
+  return restartServe(doneMessage, serveRestartDeps);
 }
 
 // ——————————————————————————————————————————————
@@ -2004,13 +2094,7 @@ async function syncNanobotMcp(mcpJson: string): Promise<{
     }
     // chat/completions 由 serve 子进程承载；MCP 工具在 serve 启动时加载 → 需重启 serve
     if (nanobotProcess) {
-      stopNanobot();
-      await waitForPortFree(nanobotServeHost, nanobotServePort ?? DEFAULT_GATEWAY_PORT, 5000);
-      await startNanobot();
-      if (nanobotProcess) {
-        return { ok: true, message: 'MCP 配置已写入 config.json.tools.mcpServers，serve 已重启生效' };
-      }
-      return { ok: false, message: 'MCP 配置已写入，但 serve 重启失败，请检查 nanowork 日志' };
+      return await restartServeForConfig('MCP 配置已写入 config.json.tools.mcpServers');
     }
     // serve 不在本进程托管（外部进程或尚未启动）
     const portBusy = await isPortInUse(nanobotServeHost, nanobotServePort ?? DEFAULT_GATEWAY_PORT);
@@ -2302,13 +2386,7 @@ async function commitNanobotConfig(
   if (!changed) return { ok: true, changed: false, message: '配置与 nanowork 侧已一致，无需变更' };
   // /v1/models 的预设目录、工具实例都在 serve 启动时构建 → 改模型与改工具策略都得重启 serve
   if (nanobotProcess) {
-    stopNanobot();
-    await waitForPortFree(nanobotServeHost, nanobotServePort ?? DEFAULT_GATEWAY_PORT, 5000);
-    await startNanobot();
-    if (nanobotProcess) {
-      return { ok: true, message: `${doneMessage}，serve 已重启生效` };
-    }
-    return { ok: false, message: `${doneMessage}，但 serve 重启失败，请检查 nanowork 日志` };
+    return await restartServeForConfig(doneMessage);
   }
   const portBusy = await isPortInUse(nanobotServeHost, nanobotServePort ?? DEFAULT_GATEWAY_PORT);
   return {
@@ -4453,13 +4531,7 @@ async function syncNanobotSkills(overridesJson: string): Promise<{
     }
     // 覆盖表在 serve 启动时读入 AgentDefaults；改完必须重启才作用于新会话。
     if (nanobotProcess) {
-      stopNanobot();
-      await waitForPortFree(nanobotServeHost, nanobotServePort ?? DEFAULT_GATEWAY_PORT, 5000);
-      await startNanobot();
-      if (nanobotProcess) {
-        return { ok: true, changed: true, message: '技能覆盖已写入并生效' };
-      }
-      return { ok: false, changed: true, message: '技能覆盖已写入，但 serve 重启失败，请检查 nanowork 日志' };
+      return { ...(await restartServeForConfig('技能覆盖已写入')), changed: true };
     }
     const portBusy = await isPortInUse(nanobotServeHost, nanobotServePort ?? DEFAULT_GATEWAY_PORT);
     return {
@@ -4485,6 +4557,12 @@ ipcMain.handle('nanobot:syncSkills', async (_e, overridesJson: string) => {
 
 // —— 生命周期 ——
 app.whenReady().then(async () => {
+  // 第二实例理论上已在 `acquireSingleInstance` 里 `app.exit(0)`，这里再拦一道：
+  // `app.exit()` **不保证**取消已排定的 whenReady 回调——若它在 exit 之前就已开跑，
+  // 就会一路走到 createWindow + startNanobot，与主实例抢同一个端口。
+  // 有了单实例锁本不该到达这里，所以这行是保险而非主防线。
+  if (!isPrimaryInstance) return;
+
   // 隐藏系统级原生菜单（自绘菜单栏接管）
   Menu.setApplicationMenu(null);
 
@@ -4574,8 +4652,76 @@ app.on('before-quit', () => {
   // 关闭网关认证 WS 桥连接，避免退出时残留孤儿连接；在途请求随桥一并作废
   gatewayBridge?.ws.terminate();
   gatewayBridge = null;
-  stopNanobot();
-  stopNanobotGateway();
+  // ⚠️ 这里**不再**调 stopNanobot / stopNanobotGateway：那俩是「发起即返回」的
+  // 同步 taskkill，放在同步监听器里等于发起了但没等——主进程会在进程树还没死透时
+  // 退出，留下孤儿占住 18900 / 18790。真正的清理在下面的 will-quit 里等完再走。
+});
+
+/**
+ * 退出前的进程树清理（FR-13.2）。
+ *
+ * **为什么用 `will-quit` 而不是 `before-quit`**：清理是异步的（taskkill 本身要时间），
+ * 而 `before-quit` 的监听器必须是同步的。这里 `preventDefault()` 拦住退出、等进程树
+ * 真死了再 `app.exit()`。
+ *
+ * 与 `before-quit` 的分工是**刻意的**：同步的（isQuitting / 热键 / 托盘 / WS 桥）留在
+ * before-quit，异步的（子进程）只在这里做一次。两处都防会变成「谁都没等完整」。
+ */
+app.on('will-quit', (event) => {
+  event.preventDefault();
+  void (async () => {
+    try {
+      const reaped = await stopNanobotAndWait(CHILD_PROCESS_EXIT_TIMEOUT_MS);
+      if (reaped < 2) {
+        // 没死透不等于失败：引擎可能本就没被本进程托管（外部拉起 / 从未启动成功）。
+        // 但一旦真是孤儿，下一次启动会撞 EADDRINUSE，所以必须留一条可追查的记录。
+        userDataLog('engine', 'warn', '退出时仍有引擎子进程未确认退出', { reaped });
+      }
+    } catch (err) {
+      // 清理失败**不能**变成「退不出去」：孤儿是卫生问题，卡死退出是事故。
+      console.warn('[nanobot] 退出时清理子进程失败：', err);
+    } finally {
+      app.exit(0);
+    }
+  })();
+});
+
+/**
+ * 进程级兜底：主进程自己崩了 / 收到终止信号时，也要收掉引擎子进程。
+ *
+ * 否则 Python 引擎会变成孤儿继续占端口——用户下次启动直接 EADDRINUSE，
+ * 而界面上的表现是「网关起不来」，与真正的配置错误无法区分。
+ *
+ * 这里只做**同步**的尽力清理：进程马上就要没了，等 taskkill 返回没有意义
+ * （`killProcessTree` 内部 spawn 出去的任务会由 Windows 自己收尾）。
+ */
+function cleanupChildProcessesOnCrash(reason: string, exitCode: number): void {
+  try {
+    cleanupChildProcessesSync(reason);
+  } finally {
+    process.exit(exitCode);
+  }
+}
+
+/** `cleanupChildProcesses` 的同步版：发起即返回，不等退出事件 */
+function cleanupChildProcessesSync(reason: string): void {
+  for (const proc of [nanobotProcess, nanobotGatewayProcess]) {
+    if (proc) killProcessTree(proc);
+  }
+  userDataLog('engine', 'warn', '主进程异常退出，已尝试清理引擎子进程', { reason });
+}
+
+process.on('uncaughtException', (err) => {
+  console.error('[main] 未捕获异常，清理子进程后退出：', err);
+  cleanupChildProcessesOnCrash(`uncaughtException: ${String(err)}`, 1);
+});
+
+process.on('SIGINT', () => {
+  cleanupChildProcessesOnCrash('SIGINT', 0);
+});
+
+process.on('SIGTERM', () => {
+  cleanupChildProcessesOnCrash('SIGTERM', 0);
 });
 
 app.on('activate', () => {
