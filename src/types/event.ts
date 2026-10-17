@@ -450,6 +450,13 @@ export interface SessionMeta {
   channel?: string;
   readonly?: boolean;
   pinned?: boolean;
+  /**
+   * 会话版本引用集（FR-3.9 ①，与 `Session.pluginVersions` 对齐）。
+   *
+   * 必须随 meta 落盘：它是**声明**而非缓存，重启后丢失就等于「这个会话当初用哪一版」
+   * 凭空消失，GC 保护与「版本不一致」提示会一起失效。
+   */
+  pluginVersions?: Record<string, string>;
   createdAt: string;
   updatedAt: string;
   /** 同步元数据（第 19 章） */

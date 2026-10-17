@@ -66,6 +66,17 @@ export interface Session {
   readonly?: boolean;
   /** 是否置顶：分组内始终排在最前，便于快速访问高频任务（持久化） */
   pinned?: boolean;
+  /**
+   * **会话版本引用集**（FR-3.9 ①）：`{ 插件名: 版本 }`，建会话时生效的那一份。
+   *
+   * 它是**声明**不是缓存——跨设备同步（在 `SESSION_SYNC_FIELDS` 白名单里），
+   * 用来回答两件本机磁盘答不了的事：① 换台机器 GC 时，别把「别的设备上的会话
+   * 正在用的那一版」当旧副本删掉；② 本机装的版本与这个会话当初用的不同时，
+   * 界面能如实说出来（见 `lib/sessionPluginRefs.ts`）。
+   *
+   * 只在建会话时快照一次，之后不随本机装了什么而漂移：它记的是历史事实。
+   */
+  pluginVersions?: Record<string, string>;
   /** 会话标题（首条消息摘要） */
   title: string;
   messages: Message[];

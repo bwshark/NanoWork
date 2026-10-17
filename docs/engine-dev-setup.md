@@ -117,7 +117,7 @@ cd nanobot
 
 ### 5.3 修复（就地补回，未联网重下）
 
-1. 在本机另一份克隆 `D:\Workspace\Codes\sciherd-cloud-smartagent\nanobot` 中找到同名 `pack`，
+1. 在本机另一份克隆 `D:\Workspace\study\nanowork\nanobot` 中找到同名 `pack`，
    **比对 `.idx` 的 SHA256 一致**后，把 `.pack` / `.rev` 复制回本仓库 `objects/pack/`。
 2. 逐个比对两份仓库的对象清单，找出**备份有而本地缺**的 79 个对象（全部在备份侧是松散对象），
    按 SHA 路径（`objects/ab/cdef...`）**字节复制**回本地。
@@ -138,7 +138,7 @@ cd nanobot
 
 - `.git` 全量备份：**`D:\Workspace\_backup\nanobot-git-2026-09-17`**（118MB，robocopy /E）。
   对象库修复前建的，可作最后手段。
-- 另一份可用克隆：`D:\Workspace\Codes\sciherd-cloud-smartagent\nanobot`（**fsck 零问题**，本次的修复来源）。
+- 另一份可用克隆：`D:\Workspace\study\nanowork\nanobot`（**fsck 零问题**，本次的修复来源）。
   **建议保留**，作为引擎仓库的第二个可用对象源。
 - **教训**：不要把「只有 .idx 没有 .pack」的 pack 目录当成正常状态；`git fsck` 应纳入本地例行检查
   （尤其在做批量清理 / 改 `.git` 之前）。

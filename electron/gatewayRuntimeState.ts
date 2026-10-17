@@ -7,7 +7,7 @@
  * `<config 所在目录>/run/gateway.<hash>.json` 写一份状态：pid、端口、config 路径、
  * 启动时间。进程**正常退出**时它会自己删掉；被 kill / 崩了 / 换了项目跑，文件就留下来。
  * 实测（2026-10-16）本机 `run/` 堆了 3 份，其中一份的 `config_path` 指向
- * **另一个项目**（`D:\Workspace\Codes\sciherd-cloud-smartagent\…`）——两个项目的引擎
+ * **另一个项目**（`D:\Workspace\study\nanowork\…`）——两个项目的引擎
  * 互相把对方的状态文件当成自己的，`GatewayInstance.resolve` 的指纹空间是脏的。
  *
  * ## 为什么清理放在客户端而不是引擎

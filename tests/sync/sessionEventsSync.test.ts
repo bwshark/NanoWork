@@ -127,8 +127,11 @@ beforeAll(async () => {
     env: { ...process.env, NANOWORK_CLOUD_DB_URL: `sqlite:///${dbFile}` },
     stdio: 'ignore',
   });
-  await waitHealth(`${BASE}/health`, 20000);
-}, 30000);
+  // 90s 而不是 20s：全量 229 个文件并发时，uvicorn 的 spawn + 首次 import 可以被拖到
+  // 20s 以上（实测该文件在全量里报「服务端 20s 未就绪」，单跑只需 2.9s）。放宽的是
+  // **余量**而不是等一个慢启动——真正的失败仍会在这里以超时报出来。
+  await waitHealth(`${BASE}/health`, 90000);
+}, 120000);
 
 afterAll(async () => {
   if (server) {

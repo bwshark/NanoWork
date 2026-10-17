@@ -59,6 +59,8 @@ import { useExpertGroupsStore } from './expertGroupsStore';
 import { useSettingsStore } from './settingsStore';
 import { resolveDefaultWorkspacePath } from './storageInfoStore';
 import { useSkillsStore } from './skillsStore';
+import { usePluginsStore } from './pluginsStore';
+import { snapshotSessionPluginVersions } from '@/lib/sessionPluginRefs';
 import { useModelsStore } from './modelsStore';
 import {
   deletedFilePathFrom,
@@ -531,6 +533,8 @@ function toMeta(s: Session): SessionMeta {
     channel: s.channel,
     readonly: s.readonly,
     pinned: s.pinned,
+    // 会话版本引用集（FR-3.9 ①）：声明性质，必须随 meta 落盘，否则重启即丢失
+    pluginVersions: s.pluginVersions,
     createdAt: s.createdAt,
     updatedAt: s.updatedAt,
     // 同步元数据（第 19 章）：`rev` / `updatedBy` 由 `updateSession` 自动维护
@@ -640,6 +644,26 @@ function buildSessionFromMeta(meta: SessionMeta): Session {
 }
 
 /**
+ * 从实体上摘出**版本引用集**并逐项校验（FR-3.9 ①）。
+ *
+ * 逐项过滤而不是整体信任：引用集是**加强信息**（GC 保护 + 版本提示），
+ * 一条格式不对不该让整次 pull 落地失败。空集归一为 `undefined`——
+ * 「没有引用集」与「引用集为空」语义相同，不必多存一种形态。
+ */
+function pluginVersionsOf(entity: Record<string, unknown>): Record<string, string> | undefined {
+  const raw = entity.pluginVersions;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const out: Record<string, string> = {};
+  for (const [name, version] of Object.entries(raw as Record<string, unknown>)) {
+    if (name === '') continue;
+    if (typeof version !== 'string' || version === '') continue;
+    out[name] = version;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+
+/**
  * 由同步负载（`sessionMeta` collection 的 entity）组装 `SessionMeta`（**落盘形态**）。
  *
  * ⚠️ 负载里的 `workdir` 是**语义工作空间**（`SESSION_SYNC_FIELDS` 的白名单字段），
@@ -681,6 +705,9 @@ export function toMetaFromEntity(entity: Record<string, unknown>): SessionMeta {
     ...(typeof entity.channel === 'string' ? { channel: entity.channel } : {}),
     ...(typeof entity.readonly === 'boolean' ? { readonly: entity.readonly } : {}),
     ...(typeof entity.pinned === 'boolean' ? { pinned: entity.pinned } : {}),
+    // 会话版本引用集（FR-3.9 ①）：同步负载里带的是 `{插件名: 版本}` 的**声明**，
+    // 逐项过滤非法值而不是整体信任——一条格式不对的引用集不该让整次落地失败
+    ...(pluginVersionsOf(entity) ? { pluginVersions: pluginVersionsOf(entity) } : {}),
     createdAt: typeof entity.createdAt === 'string' ? entity.createdAt : now,
     updatedAt: typeof entity.updatedAt === 'string' ? entity.updatedAt : now,
     rev: typeof entity.rev === 'number' ? entity.rev : undefined,
@@ -1396,12 +1423,26 @@ export const useSessionsStore = create<SessionsState>()(
             ''
           : '');
       const agent = agentsState.agents.find((a) => a.id === aid);
+      // 插件版本快照取自 store 的**已扫描视图**（插件页未进过时为空 → 不写引用集）。
+      // 刻意不在建会话时 `refresh()`：那要读磁盘 + 发 HTTP，而建会话是同步动作。
+      const pluginVersions = snapshotSessionPluginVersions(
+        usePluginsStore.getState().installed,
+      );
       const session: Session = {
         id: genId(),
         agentId: aid,
         ...(boundGroup ? { groupId: boundGroup.id } : {}),
         // aid 为空串时 agent 必然 undefined → 不挂任何技能（新任务的默认态）
         skillIds: agent?.skillIds?.length ? [...agent.skillIds] : undefined,
+        /**
+         * 会话版本引用集（FR-3.9 ①）：把**此刻**生效的插件版本记成声明。
+         *
+         * 只在建会话时快照一次——它记的是历史事实（「这个会话用的哪一版」），
+         * 之后本机再装新版也不该改写它，否则①换机 GC 会按最新版保护、
+         * ②「两端版本不一致」永远看不出来。取不到插件（插件页从未进过、引擎离线）
+         * 时得到 `undefined`，语义是「这份会话没声明过」，不是「声明为空」。
+         */
+        ...(pluginVersions ? { pluginVersions } : {}),
         /**
          * 调用方没当场指定工作空间时，落到「默认工作空间存储路径」
          * （设置 → 通用 → 存储；用户值 > 内置 `<home>/NanoWork`）。

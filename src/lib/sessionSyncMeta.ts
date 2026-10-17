@@ -56,6 +56,9 @@ export const SESSION_SYNC_FIELDS = [
   'channel',
   'readonly',
   'pinned',
+  // FR-3.9 ①：建会话时的插件版本声明。跨设备成立（历史事实），且不带上它就
+  // 无法回答「换机 GC 会不会删掉别的设备正在用的那一版」。
+  'pluginVersions',
 ] as const satisfies readonly (keyof Session)[];
 
 /** 从会话上摘出参与比较的那几个字段 */
@@ -76,7 +79,21 @@ function sameValue(a: unknown, b: unknown): boolean {
   if (Array.isArray(a) && Array.isArray(b)) {
     return a.length === b.length && a.every((item, i) => item === b[i]);
   }
+  // 版本引用集是 `{插件名: 版本}` 的对象：**必须按内容比**，不能比引用。
+  // 比引用会让「同一份声明」每轮都被判成变了 → `updateSession` 每次都涨 `rev`
+  // → 同步层把一条没改过的会话当成脏数据反复推。
+  if (isPlainRecord(a) && isPlainRecord(b)) {
+    const keysA = Object.keys(a);
+    const keysB = Object.keys(b);
+    if (keysA.length !== keysB.length) return false;
+    return keysA.every((key) => sameValue(a[key], b[key]));
+  }
   return a === b;
+}
+
+/** 是不是「普通对象」（`null` / 数组 / 函数都不算） */
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 /** 会话的可同步字段是否有变化（`prev` 缺省 = 无从比较 → 视为有变化） */

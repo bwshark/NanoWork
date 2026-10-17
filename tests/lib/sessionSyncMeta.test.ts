@@ -6,9 +6,10 @@
  * 各调用点——散着写的失败形态是静默的（本地一切正常，换台设备才发现少了一次改动）。
  *
  * 这里锁三件事：
- * 1. 白名单**恰好**是那 12 个可同步字段，本机事实与纯缓存一个都不在内；
+ * 1. 白名单**恰好**是那 13 个可同步字段，本机事实与纯缓存一个都不在内；
  * 2. 没变就不涨 `rev`（否则改一次记忆快照就涨一版，LWW 的「谁更新」被噪声淹没）；
- * 3. 数组按顺序比较、`undefined` 与 `[]` 不同义。
+ * 3. 数组按顺序比较、`undefined` 与 `[]` 不同义；
+ * 4. 版本引用集（`pluginVersions`）按**内容**比较——比引用会让每轮发送都涨 `rev`。
  */
 
 import { describe, expect, it } from 'vitest';
@@ -151,5 +152,39 @@ describe('sessionSyncPatch / withSessionSync', () => {
 
   it('新建会话得到 rev = 1，且走的是 sessionCreatePatch 而非改动路径', () => {
     expect(sessionCreatePatch().rev).toBe(1);
+  });
+});
+
+describe('版本引用集（FR-3.9 ①）：按内容比较，不按引用', () => {
+  it('两个内容相同的对象视为「没变」——否则每轮发送都涨 rev', () => {
+    // 真实形态：`pluginVersions` 在每次会话对象重建时都是**新对象**。
+    // 若比较引用，`updateSession` 会把它判成改动 → `rev + 1` → 同步层反复推脏数据。
+    const prev = session({ pluginVersions: { demo: '0.1.9' } });
+    const next = session({ pluginVersions: { demo: '0.1.9' } });
+    expect(prev.pluginVersions).not.toBe(next.pluginVersions);
+    expect(sessionMetaChanged(pickSyncFields(prev), pickSyncFields(next))).toBe(false);
+  });
+
+  it('版本变了就是改动（这是「两端版本不一致」能被同步出去的前提）', () => {
+    const prev = session({ pluginVersions: { demo: '0.1.9' } });
+    const next = session({ pluginVersions: { demo: '0.1.10' } });
+    expect(sessionMetaChanged(pickSyncFields(prev), pickSyncFields(next))).toBe(true);
+  });
+
+  it('从无到有 / 从有到无都算改动', () => {
+    const none = session();
+    const withRefs = session({ pluginVersions: { demo: '0.1.9' } });
+    expect(sessionMetaChanged(pickSyncFields(none), pickSyncFields(withRefs))).toBe(true);
+    expect(sessionMetaChanged(pickSyncFields(withRefs), pickSyncFields(none))).toBe(true);
+  });
+
+  it('多一个插件也算改动（键集不同）', () => {
+    const one = session({ pluginVersions: { demo: '0.1.9' } });
+    const two = session({ pluginVersions: { demo: '0.1.9', other: '2.0.0' } });
+    expect(sessionMetaChanged(pickSyncFields(one), pickSyncFields(two))).toBe(true);
+  });
+
+  it('引用集在白名单里（否则它永远不上行）', () => {
+    expect(SESSION_SYNC_FIELDS as readonly string[]).toContain('pluginVersions');
   });
 });

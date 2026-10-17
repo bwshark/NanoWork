@@ -461,6 +461,8 @@ export function metaToSession(meta: SessionMeta): Omit<Session, 'messages' | 'pe
     ...(meta.channel !== undefined ? { channel: meta.channel } : {}),
     ...(meta.readonly !== undefined ? { readonly: meta.readonly } : {}),
     ...(meta.pinned !== undefined ? { pinned: meta.pinned } : {}),
+    // 会话版本引用集（FR-3.9 ①）：浅拷贝一份，避免视图侧改动反过来污染 meta 对象
+    ...(meta.pluginVersions ? { pluginVersions: { ...meta.pluginVersions } } : {}),
     title: meta.title,
     createdAt: meta.createdAt,
     updatedAt: meta.updatedAt,

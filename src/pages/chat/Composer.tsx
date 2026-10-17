@@ -38,6 +38,8 @@ import { useModelsStore, describeModelId } from "@/stores/modelsStore";
 import { useSessionUiStore } from "@/stores/sessionUiStore";
 import { ComposerMenu } from "./ComposerMenu";
 import { ComposerContextMenu } from "./ComposerContextMenu";
+import { InjectionNotice } from "@/components/composer/InjectionNotice";
+import { detectPromptInjection } from "@/lib/promptInjection";
 import { chatColumnSx } from "./chatColumnSx";
 import { ComposerControls } from "@/components/ComposerControls";
 import { InlineAttachmentChip } from "@/components/composer/InlineAttachmentChip";
@@ -320,6 +322,12 @@ export function Composer({
   const [internalText, setInternalText] = useState("");
   const controlled = value !== undefined;
   const text = controlled ? value : internalText;
+  /**
+   * 提示词注入检测（FR-8.6 ③）：**只提示不拦截**，所以放在渲染期按文本派生，
+   * 不进任何发送 / 校验路径——它不该有机会改变「能不能发出去」这个结论。
+   * 文本没变就不重算（`useMemo`），长文本也不至于每次渲染都跑一遍正则。
+   */
+  const injectionHits = useMemo(() => detectPromptInjection(text), [text]);
   /**
    * 输入区最近一次主动向外发出的文本。
    * 受控模式下用以区分「onInput 回声」（相等，跳过 DOM 写回）
@@ -1835,6 +1843,9 @@ export function Composer({
             ))}
           </Box>
         )}
+
+        {/* 提示词注入检测（FR-8.6 ③）：命中只在输入框上方提示，不改变发送行为 */}
+        <InjectionNotice hits={injectionHits} />
 
         {/* 富输入区：contentEditable，文本与附件徽章可在光标处混排 */}
         <Box

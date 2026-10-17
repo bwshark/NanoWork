@@ -116,6 +116,7 @@ export function AgentFormDialog({
           label="名称"
           value={form.name ?? ''}
           onChange={(e) => setForm({ ...form, name: e.target.value })}
+          helperText="头像按名称自动生成（首字 + 配色，同名在任何设备上都一致）；云端头像资产尚未接入"
         />
         <TextField
           fullWidth

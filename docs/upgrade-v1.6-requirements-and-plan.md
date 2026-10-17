@@ -13,6 +13,7 @@
 ## 〇、TL;DR
 
 WorkBuddy 三轮逆向共给出 **51 条候选**（插件机制 12 条 / 平台能力 15 条 / 运行期工程 24 条）。本文把它们**去重、收敛、按域编号**，形成 **24 条正式需求**，并分为 **8 个批次 + 1 个 ADR 立项**。
+> ⚠️ **口径校准（2026-10-17，V1.7 B1）**：按 **FR 编号实为 19 条**（R13 `FR-13.1~13.6` 6 条 + R3 `FR-3.10~3.14` 5 条 + R8 `FR-8.10~8.13` 4 条 + R11 `FR-11.6~11.9` 4 条），其中 **18 条 ✅、1 条（`FR-11.8`）明确不做**。「24」是按批次任务计数，两套口径的差异在本文并入 v2 第 3 章时已校准。
 
 **核心判断**：本项目在「功能面」上并不落后（Skill / Plugin / Expert / Hook / 产物 / 记忆 / 同步都有），落后的是 **运行期工程**——具体是三件事：
 
@@ -100,7 +101,7 @@ WorkBuddy 三轮逆向共给出 **51 条候选**（插件机制 12 条 / 平台�
 >   在 `api/server.py` 再包 `llm_usage_source('user')`（早前在 serve 里绑 observer 的尝试作废，已回退）。
 >
 > **⚠️ 两个必须知道的真机事实（2026-10-17 修复时发现）：**
-> 1. **存在两份引擎副本**：桌面真正运行的是 `D:\Workspace\Codes\sciherd-cloud-smartagent\nanobot`
+> 1. **存在两份引擎副本**：桌面真正运行的是 `D:\Workspace\study\nanowork\nanobot`
 >    （原始、能出 token），而 `D:\Workspace\study\nanowork\nanobot` 是历次 `[LOCAL PATCH]` 的工作副本
 >    （其 `nanowork.config.json` 无内联凭证、本机 shell 无 `DASHSCOPE_API_KEY` → 对话 500，**无法真机验证**）。
 >    本次修复**已同步落到两份**（`make_provider` 各加同一段 observer 绑定），并**在桌面实际运行的那份上验证通过**：

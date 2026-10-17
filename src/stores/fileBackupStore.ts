@@ -14,6 +14,18 @@ export interface BackupEntry {
   at: string;
   /** 触发这次快照的写操作类型 */
   op: BackupOp;
+  /**
+   * 单文件内的单调序号（1 起）：给时间线一个**全序**。
+   *
+   * 为什么需要它：`at` 只到毫秒，两次连续快照（记忆文件 append 后立刻又被改写）
+   * 完全可能落在同一毫秒。此时若只按 `at` 排序，顺序就退化成「数组 InsertionSort
+   * 的稳定性」——看起来稳定，实际是**未定义**：同一份数据在不同引擎 / 不同批次里
+   * 可能给出不同先后，「最新在前」这条契约随之失效（UI 时间线会闪）。
+   *
+   * 老数据没有这个字段，读作 0：它们之间靠插入序（数组顺序）决定相对先后，
+   * 与真实发生顺序一致，不需要迁移。
+   */
+  seq?: number;
 }
 
 interface FileBackupState {
@@ -48,7 +60,10 @@ export const useFileBackupStore = create<FileBackupState>()(
         const at = new Date().toISOString();
         set((s) => {
           const prev = s.timeline[fileKey] ?? [];
-          const next = [...prev, { hash, at, op }];
+          // 序号取自当前末尾（不是时间戳）：它只回答「谁后写」，与时钟无关。
+          // 上限截断只丢最旧的，末尾那条的 seq 恒为最大，因此不会回退。
+          const seq = (prev[prev.length - 1]?.seq ?? 0) + 1;
+          const next = [...prev, { hash, at, op, seq }];
           // 超出上限丢弃最旧（时间线按 at 升序追加，头部即最旧）
           if (next.length > MAX_ENTRIES) next.splice(0, next.length - MAX_ENTRIES);
           return { timeline: { ...s.timeline, [fileKey]: next } };
@@ -57,8 +72,12 @@ export const useFileBackupStore = create<FileBackupState>()(
 
       list: (fileKey) => {
         const entries = get().timeline[fileKey] ?? [];
-        // 倒序：最新写入的快照排在最前
-        return [...entries].sort((a, b) => b.at.localeCompare(a.at));
+        // 倒序：最新写入的快照排在最前。
+        // **`at` 相同必须靠 `seq` 兜底**——同毫秒的两条快照若只比 `at`，顺序由
+        // sort 的稳定性决定（等于插入序，即「最旧在前」），与契约相反。
+        return [...entries].sort(
+          (a, b) => b.at.localeCompare(a.at) || (b.seq ?? 0) - (a.seq ?? 0),
+        );
       },
 
       clear: (fileKey) => {

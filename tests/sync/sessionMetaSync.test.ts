@@ -202,3 +202,71 @@ describe('D.5：workdir 原值保留、streamWorkdir 重定向本机（D-⑦）'
     expect(s.streamWorkdir).not.toBe('/remote/path');
   });
 });
+
+// ─────────────────── FR-3.9 ①：版本引用集随元数据同步 ───────────────────
+
+describe('FR-3.9 ①：会话版本引用集的上行与落地', () => {
+  it('payload 带声明，但**不带包本体 / 副本路径**（上行的是意图，不是包）', () => {
+    const payload = spec().payload(
+      session({ pluginVersions: { demo: '0.1.9' } }) as unknown as Record<string, unknown>,
+    );
+    expect(payload.pluginVersions).toEqual({ demo: '0.1.9' });
+    // 「只同步意图、包本体各设备自装」——序列化后不该出现任何缓存路径
+    expect(JSON.stringify(payload)).not.toContain('cache/');
+  });
+
+  it('落地带着引用集的负载：内存与磁盘都读得到（重启不丢声明）', async () => {
+    spec().apply({
+      id: 's1',
+      title: '带引用集',
+      agentId: 'a1',
+      workdir: '/remote/path',
+      mode: 'craft',
+      pluginVersions: { demo: '0.1.9' },
+      rev: 2,
+      updatedAt: '2026-09-01T00:00:00.000Z',
+      updatedBy: 'dev-b',
+      deletedAt: null,
+    });
+
+    const local = useSessionsStore.getState().sessions.find((x) => x.id === 's1');
+    expect(local?.pluginVersions).toEqual({ demo: '0.1.9' });
+    const meta = await getEventStore().readMeta('s1', DEFAULT_WS);
+    expect(meta?.pluginVersions).toEqual({ demo: '0.1.9' });
+  });
+
+  it('旧负载缺字段 → 按「无引用集」放行（不报错，也不写成空对象）', () => {
+    spec().apply({
+      id: 's2',
+      title: '旧负载',
+      agentId: 'a1',
+      workdir: '/remote/path',
+      mode: 'craft',
+      rev: 1,
+      updatedAt: '2026-09-01T00:00:00.000Z',
+      updatedBy: 'dev-b',
+      deletedAt: null,
+    });
+    const local = useSessionsStore.getState().sessions.find((x) => x.id === 's2');
+    expect(local).toBeTruthy();
+    // `{}` 与 `undefined` 在「有没有声明」上语义不同，不能归一成空对象
+    expect(local?.pluginVersions).toBeUndefined();
+  });
+
+  it('负载里的脏值逐项过滤（一条坏项不该让整次落地失败）', () => {
+    spec().apply({
+      id: 's3',
+      title: '脏值',
+      agentId: 'a1',
+      workdir: '/remote/path',
+      mode: 'craft',
+      pluginVersions: { demo: '0.1.9', broken: 42, '': 'x' },
+      rev: 1,
+      updatedAt: '2026-09-01T00:00:00.000Z',
+      updatedBy: 'dev-b',
+      deletedAt: null,
+    });
+    const local = useSessionsStore.getState().sessions.find((x) => x.id === 's3');
+    expect(local?.pluginVersions).toEqual({ demo: '0.1.9' });
+  });
+});

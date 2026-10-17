@@ -108,7 +108,7 @@ describe('classifyGatewayState', () => {
   it('pid 活着但属于别的项目 → stale-foreign-config（本机真实堆过这种）', () => {
     expect(
       classifyGatewayState(
-        info({ pid: 999, configPath: 'D:\\Workspace\\Codes\\sciherd-cloud-smartagent\\nanobot.config.json' }),
+        info({ pid: 999, configPath: 'D:\\Workspace\study\\nanowork\\nanowork.config.json' }),
         { pidAlive: alive, currentConfigPath: CURRENT_CONFIG },
       ),
     ).toBe('stale-foreign-config');
@@ -195,7 +195,7 @@ describe('sweepStaleGatewayStates', () => {
     });
     await seed(dir, 'gateway.cafecafecafecafe.json', {
       pid: 888_888,
-      config_path: 'D:\\Workspace\\Codes\\sciherd-cloud-smartagent\\nanobot.config.json',
+      config_path: 'D:\\Workspace\study\\nanowork\\nanowork.config.json',
     });
     await seed(dir, 'gateway.1234567890abcdef.json', '{ 写了一半就崩了');
     await seed(dir, 'gateway.abcdef1234567890.json', { pid: process.pid, config_path: CURRENT_CONFIG });

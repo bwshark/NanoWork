@@ -9,6 +9,8 @@ import {
   withPluginIntent,
 } from '@/lib/pluginIntent';
 import { useSettingsStore } from '@/stores/settingsStore';
+import { useSessionsStore } from '@/stores/sessionsStore';
+import { referencedCopyPathsForSessions } from '@/lib/sessionPluginRefs';
 import type {
   MarketIndex,
   MarketInstallResult,
@@ -416,7 +418,18 @@ export const usePluginsStore = create<PluginsState>((set, get) => ({
     try {
       // 引用集必须由调用方给：主进程不知道哪些副本还在生效（「生效」的唯一证据是
       // 磁盘扫描出来的包根），硬塞进主进程只会误删。
-      const referenced = referencedCopyPaths(get().installed);
+      // 引用集 = 本机生效副本 ∪ **会话版本引用集**（FR-3.9 ①）。
+      // 后者回答「别的设备上的会话要哪一版」：只按本机生效判，会把同步来的会话
+      // 仍在用的旧版本当垃圾删掉，那台设备换回来就读不到当初的插件了。
+      // ⚠️ 与 `sessionsStore` 互相 import（它要读本 store 的扫描视图做快照）。
+      // 这条环是**安全**的：两边都只在函数体里取对方，模块求值期不触碰。
+      const referenced = [
+        ...referencedCopyPaths(get().installed),
+        ...referencedCopyPathsForSessions(
+          get().installed,
+          useSessionsStore.getState().sessions.map((s) => s.pluginVersions),
+        ),
+      ];
       return await platform.pluginsMarketGc(referenced, keepDays ?? 30);
     } catch (err) {
       set({ marketError: err instanceof Error ? err.message : String(err) });

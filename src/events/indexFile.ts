@@ -215,7 +215,10 @@ export function summarizeTitle(text: string, max = 60): string {
 export interface DeriveMetaOptions {
   /** 兜底字段：事件里没有 `session-start` / `message` 时使用 */
   fallback?: Partial<
-    Pick<SessionMeta, 'agentId' | 'mode' | 'permissionMode' | 'model' | 'workdir' | 'title'>
+    Pick<
+      SessionMeta,
+      'agentId' | 'mode' | 'permissionMode' | 'model' | 'workdir' | 'title' | 'pluginVersions'
+    >
   >;
   /** 覆盖 createdAt；缺省取首条事件时间戳 */
   createdAt?: string;
@@ -268,6 +271,13 @@ export function deriveMetaFromEvents(
       fallback.permissionMode ??
       'restricted',
     model: (start?.type === 'session-start' ? start.model : undefined) ?? fallback.model,
+    // 版本引用集（FR-3.9 ①）事件流里**没有**它：meta 缺失时无从重建，
+    // 只能由调用方经 `fallback` 承接下来。这里显式支持该字段，是为了让
+    // 「meta 还在、只是要走一次派生」的路径（以及将来的接线）不被类型挡住而
+    // 悄悄把它丢掉——`extra` 之外少一个字段是静默的。
+    ...(fallback.pluginVersions
+      ? { pluginVersions: { ...fallback.pluginVersions } }
+      : {}),
     createdAt: opts.createdAt ?? toIso(first?.timestamp),
     updatedAt: opts.updatedAt ?? toIso(last?.timestamp, Date.now()),
   };

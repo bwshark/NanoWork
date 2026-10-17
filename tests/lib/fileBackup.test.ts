@@ -69,11 +69,30 @@ describe('snapshotBeforeWrite（J-A1~A3）', () => {
     expect(tl[0].op).toBe('overwrite');
   });
 
-  it('append / delete 同为有效 op（J-A2）', async () => {
+  it('append / delete 同为有效 op（J-A2），时间线恒为「最新在前」', async () => {
     await snapshotBeforeWrite(USER_KEY, 'a', 'append');
     await snapshotBeforeWrite(USER_KEY, 'b', 'delete');
     const ops = useFileBackupStore.getState().list(USER_KEY).map((e) => e.op);
-    expect(ops).toEqual(['append', 'delete']);
+    // 契约是**倒序（最新在前）**，不是插入序。原先这条断言写的是 `['append','delete']`，
+    // 只在两次快照落在同一毫秒时（`at` 相同 → sort 稳定 → 保持插入序）才成立，
+    // 跨毫秒就必然红——那是用例与 `list()` 的契约冲突，不是实现坏了。
+    expect(ops).toEqual(['delete', 'append']);
+  });
+
+  it('两次快照落在同一毫秒时，顺序仍由 seq 决定（不靠 sort 的稳定性）', async () => {
+    // 冻结时钟：两次 `record` 拿到**逐字相同**的 `at`，把「同毫秒」这个前提做出来。
+    // 没有 `seq` 兜底时这条必然返回插入序（`['append','delete']`）→ 契约失效。
+    vi.useFakeTimers();
+    try {
+      await snapshotBeforeWrite(USER_KEY, 'a', 'append');
+      await snapshotBeforeWrite(USER_KEY, 'b', 'delete');
+      const timeline = useFileBackupStore.getState().list(USER_KEY);
+      expect(timeline.map((e) => e.at)).toEqual([timeline[1].at, timeline[1].at]);
+      expect(timeline.map((e) => e.op)).toEqual(['delete', 'append']);
+      expect(timeline.map((e) => e.seq)).toEqual([2, 1]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('put 抛错不阻断真实写入（最佳努力，吞掉，且不记时间线）', async () => {
