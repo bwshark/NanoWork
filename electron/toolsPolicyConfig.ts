@@ -9,7 +9,7 @@
  * 本模块**不 import electron**，只用纯逻辑，因此可以在 vitest 里直接跑。
  */
 
-import type { NanobotFileToolsPolicy } from '../src/platform/types';
+import type { NanobotFileToolsPolicy, NanobotPathRule } from '../src/platform/types';
 
 /**
  * 引擎 `FileToolsConfig` 里的字段名。
@@ -31,6 +31,22 @@ export const DENY_WRITE_KEY = 'defaultDenyWrite';
  */
 export const DENY_WRITE_KEY_SNAKE = 'default_deny_write';
 
+/**
+ * [LOCAL PATCH] FR-8.13：路径规则在 `tools.file` 下的键名（camel + snake）。
+ *
+ * 与 `DENY_WRITE_KEY` 同一套理由：引擎 `Base` 两种键名都收，**读**要两种都认，
+ * **写**只写 camel（跟随现存 config.json 的 tools 段现状）。
+ */
+export const PATH_RULES_KEY = 'pathRules';
+export const PATH_RULES_KEY_SNAKE = 'path_rules';
+
+/** 三种动作（与引擎 `security/path_rules.ACTION_KINDS` 同序） */
+const RULE_ACTIONS = ['read', 'write', 'delete'] as const;
+const RULE_VERDICTS = ['allow', 'deny'] as const;
+
+/** 引擎侧的默认值（`FileToolsConfig.path_rules: list = []`） */
+export const DEFAULT_PATH_RULES: never[] = [];
+
 /** 引擎侧的默认值（`FileToolsConfig.default_deny_write: bool = False`） */
 export const DEFAULT_DENY_WRITE = false;
 
@@ -43,6 +59,43 @@ function asObject(value: unknown): Record<string, unknown> | null {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
+}
+
+/**
+ * [LOCAL PATCH] FR-8.13：把 `tools.file.pathRules` 收敛成界面可直接渲染的规则。
+ *
+ * **坏条目丢掉而不是抛错**，且**绝不猜**：一条写错的规则（`action` 拼错、`path`
+ * 不是字符串）丢掉它，其余的照常生效；整体形状不对（不是数组）当成「没有规则」。
+ * 反过来抛错会让「改错一行」表现为「整个安全分区打不开」—— 而用户此刻最需要
+ * 看见其它规则还在。
+ *
+ * ⚠️ 这里只做**形状**校验，不解析路径语义（那在引擎侧 `normalize_path_rules`）。
+ * 两份都做等于两份真相，而客户端这份一旦与引擎不一致，界面显示的就是假的。
+ */
+export function parsePathRules(value: unknown): NanobotPathRule[] {
+  if (!Array.isArray(value)) return [];
+  const rules: NanobotPathRule[] = [];
+  for (const item of value) {
+    const entry = asObject(item);
+    if (!entry) continue;
+    const path = entry.path;
+    if (typeof path !== 'string' || path.trim() === '') continue;
+    const action: Record<string, string> = {};
+    const rawAction = asObject(entry.action);
+    if (rawAction) {
+      for (const kind of RULE_ACTIONS) {
+        const verdict = rawAction[kind];
+        if (typeof verdict === 'string' && (RULE_VERDICTS as readonly string[]).includes(verdict)) {
+          action[kind] = verdict;
+        }
+      }
+    }
+    // 一个有效动作都没有的条目对引擎毫无意义（引擎会连规则一起丢掉），
+    // 界面也没必要显示一个空行
+    if (Object.keys(action).length === 0) continue;
+    rules.push({ path, action });
+  }
+  return rules;
 }
 
 /**
@@ -63,29 +116,45 @@ export function parseFileToolsPolicy(tools: unknown): NanobotFileToolsPolicy | n
   if (!file) return null;
   // 两种键都没写 = 引擎默认值 False；「段在」本身就说明引擎认它
   if (!(DENY_WRITE_KEY in file) && !(DENY_WRITE_KEY_SNAKE in file)) {
-    return { defaultDenyWrite: DEFAULT_DENY_WRITE, supported: true };
+    return {
+      defaultDenyWrite: DEFAULT_DENY_WRITE,
+      supported: true,
+      pathRules: parsePathRules(file[PATH_RULES_KEY] ?? file[PATH_RULES_KEY_SNAKE]),
+    };
   }
   // 走到这里说明至少有一个键写了，但值可能压根不是布尔（`'true'` / `1`）——
   // `asBoolean` 对**缺失**也返回 null，所以必须先判「键在不在」再判「值对不对」，
   // 顺序反了就会把「没写」和「写坏了」都当成默认值兜底。
   const value = asBoolean(file[DENY_WRITE_KEY]) ?? asBoolean(file[DENY_WRITE_KEY_SNAKE]);
   if (value === null) return null;
-  return { defaultDenyWrite: value, supported: true };
+  return {
+    defaultDenyWrite: value,
+    supported: true,
+    // FR-8.13：规则**缺省就是空数组**（引擎默认值），不影响 `supported` 的判定
+    pathRules: parsePathRules(file[PATH_RULES_KEY] ?? file[PATH_RULES_KEY_SNAKE]),
+  };
 }
 
 /**
- * 幂等签名：只比 `tools.file.defaultDenyWrite`。
+ * 幂等签名：只比 `tools.file.defaultDenyWrite` 与 `tools.file.pathRules`。
  *
  * 与模型变更那套同口径——拿整份 `data` 比对是不行的，`tools` 段还有 mcpServers /
  * ssrfWhitelist 等别人也会写的键，任何外部改动都会被算成「本次有变更」，于是
  * 「再点一次保存」永远报「已修改」（而实际上什么都没改）。
+ *
+ * [LOCAL PATCH] FR-8.13：规则也进签名。少了它，「删掉一条规则再保存」会被判成
+ * 「没有变更」而不写盘 —— 而用户看到的却是「保存成功」。
  */
 export function fileToolsSignature(data: Record<string, unknown>): string {
   const root = asObject(data);
   const file = root ? asObject(root.tools) : null;
   const policy = file ? asObject(file.file) : null;
   const value = policy ? asBoolean(policy[DENY_WRITE_KEY]) : null;
-  return JSON.stringify({ denyWrite: value });
+  const rules = policy ? parsePathRules(policy[PATH_RULES_KEY] ?? policy[PATH_RULES_KEY_SNAKE]) : [];
+  // 按路径排序后再签名：规则的**书写顺序不改变语义**（引擎按「最具体匹配」裁决，
+  // 不按先后）。不排序的话，用户只是把列表整理整齐就会触发一次网关重启。
+  const canonical = [...rules].sort((a, b) => a.path.localeCompare(b.path));
+  return JSON.stringify({ denyWrite: value, pathRules: canonical });
 }
 
 /**
@@ -111,6 +180,39 @@ export function mergeDefaultDenyWrite(
   const tools = asObject(root.tools) ?? {};
   const file = asObject(tools.file) ?? {};
   const next: Record<string, unknown> = { ...file, [DENY_WRITE_KEY]: defaultDenyWrite };
+  const nextTools: Record<string, unknown> = { ...tools, file: next };
+  return { data: { ...root, tools: nextTools }, changed: true };
+}
+
+/**
+ * [LOCAL PATCH] FR-8.13：把 `tools.file.pathRules` 合并进整份配置。
+ *
+ * 与 `mergeDefaultDenyWrite` 同套路（只合并这一段、显式补空壳段），差别只在
+ * 值是**数组**：整体替换语义在这里是对的（规则表就该整表替换），但 `tools` 段
+ * 与 `tools.file` 段里别人的键仍然原样保留。
+ *
+ * @returns `changed` 为 false 表示配置形状不安全（`tools` 不是对象），调用方应中止。
+ */
+export function mergePathRules(
+  data: Record<string, unknown>,
+  pathRules: NanobotPathRule[],
+): { data: Record<string, unknown>; changed: boolean } {
+  const root = asObject(data);
+  if (!root) return { data, changed: false };
+  const tools = asObject(root.tools) ?? {};
+  const file = asObject(tools.file) ?? {};
+  // 只写**有效动作**，且键序固定（read / write / delete）：落盘的形状稳定，
+  // 用户两次保存同一份规则时 diff 才是空的。
+  const normalized = pathRules.map((rule) => ({
+    path: rule.path,
+    action: Object.fromEntries(
+      RULE_ACTIONS.filter((kind) => rule.action[kind] !== undefined).map((kind) => [
+        kind,
+        rule.action[kind],
+      ]),
+    ),
+  }));
+  const next: Record<string, unknown> = { ...file, [PATH_RULES_KEY]: normalized };
   const nextTools: Record<string, unknown> = { ...tools, file: next };
   return { data: { ...root, tools: nextTools }, changed: true };
 }

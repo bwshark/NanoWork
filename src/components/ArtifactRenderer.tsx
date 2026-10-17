@@ -2,8 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Box, Button, Paper, useTheme } from '@mui/material';
 import DownloadIcon from '@mui/icons-material/Download';
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
-import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import { CodeBlockView } from './CodeBlockView';
 import type { Artifact } from '@/types';
 import { isHtmlArtifact } from '@/lib/fileArtifact';
 import { MarkdownView } from './MarkdownView';
@@ -61,14 +60,9 @@ function DualView({
       {mode === 'preview' ? (
         preview
       ) : (
-        <SyntaxHighlighter
-          style={oneDark}
-          language={language}
-          PreTag="div"
-          customStyle={{ borderRadius: 8, fontSize: 13, maxWidth: '100%', overflowX: 'auto' }}
-        >
-          {source}
-        </SyntaxHighlighter>
+        // FR-13.5：改走懒加载的代码高亮。本组件在 AppLayout 的**静态**依赖链上，
+        // 直接 import 高亮库会把 772 KB 的 markdown 分包写进首屏 modulepreload。
+        <CodeBlockView language={language} source={source} />
       )}
     </Box>
   );
@@ -233,32 +227,11 @@ export function ArtifactRenderer({ artifact, header = true }: ArtifactRendererPr
       ) : artifact.language === 'markdown' ? (
           markdownView(artifact.content)
         ) : (
-          <SyntaxHighlighter
-            style={oneDark}
-            language={artifact.language ?? 'text'}
-            PreTag="div"
-            customStyle={{
-              borderRadius: 8,
-              fontSize: 13,
-              maxWidth: '100%',
-              overflowX: 'auto',
-            }}
-          >
-            {artifact.content}
-          </SyntaxHighlighter>
+          <CodeBlockView language={artifact.language ?? 'text'} source={artifact.content} />
         );
       break;
     case 'code':
-      body = (
-        <SyntaxHighlighter
-          style={oneDark}
-          language={artifact.language ?? 'text'}
-          PreTag="div"
-          customStyle={{ borderRadius: 8, fontSize: 13, maxWidth: '100%', overflowX: 'auto' }}
-        >
-          {artifact.content}
-        </SyntaxHighlighter>
-      );
+      body = <CodeBlockView language={artifact.language ?? 'text'} source={artifact.content} />;
       break;
     case 'markdown':
     default:

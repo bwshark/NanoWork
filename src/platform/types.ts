@@ -17,6 +17,8 @@ import type {
 } from '@/types/event';
 import type { LogLevel, LogModule } from '@/observability/logging';
 import type { TraceFile } from '@/observability/trace';
+import type { SessionLatencySample } from '@/lib/sseLatency';
+import type { EngineSelfCheckReport } from '@/types/engine';
 
 // 插件领域类型声明在 `@/types/plugin.ts`（**唯一声明处**，主进程也引它）。
 // 这里只做转出，让 platform 消费方「只 import 一处」即可拿到完整契约面。
@@ -394,6 +396,20 @@ export interface NanobotFileToolsPolicy {
   defaultDenyWrite: boolean;
   /** 引擎是否认这个字段（config.json 里 `tools.file` 段存在且能被解析） */
   supported: boolean;
+  /**
+   * 路径级权限规则（FR-8.13）。**缺省空数组**（引擎默认值），不影响 `supported`。
+   *
+   * 形状与引擎 `FileToolsConfig.path_rules` 一致：`{path, action: {read|write|delete}}`。
+   * 界面上把它当**整表**编辑（草稿 + 保存），不做单条增量 —— 规则表的价值在于
+   * 「一眼看完谁被限制成什么样」，增量编辑会让人漏看某一条。
+   */
+  pathRules?: NanobotPathRule[];
+}
+
+/** 一条路径规则（FR-8.13）。三种动作各自独立，未声明的动作表示「不表态」。 */
+export interface NanobotPathRule {
+  path: string;
+  action: Partial<Record<'read' | 'write' | 'delete', 'allow' | 'deny'>>;
 }
 
 /**
@@ -406,10 +422,14 @@ export interface NanobotToolsSnapshot {
   file: NanobotFileToolsPolicy;
 }
 
-/** 工具策略的一次变更。命名跟随 `NanobotModelsMutation`，但只有一条指令 */
+/** 工具策略的一次变更。命名跟随 `NanobotModelsMutation` */
 export type NanobotToolsMutation = {
   op: 'setDefaultDenyWrite';
   defaultDenyWrite: boolean;
+} | {
+  op: 'setPathRules';
+  /** 整表替换：空数组 = 清空所有规则 */
+  pathRules: NanobotPathRule[];
 };
 
 /** 工具策略同步结果（与 `ModelsSyncResult` 同形：写盘 + 按需重启 serve） */
@@ -1189,8 +1209,28 @@ export interface PlatformAdapter {
    * 影响用户这一轮的结果。web 端 no-op。
    */
   writeTrace(file: TraceFile): void;
+  /**
+   * 落一条**会话首字延迟**采样（FR-11.7）。
+   *
+   * 与 `writeTrace` 同款 fire-and-forget：埋点挂在流式收尾路径上，采集失败绝不该
+   * 影响这一轮对话的结果，故实现内部自行 catch、调用点不 await。
+   *
+   * web 端 no-op（没有文件系统权限）；它不影响功能，只让「会话性能报告」在 Web 上
+   * 没有数据可读——与诊断包在 Web 上不可用是同一条理由。
+   */
+  recordSessionLatency(sample: SessionLatencySample): void;
   /** 诊断产物统计；web 端返回 `null`（界面据此显示不可用）。 */
   diagnosticsStats(): Promise<DiagnosticsStats | null>;
+  /**
+   * 引擎运行时三项自检（FR-13.6）。
+   *
+   * `refresh = true` 强制重跑（界面上的「重新自检」）；否则返回缓存 / 进行中的那份
+   * —— 打开界面立刻有内容，不必每次等两轮子进程。
+   *
+   * web 端返回 `null`（没有本地引擎这回事，不是「检查失败」）：与
+   * `diagnosticsStats` 同一条口径，界面据此显示「Web 端不适用」而不是一片红。
+   */
+  engineSelfCheck(refresh?: boolean): Promise<EngineSelfCheckReport | null>;
   /**
    * 导出诊断包（zip）：弹保存对话框 → 打包 → 写盘。
    * 用户取消时 `{ ok: false, canceled: true }`——**不是错误**，界面不该弹红。
@@ -1596,8 +1636,12 @@ export interface ElectronAPI {
   appendLog(entry: LogEntry): void;
   /** 落一份回合 trace（fire-and-forget；主进程补上写盘进程的 pid / 主机名） */
   writeTrace(file: TraceFile): void;
+  /** 落一条会话首字延迟采样（FR-11.7，fire-and-forget；主进程追加一行 JSONL） */
+  recordSessionLatency(sample: SessionLatencySample): void;
   /** 诊断产物统计（落点与体量） */
   diagnosticsStats(): Promise<DiagnosticsStats>;
+  /** 引擎运行时三项自检（FR-13.6）；`true` 强制重跑 */
+  engineSelfCheck(refresh?: boolean): Promise<EngineSelfCheckReport>;
   /** 导出诊断包（zip）：弹保存对话框 → 打包 → 写盘 */
   exportDiagnostics(): Promise<DiagnosticsExportResult>;
   /**

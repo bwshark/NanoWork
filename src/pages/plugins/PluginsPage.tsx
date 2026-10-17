@@ -18,6 +18,8 @@ import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import FolderOpenIcon from "@mui/icons-material/FolderOpen";
 import ExtensionOutlinedIcon from "@mui/icons-material/ExtensionOutlined";
 import { usePluginsStore } from "@/stores/pluginsStore";
+import { useAgentsStore } from "@/stores/agentsStore";
+import { computePluginToolGaps } from "@/lib/pluginToolGaps";
 import { platform } from "@/platform";
 import { toast } from "@/components/Toast";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
@@ -78,6 +80,21 @@ export function PluginsPage({ embedded = false }: { embedded?: boolean }) {
   const installPlugin = usePluginsStore((s) => s.install);
   const uninstallPlugin = usePluginsStore((s) => s.uninstall);
   const clearFeedback = usePluginsStore((s) => s.clearFeedback);
+
+  // 当前 Agent（决定「声明工具是否被收窄」的基线）：优先用全局激活的 Agent，
+  // 回落到内置通用助手。插件列表是全局配置页，没有会话上下文，所以用
+  // 「用户当前选中的 Agent」作为基线——与引擎每轮按会话 Agent 算 policy_gaps 同源。
+  const agents = useAgentsStore((s) => s.agents);
+  const activeAgentId = useAgentsStore((s) => s.activeAgentId);
+  const activeAgent = useMemo(() => {
+    if (activeAgentId) {
+      const hit = agents.find((a) => a.id === activeAgentId);
+      if (hit) return hit;
+    }
+    return (
+      agents.find((a) => a.id === "builtin:general") ?? agents[0] ?? null
+    );
+  }, [agents, activeAgentId]);
 
   const [busyName, setBusyName] = useState<string | null>(null);
   const [installing, setInstalling] = useState(false);
@@ -246,6 +263,15 @@ export function PluginsPage({ embedded = false }: { embedded?: boolean }) {
           const driftNotice = PLUGIN_DRIFT_NOTICE[view.drift];
           const activation = ACTIVATION_CHIP[view.activation];
           const busy = busyName === manifest.name;
+          // 声明工具被当前 Agent 白名单收窄的落差（FR-3.12 纪律③ 的前端镜像）。
+          // activeAgent 为 null（agents 还没加载）时退化为「不算落差」，不误报。
+          const toolGaps = activeAgent
+            ? computePluginToolGaps(
+                manifest.permissions.tools,
+                activeAgent.toolAllow,
+                activeAgent.toolDeny,
+              )
+            : [];
           const totalResources = view.plugin.resources.filter(
             (g) => g.count > 0,
           );
@@ -367,6 +393,43 @@ export function PluginsPage({ embedded = false }: { embedded?: boolean }) {
                     }
                     sx={cardStatusChipSx}
                   />
+                )}
+                {toolGaps.length > 0 && (
+                  <Tooltip
+                    title={
+                      <Box sx={{ maxWidth: 320 }}>
+                        <Typography variant="caption" fontWeight={600}>
+                          以下声明工具被
+                          {activeAgent ? `「${activeAgent.name}」` : "当前 Agent"}
+                          的工具白名单收窄（不会生效）：
+                        </Typography>
+                        <Box
+                          component="ul"
+                          sx={{ m: 0.5, pl: 2, fontSize: 12 }}
+                        >
+                          {toolGaps.map((g) => (
+                            <li key={g.tool}>
+                              {g.tool}
+                              {g.reason === "denied"
+                                ? "（命中工具黑名单）"
+                                : "（不在白名单内）"}
+                            </li>
+                          ))}
+                        </Box>
+                        <Typography variant="caption" color="text.secondary">
+                          声明只收窄能力、不提权；如需生效，放宽该 Agent 的工具白名单。
+                        </Typography>
+                      </Box>
+                    }
+                  >
+                    <Chip
+                      size="small"
+                      color="warning"
+                      variant="outlined"
+                      label={`${toolGaps.length} 项工具被收窄`}
+                      sx={cardStatusChipSx}
+                    />
+                  </Tooltip>
                 )}
               </Stack>
 

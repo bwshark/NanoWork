@@ -251,6 +251,20 @@ export interface MarketPackage {
   displayName: string;
   version: string;
   description: string;
+  /**
+   * 市场索引（`marketplace.json`）给出的分类。
+   *
+   * **可选**：没有索引文件的市场照样能用，此时为 `undefined`。刻意不落成 `''`——
+   * 「市场没写分类」与「分类是空串」在界面上该是两回事（前者不显示徽标）。
+   */
+  category?: string;
+  /**
+   * 该插件依赖的**插件名**列表（来自市场索引）。
+   *
+   * 索引里没有这个包时也是 `undefined`：索引是**可选元数据**，不是白名单
+   * ——不认识的包照样按单包安装（见 `resolveInstallOrder` 的注释）。
+   */
+  dependencies?: string[];
 }
 
 /** 一个市场的源侧索引 */
@@ -278,6 +292,14 @@ export interface MarketInstallResult {
   version: string;
   /** 生效副本的绝对路径（成功时） */
   path: string;
+  /**
+   * 本次实际安装的清单，**按安装顺序**（依赖在前，目标最后），形如 `['mcp-miora@1.2.0', 'welcomemode-design@1.0.0']`。
+   *
+   * 只有在市场索引声明了依赖时才会出现多项；没有索引 / 没有依赖时与旧行为一样
+   * （一项，就是目标自己）。失败时是**已经装成功的那几项**——那时它比 `error`
+   * 更有用：用户要知道「装到一半停在哪了」。
+   */
+  installed?: string[];
   error?: string;
 }
 

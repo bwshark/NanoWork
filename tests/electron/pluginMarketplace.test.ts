@@ -19,15 +19,20 @@ import {
   CACHE_DIR,
   CURRENT_POINTER,
   MARKETPLACES_DIR,
+  MARKET_INDEX_FILENAME,
   collectMarketCache,
   describeMarketSync,
   installFromMarket,
   isOfflineCapable,
   listMarketPackages,
   normalizeMarketEntry,
+  normalizeMarketplaceIndex,
+  pickNewestVersion,
   readMarketRegistry,
+  readMarketplaceIndex,
   recordMarketSync,
   removeMarket,
+  resolveInstallOrder,
   shouldCollectCopy,
   syncMarket,
   upsertMarket,
@@ -403,5 +408,304 @@ describe('市场索引与展示', () => {
 
   it('未同步过的市场显示「尚未同步」', () => {
     expect(describeMarketSync(market())).toBe('尚未同步');
+  });
+});
+
+/**
+ * 可选市场索引与依赖解析（FR-3.13）。
+ *
+ * 三条判据各自对应一种**会把事情做错的方式**：
+ *
+ * 1. **无索引 → 与现状逐字相同**（回归）。索引是可选元数据，引入它不该让任何
+ *    已存在的市场改行为；
+ * 2. **有依赖 → 按拓扑序装**（依赖在前）。顺序错了的后果是「装完了但跑不起来」，
+ *    而那种故障在运行期才暴露；
+ * 3. **循环依赖 → 明确拒绝 + 打印环**。只说「存在循环」等于让用户自己去翻索引找环。
+ */
+describe('市场索引解析（纯函数）', () => {
+  it('解析 name / source / category / dependencies', () => {
+    const index = normalizeMarketplaceIndex({
+      name: '官方市场',
+      plugins: [
+        {
+          name: 'welcomemode-design',
+          source: 'welcomemode-design-1.0.0',
+          category: '主题',
+          dependencies: ['mcp-miora', 'ardot'],
+        },
+      ],
+    });
+    expect(index).not.toBeNull();
+    expect(index?.name).toBe('官方市场');
+    expect(index?.plugins[0]).toMatchObject({
+      name: 'welcomemode-design',
+      source: 'welcomemode-design-1.0.0',
+      category: '主题',
+      dependencies: ['mcp-miora', 'ardot'],
+    });
+  });
+
+  it('坏条目被丢掉，其余照常可读（一行笔误不该让整份索引失效）', () => {
+    const index = normalizeMarketplaceIndex({
+      plugins: [
+        { name: 'good' },
+        { name: '' },
+        { name: '../evil' },
+        { source: 'no-name' },
+        'not-an-object',
+      ],
+    });
+    expect(index?.plugins.map((entry) => entry.name)).toEqual(['good']);
+  });
+
+  it('依赖去重、并滤掉非法项（否则会在排序时变成假的「找不到依赖」）', () => {
+    const index = normalizeMarketplaceIndex({
+      plugins: [{ name: 'a', dependencies: ['b', 'b', '', 7, '../x', 'c'] }],
+    });
+    expect(index?.plugins[0].dependencies).toEqual(['b', 'c']);
+  });
+
+  it('整体形状不认识才返回 null（plugins 不是数组）', () => {
+    expect(normalizeMarketplaceIndex(null)).toBeNull();
+    expect(normalizeMarketplaceIndex({ plugins: {} })).toBeNull();
+    expect(normalizeMarketplaceIndex({ plugins: [] })).toEqual({ name: null, plugins: [] });
+  });
+});
+
+describe('pickNewestVersion', () => {
+  it('按语义化顺序挑最新，不做字符串比较', () => {
+    // 字符串序 `'0.1.9' > '0.1.10'` —— 会用错版本，且没有任何报错
+    expect(pickNewestVersion(['0.1.9', '0.1.10'])).toBe('0.1.10');
+    expect(pickNewestVersion(['1.0.0', '2.0.0', '1.9.9'])).toBe('2.0.0');
+  });
+
+  it('非法 / 不安全的名字跳过；全都不合法时返回 null', () => {
+    expect(pickNewestVersion(['../evil', '1.0.0'])).toBe('1.0.0');
+    expect(pickNewestVersion(['../evil'])).toBeNull();
+    expect(pickNewestVersion([])).toBeNull();
+  });
+});
+
+describe('resolveInstallOrder（纯函数）', () => {
+  const pkg = (name: string, dependencies?: string[]) => ({
+    name,
+    displayName: name,
+    version: '1.0.0',
+    description: '',
+    ...(dependencies ? { dependencies } : {}),
+  });
+
+  it('没有依赖 → 只有目标自己', () => {
+    const result = resolveInstallOrder([pkg('a')], 'a');
+    expect(result).toEqual({ ok: true, order: ['a'] });
+  });
+
+  it('链式依赖 → 依赖在前、目标在后', () => {
+    const result = resolveInstallOrder([pkg('a', ['b']), pkg('b', ['c']), pkg('c')], 'a');
+    expect(result).toEqual({ ok: true, order: ['c', 'b', 'a'] });
+  });
+
+  it('共享依赖只出现一次，且排在使用者之前', () => {
+    const result = resolveInstallOrder(
+      [pkg('a', ['b', 'c']), pkg('b', ['d']), pkg('c', ['d']), pkg('d')],
+      'a',
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.order.filter((name) => name === 'd')).toHaveLength(1);
+    expect(result.order.indexOf('d')).toBeLessThan(result.order.indexOf('b'));
+    expect(result.order.indexOf('d')).toBeLessThan(result.order.indexOf('c'));
+    expect(result.order[result.order.length - 1]).toBe('a');
+  });
+
+  it('索引里没有目标 → 按单包装（索引是元数据，不是白名单）', () => {
+    // 一份没写全的索引不该让市场里别的包装不上
+    const result = resolveInstallOrder([pkg('other')], 'a');
+    expect(result).toEqual({ ok: true, order: ['a'] });
+  });
+
+  it('依赖在市场里找不到 → 拒绝，并说清是哪个依赖', () => {
+    const result = resolveInstallOrder([pkg('a', ['ghost'])], 'a');
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toContain('ghost');
+    expect(result.error).toContain('市场');
+  });
+
+  it('循环依赖 → 拒绝，并**把环打印出来**', () => {
+    const result = resolveInstallOrder([pkg('a', ['b']), pkg('b', ['a'])], 'a');
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toContain('循环');
+    expect(result.error).toContain('a → b → a');
+  });
+
+  it('自环也算循环', () => {
+    const result = resolveInstallOrder([pkg('a', ['a'])], 'a');
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toContain('a → a');
+  });
+});
+
+describe('市场索引：归档与读取', () => {
+  it('源里的 marketplace.json 被归档，listMarketPackages 据此补上分类与依赖', async () => {
+    const pluginsRoot = join(caseDir, 'plugins');
+    await putPackage(marketDir, 'welcomemode-design-1.0.0', 'welcomemode-design', '1.0.0');
+    await putPackage(marketDir, 'mcp-miora-1.0.0', 'mcp-miora', '1.0.0');
+    await writeFile(
+      join(marketDir, MARKET_INDEX_FILENAME),
+      JSON.stringify({
+        name: '演示市场',
+        plugins: [
+          { name: 'welcomemode-design', category: '主题', dependencies: ['mcp-miora'] },
+          { name: 'mcp-miora', category: 'MCP' },
+        ],
+      }),
+      'utf8',
+    );
+
+    await syncMarket(pluginsRoot, market());
+
+    const { index, error } = await readMarketplaceIndex(pluginsRoot, 'demo-market');
+    expect(error).toBeNull();
+    expect(index?.name).toBe('演示市场');
+
+    const listed = await listMarketPackages(pluginsRoot, 'demo-market');
+    const design = listed.packages.find((entry) => entry.name === 'welcomemode-design');
+    expect(design?.category).toBe('主题');
+    expect(design?.dependencies).toEqual(['mcp-miora']);
+    // 索引文件自己**不是**一个包，也不该进 skipped
+    expect(listed.packages.map((entry) => entry.name)).not.toContain(MARKET_INDEX_FILENAME);
+    expect(listed.skipped).toEqual([]);
+  });
+
+  it('没有索引文件 → 不是错误，包照常可读且元数据为空（回归）', async () => {
+    const pluginsRoot = join(caseDir, 'plugins');
+    await putPackage(marketDir, 'alpha', 'alpha', '1.0.0');
+    await syncMarket(pluginsRoot, market());
+
+    const { index, error } = await readMarketplaceIndex(pluginsRoot, 'demo-market');
+    expect(index).toBeNull();
+    expect(error).toBeNull();
+
+    const listed = await listMarketPackages(pluginsRoot, 'demo-market');
+    expect(listed.packages).toHaveLength(1);
+    expect(listed.packages[0].category).toBeUndefined();
+    expect(listed.packages[0].dependencies).toBeUndefined();
+  });
+
+  it('索引坏了 → 明确报原因，但**仍然回退目录扫描**（不是装不了）', async () => {
+    const pluginsRoot = join(caseDir, 'plugins');
+    await putPackage(marketDir, 'alpha', 'alpha', '1.0.0');
+    await writeFile(join(marketDir, MARKET_INDEX_FILENAME), '{ 这不是 JSON', 'utf8');
+    await syncMarket(pluginsRoot, market());
+
+    const { index, error } = await readMarketplaceIndex(pluginsRoot, 'demo-market');
+    expect(index).toBeNull();
+    expect(error).toContain('JSON');
+
+    const listed = await listMarketPackages(pluginsRoot, 'demo-market');
+    expect(listed.packages.map((entry) => entry.name)).toEqual(['alpha']);
+  });
+});
+
+describe('依赖感知的安装', () => {
+  async function seedMarket(pluginsRoot: string): Promise<void> {
+    await putPackage(marketDir, 'design-1.0.0', 'design', '1.0.0');
+    await putPackage(marketDir, 'miora-1.0.0', 'miora', '1.0.0');
+    await putPackage(marketDir, 'miora-1.0.1', 'miora', '1.0.1');
+    await writeFile(
+      join(marketDir, MARKET_INDEX_FILENAME),
+      JSON.stringify({
+        plugins: [
+          { name: 'design', dependencies: ['miora'] },
+          { name: 'miora', category: 'MCP' },
+        ],
+      }),
+      'utf8',
+    );
+    await syncMarket(pluginsRoot, market());
+  }
+
+  it('依赖先装、目标后装，两边的 current 指针都拨好', async () => {
+    const pluginsRoot = join(caseDir, 'plugins');
+    await seedMarket(pluginsRoot);
+
+    const result = await installFromMarket(pluginsRoot, 'demo-market', 'design', '1.0.0');
+
+    expect(result.ok).toBe(true);
+    // 依赖挑的是**最新可用版**（1.0.1），且顺序在目标之前
+    expect(result.installed).toEqual(['miora@1.0.1', 'design@1.0.0']);
+    expect(await readFile(join(pluginsRoot, CACHE_DIR, 'demo-market', 'miora', CURRENT_POINTER), 'utf8')).toBe('1.0.1');
+    expect(await readFile(join(pluginsRoot, CACHE_DIR, 'demo-market', 'design', CURRENT_POINTER), 'utf8')).toBe('1.0.0');
+    expect(result.path).toBe(join(pluginsRoot, CACHE_DIR, 'demo-market', 'design', '1.0.0'));
+  });
+
+  it('依赖装不上时**目标一个字节都不装**（不留半装现场）', async () => {
+    const pluginsRoot = join(caseDir, 'plugins');
+    await putPackage(marketDir, 'design-1.0.0', 'design', '1.0.0');
+    await writeFile(
+      join(marketDir, MARKET_INDEX_FILENAME),
+      JSON.stringify({ plugins: [{ name: 'design', dependencies: ['ghost'] }] }),
+      'utf8',
+    );
+    await syncMarket(pluginsRoot, market());
+
+    const result = await installFromMarket(pluginsRoot, 'demo-market', 'design', '1.0.0');
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('ghost');
+    await expect(readdir(join(pluginsRoot, CACHE_DIR, 'demo-market'))).rejects.toThrow();
+  });
+
+  it('循环依赖 → 安装被拒，原因里带着环', async () => {
+    const pluginsRoot = join(caseDir, 'plugins');
+    await putPackage(marketDir, 'a-1.0.0', 'a', '1.0.0');
+    await putPackage(marketDir, 'b-1.0.0', 'b', '1.0.0');
+    await writeFile(
+      join(marketDir, MARKET_INDEX_FILENAME),
+      JSON.stringify({
+        plugins: [
+          { name: 'a', dependencies: ['b'] },
+          { name: 'b', dependencies: ['a'] },
+        ],
+      }),
+      'utf8',
+    );
+    await syncMarket(pluginsRoot, market());
+
+    const result = await installFromMarket(pluginsRoot, 'demo-market', 'a', '1.0.0');
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('循环');
+    expect(result.error).toContain('a → b → a');
+  });
+
+  it('没有索引市场时行为与现状一致（单包装，installed 只有一项）', async () => {
+    const pluginsRoot = join(caseDir, 'plugins');
+    await putPackage(marketDir, 'alpha', 'alpha', '1.0.0');
+    await syncMarket(pluginsRoot, market());
+
+    const result = await installFromMarket(pluginsRoot, 'demo-market', 'alpha', '1.0.0');
+
+    expect(result.ok).toBe(true);
+    expect(result.installed).toEqual(['alpha@1.0.0']);
+  });
+
+  it('索引没提到这个包时也按单包装（索引不全不该变成装不动）', async () => {
+    const pluginsRoot = join(caseDir, 'plugins');
+    await putPackage(marketDir, 'alpha', 'alpha', '1.0.0');
+    await writeFile(
+      join(marketDir, MARKET_INDEX_FILENAME),
+      JSON.stringify({ plugins: [{ name: 'unrelated' }] }),
+      'utf8',
+    );
+    await syncMarket(pluginsRoot, market());
+
+    const result = await installFromMarket(pluginsRoot, 'demo-market', 'alpha', '1.0.0');
+
+    expect(result.ok).toBe(true);
+    expect(result.installed).toEqual(['alpha@1.0.0']);
   });
 });

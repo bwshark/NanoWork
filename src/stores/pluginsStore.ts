@@ -388,7 +388,19 @@ export const usePluginsStore = create<PluginsState>((set, get) => ({
         set({ marketError: result.error ?? '从市场安装失败' });
         return false;
       }
-      set({ marketError: null, notice: `已切换到「${name}」v${version}（仍需启用才生效）` });
+      // FR-3.13：市场索引声明依赖时，主进程会把依赖一并装好。**必须说出来**——
+      // 否则用户会在插件列表里看到几个自己没点过安装的插件（「我没装过 miora」），
+      // 而唯一能解释这件事的信息只存在于主进程的返回值里。
+      const dependencies = (result.installed ?? []).filter(
+        (entry) => entry !== `${name}@${version}`,
+      );
+      set({
+        marketError: null,
+        notice:
+          dependencies.length > 0
+            ? `已切换到「${name}」v${version}，并安装 ${dependencies.length} 个依赖（${dependencies.join('、')}）；仍需启用才生效`
+            : `已切换到「${name}」v${version}（仍需启用才生效）`,
+      });
       // 装完要重新扫：副本是新目录，磁盘事实变了
       await get().refresh();
       return true;

@@ -9,7 +9,8 @@
     "dist/**/*",
     "electron/main.cjs",
     "electron/preload.cjs",
-    "electron/assets/**/*"
+    "electron/assets/**/*",
+    "resources/**/*"
   ],
   "mac": {
     "target": "dmg",

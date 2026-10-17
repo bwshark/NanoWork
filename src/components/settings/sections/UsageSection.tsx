@@ -16,6 +16,7 @@ import {
   dateAxisLabel,
   formatRate,
   formatTokens,
+  formatTtft,
   sliceUsageDays,
   sumDays,
   todayLocalIso,
@@ -176,6 +177,12 @@ export function UsageSection() {
         <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 3, py: 2 }}>
           <Metric label="总 token" value={formatTokens(summary.tokens30d)} />
           <Metric label="请求数" value={String(summary.requests30d)} />
+          {/*
+            平均首字延迟（FR-11.7）。分母是「量到过首字的请求数」而不是请求总数，
+            一次都没量到显示「—」而不是 0 —— 判据全在 `formatTtft` 一处，
+            UI 不自己写除法（否则两处口径必然漂移）。
+          */}
+          <Metric label="平均首字延迟" value={formatTtft(totals)} />
           <Metric label="缓存命中率" value={formatRate(summary.cacheReadRate30d)} />
           <Metric label="活跃天数" value={`${summary.activeDays30d} 天`} />
           <Metric label="单日峰值" value={formatTokens(summary.peakDayTokens)} />

@@ -23,6 +23,23 @@ export interface UsageCounters {
   /** 以 `finish_reason ∈ {error, cancelled}` 判定为失败的那部分 */
   failedRequests: number;
   durationMs: number;
+  /**
+   * 首字延迟（TTFT）的**合计**毫秒数。它可加、**不可直接展示** ——
+   * 平均值是 `ttftMs / timedRequests`（见下一字段），UI 侧统一走
+   * `usageReport.formatTtft()`，不要各自写除法。
+   *
+   * 引擎只在**流式**响应上量得到首字（非流式没有「首字」这回事），
+   * 所以它天然只覆盖全部请求中的一部分。
+   */
+  ttftMs: number;
+  /**
+   * 真正**量到过首字**的请求数 —— TTFT 平均值的**唯一合法分母**。
+   *
+   * 拿它而不是 `requests` 做分母：用总请求数会把平均值摊薄成一个偏小的假数字，
+   * 而那是个看起来更漂亮的错数。为 0 时平均首字延迟必须显示「—」而非 0
+   * ——「0 毫秒」是一个不存在的成绩。
+   */
+  timedRequests: number;
 }
 
 /** 单日聚合。`date` 是**引擎按配置时区算好的本地日**（`YYYY-MM-DD`） */

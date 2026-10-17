@@ -1,6 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, Notification, safeStorage, shell } from 'electron';
 import { basename, dirname, extname, join } from 'node:path';
-import { promises as fs, existsSync, readFileSync, watch as fsWatch, type Dirent } from 'node:fs';
+import { promises as fs, appendFileSync, existsSync, readFileSync, watch as fsWatch, type Dirent } from 'node:fs';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createConnection } from 'node:net';
 import { request as httpRequest } from 'node:http';
@@ -11,6 +11,12 @@ import { parseWebuiResponseFrame } from './webuiFrames';
 import { canBindPort, resolveGatewayPort } from './gatewayPort';
 import { createWindowPreferences } from './windowPreferences';
 import { isDevToolsShortcut } from './devtoolsShortcut';
+import {
+  engineInterpreterCandidates,
+  runEngineSelfCheck,
+  type EngineSelfCheckTarget,
+} from './engineSelfCheck';
+import type { EngineSelfCheckReport } from '../src/types/engine';
 import { normalizeEngineChannelAllowFrom } from './channelAllowFrom';
 import { disconnectChannelInConfig, resolveWeixinAccountPath, type DisconnectChannelKind } from './channelDisconnect';
 import {
@@ -75,6 +81,7 @@ import {
   DEFAULT_DENY_WRITE,
   fileToolsSignature,
   mergeDefaultDenyWrite,
+  mergePathRules,
   parseFileToolsPolicy,
 } from './toolsPolicyConfig';
 // —— 可观测性（FR-11.2 / FR-11.3）——
@@ -83,6 +90,11 @@ import {
 import { appendLogLine, createFileLogger, logStats, pruneLogs } from './logStore';
 import { pruneTraces, traceStats, writeTrace } from './traceStore';
 import { buildDiagnosticsBundle } from './diagnostics';
+// —— 启动性能剖析（FR-11.6）——
+// 该模块**零依赖**（不 import electron / store / config / logger）—— 不是洁癖：
+// 剖析器若依赖 logger，它测出来的「启动耗时」里就含它自己引入的模块加载成本，
+// 而观测手段拖慢被观测对象是最坏的耦合（见 `startupProfile.ts` 模块注释）。
+import { createStartupProfiler, isStartupProfileEnabled } from './startupProfile';
 import { acquireSingleInstance } from './singleInstance';
 import {
   cleanupChildProcesses,
@@ -143,6 +155,42 @@ import {
   type MarketplaceEntry,
 } from './pluginMarketplace';
 import type { SessionMeta } from '../src/types/event';
+
+/**
+ * 启动剖析器（FR-11.6）。
+ *
+ * **放在单实例锁之前是刻意的**：必须尽早拿到 `startedAtMs`，否则「模块加载 →
+ * whenReady」这段（进程启动成本的大头之一）根本不被覆盖。它与下面那句「必须放在
+ * 所有带副作用的模块级代码之前」不冲突 —— 本对象**零 I/O、零资源**：关闭态
+ * （默认）下 `createStartupProfiler` 直接退化成 noop，连数组都不分配；写文件只
+ * 发生在 `flush()`，而 flush 只在启动链路收敛后调一次。
+ *
+ * 落盘方式由这里注入而不是写死在模块里：只有 main.ts 知道 userData 在哪，且必须
+ * 等 `app.whenReady()` 之后才能取到。模块保持纯净，才能被 jsdom 单测直接跑。
+ *
+ * 区间名（`perf-report.html` 按它分类展示）：
+ * `app.load→ready` / `window.create→firstPaint` / `serve.spawn→listen` / `gateway.spawn→listen`
+ */
+const startupProfile = createStartupProfiler({
+  enabled: isStartupProfileEnabled(),
+  extras: () => ({ version: app.getVersion(), platform: process.platform }),
+  sink: (report) => {
+    // 只有真的开了开关才会走到这里（关闭态 flush 是 no-op）。写失败整个吞掉：
+    // 让观测手段把启动链路搞崩，正是这个模块开头警告的那种耦合。
+    try {
+      appendFileSync(
+        join(DIAGNOSTICS_USER_DATA, 'startup-profile.jsonl'),
+        `${JSON.stringify(report)}\n`,
+        'utf8',
+      );
+    } catch {
+      /* 采集失败不影响启动 */
+    }
+  },
+});
+
+// 「模块加载」这一段从此刻起算 —— 它是下面所有区间的公共原点。
+startupProfile.begin('app.load→ready');
 
 // —— 单实例锁（FR-13.1）——
 //
@@ -639,6 +687,12 @@ async function createWindow(): Promise<void> {
     await mainWindow.loadFile(join(__dirname, '../dist/index.html'));
   }
 
+  // 「首屏已加载」用一个 `once` 收口：`did-finish-load` 每次加载都会发（dev 分支的
+  // HMR 重载、切换 devUrl 都会再发），而剖析只关心冷启动那一次。
+  win.webContents.once('did-finish-load', () => {
+    startupProfile.end('window.create→firstPaint');
+  });
+
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
@@ -660,6 +714,10 @@ async function createWindow(): Promise<void> {
   // 最大化状态变化向渲染层推送（驱动自绘标题栏控件图标切换）
   mainWindow.on('maximize', () => mainWindow?.webContents.send('window:maximize-change', true));
   mainWindow.on('unmaximize', () => mainWindow?.webContents.send('window:maximize-change', false));
+
+  // FR-13.6：引擎自检排在**窗口已创建之后**（异步、不 await）——它要起子进程，
+  // 放在窗口显示前会把首屏拖长数秒，而那正是这条需求本身要治好的一种卡顿。
+  scheduleEngineSelfCheck();
 }
 
 // ——————————————————————————————————————————————
@@ -717,10 +775,9 @@ interface NanobotLaunchConfig {
 /** 项目本地兜底配置：nanobot/nanobot/.venv 里的解释器 + 项目根 nanowork.config.json */
 function fallbackLaunchConfig(): NanobotLaunchConfig {
   const root = join(__dirname, '..');
-  const isWin = process.platform === 'win32';
-  const venvPython = isWin
-    ? join(root, 'nanobot', 'nanobot', '.venv', 'Scripts', 'python.exe')
-    : join(root, 'nanobot', 'nanobot', '.venv', 'bin', 'python');
+  // 候选路径**只此一份**（FR-13.6）：自检要把它列给用户看，而「自检列出的路径」
+  // 与「启动器真正找的路径」一旦分叉，那份引导就是误导。
+  const { python: venvPython, script: venvBin } = engineInterpreterCandidates(root, process.platform);
   // 首选：venv 的解释器 + `-m nanobot`（原因见 NanobotLaunchConfig.args）
   if (existsSync(venvPython)) {
     return {
@@ -732,9 +789,6 @@ function fallbackLaunchConfig(): NanobotLaunchConfig {
     };
   }
   // 退路：console script，或 PATH 上的 nanobot
-  const venvBin = isWin
-    ? join(root, 'nanobot', 'nanobot', '.venv', 'Scripts', 'nanobot.exe')
-    : join(root, 'nanobot', 'nanobot', '.venv', 'bin', 'nanobot');
   return {
     bin: existsSync(venvBin) ? venvBin : 'nanobot',
     args: [],
@@ -800,6 +854,83 @@ async function readNanobotConfig(): Promise<NanobotLaunchConfig> {
     port: process.env.NANOBOT_PORT || base.port,
     config: base.config,
   };
+}
+
+// ——————————————————————————————————————————————
+// 引擎运行时自检（FR-13.6）
+// ——————————————————————————————————————————————
+
+/** 最近一次自检报告（`null` = 还没跑过）。渲染层「关于」分区来取这一份。 */
+let engineSelfCheckReport: EngineSelfCheckReport | null = null;
+/** 进行中的那次自检。同一时刻只跑一次：三项检查要起子进程，重复跑纯属浪费。 */
+let engineSelfCheckInflight: Promise<EngineSelfCheckReport> | null = null;
+
+/**
+ * 取自检报告（必要时跑一次）。
+ *
+ * `refresh = true` 时强制重跑（「关于」分区的「重新自检」按钮）；否则复用进行中
+ * 或已完成的报告 —— 界面打开就立刻有内容，而不是每次都等两轮子进程。
+ *
+ * 用 `readNanobotConfig()`（而不是 `readLaunchConfigFromDisk()`）取目标：前者含
+ * `NANOBOT_BIN` 等环境变量覆盖，也就是**引擎真正会被用什么拉起**。自检若查的是
+ * 「配置文件里的那个 bin」，用户把 bin 指到别处之后就会看到一份「检查通过」而引擎
+ * 照旧起不来的报告。
+ */
+function engineSelfCheck(refresh = false): Promise<EngineSelfCheckReport> {
+  if (refresh) engineSelfCheckInflight = null;
+  if (engineSelfCheckInflight !== null) return engineSelfCheckInflight;
+  const targetPromise: Promise<EngineSelfCheckTarget> = readNanobotConfig()
+    .then((launch) => ({
+      bin: launch.bin,
+      // `config` 在启动配置里是可选的；兜底到引擎默认那份路径 —— 自检要能报出
+      // 「我在看哪个文件」，而 `undefined` 在报告里会变成一句没法行动的空白。
+      config: launch.config ?? join(__dirname, '..', 'nanowork.config.json'),
+      engineRoot: join(__dirname, '..'),
+    }))
+    .catch(() => {
+      const fallback = fallbackLaunchConfig();
+      return {
+        bin: fallback.bin,
+        config: fallback.config ?? join(__dirname, '..', 'nanowork.config.json'),
+        engineRoot: join(__dirname, '..'),
+      };
+    });
+  engineSelfCheckInflight = targetPromise
+    .then((target) => runEngineSelfCheck(target))
+    .then((report) => {
+      engineSelfCheckReport = report;
+      return report;
+    })
+    .catch((err: unknown) => {
+      // 连自检本身都跑挂了（理论上不该发生：子进程错误由 IO 适配器收成结果）。
+      // **不缓存这次失败**：否则「重新自检」会一直返回同一个坏结果。
+      engineSelfCheckInflight = null;
+      throw err;
+    });
+  return engineSelfCheckInflight;
+}
+
+/**
+ * 窗口显示**之后**再跑（FR-13.6 验收③：自检不得阻塞窗口显示）。
+ *
+ * 失败时落一条 `engine` 模块的日志：自检结果要能在**没打开设置页**的情况下被事后
+ * 诊断包捞到 —— 用户来问「为什么引擎起不来」时，我们最需要的正是那一刻的原始报错。
+ */
+function scheduleEngineSelfCheck(): void {
+  void engineSelfCheck()
+    .then((report) => {
+      if (report.ok) return;
+      const failed = report.findings.filter((finding) => finding.status === 'failed');
+      void appendLogLine(DIAGNOSTICS_USER_DATA, {
+        at: Date.now(),
+        module: 'engine',
+        level: 'warn',
+        message: `引擎自检未通过（${failed.length}/3）：${failed
+          .map((finding) => `${finding.id}: ${finding.summary}${finding.detail ? ` | ${finding.detail.split('\n')[0]}` : ''}`)
+          .join(' ; ')}`,
+      });
+    })
+    .catch(() => undefined);
 }
 
 /**
@@ -921,6 +1052,9 @@ async function startNanobot(): Promise<boolean> {
     if (config && existsSync(config)) {
       serveArgs.push('--config', config, '-v');
     }
+    // 起点取在 spawn **之前**：这样量到的是「从发起拉起到端口可连」的整段，
+    // 与上面那句注释里的 9.4 秒同一口径（只量 spawn 之后会漏掉进程创建本身）。
+    startupProfile.begin('serve.spawn→listen');
     nanobotProcess = spawn(bin, serveArgs, {
       stdio: ['ignore', 'pipe', 'pipe'],
       shell: process.platform === 'win32',
@@ -946,6 +1080,9 @@ async function startNanobot(): Promise<boolean> {
     const ready = await waitForPort(host, listenPort, LAUNCH_READY_TIMEOUT_MS, () =>
       nanobotProcess === null,
     );
+    // 成功与超时**都要收口**：超时那一段恰恰是排查「为什么起不来」最有价值的数据，
+    // 只在 ready 分支 end 会把它整段丢掉。
+    startupProfile.end('serve.spawn→listen');
     if (!ready) {
       console.warn(
         `[nanobot] ${host}:${listenPort} 在 ${LAUNCH_READY_TIMEOUT_MS / 1000} 秒内未进入监听（进程可能已退出）`,
@@ -1035,6 +1172,7 @@ async function startNanobotGateway(): Promise<boolean> {
   try {
     const gatewayArgs = [...args, 'gateway', '--foreground'];
     if (config && existsSync(config)) gatewayArgs.push('--config', config, '-v');
+    startupProfile.begin('gateway.spawn→listen');
     nanobotGatewayProcess = spawn(bin, gatewayArgs, {
       stdio: ['ignore', 'pipe', 'pipe'],
       shell: process.platform === 'win32',
@@ -1057,6 +1195,7 @@ async function startNanobotGateway(): Promise<boolean> {
     const ready = await waitForPort('127.0.0.1', 18790, LAUNCH_READY_TIMEOUT_MS, () =>
       nanobotGatewayProcess === null,
     );
+    startupProfile.end('gateway.spawn→listen');
     if (!ready) {
       console.warn(
         `[nanobot] gateway 18790 在 ${LAUNCH_READY_TIMEOUT_MS / 1000} 秒内未进入监听（进程可能已退出）`,
@@ -2505,12 +2644,16 @@ async function getNanobotTools(): Promise<NanobotToolsSnapshot | null> {
 }
 
 /**
- * 合并一次工具策略变更（目前只有「默认拒绝写入」一条指令）。
+ * 合并一次工具策略变更。
  *
  * 与 `mergeModelMutationIntoConfig` 同形（逐段合并 + 幂等比对），差别只在动的是
  * `tools.file` 而不是 `modelPresets` / `agents.defaults`——**并且这两段必须分开走**：
  * 模型段和工具段的幂等签名只比自己那几段，混在一起会让「顺手改了模型」被判成
  * 「工具策略有变更」，白白重启一次 serve。
+ *
+ * [LOCAL PATCH] FR-8.13：多了一条 `setPathRules` 指令。两条走**同一个**签名函数
+ * （`fileToolsSignature` 已把规则并进去），所以「改开关」与「改规则」各自判重，
+ * 不会互相触发多余的重启。
  */
 async function mergeToolsMutationIntoConfig(
   configPath: string,
@@ -2520,7 +2663,10 @@ async function mergeToolsMutationIntoConfig(
   const data = JSON.parse(raw) as Record<string, unknown>;
 
   const before = fileToolsSignature(data);
-  const next = mergeDefaultDenyWrite(data, mutation.defaultDenyWrite);
+  const next =
+    mutation.op === 'setPathRules'
+      ? mergePathRules(data, mutation.pathRules)
+      : mergeDefaultDenyWrite(data, mutation.defaultDenyWrite);
   if (!next.changed) return false;
   if (fileToolsSignature(next.data) === before) return false;
 
@@ -2535,21 +2681,25 @@ async function syncNanobotTools(mutationJson: string): Promise<ToolsSyncResult> 
   try {
     if (nanobotStartupPromise) await nanobotStartupPromise;
     const mutation = JSON.parse(mutationJson) as NanobotToolsMutation;
-    if (!mutation || mutation.op !== 'setDefaultDenyWrite') {
+    if (mutation.op !== 'setDefaultDenyWrite' && mutation.op !== 'setPathRules') {
       return { ok: false, message: '工具策略变更指令格式非法' };
     }
-    if (typeof mutation.defaultDenyWrite !== 'boolean') {
+    if (mutation.op === 'setDefaultDenyWrite' && typeof mutation.defaultDenyWrite !== 'boolean') {
       return { ok: false, message: 'defaultDenyWrite 必须是布尔值' };
+    }
+    if (mutation.op === 'setPathRules' && !Array.isArray(mutation.pathRules)) {
+      return { ok: false, message: 'pathRules 必须是数组' };
     }
     const configPath = await resolveNanobotConfigPath();
     if (!configPath) {
       return { ok: false, message: '未找到 nanowork config.json，无法同步工具策略' };
     }
     const changed = await mergeToolsMutationIntoConfig(configPath, mutation);
-    return await commitNanobotConfig(
-      changed,
-      `写入策略已写入 config.json.tools.file（默认${mutation.defaultDenyWrite ? '拒绝' : '允许'}写入）`,
-    );
+    const message =
+      mutation.op === 'setPathRules'
+        ? `路径规则已写入 config.json.tools.file（${mutation.pathRules.length} 条）`
+        : `写入策略已写入 config.json.tools.file（默认${mutation.defaultDenyWrite ? '拒绝' : '允许'}写入）`;
+    return await commitNanobotConfig(changed, message);
   } catch (err) {
     return { ok: false, message: `工具策略同步失败：${String(err)}` };
   }
@@ -3340,6 +3490,57 @@ ipcMain.on('trace:write', (_e, file: unknown) => {
     await pruneTraces(DIAGNOSTICS_USER_DATA, { now });
   })();
 });
+
+/** 会话首字延迟样本的落点（与 trace 分文件，见下方注释） */
+const SESSION_LATENCY_FILE = 'session-latency.jsonl';
+
+/** 只接受「有限非负数」，其余一律 `null`（＝未测到，与「0 毫秒」是两件事） */
+function latencyNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+    ? Math.round(value)
+    : null;
+}
+
+/**
+ * 会话首字延迟采样落盘（FR-11.7）。
+ *
+ * **与 trace 分开落一个文件**：trace 是回合级、按 pid 分目录、带保留策略；而延迟
+ * 样本是一条条可聚合的测量值，性能报告要按时间轴直接读全。混进 trace 目录只会让
+ * 报告去遍历一堆不相干的文件。
+ *
+ * 落盘前逐字段收敛：渲染层的值不可全信，而这些数字会被当成**测量结果**写进报告 ——
+ * 混进一个 `NaN` 或字符串，平均值整列变 `NaN` 却不报错，那种错没有人能一眼看出。
+ * 收敛口径与渲染层一致：非「有限非负数」一律记 `null`（＝未测到，与「0 毫秒」区分）。
+ */
+ipcMain.on('perf:latency', (_e, raw: unknown) => {
+  const sample = raw as Record<string, unknown> | null;
+  if (!sample || typeof sample !== 'object') return;
+  const record = {
+    at: Date.now(),
+    startedAtMs: latencyNumber(sample.startedAtMs),
+    firstByteAtMs: latencyNumber(sample.firstByteAtMs),
+    firstTokenAtMs: latencyNumber(sample.firstTokenAtMs),
+    ttftMs: latencyNumber(sample.ttftMs),
+    firstTokenLatencyMs: latencyNumber(sample.firstTokenLatencyMs),
+  };
+  try {
+    appendFileSync(
+      join(DIAGNOSTICS_USER_DATA, SESSION_LATENCY_FILE),
+      `${JSON.stringify(record)}\n`,
+      'utf8',
+    );
+  } catch {
+    /* 采集失败不影响这一轮对话 */
+  }
+});
+
+/**
+ * 引擎运行时自检（FR-13.6）。`refresh = true` 强制重跑（「重新自检」按钮）。
+ *
+ * 返回的是一份**结构化报告**（三项逐项结果 + 证据 + 可操作命令），不是一个布尔 ——
+ * 三项的修法完全不同，糊成一句「引擎失败」等于把黑盒换个地方摆。
+ */
+ipcMain.handle('engine:selfCheck', (_e, refresh: unknown) => engineSelfCheck(refresh === true));
 
 ipcMain.handle('diagnostics:stats', async () => {
   const [logs, traces] = await Promise.all([
@@ -4658,6 +4859,10 @@ app.whenReady().then(async () => {
   // 有了单实例锁本不该到达这里，所以这行是保险而非主防线。
   if (!isPrimaryInstance) return;
 
+  // 「模块加载 → ready」到此为止。这一段是**纯启动成本**，后面每一段都属于可优化项，
+  // 分开量才能判断 9.4 秒里有多少是引擎、有多少是应用自己。
+  startupProfile.end('app.load→ready');
+
   // 隐藏系统级原生菜单（自绘菜单栏接管）
   Menu.setApplicationMenu(null);
 
@@ -4665,6 +4870,7 @@ app.whenReady().then(async () => {
   // 必须早于 createWindow：建窗时会同步读主题偏好，迁移完成后即可直接命中新落点。
   await migrateLegacyStore();
 
+  startupProfile.begin('window.create→firstPaint');
   void createWindow();
 
   // 诊断产物的保留清理（FR-11.2 / FR-11.3）：启动时各扫一次，之后在 trace 写入侧
@@ -4733,6 +4939,12 @@ app.whenReady().then(async () => {
   );
   void nanobotStartupPromise.then((ok) => {
     if (ok) console.log('[nanobot] 网关已在后台启动');
+    // 剖析结果在这里写一次：此刻所有并行阶段（窗口 / serve / gateway）都已收敛。
+    // 延后 3 秒是为了让窗口首屏那一段也闭合（冷启动下它与网关就绪同量级）。
+    // `unref()` 让采样定时器不拖住进程退出——观测手段不该影响被观测对象的行为。
+    // 未开开关时 `flush` 是 no-op，这里等于什么都没做。
+    const flushTimer = setTimeout(() => startupProfile.flush(), 3000);
+    flushTimer.unref?.();
   });
 });
 

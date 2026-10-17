@@ -166,3 +166,72 @@ describe('fetchSSE: 结束形态与错误上报', () => {
     expect(end).toBe('eof');
   });
 });
+
+/**
+ * 首字节信号（FR-11.7）。
+ *
+ * 它与 `onActivity` 的差别只有一处，但足以让 `ttftMs` 整段算错：
+ * `fetchSSE` 在**拿到响应头**时就会先调一次 `onActivity`，而那一个字节都还没读到。
+ * 拿 `onActivity` 的首次调用当首字节，等于把「等待响应头」也算进首字延迟。
+ */
+describe('首字节信号', () => {
+  it('只回调一次，且只在真的读到字节时——响应头到达不算', async () => {
+    const activity: number[] = [];
+    const firstByte: number[] = [];
+    await readSSEStream(
+      readerOf(['data: a\n\n', 'data: b\n\n', 'data: [DONE]\n\n']),
+      undefined,
+      () => undefined,
+      () => activity.push(activity.length),
+      // ③ 首字节
+      () => firstByte.push(firstByte.length),
+    );
+
+    // 活跃信号会随每个 chunk 增加；首字节无论读多少块都只有一次
+    expect(activity.length).toBeGreaterThan(1);
+    expect(firstByte).toHaveLength(1);
+  });
+
+  it('空 chunk 不算首字节（读到 0 字节不是「收到数据」）', async () => {
+    const encoder = new TextEncoder();
+    const chunks: Uint8Array[] = [encoder.encode(''), encoder.encode('data: [DONE]\n\n')];
+    let i = 0;
+    const reader = {
+      read: async () =>
+        i < chunks.length
+          ? ({ done: false, value: chunks[i++] } as const)
+          : ({ done: true, value: undefined } as const),
+    } as unknown as ReadableStreamDefaultReader<Uint8Array>;
+
+    let fired = 0;
+    await readSSEStream(reader, undefined, () => undefined, undefined, () => {
+      fired += 1;
+    });
+    expect(fired).toBe(1);
+  });
+
+  it('流一开始就结束（一个字节都没有）→ 首字节永不触发', async () => {
+    let fired = 0;
+    await readSSEStream(readerOf([]), undefined, () => undefined, undefined, () => {
+      fired += 1;
+    });
+    expect(fired).toBe(0);
+  });
+
+  it('fetchSSE 把 onFirstByte 透传给读取层', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        fakeResponse({ status: 200, body: 'data: [DONE]\n\n', contentType: 'text/event-stream' }),
+      ),
+    );
+    let fired = 0;
+    await fetchSSE(
+      'http://gw/v1/chat/completions',
+      { onFirstByte: () => { fired += 1; } },
+      () => undefined,
+      () => undefined,
+    );
+    expect(fired).toBe(1);
+  });
+});

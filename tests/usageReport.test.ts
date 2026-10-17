@@ -13,10 +13,12 @@
 import { describe, expect, it } from 'vitest';
 import {
   aggregateBySource,
+  averageTtftMs,
   dateAxisLabel,
   emptyUsageStats,
   formatRate,
   formatTokens,
+  formatTtft,
   sliceUsageDays,
   sumDays,
   todayLocalIso,
@@ -179,5 +181,49 @@ describe('emptyUsageStats', () => {
 
   it('带原因时把原因带上（界面要显示它）', () => {
     expect(emptyUsageStats('网关未启动').error).toBe('网关未启动');
+  });
+});
+
+/**
+ * 平均首字延迟（FR-11.7）。
+ *
+ * **分母不是请求数**：只有流式请求量得到首字。拿总请求数当分母会把平均值摊薄成
+ * 一个偏小的假数字 —— 而「偏小的错数」比「—」危险得多，因为没人会去怀疑一个
+ * 更好看的数字。这批用例钉的就是这两条：分母是 `timedRequests`、未测到显示「—」。
+ */
+describe('平均首字延迟', () => {
+  it('分母是「量到过首字的请求数」，不是请求总数', () => {
+    // 10 次请求里只有 2 次是流式（量得到首字），合计 2000ms
+    const c = counters({ requests: 10, timedRequests: 2, ttftMs: 2000 });
+    expect(averageTtftMs(c)).toBe(1000);
+    expect(formatTtft(c)).toBe('1 s');
+  });
+
+  it('一次都没量到 → null /「—」，绝不是 0 ms', () => {
+    const c = counters({ requests: 42 });
+    expect(averageTtftMs(c)).toBeNull();
+    expect(formatTtft(c)).toBe('—');
+  });
+
+  it('量到的是真的 0 毫秒 → 显示 0 ms（与「未测到」区分开）', () => {
+    // 首字节即首 token 时会得到这个值：它是一条真实的测量结果。
+    const c = counters({ timedRequests: 1, ttftMs: 0 });
+    expect(averageTtftMs(c)).toBe(0);
+    expect(formatTtft(c)).toBe('0 ms');
+  });
+
+  it('亚秒级按毫秒展示，秒级以上按秒展示', () => {
+    expect(formatTtft(counters({ timedRequests: 2, ttftMs: 980 }))).toBe('490 ms');
+    expect(formatTtft(counters({ timedRequests: 4, ttftMs: 9600 }))).toBe('2.4 s');
+  });
+
+  it('多日累加后仍按同一口径求平均（sumDays 把两个字段一起加）', () => {
+    const total = sumDays([
+      day('2026-10-15', { timedRequests: 1, ttftMs: 400 }),
+      day('2026-10-16', { timedRequests: 3, ttftMs: 2600 }),
+    ]);
+    expect(total.timedRequests).toBe(4);
+    expect(total.ttftMs).toBe(3000);
+    expect(formatTtft(total)).toBe('750 ms');
   });
 });

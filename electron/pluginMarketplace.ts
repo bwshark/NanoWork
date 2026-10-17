@@ -38,6 +38,9 @@
  */
 import { promises as fs } from 'node:fs';
 import { basename, isAbsolute, join, resolve, sep } from 'node:path';
+// 版本比较复用既有实现（`semverRange` 是「版本规则的唯一产地」，
+// 主进程的包校验与渲染层的插件卡片都用它；这里再写一份必然漂移）。
+import { compareVersions } from '../src/lib/semverRange';
 import type {
   MarketGcResult,
   MarketIndex,
@@ -71,6 +74,110 @@ const SAFE_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 export const MARKETPLACES_DIR = 'marketplaces';
 export const CACHE_DIR = 'cache';
 export const CURRENT_POINTER = 'current';
+
+/**
+ * 可选的市场索引文件名（FR-3.13）。
+ *
+ * 放在市场源根目录（目录型市场 = `location` 下），同步时归档到
+ * `marketplaces/<market>/marketplace.json`。**可选**：没有它时一切行为与引入
+ * 本特性之前逐字相同（回退目录扫描）。
+ */
+export const MARKET_INDEX_FILENAME = 'marketplace.json';
+
+/** 索引里的一条（已收敛：坏条目在解析期就被丢掉，不传染整份索引） */
+export interface MarketplaceIndexPlugin {
+  /** 插件名；**只用于匹配**（不参与拼路径），故与清单里的 `name` 同一个域 */
+  name: string;
+  /** 包在索引里的来源目录名（信息性字段；目录型市场里通常等于包目录名） */
+  source: string | null;
+  category: string | null;
+  dependencies: string[];
+}
+
+/** 一份收敛后的市场索引 */
+export interface MarketplaceIndex {
+  name: string | null;
+  plugins: MarketplaceIndexPlugin[];
+}
+
+/**
+ * 把一段未知形状收敛成市场索引。
+ *
+ * 形状照分析① §P3：`{name, plugins:[{name, source, category, dependencies[]}]}`。
+ *
+ * **坏条目丢弃、不抛错**：一条写错的依赖声明不该让整份索引失效——那会让用户
+ * 以为「这个市场什么都没写」，而实际上只是其中一行有笔误。
+ * 返回 `null` 只用于「整体形状不对」（不是对象 / `plugins` 不是数组），
+ * 那才是真的读不懂。
+ */
+export function normalizeMarketplaceIndex(raw: unknown): MarketplaceIndex | null {
+  if (typeof raw !== 'object' || raw === null) return null;
+  const record = raw as Record<string, unknown>;
+  if (!Array.isArray(record.plugins)) return null;
+  const plugins: MarketplaceIndexPlugin[] = [];
+  for (const item of record.plugins) {
+    if (typeof item !== 'object' || item === null) continue;
+    const entry = item as Record<string, unknown>;
+    const name = asString(entry.name).trim();
+    if (!isSafeSegment(name)) continue;
+    const source = asString(entry.source).trim();
+    const category = asString(entry.category).trim();
+    const rawDeps = Array.isArray(entry.dependencies) ? entry.dependencies : [];
+    // 去重 + 收敛：重复声明同一依赖会让拓扑排序多做一次无意义的访问，
+    // 而非法项（数字 / 含分隔符 / 空串）留着只会在解析顺序时变成一条
+    // 「找不到依赖 X」的假错误。
+    const dependencies = [
+      ...new Set(
+        rawDeps
+          .filter((dep): dep is string => typeof dep === 'string')
+          .map((dep) => dep.trim())
+          .filter(isSafeSegment),
+      ),
+    ];
+    plugins.push({
+      name,
+      source: isSafeSegment(source) ? source : null,
+      category: category === '' ? null : category,
+      dependencies,
+    });
+  }
+  const indexName = asString(record.name).trim();
+  return { name: indexName === '' ? null : indexName, plugins };
+}
+
+/**
+ * 读市场源侧归档里的索引文件。
+ *
+ * 三种结果要分清（调用方据此决定是「回退扫描」还是「报错」）：
+ * - `index === null` + `error === null` → **没有索引文件**（正常，走目录扫描）；
+ * - `index === null` + 有 `error` → 文件在但读不懂（**仍然走扫描**，只是提示一下）；
+ * - 有 `index` → 用它。
+ */
+export async function readMarketplaceIndex(
+  pluginsRoot: string,
+  market: string,
+): Promise<{ index: MarketplaceIndex | null; error: string | null }> {
+  if (!isSafeSegment(market)) return { index: null, error: null };
+  const path = join(pluginsRoot, MARKETPLACES_DIR, market, MARKET_INDEX_FILENAME);
+  let raw: string;
+  try {
+    raw = await fs.readFile(path, 'utf8');
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException | null)?.code;
+    // ENOENT / ENOTDIR（市场还没同步过）都是「没有索引」，不是错误
+    if (code === 'ENOENT' || code === 'ENOTDIR') return { index: null, error: null };
+    return { index: null, error: `市场索引读取失败：${(err as Error).message}` };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    return { index: null, error: `市场索引不是合法 JSON：${(err as Error).message}` };
+  }
+  const index = normalizeMarketplaceIndex(parsed);
+  if (index === null) return { index: null, error: '市场索引形状不认识（需要 {plugins: [...]}）' };
+  return { index, error: null };
+}
 
 /** 空注册表：注册表文件不存在 / 坏了时的起点（**不猜**出厂市场） */
 export function emptyMarketRegistry(): MarketRegistry {
@@ -267,7 +374,15 @@ export async function listMarketPackages(
   } catch {
     return result;
   }
+  // 索引（可选）只用来给包**补元数据**；包本身仍然以磁盘为准。
+  // 两份都读：索引告诉你「这个包是谁的依赖、属于哪一类」，磁盘告诉你「有哪些版本」。
+  const { index } = await readMarketplaceIndex(pluginsRoot, market);
+  const metaByName = new Map((index?.plugins ?? []).map((entry) => [entry.name, entry]));
   for (const pluginDir of pluginDirs) {
+    // 索引文件躺在插件目录的**同一层**，必须显式跳过：虽然拿文件当目录 readdir
+    // 会失败并被 catch 掉，但那是「靠副作用跳过」——多一次必然失败的 syscall，
+    // 且以后若改成不 catch，它就会变成一个假的 skipped 条目。
+    if (pluginDir === MARKET_INDEX_FILENAME) continue;
     if (!isSafeSegment(pluginDir)) continue;
     const pluginRoot = join(marketRoot, pluginDir);
     let versions: string[];
@@ -288,6 +403,12 @@ export async function listMarketPackages(
         displayName: manifest.displayName,
         version,
         description: manifest.description,
+        // 索引没提到的包保持 `undefined`（不是空数组）：`undefined` = 不知道，
+        // `[]` = 明确声明「没有依赖」。两者在「要不要提示安装顺序」上不一样。
+        category: metaByName.get(manifest.name)?.category ?? undefined,
+        dependencies: metaByName.get(manifest.name)?.dependencies.length
+          ? [...(metaByName.get(manifest.name)?.dependencies ?? [])]
+          : undefined,
       });
     }
   }
@@ -306,6 +427,32 @@ export async function listMarketPackages(
  * 远程型：本轮不联网（还没接入下载通道），**如实失败**并记 `lastError`；
  * 索引保持上次的样子，绝不因为拉不到就把索引清空。
  */
+/**
+ * 把市场源里的索引文件归档到 `marketplaces/<market>/marketplace.json`（FR-3.13）。
+ *
+ * 与包副本不同，索引**每次都覆盖写**：它描述的是「这个市场现在有哪些包、依赖怎么连」。
+ * 留旧版本会让新加入的包在分类 / 依赖上永远是空的 —— 而那种缺失看起来像
+ * 「这个市场没写分类」，很难联想到「归档没更新」。
+ *
+ * 索引缺失 / 读不到**不算同步失败**（它是可选元数据）。归档原文而不先校验：
+ * 保留原始内容便于事后诊断，坏索引在读的那一侧会被明确报出来并回退扫描。
+ */
+async function archiveMarketIndex(pluginsRoot: string, market: MarketplaceEntry): Promise<void> {
+  let raw: string;
+  try {
+    raw = await fs.readFile(join(market.location, MARKET_INDEX_FILENAME), 'utf8');
+  } catch {
+    return;
+  }
+  try {
+    const targetDir = join(pluginsRoot, MARKETPLACES_DIR, market.id);
+    await fs.mkdir(targetDir, { recursive: true });
+    await fs.writeFile(join(targetDir, MARKET_INDEX_FILENAME), raw, 'utf8');
+  } catch {
+    /* 归档失败不影响包同步：包本体能不能用才是判据 */
+  }
+}
+
 export async function syncMarket(
   pluginsRoot: string,
   market: MarketplaceEntry,
@@ -336,6 +483,8 @@ export async function syncMarket(
       error: `市场目录不可读：${(err as Error).message}`,
     };
   }
+  // 索引归档在包循环之前：即便后面每个包都跳过，索引也让「分类 / 依赖」可见
+  await archiveMarketIndex(pluginsRoot, market);
   for (const entry of entries) {
     if (!isSafeSegment(entry)) continue;
     const source = join(market.location, entry);
@@ -377,33 +526,91 @@ export async function recordMarketSync(
 }
 
 /**
- * 从市场安装（= 把一个版本 materialize 成生效副本并拨指针）。
+ * 从一组版本号里挑最新的（非法/不安全的一律跳过）。
  *
- * ⚠️ 指针**只在安装/切换版本时改写**，市场同步不会动它——这条是
- * 「刷新不破坏活跃现场」的另一半。
+ * 用 `compareVersions` 而不是字符串比较：`0.1.9` 与 `0.1.10` 的字符串序是反的，
+ * 而那会表现为「装依赖装了个旧版」，没有任何报错。
  */
-export async function installFromMarket(
+export function pickNewestVersion(versions: readonly string[]): string | null {
+  let best: string | null = null;
+  for (const candidate of versions) {
+    if (!isSafeSegment(candidate)) continue;
+    if (best === null || compareVersions(candidate, best) > 0) best = candidate;
+  }
+  return best;
+}
+
+/**
+ * 解析「安装 `target` 需要按什么顺序装哪些插件」（FR-3.13，**纯函数**）。
+ *
+ * 返回的 `order` **依赖在前、目标最后**，且已去重。
+ *
+ * 两条刻意的判断：
+ *
+ * 1. **索引里没有 `target` 时按「单个包」处理**（`order: [target]`）。索引是
+ *    **可选元数据，不是白名单**——一份没写全的索引不该让市场里别的包装不上，
+ *    那会把「索引不全」变成一个装不动的硬故障。
+ * 2. **循环依赖明确拒绝，并把环打印出来**（`a → b → a`）。只说「存在循环依赖」
+ *    等于让用户自己去翻索引找环；环的路径才是可操作的信息。
+ *
+ * 依赖缺失也拒绝：静默跳过会让用户装到一个「装完了但跑不起来」的包，
+ * 而那种故障发生在**运行期**，比安装期报错难查得多。
+ */
+export function resolveInstallOrder(
+  packages: readonly MarketPackage[],
+  target: string,
+): { ok: true; order: string[] } | { ok: false; error: string } {
+  const byName = new Map(packages.map((pkg) => [pkg.name, pkg]));
+  if (!byName.has(target)) return { ok: true, order: [target] };
+
+  const order: string[] = [];
+  const state = new Map<string, 'visiting' | 'done'>();
+  const stack: string[] = [];
+
+  const visit = (name: string): string | null => {
+    const current = state.get(name);
+    if (current === 'done') return null;
+    if (current === 'visiting') {
+      const from = stack.indexOf(name);
+      const cycle = [...stack.slice(from >= 0 ? from : 0), name].join(' → ');
+      return `插件依赖存在循环，无法确定安装顺序：${cycle}`;
+    }
+    const pkg = byName.get(name);
+    if (!pkg) {
+      // 措辞要准：`packages` 是**市场里实际有货的包**，不是索引的内容。
+      // 写成「不在索引里」会让用户去翻索引，而这个包往往索引里写了、只是
+      // 市场还没同步下来 —— 那是两件完全不同的排查方向。
+      return `依赖「${name}」在市场里找不到（先同步该市场，或修正 ${MARKET_INDEX_FILENAME}）`;
+    }
+    state.set(name, 'visiting');
+    stack.push(name);
+    for (const dependency of pkg.dependencies ?? []) {
+      const error = visit(dependency);
+      if (error !== null) return error;
+    }
+    stack.pop();
+    state.set(name, 'done');
+    order.push(name);
+    return null;
+  };
+
+  const error = visit(target);
+  if (error !== null) return { ok: false, error };
+  return { ok: true, order };
+}
+
+/** 把某个已归档的版本 materialize 成生效副本并拨指针（单包原语，不做依赖解析） */
+async function materializeVersion(
   pluginsRoot: string,
   market: string,
   name: string,
   version: string,
-): Promise<MarketInstallResult> {
-  const failure = (error: string): MarketInstallResult => ({
-    ok: false,
-    market,
-    name,
-    version: '',
-    path: '',
-    error,
-  });
-  if (!isSafeSegment(market) || !isSafeSegment(name) || !isSafeSegment(version)) {
-    return failure('市场 / 插件名 / 版本号不合法');
-  }
+): Promise<{ ok: true; path: string } | { ok: false; error: string }> {
   const source = join(pluginsRoot, MARKETPLACES_DIR, market, name, version);
   try {
     await fs.access(source);
   } catch {
-    return failure(`市场「${market}」里没有 ${name}@${version}（先同步市场）`);
+    return { ok: false, error: `市场「${market}」里没有 ${name}@${version}（先同步市场）` };
   }
   const target = join(pluginsRoot, CACHE_DIR, market, name, version);
   await copyTree(source, target, false);
@@ -411,7 +618,78 @@ export async function installFromMarket(
   // 管理员、要么需要开发者模式，写文件在任何机器上都是同一条路径。
   await fs.mkdir(join(pluginsRoot, CACHE_DIR, market, name), { recursive: true });
   await fs.writeFile(join(pluginsRoot, CACHE_DIR, market, name, CURRENT_POINTER), version, 'utf8');
-  return { ok: true, market, name, version, path: target };
+  return { ok: true, path: target };
+}
+
+/**
+ * 从市场安装（= 把一个版本 materialize 成生效副本并拨指针）。
+ *
+ * ⚠️ 指针**只在安装/切换版本时改写**，市场同步不会动它——这条是
+ * 「刷新不破坏活跃现场」的另一半。
+ *
+ * [LOCAL PATCH] FR-3.13：市场索引声明了依赖时，先按**拓扑序**把依赖装完再装目标。
+ * 刻意**不抄 WorkBuddy 的「所有插件共用一个版本串」**（那是整包发版的产物）——
+ * 这里每个插件各自挑自己可用的最新版、各自写自己的 `current` 指针，
+ * 与「版本化缓存 + 指针」的既有设计一致。
+ *
+ * 请求的包**不在索引里**时行为与引入依赖解析之前逐字相同（单包装）。
+ */
+export async function installFromMarket(
+  pluginsRoot: string,
+  market: string,
+  name: string,
+  version: string,
+): Promise<MarketInstallResult> {
+  const installed: string[] = [];
+  const failure = (error: string): MarketInstallResult => ({
+    ok: false,
+    market,
+    name,
+    version: '',
+    path: '',
+    // 失败时带上「已经装成功的那几项」：用户要知道装到一半停在哪了
+    ...(installed.length ? { installed } : {}),
+    error,
+  });
+  if (!isSafeSegment(market) || !isSafeSegment(name) || !isSafeSegment(version)) {
+    return failure('市场 / 插件名 / 版本号不合法');
+  }
+
+  const plan: Array<{ name: string; version: string }> = [{ name, version }];
+  const { index } = await readMarketplaceIndex(pluginsRoot, market);
+  if (index !== null) {
+    const available = await listMarketPackages(pluginsRoot, market);
+    const resolution = resolveInstallOrder(available.packages, name);
+    if (!resolution.ok) return failure(resolution.error);
+    if (resolution.order.length > 1) {
+      plan.length = 0;
+      for (const step of resolution.order) {
+        if (step === name) {
+          plan.push({ name, version });
+          continue;
+        }
+        const newest = pickNewestVersion(
+          available.packages.filter((pkg) => pkg.name === step).map((pkg) => pkg.version),
+        );
+        if (newest === null) return failure(`依赖「${step}」在市场里没有可用版本（先同步市场）`);
+        plan.push({ name: step, version: newest });
+      }
+    }
+  }
+
+  let targetPath = '';
+  for (const step of plan) {
+    const result = await materializeVersion(pluginsRoot, market, step.name, step.version);
+    if (!result.ok) {
+      const isTarget = step.name === name;
+      return failure(
+        isTarget ? result.error : `依赖「${step.name}@${step.version}」安装失败：${result.error}`,
+      );
+    }
+    installed.push(`${step.name}@${step.version}`);
+    if (step.name === name) targetPath = result.path;
+  }
+  return { ok: true, market, name, version, path: targetPath, installed };
 }
 
 /**

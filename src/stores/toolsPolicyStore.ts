@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { platform } from '@/platform';
-import type { NanobotFileToolsPolicy } from '@/platform/types';
+import type { NanobotFileToolsPolicy, NanobotPathRule } from '@/platform/types';
 
 /**
  * 引擎写策略（`tools.file.default_deny_write`，FR-8.4）的状态。
@@ -27,6 +27,14 @@ interface ToolsPolicyState {
   loadPolicy: (force?: boolean) => Promise<void>;
   /** 切换默认拒绝写入；成功返回 true */
   setDefaultDenyWrite: (value: boolean) => Promise<boolean>;
+  /**
+   * [LOCAL PATCH] FR-8.13：整表替换路径规则；成功返回 true。
+   *
+   * 刻意是**整表**而不是「增 / 删 / 改一条」：规则表的价值在于「一眼看完谁被限制成
+   * 什么样」，增量接口会让「删掉某条」这种最常见操作退化成「先读全表、改一条、
+   * 再写回」，而读与写之间的任何并发改动都会被静默覆盖。
+   */
+  setPathRules: (rules: NanobotPathRule[]) => Promise<boolean>;
 }
 
 /** 飞行中的回读，避免「进入安全分区 + 打开开关」并发各读一遍 */
@@ -65,6 +73,16 @@ export const useToolsPolicyStore = create<ToolsPolicyState>((set, get) => ({
     if (!result.ok) return false;
     // 以磁盘为准回读：主进程会补出 `tools.file` 段（原先可能整段不存在），
     // 拿本地那份乐观状态显示就与文件里的实际形状对不上。
+    await get().loadPolicy(true);
+    return true;
+  },
+
+  setPathRules: async (rules) => {
+    const result = await platform.syncNanobotTools(
+      JSON.stringify({ op: 'setPathRules', pathRules: rules }),
+    );
+    if (!result.ok) return false;
+    // 与写开关同一条理由：以盘为准回读（主进程可能补出整段 tools.file）
     await get().loadPolicy(true);
     return true;
   },

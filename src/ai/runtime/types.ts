@@ -32,6 +32,9 @@ import type {
 import type { ExecutionMode, PlanStep } from '@/types/event';
 import type { MemberEventPhase } from '@/types/process';
 import type { PluginEngineIndex } from '@/types/plugin';
+// 首字延迟采样（FR-11.7）：纯客户端测量值的形状，与引擎 wire 格式无关，
+// 故可以直接从 `@/lib` 引类型（不违反「契约层不得出现引擎特有字段」）。
+import type { SessionLatencySample } from '@/lib/sseLatency';
 
 // 领域类型（模型目录 / 连接状态 / 运行记录）由 `@/types` 定义，
 // 这里仅做转出，使调用方「只 import 一处」即可拿到完整契约面。
@@ -334,6 +337,16 @@ export interface StreamHandlers {
    * 界面上显示「已完成」（2026-09-29 事故）。
    */
   onInterrupted?(reason: 'engine_error' | 'truncated'): void;
+  /**
+   * 会话首字延迟采样（FR-11.7）：响应头 → 首字节 → 首 token。
+   *
+   * 它是**数据**而不是状态流：只在真的等到首 token 时触发一次，供调用方落盘
+   * （由「会话性能报告」消费）。刻意不做成 `onStatus` 的一个取值 —— 状态是给
+   * 界面看的瞬时事实，延迟样本是要被聚合的测量值，两者的生命周期与消费者都不同。
+   *
+   * 缺省不实现 = 不采集，符合「默认零 I/O」。
+   */
+  onLatency?(sample: SessionLatencySample): void;
 }
 
 /**

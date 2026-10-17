@@ -79,6 +79,12 @@ function readCounters(entry: Record<string, unknown>): UsageCounters {
     requests: intOf(entry.requests),
     failedRequests: intOf(entry.failed_requests),
     durationMs: intOf(entry.duration_ms),
+    // 引擎的 `_AGGREGATE_SQL` 里这两项是 `COALESCE(SUM(...), 0)`（实测
+    // `llm_usage/store.py` 的 `_USAGE_COLUMNS` 含 `ttft_ms` / `timed_requests`，
+    // 且被 `_as_int_row` 全量映射进 `days` 与 `providers_30d` 两侧）。
+    // 缺字段时 `intOf` 收敛到 0，即「没测到」—— 与引擎的 `timed_requests=0` 同义。
+    ttftMs: intOf(entry.ttft_ms),
+    timedRequests: intOf(entry.timed_requests),
   };
 }
 

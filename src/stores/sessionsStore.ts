@@ -1001,6 +1001,10 @@ async function streamAssistantReply(
         useSessionsStore.getState().handleApprovalRequest(sessionId, assistantId, r),
       onPlan: (plan) =>
         useSessionsStore.getState().handlePlan(sessionId, assistantId, plan),
+      // 首字延迟采样（FR-11.7）：只落一条数据，不碰界面状态。
+      // 「只有真的等到首字才触发」由 runtime 侧保证（没等到首字它不会回调），
+      // 所以这里不必再判空——报了 null 样本只会污染报告的平均值。
+      onLatency: (sample) => platform.recordSessionLatency(sample),
       onDone: () => patchStream({ status: 'done' }),
       onError: (err) => {
         sendError = err.message;

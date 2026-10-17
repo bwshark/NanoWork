@@ -76,6 +76,8 @@ export function zeroCounters(): UsageCounters {
     requests: 0,
     failedRequests: 0,
     durationMs: 0,
+    ttftMs: 0,
+    timedRequests: 0,
   };
 }
 
@@ -97,6 +99,29 @@ export function formatTokens(value: number): string {
 function trimZero(value: number): string {
   const rounded = Math.round(value * 10) / 10;
   return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
+}
+
+/**
+ * 平均首字延迟（TTFT，毫秒）。**分母是 `timedRequests` 而不是 `requests`**：
+ * 只有流式请求量得到首字，拿总请求数当分母会把平均值摊薄成一个偏小的假数字 ——
+ * 而「偏小的错数」比「—」危险得多，因为没人会去怀疑一个更好看的数字。
+ *
+ * 一次都没量到（`timedRequests === 0`）时返回 `null`（＝「未测到」，不是「0」）。
+ */
+export function averageTtftMs(counters: UsageCounters): number | null {
+  if (counters.timedRequests <= 0) return null;
+  return counters.ttftMs / counters.timedRequests;
+}
+
+/**
+ * 平均首字延迟的展示文案。未测到显示「—」而**不是**「0 ms」——
+ * 后者是一个不存在的成绩，会让人以为首字快到极致。
+ */
+export function formatTtft(counters: UsageCounters): string {
+  const average = averageTtftMs(counters);
+  if (average === null) return '—';
+  if (average < 1000) return `${Math.round(average)} ms`;
+  return `${trimZero(average / 1000)} s`;
 }
 
 /** 比例（0-1）→ 百分比文案；`null`（引擎算不出）显示破折号而不是 `0%` */
@@ -152,6 +177,8 @@ export function addCounters(target: UsageCounters, next: UsageCounters): UsageCo
     requests: target.requests + next.requests,
     failedRequests: target.failedRequests + next.failedRequests,
     durationMs: target.durationMs + next.durationMs,
+    ttftMs: target.ttftMs + next.ttftMs,
+    timedRequests: target.timedRequests + next.timedRequests,
   };
 }
 

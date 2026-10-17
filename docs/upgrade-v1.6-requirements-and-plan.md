@@ -33,7 +33,11 @@ WorkBuddy 三轮逆向共给出 **51 条候选**（插件机制 12 条 / 平台�
 | **B1 事故止血** | ✅ **已落地** | 2026-10-16 | 19 条新单测 + 4 项变异验证全红后转绿；三套 tsc 0 错误；`vitest` 213 文件 3218 用例全绿；`vite build` 绿；`main.cjs`/`preload.cjs` 已重建；真机一轮 12 项全绿 + **旧行为前后对比**（还原旧写法后「退出后端口 18900 已释放」FAIL） |
 | **B2 卫生与诊断** | 🟡 **4/5 项落地，B2-02 前提被实测推翻而不做** | 2026-10-16 | 新增 57 条单测 + 4 项变异验证；三套 tsc 0 错误；`vitest` **215 文件 3258 用例全绿**；`vite build` 绿；cjs 已重建。真机：`run/` 三份僵尸全部判为 `stale-dead-pid` 并清除；端口→占用者 pid 链路实测通过。**B2-02 见下方专列** |
 | **B3 安全纵深** | ✅ **已落地** | 2026-10-16 | 新增 `windowPreferences.ts`(12 单测+变异红后转绿) / `safeDelete.ts`(5 单测+fail-closed 变异) / `artifactCsp.ts`(4 单测+connect-src 变异) / `iframe-csp.d.ts`；`main.ts` 走 `createWindowPreferences`(主窗口 `sandbox:true` + 显式认领 `webSecurity:false`，notes 落 warn)；`eventStore`/`pluginPackage` 删除改 `safeDelete`(FR-8.11)；`ArtifactRenderer`/`WebTabView` 仅 docMode 套 CSP(FR-8.12)。三套 tsc 0 错误；`vitest` **218 文件 3279 用例全绿 exit=0**；`vite build` 绿；cjs 已重建。V-1(sandbox+preload 兼容)通过、V-2(引擎无 CORS→主窗口显式认领 webSecurity:false 保留)落定 |
-| B4–B8 | ⬜ 未开工 | — | — |
+| **B4 可观测** | ✅ **已落地** | 2026-10-16 | 新增 `electron/startupProfile.ts`（20 单测 + 变异红后转绿；区间按**并集**算，避免并行阶段被重复相加）+ `src/lib/sseLatency.ts`（9 单测，含「首字节即首 token」与「未测到 ≠ 0」两条边界）+ `resources/perf-report.html`（11 单测用 jsdom **真渲染**）；`main.ts` 打点 `app.load→ready` / `window.create→firstPaint` / `serve.spawn→listen` / `gateway.spawn→listen` 四点 + `perf:latency` IPC 落 `session-latency.jsonl`；`src/lib/sse.ts` 加 `onFirstByte`（**与 `onActivity` 区分**：响应头到达不算首字节）；`usage.ts` / `src/types/usage.ts` / `usageReport.ts` 补 `ttftMs` / `timedRequests` 并接进用量页「平均首字延迟」。三套 tsc 0 错误；cjs 已重建。**B4-02 的口径被修正**，见下方专列 |
+| **B7 扩展面** | ✅ **7/7 项落地（FR-3.10 / 3.11 / 3.12 / 3.13）** | 2026-10-16 | **FR-3.10 / 3.11**：`agent/plugins.py` 的 `AgentPlugin` 加 `prompt_dirs` / `agent_files` / `command_files` / `hook_manifest` / `tool_policy`（**解析期**过 `_contained()`）+ `PluginMount` 统一挂载表 + `plugin_trust()` + `plugin_prompt_mounts()`；`utils/prompt_templates.py` 单 loader → **ChainLoader**（① 插件命名空间 ② 工作区覆盖 ③ 内置）+ `user` 档片段包 `<untrusted_content>`；`agent/context.py` 接线。**14 条新用例**（整链路 / 「去掉第①级就变红」对照 / 越界三类 / 改内容即失效 / 声明目录外不可读）。**FR-3.13**：`electron/pluginMarketplace.ts` 加可选 `marketplace.json`（归档 + 解析 + 逐条目容错）+ `resolveInstallOrder`（拓扑序，环打印出来）+ `pickNewestVersion`（语义化，不是字符串序）+ 依赖感知安装（索引不是白名单：没提到就单包装）；**18 条新用例** + **2 项变异验证**（拓扑序反转 → 精确红 3 条；循环检测失效 → 精确红 3 条）。**FR-3.12**：新增 `agent/hooks/plugin_tools.py`（策略代数 + 声明门）+ `turn_hooks.py` / `loop.py` / `skills.py` / `context.py` 接线；**20 条新用例** + **3 项变异验证**（交集改并集 → 精确红 2 条；装配期摘审批门 → 精确红 1 条；只认列表 → 精确红 2 条）；口径按用户拍板的「交集 **+ 落差必须说出来**」实现。`ruff` 全清；全量引擎 `pytest` 除 3 条**预存** Windows symlink 红外全绿。引擎侧改动已登记 `docs/upstream-merge-conflicts.md` §九。⚠️ 原遗留「插件视图徽标」已于 2026-10-17 落地：前端复刻引擎 `agent_blocks_tool` 语义（`src/lib/pluginToolGaps.ts`，13 单测 + 变异红后转绿）+ `PluginsPage` 按 `activeAgent`（回落 builtin:general）对每张卡算落差并渲染 **warning 徽标「N 项工具被收窄」** + Tooltip（列出被收窄工具及原因：命中黑名单 / 不在白名单内）+ 当前 Agent 名 |
+| **B5 首屏与交付** | ✅ **已落地（4/4）** | 2026-10-16 | **FR-13.5**：9 个路由页全部 `React.lazy` + `<Suspense>`（边界在 `AppLayout` 内，侧栏/标题栏切页期间不重建）；`MarkdownView` / `CodeBlockView` 各自成为懒边界，`react-markdown` / `react-syntax-highlighter` **只经 `import()` 到达**。**实测 `dist/index.html` 的 modulepreload 1.30 MB → 0.61 MB**（验收 ≤ 1.2 MB），入口脚本 836 KB → 553 KB，首屏 JS 合计 **2.19 MB → 1.15 MB**；判据脚本 `tasks/verify-b5-first-paint.mjs`（超预算退出码 1）。**FR-13.6**：新增 `electron/engineSelfCheck.ts`（解释器可达 / 包可导入 / 配置可校验，三项**各自独立**、IO 注入可单测）+ 主进程 IPC + 设置「关于」分区的自检卡片（三项分行 + 真实路径 / 原始报错 / 可复制命令 / 第 0 步引导）。**21 条新用例**（14 引擎侧 + 7 UI 侧）。三套 tsc 0 错误；cjs 已重建。⚠️ 真机项：**未做「改 venv 名字」的实测**（有破坏性，改用 `NANOBOT_BIN` 指向不存在路径的等价路径，见 FR-13.6 现状列） |
+| **B6 引擎侧路径规则** | ✅ **已落地（3/3）** | 2026-10-17 | **B6-01**：新增 `nanobot/nanobot/security/path_rules.py`（复合动作 read/write/delete 各自授权）+ 把它接进 `resolve_allowed_path()` 这个**唯一收口**；`FileToolsConfig.path_rules` 字段 + `create()` 里归一化一次 + `path_utils` 透传 + 删除入口按 `kind='delete'` 裁决。**28 条新用例**（正交性 / 最具体优先 / 无规则向后兼容 / `no_access` 无条件 / 规则不能放宽边界 / 配置往返）。**B6-02**：`PathRulesEditor`（设置「安全」分区，整表编辑 + 草稿保存）+ `toolsPolicyConfig.ts` 的 `parsePathRules` / `mergePathRules` / 签名入规则 + `syncNanobotTools` 新 op `setPathRules`；**13 条新用例**（含「删掉一条规则 → 签名必须变」）。**B6-03**：已登记 `upstream-merge-conflicts.md` §九第 6 小节。**2 项变异验证**（复合动作退化成笼统裁决 → 精确红 1 条；规则的 allow 覆盖凭据守卫 → 精确红 1 条）。⚠️ 过程中**修掉一个自己引入的回归**：`context.py` 模块级 import `plugins` 把 config 闭成环，导致 `Config.model_validate` 全盘抛「not fully defined」（`test_model_presets` 红了一轮）——已改函数内局部导入，四目录基线回到 skill 登记的 4 条红 |
+| **B8 扩展运行时 ADR** | ✅ **已落地（1/1）** | 2026-10-17 | 新增 `docs/adr/ADR-0025.md`（并登记进 `docs/adr/README.md` 索引）：进程模型（`fork` 独立进程，**不抄 Module Federation**，三条否决理由：共享依赖单例 / 权限面无处安放 / 首屏回退）、权限面（manifest 声明式白名单，未声明 = 拿不到）、生命周期（activate / deactivate / 崩溃重启，主进程持唯一权威、不无限自动重启）、与插件分工（插件给 agent 加能力、扩展给应用加功能，两套机制不混）。**「不做 Guest 桥接 SDK」的两条理由**：没有真实需求方（会逼出第二套权限模型）+ 它会把「声明即权限」滑回「代码即权限」。附三条备选方案的否决记录 |
 
 > **⚠️ B2-02（SQLite WAL checkpoint worker）本期不做——原前提被实测推翻。**
 > 分析时的证据是「`llm_usage.sqlite3-wal` 4.13 MB vs 主库 143 KB（≈29:1），从未 checkpoint」。
@@ -53,6 +57,66 @@ WorkBuddy 三轮逆向共给出 **51 条候选**（插件机制 12 条 / 平台�
 > 需要时再立项；要真做 checkpoint 应改引擎侧（写入者），但那需要引擎契约变更。
 >
 > B1 的完整落地记录（文件清单、真机判据、踩到的环境坑）见 §四 批次明细与 `tasks/verify-b1-process-lifecycle.mjs` 头注释。
+
+> **⚠️ B4-02（FR-11.7 补 `ttftMs` / `stream`）的口径被实测修正——原「真缺陷」判断只对了一半。**
+> 计划书 §2.4 写「`llm_usage.sqlite3` 1148 条记录中 `stream=1` 与 `ttft_ms>0` 均为 0」，
+> 并把改法写成「**wire → 领域类型 → 落库三处同改**（含引擎 `store.py:295-301`）」。
+> 逐条核实后：
+>
+> 1. **引擎侧三处早已就绪**：`llm_usage/store.py` 的 `_AGGREGATE_SQL` 本来就有
+>    `COALESCE(SUM(ttft_ms), 0) AS ttft_ms` 与 `timed_requests`，`_as_int_row` 又把
+>    `_USAGE_COLUMNS` **全量**映射进 `days`（含 `sources`）与 `providers_30d` ——
+>    也就是说 `/v1/usage` 的载荷**早就在报这两个值**，缺的只是客户端不读。
+> 2. **真实断点是客户端两处**：`src/types/usage.ts` 的 `UsageCounters` 没有这两个字段，
+>    `src/ai/runtime/nanobotHttp/usage.ts` 的 `readCounters` 自然也不解码。
+>    计划书给的落点 `usage.ts` 其实是**读取**路径（读 `/v1/usage`），不是写入路径；
+>    写入者是 Python 引擎，而那一侧不需要改。
+> 3. **「采集率 0」的成因比「字段没写」复杂**：样本库里 `distinct source` **只有
+>    `dream` 与 `cron`** 两类后台流量，没有任何交互流量（`user` / `api`），
+>    而这些后台请求都是**非流式**（`stream=0`）—— 非流式根本没有「首字」这回事，
+>    `ttft_ms` 为 0 是**正确结果**，不是缺陷。要判断交互链路是否真的采集到，需要另做
+>    一次「跑一轮对话 → 查库」的实测（**本轮未做，如实登记为待办**）。
+> 4. 故本批只改客户端：补字段 + 解码 + `averageTtftMs` / `formatTtft`（**分母是
+>    `timedRequests` 而不是 `requests`**；未测到显示「—」而非「0 ms」）+ 用量页指标。
+>    **`stream` 字段未加**：它在 `_AGGREGATE_SQL` 里根本不存在（不是聚合维度），
+>    加它属于另立需求，不该混在「补字段」里。
+
+> **🔬 真机实测结论（2026-10-17：`verify-b4-ttft.mjs` 如实报红 → 定位根因 → 修复后转绿）**
+> 网关在跑、对话 HTTP 200、`/v1/usage` 里 81 处 `ttft_ms` 全为 0；直接查 `llm_calls` 表：
+> **`distinct source` 仍只有 `dream` / `cron`，全部 `stream=0`、`ttft_ms=NULL`，交互记录数 = 0。**
+> 根因定位（确定性代码缺口）：
+> - 全仓 `LLMCallRecord(...)` 只在 `providers/base.py::_observe_llm_call` 一处构造，且仅当
+>   `self._llm_call_observer is not None` 时落库；observer 由 `set_llm_call_observer(...)` 挂上。
+> - 该 observer 此前**只在 `cli/gateway_runtime.py::_observe_provider` 绑过一次**，且只绑在
+>   gateway 启动时那份**静态快照**的 provider 上。而**桌面前端真正连的是 `nanobot serve`**：
+>   它在 `cli/commands.py::serve` 里**自建 `AgentLoop.from_config` → `make_provider`**，与 gateway 的
+>   `_observe_provider` 无关；交互链路按需构造的新鲜 provider（`resolve_preset` / `resolve_override` /
+>   刷新）也全部绕过那份静态绑定 → observer 恒为 None → 交互用量 / TTFT 永不落库。
+> - **修复（已实施并真机验证）**：把观察者绑到 provider **构造出口** `providers/factory.py::make_provider`
+>   （`FallbackProvider.set_llm_call_observer` 会向 primary 传播），serve / gateway / preset / override
+>   全路径覆盖；`set_llm_call_observer` 幂等，与 gateway 的重复绑定无害。
+> - **source 无需额外处理**：引擎 loop 自己按 `channel='api'` 把交互流量归为 `source='api'`
+>   （`llm_usage/context.py::source_from_request`），实测落库记录即 `source='api'`——所以**不需要**
+>   在 `api/server.py` 再包 `llm_usage_source('user')`（早前在 serve 里绑 observer 的尝试作废，已回退）。
+>
+> **⚠️ 两个必须知道的真机事实（2026-10-17 修复时发现）：**
+> 1. **存在两份引擎副本**：桌面真正运行的是 `D:\Workspace\Codes\sciherd-cloud-smartagent\nanobot`
+>    （原始、能出 token），而 `D:\Workspace\study\nanowork\nanobot` 是历次 `[LOCAL PATCH]` 的工作副本
+>    （其 `nanowork.config.json` 无内联凭证、本机 shell 无 `DASHSCOPE_API_KEY` → 对话 500，**无法真机验证**）。
+>    本次修复**已同步落到两份**（`make_provider` 各加同一段 observer 绑定），并**在桌面实际运行的那份上验证通过**：
+>    跑流式对话后 `llm_calls` 新增 `source='api', stream=1, ttft_ms=5778>0`。
+> 2. **桌面引擎（codes 副本）此前早于 FR-11.1、未挂 `/v1/usage`，且缺全部历史 `[LOCAL PATCH]`（仅 11 处 vs study 的 163 处）。**
+>    2026-10-17 已把 **study 的整套 `nanobot/nanobot` 源码同步进 codes**（保留 codes 独有的
+>    `utils/gitstore.py` 跨进程 `FileLock` 修复——它与 study 版公共方法完全一致、API 兼容）。
+>    同步后 codes：`compileall` 全过、`/v1/usage` **200**、`/v1/plugins` 200、流式对话出 token，
+>    `verify-b4-ttft.mjs` 经**真实 `/v1/usage`** 转绿（83 处 `ttft_ms`，3 处 >0，max=12197）。
+>    仅剩 `utils/gitstore.py` 一处与 study 不同（刻意保留）。同步前整份备份：
+>    `codes/nanobot/.local-backup-eng-20261017_204905/`（7.3M，可回滚）。
+>    脚本的 **sqlite 降级探测**保留，兼容尚未挂 `/v1/usage` 的更旧引擎版本。
+>    注：非流式接口对思考型模型会命中 DashScope 的 `enable_thinking` 400（**同步前后一致**、
+>    属既有 provider/模型配置问题，不影响桌面走流式的对话）。
+> 5. 客户端侧另有真正可测的那一半：`sseLatency`（**首字节 → 首 token**）+ `onFirstByte`
+>    （与 `onActivity` 区分）+ 自包含报告 —— 这部分与引擎无关，已落地并有用例。
 
 ---
 
@@ -180,7 +244,7 @@ WorkBuddy 三轮逆向共给出 **51 条候选**（插件机制 12 条 / 平台�
 | ----- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 优先级   | **P1**                                                                                                                                                                                                                                         |
 | 来源    | 分析③ C4                                                                                                                                                                                                                                         |
-| 现状    | ① `src/router/index.tsx:1-14` 约 10 个页面**全部静态 import**；② 全仓 `React.lazy` 零命中（唯一真动态 import 是 `ArtifactRenderer.tsx:120-129` 的 mermaid）；③ `manualChunks` 只赚 HTTP 缓存粒度，`dist/index.html` 里 `markdown`（790 KB）仍被 `modulepreload` → **首屏 2.27 MB**   |
+| 现状    | ✅ **已落地（2026-10-16，见 §〇）**。实测：modulepreload **1.30 MB → 0.61 MB**（预算 1.2 MB）、入口 836 → 553 KB、首屏合计 2.19 → 1.15 MB。⚠️ 实现中发现的**真因与计划书的判断不同**：markdown 之所以进首屏**不是**「因为它被静态 import」，而是**手工 `manualChunks` 把 Vite 的 `__vitePreload` 助手分配进了那个 chunk** —— 助手被每个含动态 `import()` 的 chunk 副作用导入，于是它所在的 chunk 必然进静态图。删掉 markdown 分包后助手又落进 `mermaid`（665 KB 又被 preload），最终解法是**给助手单独一个 chunk** + 只保留「本来就该在首屏」的分包。原状：① `src/router/index.tsx:1-14` 约 10 个页面**全部静态 import**；② 全仓 `React.lazy` 零命中（唯一真动态 import 是 `ArtifactRenderer.tsx:120-129` 的 mermaid）；③ `manualChunks` 只赚 HTTP 缓存粒度，`dist/index.html` 里 `markdown`（790 KB）仍被 `modulepreload` → **首屏 2.27 MB**   |
 | 需求    | ① 路由级 `React.lazy` + `Suspense` 边界（带可见 fallback，避免白屏）；② 把 `markdown` 分包从 `modulepreload` 挪到按需（照 mermaid 现成写法）；③ 保留 `App` / `AppLayout` 为静态（它们是所有路由的壳，懒加载无收益）                                                                                   |
 | 验收标准  | ① `dist/index.html` 中 `modulepreload` 的目标总量 **≤ 1.2 MB**（当前 2.27 MB，最大一块是 `matrix:markdown` 790 KB）；② 每个路由首次进入仍可正常渲染（真机脚本逐页访问）；③ 无白屏：`Suspense` fallback 已在慢网络下可见（可用 devtools throttling 目视）；④ **不做**「假懒加载」——若某 chunk 仍被 `modulepreload`，视为未完成 |
 | 落点    | `src/router/index.tsx`、`vite.config.ts`（`build.rollupOptions.output.manualChunks`）                                                                                                                                                             |
@@ -192,7 +256,7 @@ WorkBuddy 三轮逆向共给出 **51 条候选**（插件机制 12 条 / 平台�
 | ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 优先级   | **P1**                                                                                                                                                                                                                                        |
 | 来源    | 分析② B8、分析③ J5（`self-check.js` / `memory-check.js` 登记项）                                                                                                                                                                                        |
-| 现状    | 无随包运行时（引擎要用户自建 venv）。`main.ts` 的 `fallbackLaunchConfig()` 在全部候选路径失败后**没有「全失败」分支**——「装不上 / 找不到引擎」是黑盒                                                                                                                                           |
+| 现状    | ✅ **已落地（2026-10-16，见 §〇）**。产出：`electron/engineSelfCheck.ts`（三项检查 + 候选路径解析 + IO 注入）+ `src/types/engine.ts`（报告类型，主进程与渲染层共用）+ 主进程 `engine:selfCheck` IPC + `EngineSelfCheckCard`（设置「关于」分区）。**14 条引擎侧用例**逐项断言「某一项失败时另外两项**不被连坐**」，**7 条 UI 用例**断言「真实路径与真实命令出现在界面上」「Web 端说『不适用』而不是报红」。⚠️ **真机项未做**：验收①原话是「把 venv 改名 → 出现引导」。改本机 venv 名有破坏性（引擎会起不来），故未执行；等价且无破坏的路径是由 `NANOBOT_BIN` 指向一个不存在的文件（`readNanobotConfig()` 认这个环境变量，而自检用的正是它），该路径**只由单测覆盖**，未在真实 Electron 里跑过 —— 如实登记为待办。原状：无随包运行时（引擎要用户自建 venv）。`main.ts` 的 `fallbackLaunchConfig()` 在全部候选路径失败后**没有「全失败」分支**——「装不上 / 找不到引擎」是黑盒                                                                                                                                           |
 | 需求    | ① 启动期对引擎做三项自检：**解释器可达**（venv python 存在且可执行）、**引擎包可导入**（`python -c "import nanobot"`）、**配置可加载**（`nanowork.config.json` 通过引擎 schema 校验）；② 任一项失败 → 渲染层给出**分步可操作引导**（含真实命令、真实报错原文、文档链接），而不是笼统 toast；③ **不打包 CPython**（明确不做，见 §1.5），只把「装不上」从黑盒变可操作 |
 | 验收标准  | ① 把 venv 改名 → 启动后出现「解释器不可达」引导且**文案含实际查找过的路径**；② 单测：三项自检各自有独立的失败用例（禁止合并成「自检失败」一个布尔）；③ 自检本身不得阻塞窗口显示（与窗口可见性解耦）                                                                                                                                   |
 | 落点    | `electron/main.ts` 的 `fallbackLaunchConfig()` / 启动链路；新增 `electron/engineSelfCheck.ts`；渲染层新增引导视图（可复用设置页「关于」分区）                                                                                                                                 |
@@ -208,7 +272,7 @@ WorkBuddy 三轮逆向共给出 **51 条候选**（插件机制 12 条 / 平台�
 | ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 优先级   | **P1（本组最高）**                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | 来源    | 分析① P0 / G1                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| 现状    | 插件**不能提供 prompt 片段**。`promptCatalog` 的槽位是渲染层硬编码常量；引擎侧 `nanobot/utils/prompt_templates.py` 是**单个 `FileSystemLoader` + `OVERRIDABLE_TEMPLATES` 白名单覆盖**。后果：第三方无法在不改引擎代码的前提下注入领域规程                                                                                                                                                                                                                                                                                                    |
+| 现状    | ✅ **已落地（2026-10-16，见 §〇）**。原状：插件**不能提供 prompt 片段**。`promptCatalog` 的槽位是渲染层硬编码常量；引擎侧 `nanobot/utils/prompt_templates.py` 是**单个 `FileSystemLoader` + `OVERRIDABLE_TEMPLATES` 白名单覆盖**。后果：第三方无法在不改引擎代码的前提下注入领域规程                                                                                                                                                                                                                                                                                                    |
 | 需求    | ① `plugins.py` 的 `AgentPlugin` 加 `prompts` 字段（与 `skills` 同形：string | string[]，指向包内目录）；② 把 `SkillsLoader` 已有的「已启用插件 → 包根」映射（`enabled_agent_plugin_skill_dirs`）**提升为按插件 `name` 索引的挂载表**，服务全部文本资产而不只 skills；③ `prompt_templates.py` 的单 loader → **ChainLoader**：`① 插件虚拟命名空间 > ② 工作区覆盖 > ③ 引擎内置`；④ **信任分级（必做，否则是安全洞）**：`builtin` / `trusted` 直注，`user` 档片段包 `<untrusted_content>`（引擎已有 `_snippets/untrusted_content.md` 可复用）；⑤ 变量上下文复用现有 `render_template(name, context)`，**不另建变量体系** |
 | 验收标准  | ① demo 插件的 `fragments/domain.md` 经 `{% include "demo-plugin/fragments/domain.md" %}` 出现在系统提示词中（一条用例证明整链路）；② **变异验证**：去掉 ChainLoader 第一级 → 用例必须变红；③ `user` 档插件的片段在最终提示词中**确实被 `<untrusted_content>` 包裹**；④ `_package_fingerprint` 的覆盖范围已包含 `prompts` 目录（见风险 R-6，缺它是「改了不生效」）                                                                                                                                                                                                        |
 | 落点    | `nanobot/agent/plugins.py`、`nanobot/utils/prompt_templates.py`                                                                                                                                                                                                                                                                                                                                                                                                                    |
@@ -221,7 +285,7 @@ WorkBuddy 三轮逆向共给出 **51 条候选**（插件机制 12 条 / 平台�
 |---|---|
 | 优先级 | **P1** |
 | 来源 | 分析① P1 / G2·G3·G5 |
-| 现状 | manifest 不认 `agents` / `commands` / `hooks`，子代理只能由核心代码或专家团运行时构造，无斜杠命令扩展点 |
+| 现状 | 🟡 **部分落地（2026-10-16）**：清单新字段的**解析**（走同一套 `_contained()`）+ 统一挂载表 + 越界与向后兼容用例已落；`agents` / `commands` / `hooks` 的**消费端**（谁来用这些清单）未接，故不算完成。原状：manifest 不认 `agents` / `commands` / `hooks`，子代理只能由核心代码或专家团运行时构造，无斜杠命令扩展点 |
 | 需求 | `AgentPlugin` dataclass 扩为：`skill_dirs` / `agent_files` / `command_files` / `prompt_dirs` / `hook_manifest` / `tool_policy`（形状见分析① §P1）。**关键纪律：所有新字段的路径必须走同一套 `_contained()` 包含性检查**（`plugins.py` 现成注释已点明「这一层是遍历防护」）；绕过它 = 给已有的防路径逃逸开后门 |
 | 验收标准 | ① 每条新路径都有「越界路径被拒」的用例（含 `../` 与绝对路径两种形态）；② 字段未声明时行为与现状完全一致（向后兼容）；③ fingerprint 覆盖新目录 |
 | 落点 | `nanobot/agent/plugins.py` |
@@ -233,7 +297,7 @@ WorkBuddy 三轮逆向共给出 **51 条候选**（插件机制 12 条 / 平台�
 |---|---|
 | 优先级 | **P1** |
 | 来源 | 分析① P2 / G5 |
-| 现状 | 无插件级声明式工具白名单；工具策略散在 `toolsPolicyStore.ts` + 引擎 hook |
+| 现状 | ✅ **已落地（2026-10-16，见 §〇）**。口径按用户 2026-10-16 拍板：**交集（只收紧）+ 落差必须说出来**。⚠️ 原遗留「插件视图徽标」已于 2026-10-17 落地：前端 `src/lib/pluginToolGaps.ts` 复刻引擎 `agent_blocks_tool` 语义（`allow===undefined` 放行全部 / `allow===[]` 全拒 / `deny` 优先），`PluginsPage` 按 `activeAgent`（回落 builtin:general）对每张卡算 `computePluginToolGaps(manifest.permissions.tools, toolAllow, toolDeny)`，有落差即渲染 warning 徽标 + Tooltip（列出被收窄工具及原因）。徽标口径与引擎 `policy_gaps` 同源。原状：无插件级声明式工具白名单；工具策略散在 `toolsPolicyStore.ts` + 引擎 hook |
 | 需求 | 在**技能 frontmatter** 与**插件 manifest** 两处支持 `tools:` 字段（与 WorkBuddy `interaction.md` frontmatter 同形），装配时叠加为 ToolPolicy。落点照 `nanobot/agent/hooks/agent_tools.py`（FR-2.2 的成熟实现）的形状加 `plugin_tools.py`，挂进 `turn_hooks.py` 的 `build_agent_turn_hook` 基线链 |
 | 验收标准 | ① 插件/技能声明 `tools:` 后，未列出的工具被拦；② **白名单只能收紧不能放宽**——基线链里的审批门必须是「交集」语义，即插件无法用 `tools:` 把审批门顶掉（**用例：声明 `tools: [shell]` 不得使 `shell` 绕过审批**）；③ 变异验证：把交集改成并集 → 用例变红 |
 | 落点 | `nanobot/agent/hooks/plugin_tools.py`（新增）、`turn_hooks.py` |
@@ -245,7 +309,7 @@ WorkBuddy 三轮逆向共给出 **51 条候选**（插件机制 12 条 / 平台�
 |---|---|
 | 优先级 | **P2** |
 | 来源 | 分析① P3 / G6 |
-| 现状 | `electron/pluginMarketplace.ts` 靠**目录扫描**；拿不到 `dependencies` / `category` 这类市场级语义 |
+| 现状 | ✅ **已落地（2026-10-16，见 §〇）**。⚠️ 落点只有 `electron/pluginMarketplace.ts`——`pluginPackage.ts` **未动**（依赖是**市场级**语义，归索引文件；`pluginPackage.ts` 读的是已安装包的清单，那里没有依赖这一维）。原状：`electron/pluginMarketplace.ts` 靠**目录扫描**；拿不到 `dependencies` / `category` 这类市场级语义 |
 | 需求 | 加**可选**的 `marketplace.json`（`{name, plugins:[{name, source, category, dependencies[]}]}`）。带来 `dependencies` 解析（WorkBuddy 的 `welcomemode-design → [mcp-miora, ardot]` 就是这么表达的）。**没有索引文件时回退目录扫描**，保持向后兼容 |
 | 验收标准 | ① 有索引 → 依赖被解析且拓扑排序后安装；② 无索引 → 行为与现状一致（回归用例）；③ 循环依赖被明确拒绝并给出人话原因 |
 | 落点 | `electron/pluginMarketplace.ts`、`electron/pluginPackage.ts` |
@@ -257,7 +321,7 @@ WorkBuddy 三轮逆向共给出 **51 条候选**（插件机制 12 条 / 平台�
 |---|---|
 | 优先级 | **P1（ADR）→ 实施另排** |
 | 来源 | 分析② B9 / 层② |
-| 现状 | PRD「四级扩展生态」只列了名字，**零实现**。WorkBuddy 的 `extensions/` 是 8 个 **fork 独立 Node 进程** + `distribution.json`，入口经 `main/preload/fork-preload.cjs` → `runExtension({extensionId, env, activate})` |
+| 现状 | ✅ **ADR 已通过（2026-10-17，见 §〇）**：`docs/adr/ADR-0025.md`，四件事（进程模型 / 权限面 / 生命周期 / 与插件分工）全部有结论，且含「抄进程隔离、不抄 Module Federation」与「不做 Guest 桥接 SDK」的理由。**实施另排**（本期不承诺实现）。原状：PRD「四级扩展生态」只列了名字，**零实现**。WorkBuddy 的 `extensions/` 是 8 个 **fork 独立 Node 进程** + `distribution.json`，入口经 `main/preload/fork-preload.cjs` → `runExtension({extensionId, env, activate})` |
 | 需求 | **先出 ADR**（`docs/adr/`），明确四件事：① 扩展的进程模型（fork 子进程，**不抄 Module Federation**）；② 权限面（扩展能拿到什么 API，如何声明）；③ 生命周期（activate / deactivate / 崩溃重启）；④ 与插件的分工（插件给 agent 加能力，扩展给应用加功能——**两套机制不要混**）。ADR 通过后再实施 |
 | 验收标准 | **ADR 通过即视为本批次完成**（本期不承诺实现）。ADR 必须含「为什么抄进程隔离、不抄 UI 联邦」与「不做 Guest 桥接 SDK 的理由」（后者只在做第三方 UI 扩展时才需要） |
 | 落点 | `docs/adr/ADR-00xx.md`（新增） |
@@ -307,7 +371,7 @@ WorkBuddy 三轮逆向共给出 **51 条候选**（插件机制 12 条 / 平台�
 |---|---|
 | 优先级 | **P1（需引擎改动）** |
 | 来源 | 分析② B6、§2.2 |
-| 现状 | 无用户可配置路径规则；凭据名单**硬编码且不可改**，`SecuritySection.tsx` 明写「不做白名单编辑器」 |
+| 现状 | ✅ **已落地（2026-10-17，见 §〇）**。优先级顺序由本次落地定为：**凭据 `no_access`（无条件，规则不可覆盖）> 工作区/允许根包含性（规则不能放宽边界）> 路径规则 > `default_deny_write`（笼统兜底）** —— 前置要求「先确认二者优先级顺序」的那条已按此回答，并写进 `upstream-merge-conflicts.md` §九。⚠️ **真机项未做**：改配置 → 重启网关 → 助手真的读不到该路径，这一轮只在单测层验证（规则进了 `resolve_allowed_path` 这个唯一收口；删除入口按 `kind='delete'` 裁决）。原状：无用户可配置路径规则；凭据名单**硬编码且不可改**，`SecuritySection.tsx` 明写「不做白名单编辑器」 |
 | 需求 | 抄 WorkBuddy `tsbx_rules.json` 的**复合动作**设计：`{path, action: "read=deny|write=deny|delete=deny"}`——**读写删分别授权**，而不是一个笼统的 allow/deny。引擎 `security/` 新增规则加载器；`SecuritySection.tsx` 加编辑器（草稿 + 保存，因改配置会重启网关） |
 | 验收标准 | ① 单测覆盖三种动作的**正交性**（`write=deny` 不得顺带禁读）；② 规则文件路径必须走引擎既有的包含性检查；③ 无规则文件时行为与现状完全一致（向后兼容）；④ `no_access` 凭据为**无条件**守卫，规则无法覆盖它（回归） |
 | 落点 | `nanobot/nanobot/security/`（新增加载器）、`src/components/settings/sections/SecuritySection.tsx` |
@@ -321,7 +385,7 @@ WorkBuddy 三轮逆向共给出 **51 条候选**（插件机制 12 条 / 平台�
 |---|---|
 | 优先级 | **P1** |
 | 来源 | 分析③ C6、分析② B1 |
-| 现状 | 全仓 `performance.mark` / `process.uptime` / `perf_hooks` **零命中**；`main.ts:799-829` 注释写着 spawn→listen 实测 **9.4 秒**，但**从不落日志** → 「9.4 秒花在哪」只能靠猜 |
+| 现状 | ✅ **已落地（2026-10-16，见 §〇）**。原状：全仓 `performance.mark` / `process.uptime` / `perf_hooks` **零命中**；`main.ts:799-829` 注释写着 spawn→listen 实测 **9.4 秒**，但**从不落日志** → 「9.4 秒花在哪」只能靠猜 |
 | 需求 | 照 `startup-profile.cjs` 的**两个原则**：① **默认零 I/O**——只有显式开关（`NANOWORK_STARTUP_PROFILE=1`）才加载采集器；② **独立于业务模块图**——不 import store / config / logger。至少打三个点：`whenReady → 窗口可见`、`spawn → first listen`（那 9.4 秒）、`首 token` |
 | 验收标准 | ① 不设开关时**零额外 IO、零额外模块加载**（可用构建产物对比 or 单测断言采集器未被 require）；② 设开关后产出分段数据（JSONL 或结构化日志）；③ 分段区间去重（若统计的是区间并集，照 `startup-profile.cjs` 的 `unionDuration()` 语义） |
 | 落点 | 新增 `electron/startupProfile.ts`；`main.ts` 启动链路打点 |
@@ -333,7 +397,7 @@ WorkBuddy 三轮逆向共给出 **51 条候选**（插件机制 12 条 / 平台�
 |---|---|
 | 优先级 | **P1**（含**真缺陷**） |
 | 来源 | 分析② B1、分析③ §2.3 附 |
-| 现状 | ① `llm_usage.sqlite3` **1148 条记录中 `stream=1` 与 `ttft_ms>0` 均为 0**；② `src/ai/runtime/nanobotHttp/usage.ts` 与 `src/types/usage.ts` **根本没有 `ttftMs` 字段** → TTFT 采集率 **0**，即「首字延迟 ≤ 3s」这条非功能需求**当前无法测量** |
+| 现状 | 🟡 **客户端已落 / 引擎侧待复核（2026-10-16，见 §〇 的 B4-02 专列）**：客户端首字延迟采集（`sseLatency` + `onFirstByte`）、自包含报告、用量侧 `ttftMs` / `timedRequests` 均已落；**但**① 引擎侧「采集率 0」的成因是样本里只有非流式的后台流量，交互链路是否真采到**未实测**；② `stream` 字段未加（`_AGGREGATE_SQL` 里没有这一维）。原状：① `llm_usage.sqlite3` **1148 条记录中 `stream=1` 与 `ttft_ms>0` 均为 0**；② `src/ai/runtime/nanobotHttp/usage.ts` 与 `src/types/usage.ts` **根本没有 `ttftMs` 字段** → TTFT 采集率 **0**，即「首字延迟 ≤ 3s」这条非功能需求**当前无法测量** |
 | 需求 | ① 补 `ttftMs` / `stream` 字段（wire → 领域类型 → 落库三处同改，避免「声明了但没写」）；② 在 SSE 首字节处打点；③ 产出**自包含 HTML 报告**（抄 WorkBuddy「JSONL 落盘 + 拖拽即渲染」的形态：单文件、无外部依赖、拖进浏览器就能看） |
 | 验收标准 | ① 新产生的记录中 `ttft_ms>0` 占比 > 0（真机一轮对话即可验证）；② 报告 HTML 在**断网**下可完整渲染（无 CDN 依赖）；③ 单测：SSE 首字节到首 token 的耗时计算正确（含「首字节即首 token」的边界）；④ 与 FR-11.2 的回合 trace **不重复采集**（trace 是回合级，本条是延迟级） |
 | 落点 | `src/ai/runtime/nanobotHttp/usage.ts`、`src/types/usage.ts`、`nanobot/nanobot/llm_usage/store.py:295-301`（写入者）、新增 `resources/perf-report.html` |
@@ -563,6 +627,15 @@ B8 ADR（并行）
 | FR-13.5 | 恢复静态 import | 「首屏 preload 总量」断言变红 |
 | FR-3.10 | 去掉 ChainLoader 第一级 | 「demo 插件片段进提示词」用例变红 |
 | FR-3.12 | 交集改并集 | 「`tools:[shell]` 不得绕过审批」用例变红 |
+| FR-3.12 | 多份声明取并集（`allow &=` → `allow \|=`） | 「两份声明取交集」相关 **2 条**用例变红 ✅ 已验证 |
+| FR-3.12 | 装配期「有声明就跳过审批门」 | 「真实装配下审批门仍在链上」**1 条**用例变红 ✅ 已验证（**这条是被变异逼出来的**：原用例手工拼链，装配那一层根本没覆盖，第一次跑变异时 29 条全绿） |
+| FR-3.12 | `parse_declared_tools` 只认列表（单值读成空） | 「单值声明」相关 **2 条**用例变红 ✅ 已验证 |
+| FR-3.13 | 拓扑序反转（`order.push` → `order.unshift`） | 「依赖在前、目标在后」相关 **3 条**用例变红 ✅ 已验证 |
+| FR-3.13 | 循环检测失效（`visiting` 分支直接放过） | 「循环被拒 + 打印环路径」相关 **3 条**用例变红 ✅ 已验证 |
+| FR-13.5 | `MarkdownView` 改回静态 `import` | **第一次跑没红** —— 772 KB 被并进**入口 chunk**（553 KB → 1340 KB）而不是变成 `modulepreload`，于是「只卡 modulepreload」的判据被动绕过。补了第二条预算（首屏 JS 合计 ≤ 1.5 MB）后 → 判据退出码 1 ✅ 已验证 |
+| FR-13.6 | 把「解释器不可达」导致的未判定写成 `failed`（＝三项被第一项连坐） | 「另外两项不被连坐」+「裸命令名判 skipped」**2 条**用例变红 ✅ 已验证 |
+| FR-8.13 | 复合动作退化成笼统裁决（不看 `kind`，规则里任一 deny 就拒） | 「删除按 delete 裁决、写仍放行」**1 条**用例变红 ✅ 已验证 |
+| FR-8.13 | 规则的 `allow` 顺带放行凭据（跳过 `require_no_access_free`） | 「`no_access` 压过 allow 规则」**1 条**用例变红 ✅ 已验证 |
 
 **通用纪律**（项目既有，逐条重申）：
 1. 每个整改项**先写用例再看红**，不接受「代码写完顺手补测试」。

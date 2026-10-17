@@ -54,3 +54,48 @@ WorkBuddy 式智能体客户端：React 18 + TS + Vite 渲染层 + Electron 主�
 4. 启动 dev 前先 `mv node_modules/.vite/deps_temp_* /tmp`（改 `@mui/icons-material` 图标重优化依赖会撞安全删除守卫崩 dev）。
 5. 真机切场景 = 每场景 `ctx.newPage()`；桩数据落 `localStorage` **且** `Object.assign` 内存对象。
 6. 判断上游真伪用 `curl --noproxy '*' -i` + `/openapi.json`。
+
+## 引擎提示词层（FR-3.10 ChainLoader）· 2026-10-16
+
+- ⚠️ **Jinja 自定义 loader 的 `get_source` 找不到时必须 `raise TemplateNotFound`，不能 `return None`**：`BaseLoader.load` 会解包返回值，返回 None 抛 `TypeError: cannot unpack non-iterable NoneType object`，而 `ChoiceLoader` 只捕 `TemplateNotFound` → 错误带着与模板名无关的栈冒到业务代码。
+- ⚠️ **ChainLoader 的内置 `FileSystemLoader` 必须始终在链尾**：漏掉它时唯一那个 loader 抛错后无人接手，内置模板（如 `agent/platform_policy.md`）直接解析失败，报错像「模板文件不见了」。
+- ⚠️ **覆盖模板必须走 loader，不能用 `Environment.from_string`**：`from_string` 产出的模板**没有 loader** → 覆盖文件里的 `{% include %}` 一律解析不到（上游式覆盖的既有缺陷）。
+- 插件片段模板名基准是**包根**（`demo/fragments/domain.md`），不是被声明目录吃掉后的相对名。
+- 清单里单值字段（`tools: "shell"`）必须走 `_string_list`；用 `_string_tuple` 会静默读成空 = 不约束 → **安全方向的静默失效**。
+- 测试报告类 HTML 页面：jsdom 里 `body.textContent` **包含 inline `<script>` 源码** → 拿注释里的字样当 waitFor 判据会立刻通过（用例变恒真）。
+- `jsdom` 无 `.d.ts` → 已在 `tests/jsdom.d.ts` 补最小声明（不引 `@types/jsdom`）。
+
+## 插件市场（FR-3.7 / 3.8 / 3.13）· 2026-10-16
+
+- ⚠️ **依赖是「市场级」语义，归 `marketplace.json`（索引文件），不是包清单的一维** → 落点只有 `electron/pluginMarketplace.ts`，`pluginPackage.ts` 不用动。
+- ⚠️ **索引是可选元数据，不是白名单**：`resolveInstallOrder` 遇到「索引没提到这个包」必须按**单包**处理，否则一份没写全的索引会变成「市场里别的包装不上」的硬故障。
+- ⚠️ **索引文件每次同步覆盖写**（与包副本的「只增不改」相反）；`listMarketPackages` 要**显式跳过**它，不能靠「拿文件 readdir 必然失败」来跳过。
+- ⚠️ **版本比较永远用 `src/lib/semverRange` 的 `compareVersions`**，别字符串比：`'0.1.9' > '0.1.10'` 会装到旧版且无报错。
+- 拓扑序/环检测 = DFS + `visiting`/`done` 三态；**循环要把环打印出来**（`a → b → a`），只说「存在循环」用户没法行动。
+
+## 工具策略门（FR-3.12 plugin_tools）· 2026-10-16
+
+- ⚠️ **「白名单只能收紧」是 `CompositeHook` 免费提供的**：`_decide_for_each_hook` 只收集 `allowed=False`，`allow()` 被直接丢弃 → 任何门都只能加 deny，**门的位置不改变语义**。
+- ⚠️⚠️ **Hook 装配字段的工厂必须用 `isinstance` 认形状，不能只判 `is not None`**：喂进来一个「长得像但不是」的值（实测是单测里 mock 掉 `ContextBuilder` 后的 `MagicMock`）→ 门挂上、白名单空、**所有工具全被拒**，且拒绝原因里连来源名都没有（最坏的一种故障：整轮不可用 + 无法解释）。认不出形状＝当没声明 + warn。
+- ⚠️ **变异验证必须先确认「用例真的覆盖了那一层」**：手工拼 `CompositeHook([...])` 的用例**证不了装配**（`build_agent_turn_hook`）——「有声明就跳过审批门」写进装配时它照绿。走真实装配的用例要放在那里。
+- ⚠️ **多份声明（技能 frontmatter ∩ 插件清单）取交集**；并集会让任一份都能放宽另一份。
+- `tools:` 是既有 frontmatter 的**新键** → 按硬白名单解释前先 `grep -rn '^tools:' <skills>/` 确认没撞名。
+- 单值 `tools: shell` **必须收**（技能侧拿到的是原始值，这条规则是唯一防线）；`tools: []` = 显式全拒（不读成「没声明」）。
+
+## 首屏治理（FR-13.5 / 13.6）· 2026-10-16
+
+- ⚠️⚠️ **Vite 的 `__vitePreload` 助手必须单独成一个 chunk**：它被每个含动态 `import()` 的 chunk 副作用导入 → **它落在哪个 chunk，那个 chunk 就必然进入口的静态图**、被 `modulepreload`。手工 `manualChunks: { markdown: [...] }` 会把 772 KB 拽上首屏（本意相反），摘掉 markdown 后助手又落进 `mermaid`（665 KB 上首屏）。解法：`manualChunks(id) { if (id.includes('vite/preload-helper')) return 'preload-helper'; ... }`。
+- ⚠️ **判据不能只卡 `modulepreload`**：把大依赖改回静态 `import` 时它会**并进入口 chunk**（553 KB → 1340 KB）而不是变成一条 preload → 只卡那一条的判据被绕过。判据见 `tasks/verify-b5-first-paint.mjs`（两条预算：modulepreload ≤ 1.2 MB、首屏合计 ≤ 1.5 MB）。
+- ⚠️ **`const Page = lazy(() => import(...))` 必须写在 `createBrowserRouter([...])` 之前**：路由表在模块求值时就读它们，`const` 没有提升（tsc 报 TS2448/TS2454）。
+- ⚠️ **`Suspense` 边界放 `AppLayout` 的 `<Outlet />` 外**（不是路由表）：放路由表会让带壳布局卸载重建。**全屏页（`/auth`）必须自己一个边界**，否则懒加载一路上抛到根级（无边界）→ 白屏。
+- ⚠️ **测试等懒加载用轮询**（`tests/helpers/reactMount.ts` 的 `waitForSettled`）：`flush()` 是固定 10 轮 `setTimeout(0)`，等不完一个真实 `import()`。
+- 引擎路径深度：**两层** `nanobot` —— `<appRoot>/nanobot` 是引擎仓库，venv 在 `<appRoot>/nanobot/nanobot/.venv`。候选路径只有一份真相（`engineInterpreterCandidates`），启动器与自检共用。
+- ⚠️⚠️ **两份引擎副本，桌面真正跑的是另一份**：桌面前端连 `D:\Workspace\Codes\sciherd-cloud-smartagent\nanobot`（原始、**能出 token**）；`D:\Workspace\study\nanowork\nanobot` 是 patch 工作副本（`nanowork.config.json` 无内联凭证、shell 无 `DASHSCOPE_API_KEY` → 对话 **500、无法真机验证**）。`study/.../nanobot/nanobot/.venv/Scripts/nanobot.exe` 启动器**实际分发到 codes venv**（traceback 路径露馅）。→ **引擎改动必须同步两份**；**真机验证要让能出 token 的 codes 那份跑**（`study/.../nanobot.exe serve` 即走 codes）。**2026-10-17 已把 study 整套 `nanobot/nanobot` 源码同步进 codes**（codes 由仅 11 处 patch → 全量 163 处；`/v1/usage` 恢复 200；B4-02 经真实 /v1/usage 转绿），**唯一刻意保留的差异是 `utils/gitstore.py`**（codes 独有的跨进程 `FileLock`，与 study 版公共方法一致、API 兼容）。同步前备份在 `codes/nanobot/.local-backup-eng-20261017_204905/`（7.3M，可回滚）。⚠️ **今后若再改 study 引擎，需重新同步到 codes**（模型不做 git 写操作）。
+
+## 引擎 import 环与路径规则（B6）· 2026-10-17
+
+- ⚠️⚠️ **`agent/context.py` 里 `from nanobot.agent.plugins import ...` 只能是函数内局部导入**：`agent/__init__.py` 重导出 `context`，而 `plugins.py` 模块级 import `config.loader` → 环闭 → `config/schema.py` 末尾的 `_resolve_tool_config_refs()` 静默失败 → **任何** `Config.model_validate` 抛 `` `Config` is not fully defined; you should define `WebToolsConfig` ``。排查提示就写在 schema.py 末尾。
+- ⚠️ **判定「是不是自己改坏的」必须跑 skill 登记的四目录基线**（`tests/utils tests/agent tests/command tests/config`）：我跑 `tests/agent`+`tests/utils` 子集时把上面那条误判成环境问题，`tests/config` 才照出来。
+- 路径规则优先级：**凭据 `no_access`（无条件）> 允许根包含性 > 路径规则 > `default_deny_write`**。规则匹配是「对该 kind 有表态的规则里挑最具体」——写反了会让细规则意外放宽粗规则。
+- 删除复用写解析路径但必须传 `kind='delete'`，否则 `delete=deny` 不生效。
+- ⚠️ **变异要真能改变行为**：改到被前置过滤挡住的分支 / 只换执行顺序，都是空转变异（看到全绿会误导）。

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { act } from 'react';
-import { click, mount, unmount } from '../helpers/reactMount';
+import { click, mount, unmount, waitForSettled } from '../helpers/reactMount';
 import { ArtifactRenderer } from '@/components/ArtifactRenderer';
 import type { Artifact } from '@/types';
 
@@ -79,10 +79,17 @@ describe('HTML 产物：页面 / 源码', () => {
 describe('markdown / mermaid：同样有「预览 / 源码」', () => {
   const MD = '# 标题\n\n- 一\n- 二\n';
 
-  it('markdown 默认渲染文档，切「源码」显示原文（围栏与 .md 文件一致）', () => {
+  it('markdown 默认渲染文档，切「源码」显示原文（围栏与 .md 文件一致）', async () => {
     const host = mount(
       <ArtifactRenderer artifact={artifact({ id: 'm1', type: 'markdown', content: MD })} header={false} />,
     );
+    // FR-13.5：`MarkdownView` / `CodeBlockView` 都是**懒加载边界**（772 KB 的 markdown
+    // 分包只在真要看 markdown 时才下载），首帧给的是纯文本兜底 —— 内容立刻可读、
+    // 只是暂时没有排版。所以要等它真正落地，而不是把断言删掉：
+    // 断言本身（「文档模式渲染成标题，正文里不出现 `#`」）是这层的契约，没变。
+    // ⚠️ 用 `waitForSettled` 而不是 `flush()`：后者是固定轮次，等不完一个真实 `import()`。
+    await waitForSettled(() => !(host.textContent ?? '').includes('# 标题'));
+
     // 预览：MarkdownView 把 `# 标题` 渲染成标题元素，正文里不会出现 `#`
     expect(host.textContent).toContain('标题');
     expect(host.textContent).not.toContain('# 标题');
@@ -90,6 +97,7 @@ describe('markdown / mermaid：同样有「预览 / 源码」', () => {
     act(() => {
       click(host.querySelector('[aria-label="源码"]'));
     });
+    await waitForSettled(() => (host.textContent ?? '').includes('# 标题')); // 源码视图同样要等代码高亮那一块
     expect(host.textContent).toContain('# 标题');
   });
 

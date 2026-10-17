@@ -466,6 +466,48 @@ describe('pluginsStore.installFromMarket', () => {
     expect(usePluginsStore.getState().installingKey).toBeNull();
   });
 
+  it('装了依赖时把依赖说出来（否则用户看到几个自己没点过安装的插件）', async () => {
+    stubPlatform({ plugins: [installed()], skipped: [] });
+    listPlugins.mockResolvedValue(engineIndex());
+    vi.spyOn(platform, 'pluginsMarketInstall').mockResolvedValue({
+      ok: true,
+      market: 'official',
+      name: 'demo-plugin',
+      version: '2.0.0',
+      path: `${PLUGINS_ROOT}/cache/official/demo-plugin/2.0.0`,
+      installed: ['miora@1.0.1', 'ardot@0.3.0', 'demo-plugin@2.0.0'],
+    });
+
+    const ok = await usePluginsStore.getState().installFromMarket('official', 'demo-plugin', '2.0.0');
+
+    expect(ok).toBe(true);
+    const notice = usePluginsStore.getState().notice ?? '';
+    expect(notice).toContain('2 个依赖');
+    // 目标自己**不算依赖**（它在 installed 里也有，很容易被一起数进去）
+    expect(notice).not.toContain('3 个依赖');
+    expect(notice).toContain('miora@1.0.1');
+    expect(notice).not.toContain('demo-plugin@2.0.0（');
+  });
+
+  it('没有依赖时文案与从前一致（不因为多了一个字段就长出半句话）', async () => {
+    stubPlatform({ plugins: [installed()], skipped: [] });
+    listPlugins.mockResolvedValue(engineIndex());
+    vi.spyOn(platform, 'pluginsMarketInstall').mockResolvedValue({
+      ok: true,
+      market: 'official',
+      name: 'demo-plugin',
+      version: '2.0.0',
+      path: `${PLUGINS_ROOT}/cache/official/demo-plugin/2.0.0`,
+      installed: ['demo-plugin@2.0.0'],
+    });
+
+    await usePluginsStore.getState().installFromMarket('official', 'demo-plugin', '2.0.0');
+
+    expect(usePluginsStore.getState().notice).toBe(
+      '已切换到「demo-plugin」v2.0.0（仍需启用才生效）',
+    );
+  });
+
   it('失败 → marketError 有原因，且**不自动启用**（引擎激活标记与内容指纹绑定）', async () => {
     stubPlatform({ plugins: [installed()], skipped: [] });
     listPlugins.mockResolvedValue(engineIndex(['demo-plugin', false]));

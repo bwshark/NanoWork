@@ -90,6 +90,32 @@ export async function flush(rounds = 10): Promise<void> {
 }
 
 /**
+ * 等一个条件成立（轮询，超时后**不抛**——让紧随其后的断言去报错，那样失败信息
+ * 里带着实际渲染结果，比一句「等待超时」有用得多）。
+ *
+ * 为什么需要它、而不复用 `flush()`：`flush` 是**固定轮次**（10 轮 `setTimeout(0)`），
+ * 而 FR-13.5 之后 `MarkdownView` / `CodeBlockView` 是**懒加载边界** —— 要等一个真实的
+ * `import()`，那个 chunk 装着 react-markdown + 语法高亮，在 vitest 里首次 transform
+ * 要的墙钟时间远超 10 个 tick。实测把轮次提到 80 才过，而 80 是碰运气的数（机器一慢
+ * 就随机红，且失败信息是「为什么内容还是旧的」这种最难查的形态）。
+ * 轮询则快的机器立刻返回、慢的照样过，且失败时是**确定的**。
+ */
+export async function waitForSettled(
+  predicate: () => boolean,
+  options: { timeoutMs?: number; stepMs?: number } = {},
+): Promise<void> {
+  const timeoutMs = options.timeoutMs ?? 3000;
+  const stepMs = options.stepMs ?? 10;
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, stepMs));
+    });
+  }
+}
+
+/**
  * 写入受控 input / textarea 的值并触发 React 的 onChange。
  *
  * 必须先通过原型上的 setter 赋值：React 在元素上挂了 value tracker，

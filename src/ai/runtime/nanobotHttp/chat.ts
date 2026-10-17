@@ -1,5 +1,6 @@
 import { DEFAULT_TRANSCRIPTION, useSettingsStore } from '@/stores/settingsStore';
 import { fetchSSE, readSSEStream, type SSEStreamEnd } from '@/lib/sse';
+import { createSseLatencyTracker, type SessionLatencySample } from '@/lib/sseLatency';
 // MIME 推断统一复用附件模块的扩展名映射表（文档 / 表格 / 幻灯片 / PDF / 文本标记 /
 // 配置日志 / 图片 / 音视频），避免出现「Composer 能选、上传时却退化成 octet-stream」
 import { inferMime } from '@/lib/attachments';
@@ -749,6 +750,20 @@ export class NanobotClient {
     const useForm = !!form;
     const streamUrl = `${endpoint}/chat/completions`;
 
+    // —— 会话延迟埋点（FR-11.7）：响应头 → 首字节 → 首 token ——
+    // `onActivity` 在本轮里承担了两种语义（响应头到 / 每个字节到），而首字延迟需要
+    // 一个**唯一**的首字节时刻，故另接一个只报一次的 `onFirstByte`（见 sse.ts 的注释）。
+    const latency = createSseLatencyTracker();
+    let sawResponseHeaders = false;
+    const trackActivity = () => {
+      if (!sawResponseHeaders) {
+        sawResponseHeaders = true;
+        latency.markStart();
+      }
+      onActivity();
+    };
+    const trackFirstByte = () => latency.markFirstByte();
+
     const onChunk = (data: string) => {
       if (data === '[DONE]') return;
       // 中断后即使收到迟到的帧也不再回调给 store
@@ -777,6 +792,9 @@ export class NanobotClient {
 
         // 1) 文本流
         if (delta.content) {
+          // 先打点再回调：`onToken` 会把内容写进 store 并触发渲染，之后再打点
+          // 等于把「渲染开销」也算进了首字延迟。
+          latency.markFirstToken();
           fullText += delta.content;
           handlers.onToken(delta.content);
           handlers.onStatus('streaming');
@@ -887,16 +905,23 @@ export class NanobotClient {
         onChunk,
         reportError,
         signal,
-        onActivity,
+        trackActivity,
+        trackFirstByte,
       );
     } else {
       end = await fetchSSE(
         streamUrl,
-        { ...requestInit, onActivity } as never,
+        { ...requestInit, onActivity: trackActivity, onFirstByte: trackFirstByte } as never,
         onChunk,
         reportError,
       );
     }
+
+    // 首字延迟采样上报（FR-11.7）：只有真的等到首字才上报 —— 没等到就报一个
+    // 全 null 的样本，只会让报表多出无法解释的空行。
+    // 刻意放在下面的中断判断**之前**：用户中途点了停止时，已经量到的首字延迟
+    // 依然是一条有效数据（它衡量的是「多久看到第一个字」，与后来停不停无关）。
+    if (latency.hasFirstToken) handlers.onLatency?.(latency.sample());
 
     // 中断后跳过 flush 与启发式提取，避免给用户「看起来正常生成」的错觉
     if (signal.aborted) return;
@@ -943,6 +968,7 @@ export class NanobotClient {
     onError: (err: Error) => void,
     signal: AbortSignal,
     onActivity: () => void,
+    onFirstByte: () => void,
   ): Promise<SSEStreamEnd> {
     if (signal.aborted) return 'eof';
     try {
@@ -966,7 +992,7 @@ export class NanobotClient {
         return 'done';
       }
 
-      return await readSSEStream(response.body.getReader(), signal, onMessage, onActivity);
+      return await readSSEStream(response.body.getReader(), signal, onMessage, onActivity, onFirstByte);
     } catch (err) {
       // 中断造成的 AbortError 视作正常结束
       if (signal.aborted) return 'eof';

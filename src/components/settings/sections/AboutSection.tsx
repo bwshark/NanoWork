@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Box, Button, Typography } from '@mui/material';
 import { SettingsCard, SettingsRow } from '@/components/settings/SettingsPrimitives';
+import { EngineSelfCheckCard } from '@/components/settings/sections/EngineSelfCheckCard';
 import { toast } from '@/components/Toast';
 import { APP_DISPLAY_NAME, APP_DISPLAY_SUB, APP_NAME, APP_VERSION } from '@/lib/constants';
 import { platform } from '@/platform';
@@ -102,6 +103,10 @@ export function AboutSection() {
           hint={info?.deviceId ?? '仅桌面端可见，用于本地设备识别与后续同步'}
         />
       </SettingsCard>
+
+      {/* 引擎自检（FR-13.6）：放在「运行环境」之后 —— 上面说「你是什么环境」，
+          这里说「这个环境的引擎到底能不能跑」，两件事挨着看最顺。 */}
+      <EngineSelfCheckCard />
 
       <SettingsCard
         title="说明"

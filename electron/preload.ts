@@ -160,7 +160,11 @@ const api: ElectronAPI = {
   // 不能回头把用户的这一轮对话打挂）。
   appendLog: (entry) => ipcRenderer.send('log:append', entry),
   writeTrace: (file) => ipcRenderer.send('trace:write', file),
+  // 会话首字延迟采样（FR-11.7）：同样是 fire-and-forget，主进程追加一行 JSONL。
+  recordSessionLatency: (sample) => ipcRenderer.send('perf:latency', sample),
   diagnosticsStats: () => ipcRenderer.invoke('diagnostics:stats'),
+  /** FR-13.6 引擎运行时自检：返回**结构化报告**（三项逐项），`true` 强制重跑 */
+  engineSelfCheck: (refresh?: boolean) => ipcRenderer.invoke('engine:selfCheck', refresh === true),
   exportDiagnostics: () => ipcRenderer.invoke('diagnostics:export'),
   /** FR-8.9 工具网关审计日志：读 `<data_dir>/audit/tool-gateway.ndjson` 的 NDJSON 文本 */
   auditRead: () => ipcRenderer.invoke('audit:read'),

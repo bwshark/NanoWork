@@ -22,6 +22,15 @@ export interface SSEOptions {
    * 不产生事件，却恰好是「对端还活着」的证据（见 nanobotHttp/chat.ts）。
    */
   onActivity?: SSEActivityHandler;
+  /**
+   * **首个字节**到达时回调一次（且仅一次）。
+   *
+   * 与 `onActivity` 的区别是**语义**而非实现，但足以让指标算错：`onActivity`
+   * 每次读到数据都回调（供静默超时归零），且 `fetchSSE` 在**拿到响应头**时就会
+   * 先回调一次 —— 那一刻一个字节都还没读到。拿它的第一次调用当「首字节」，
+   * `ttftMs` 就会凭空多出「等待响应头」那一段（本地网关可忽略，远端网关几十毫秒）。
+   */
+  onFirstByte?: SSEActivityHandler;
 }
 
 /**
@@ -90,14 +99,24 @@ export async function readSSEStream(
   signal: AbortSignal | undefined,
   onMessage: (payload: string) => void,
   onActivity?: SSEActivityHandler,
+  onFirstByte?: SSEActivityHandler,
 ): Promise<SSEStreamEnd> {
   const decoder = new TextDecoder();
   let buffer = '';
+  let sawFirstByte = false;
   while (true) {
     if (signal?.aborted) return 'eof';
     const { done, value } = await reader.read();
     // 字节层活跃信号：先于 done 判断，让调用方在任何读到数据的时刻都能重新计时
-    if (value && value.length > 0) onActivity?.();
+    if (value && value.length > 0) {
+      onActivity?.();
+      // 首字节只报一次（`sawFirstByte` 而非「回调是否为空」做守卫：调用方可能
+      // 在流中途才把回调接上，那种情况下重复上报会把首字节时刻推后）。
+      if (!sawFirstByte) {
+        sawFirstByte = true;
+        onFirstByte?.();
+      }
+    }
     if (done) {
       // 流自然结束：追加一个事件边界，尝试消费缓冲区里的尾部数据
       const { events } = parseSSEBuffer(buffer + '\n\n');
@@ -172,6 +191,7 @@ export async function fetchSSE(
       options.signal,
       onMessage,
       options.onActivity,
+      options.onFirstByte,
     );
   } catch (err) {
     if (options.signal?.aborted) return 'eof';

@@ -155,3 +155,64 @@ V1 提交还改了 8 个上游文件却**没有留 `[LOCAL PATCH]` 标记**。�
 | `docs/nanowork-prd-design-v2.md` §2.2 / §10.3.1 / §11.1.1 / §13.4 / ADR-021 / ADR-024 | 定义「为什么必须下沉到引擎」 |
 | `docs/engine-dev-setup.md` | 引擎仓库边界、venv、测试命令、对象库修复记录 |
 | `docs/adr/ADR-0021.md` / `ADR-0024.md` | 两处最大补丁面的决策依据（工具收口、执行模式） |
+
+---
+
+## 九、V1.6 追加的引擎侧补丁（2026-10-16，B7 扩展面）
+
+> 本节是**增量登记**，不重排前几节的快照编号。§三 的表是 2026-09-17 的快照
+> （28 文件 / 104 处）；本次追加后实测 **34 文件 / 146 处**（差额含 V1.5 / M6 各批，
+> 不全是本节这批）。
+
+| 文件（相对 `nanobot/`） | 本次改动 | FR | 为什么不改上游做不到 |
+|---|---|---|---|
+| `agent/plugins.py` | `AgentPlugin` 加 `prompt_dirs` / `agent_files` / `command_files` / `hook_manifest` / `tool_policy`（均在**解析期**过 `_contained()`）；新增 `PluginMount` + `enabled_agent_plugin_mounts()`（统一挂载表）+ `plugin_trust()` + `plugin_prompt_mounts()`；`_invalidate_skill_cache` 连挂载表一起清 | FR-3.10 / 3.11 / 3.12 | 上游的清单解析面只认 `$schema` / `name` / `description` / `repository` / `extensions` / `mcpServers`，技能走目录约定。**「声明了但没读的字段」只能由我们自己读起来** |
+| `utils/prompt_templates.py` | 单 `FileSystemLoader` → **ChainLoader**（① 插件命名空间 ② 工作区覆盖 ③ 内置）；新增 `PluginPromptLoader` / `WorkspaceOverrideLoader` / `wrap_untrusted()` / `PluginPromptMount`；`render_template` 加 `plugin_mounts=` | FR-3.10 ①③④ | 上游是单 loader + 覆盖白名单，第三方无法在不改引擎代码的前提下注入领域规程。且上游式覆盖用 `from_string`，**产出的模板没有 loader** → 覆盖文件里的 `{% include %}` 一律解析不到（这是本次才发现的既有缺陷，不是新增行为） |
+| `agent/context.py` | `self.user_plugins_dir` 落实例；新增 `_plugin_prompt_mounts()`；把挂载点透传进 `build_system_prompt` / `_get_identity` 的 4 处 `render_template` | FR-3.10 | 不接线 = 片段永远进不了系统提示词（本仓库在 `session_mode` 上踩过同款「函数对了但没接线」的静默缺陷） |
+| `agent/hooks/plugin_tools.py`（**新增**） | 声明式工具白名单的策略代数（`parse_declared_tools` / `combine_declarations` / `policy_gaps`）+ `DeclaredToolPolicyHook` + 工厂 | FR-3.12 | 技能与插件的作者此前只能靠提示词表达「我只用这些工具」，而提示词是软约束。工具执行唯一入口 `before_execute_tool` 在引擎侧，客户端拦不住 |
+| `agent/turn_hooks.py` | `AgentTurnHookSpec.declared_tools` 字段；把声明门挂进基线链（排在 Agent 授权门之后） | FR-3.12 | 与审批门 / 模式门 / 授权门同级：ephemeral turn 同样绕不过 |
+| `agent/loop.py` | 装配点传 `declared_tools=self.context.declared_tool_policy(...)`（**装配期算一次**，不让热路径上的每次工具调用去扫盘） | FR-3.12 | 声明来自磁盘（技能 frontmatter / 插件清单），而工具调用是热路径 |
+| `agent/skills.py` | `SkillsLoader.declared_tools()`：读 always 技能 frontmatter 里**原始**的 `tools:` 值（刻意不在这里收敛，收敛归 `plugin_tools.parse_declared_tools`，避免两份规则漂移） | FR-3.12 | 技能元数据只在引擎侧解析，客户端拿不到 |
+| `agent/context.py`（追加） | `declared_tool_policy()`：把「always 技能」与「已启用插件」两处声明合成一份策略 | FR-3.12 | 两个来源合起来的规则（**交集**）需要一个落点，放在客户端等于两份真相 |
+
+**三条给合并上游时的提醒**：
+
+1. **`WorkspaceOverrideLoader` 是行为变更**（不只是新增）：覆盖模板里的 `{% include %}`
+   从「解析不到」变成「能解析」。若上游也重建了覆盖机制，要保住这一点。
+2. **自定义 loader 的 `get_source` 找不到时必须 `raise TemplateNotFound`，不能 `return None`**：
+   Jinja 的 `BaseLoader.load` 会解包返回值，返回 `None` 抛的是
+   `TypeError: cannot unpack non-iterable NoneType object`，而 `ChoiceLoader`
+   **只捕 `TemplateNotFound`** → 这个 TypeError 会带着一个与模板名毫无关系的栈冒到业务代码。
+   本次实测踩到（见 `tests/agent/test_plugin_prompt_fragments.py` 的用例注释）。
+3. **ChainLoader 的内置 loader 必须始终在链尾**：漏掉它时链上唯一那个 loader 抛错后无人接手，
+   `agent/platform_policy.md` 这类内置模板会直接解析失败 —— 而报错看起来像「模板文件不见了」，
+   真因却是「忘了把兜底那一级接上」。
+4. **`create_declared_tool_policy_hook` 必须用 `isinstance` 认形状，不能只判 `is not None`**：
+   `declared_tools` 由装配方喂进来，任何「长得像但不是」的值都会造成最坏的一种故障 ——
+   门挂上了、白名单是空的、**所有工具全被拒**，而拒绝原因里连一个来源名都没有。
+   实测来源：单测把 `ContextBuilder` mock 掉后返回 `MagicMock`，它 `is not None` 但
+   `__contains__` 恒为 False。认不出形状一律当「没声明」（不约束）+ warn。
+5. **`tools:` 是既有 frontmatter 里的新键**：合并上游时若上游引入了同名字段（不同语义），
+   必须显式决定取谁。本次实现按**硬白名单**语义解释（见 `plugin_tools.py` 模块 docstring），
+   并已确认当时的内置技能没有任何 `tools:` 键（`grep -rn '^tools:' nanobot/skills/` 为空）—— 合并后要重跑这个检查。
+
+### 6. FR-8.13 路径级权限规则（2026-10-16 追加）
+
+| 文件（相对 `nanobot/`） | 本次改动 | FR | 为什么不改上游就做不到 |
+|---|---|---|---|
+| `security/path_rules.py`（**新增**） | 复合动作（读 / 写 / 删各自授权）的规则形状、归一化、最具体匹配、裁决与拒绝原因 | FR-8.13 | 上游只有「一个 allowed_root + 一个 deny_write 开关」，没有按路径分动作的概念 |
+| `security/workspace_policy.py` | `resolve_allowed_path()` 加 `rules` / `kind` 两个参数，并把规则插进优先级链 | FR-8.13 | 这是路径访问的**唯一收口**（ADR-021），规则必须挂在这里才拦得住所有工具 |
+| `agent/tools/path_utils.py` | `resolve_workspace_path()` 透传 `rules` / `kind` | FR-8.13 | filesystem 工具的公共解析入口 |
+| `agent/tools/filesystem.py` | `FileToolsConfig.path_rules` 字段；`create()` 里归一化一次；`_resolve_read` / `_resolve_write` / 删除入口各自传 `kind` | FR-8.13 | 配置字段要在工具侧落地；删除复用写解析路径但**必须按 delete 裁决**，否则 `delete=deny` 永不生效 |
+
+**优先级顺序（合并上游时的断言点）**：① 凭据 `no_access`（无条件，规则不可覆盖）→ ② 工作区 /
+允许根包含性（规则不能放宽边界）→ ③ 路径规则 → ④ `default_deny_write`。
+四条各有一条用例钉住（`tests/security/test_path_rules.py`）。
+
+**⚠️ 一个必须一起带走的修复（`agent/context.py`）**：本会话早些时候给 `context.py` 加了
+**模块级**的 `from nanobot.agent.plugins import ...`，把 `agent/__init__ → context →
+plugins → config.loader → config.schema` 闭成了环。症状是 `config/schema.py` 末尾的
+`_resolve_tool_config_refs()` 静默失败，于是**任何** `Config.model_validate` 都抛
+`` `Config` is not fully defined; you should define `WebToolsConfig` ``（`tests/config/test_model_presets.py`
+因此红了一整轮）。已改为**函数内局部导入**（schema.py 末尾本就写着这条排查提示）。
+合并上游时若看到 `context.py` 里出现模块级的 plugins 导入，按同一条理由驳回。

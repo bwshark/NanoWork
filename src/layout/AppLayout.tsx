@@ -1,8 +1,9 @@
-import { useEffect } from "react";
+import { Suspense, useEffect } from "react";
 import { Box } from "@mui/material";
 import { Outlet, useNavigate } from "react-router-dom";
 import { SidebarNav } from "./SidebarNav";
 import { ConnectionBanner } from "./ConnectionBanner";
+import { RouteFallback } from "./RouteFallback";
 import { TitleBar } from "@/components/TitleBar";
 import { ArtifactPanel } from "@/components/artifacts/ArtifactPanel";
 import { SettingsDialog } from "@/components/settings/SettingsDialog";
@@ -53,7 +54,12 @@ export function AppLayout() {
           {/* <ConnectionBanner /> */}
           <Box sx={{ flex: 1, display: "flex", minHeight: 0 }}>
             <Box sx={{ flex: 1, overflow: "auto", minWidth: 0 }}>
-              <Outlet />
+              {/* FR-13.5 路由懒加载的边界。**放在这里而不是路由表上**：侧栏 / 标题栏 /
+                  产物面板在切页期间保持挂载，只有内容区走 fallback。放到路由表上会让
+                  整棵带壳布局一起卸载重建（表现是切页时侧栏闪一下、滚动位置全丢）。 */}
+              <Suspense fallback={<RouteFallback />}>
+                <Outlet />
+              </Suspense>
             </Box>
             {/* 右侧产物面板：由会话行的「产物面板」入口开关，收起时不占位 */}
             <ArtifactPanel />

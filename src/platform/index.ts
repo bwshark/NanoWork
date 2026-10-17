@@ -515,8 +515,19 @@ export const platform: PlatformAdapter = {
   writeTrace: (file) => {
     if (isElectron() && window.electronAPI) window.electronAPI.writeTrace(file);
   },
+  recordSessionLatency: (sample) => {
+    if (isElectron() && window.electronAPI) {
+      window.electronAPI.recordSessionLatency(sample);
+    }
+  },
   diagnosticsStats: () => {
     if (isElectron() && window.electronAPI) return window.electronAPI.diagnosticsStats();
+    return Promise.resolve(null);
+  },
+  engineSelfCheck: (refresh) => {
+    if (isElectron() && window.electronAPI) return window.electronAPI.engineSelfCheck(refresh);
+    // Web 端没有本地引擎这回事 → `null`（**不是**「检查失败」）：界面据此说
+    // 「Web 端不适用」，而不是给用户看三条红。
     return Promise.resolve(null);
   },
   exportDiagnostics: () => {

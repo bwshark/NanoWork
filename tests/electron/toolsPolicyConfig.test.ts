@@ -12,14 +12,22 @@
  */
 
 import { describe, expect, it } from 'vitest';
+import type { NanobotPathRule } from '@/platform/types';
 import {
   DEFAULT_DENY_WRITE,
   DENY_WRITE_KEY,
   DENY_WRITE_KEY_SNAKE,
   fileToolsSignature,
   mergeDefaultDenyWrite,
+  mergePathRules,
   parseFileToolsPolicy,
+  parsePathRules,
 } from '../../electron/toolsPolicyConfig';
+
+/** 规则字面量的类型助手：不标的话 TS 把 `{write: 'deny'}` 推断成 `{write: string}` */
+function rule(path: string, action: Record<string, 'allow' | 'deny'>): NanobotPathRule {
+  return { path, action } as NanobotPathRule;
+}
 
 /** 一份「像真的」配置：tools 段里既有 file 也有别人在维护的键 */
 function sampleConfig(): Record<string, unknown> {
@@ -39,6 +47,9 @@ describe('parseFileToolsPolicy：tools 段 → 写策略', () => {
     expect(parseFileToolsPolicy(sampleConfig().tools)).toEqual({
       defaultDenyWrite: DEFAULT_DENY_WRITE,
       supported: true,
+      // FR-8.13：规则缺省就是空数组（引擎默认值）。快照**总是**带着这个字段，
+      // 界面才不必区分「没配规则」与「配置里没这个键」——两者语义相同。
+      pathRules: [],
     });
   });
 
@@ -46,7 +57,7 @@ describe('parseFileToolsPolicy：tools 段 → 写策略', () => {
     for (const key of ['defaultDenyWrite', 'default_deny_write']) {
       expect(
         parseFileToolsPolicy({ file: { enable: true, [key]: true } }),
-      ).toEqual({ defaultDenyWrite: true, supported: true });
+      ).toEqual({ defaultDenyWrite: true, supported: true, pathRules: [] });
     }
   });
 
@@ -54,10 +65,12 @@ describe('parseFileToolsPolicy：tools 段 → 写策略', () => {
     expect(parseFileToolsPolicy({ file: { [DENY_WRITE_KEY]: false } })).toEqual({
       defaultDenyWrite: false,
       supported: true,
+      pathRules: [],
     });
     expect(parseFileToolsPolicy({ file: { enable: true } })).toEqual({
       defaultDenyWrite: DEFAULT_DENY_WRITE,
       supported: true,
+      pathRules: [],
     });
   });
 
@@ -111,6 +124,7 @@ describe('mergeDefaultDenyWrite：只动 tools.file 那一个键', () => {
     expect(parseFileToolsPolicy(data.tools)).toEqual({
       defaultDenyWrite: true,
       supported: true,
+      pathRules: [],
     });
   });
 });
@@ -133,5 +147,141 @@ describe('fileToolsSignature：幂等比对只看 tools.file', () => {
     const after = mergeDefaultDenyWrite(sampleConfig(), true).data;
     (after.tools as Record<string, unknown>).mcpServers = { other: {} };
     expect(fileToolsSignature(before)).not.toBe(fileToolsSignature(after));
+  });
+});
+
+/**
+ * 路径规则（FR-8.13）在 config.json 里的读写转换。
+ *
+ * 盯的是同一类「不会报错、只会静默改坏配置」的错，只是换了个形状：
+ * 规则是**数组**，所以「整体替换 `tools` 段」会连别人的键一起吞掉，而
+ * 「幂等比错字段」会让「删掉一条规则再保存」被判成「没有变更」—— 用户看到的是
+ * 「保存成功」，磁盘上那条规则还在。
+ */
+describe('parsePathRules：tools.file.pathRules → 规则表', () => {
+  it('camel 与 snake 两种键都由 parseFileToolsPolicy 认（parsePathRules 只接数组）', () => {
+    for (const key of ['pathRules', 'path_rules']) {
+      expect(
+        parseFileToolsPolicy({ file: { [key]: [{ path: '/a', action: { write: 'deny' } }] } })
+          ?.pathRules,
+      ).toEqual([{ path: '/a', action: { write: 'deny' } }]);
+    }
+    expect(parsePathRules([{ path: '/a', action: { write: 'deny' } }])).toEqual([
+      { path: '/a', action: { write: 'deny' } },
+    ]);
+  });
+
+  it('坏条目丢掉、其余照常（一条写错不该让整张表消失）', () => {
+    expect(
+      parsePathRules([
+        { path: '/a', action: { write: 'deny' } },
+        { action: { read: 'deny' } },
+        { path: '   ', action: { read: 'deny' } },
+        { path: '/b', action: { read: 'dney' } },
+        { path: '/c', action: { chmod: 'deny' } },
+        { path: '/d', action: {} },
+        'not-an-object',
+      ]),
+    ).toEqual([{ path: '/a', action: { write: 'deny' } }]);
+  });
+
+  it('不是数组 → 空表（不是抛错）', () => {
+    expect(parsePathRules(undefined)).toEqual([]);
+    expect(parsePathRules('nope')).toEqual([]);
+    expect(parsePathRules({ path: '/a' })).toEqual([]);
+  });
+
+  it('解析出的形状与界面 / 引擎同构（三种动作各自独立）', () => {
+    const [rule] = parsePathRules([
+      { path: '/a', action: { read: 'deny', write: 'allow', delete: 'deny' } },
+    ]);
+    expect(Object.keys(rule.action).sort()).toEqual(['delete', 'read', 'write']);
+  });
+});
+
+describe('mergePathRules：只动 tools.file.pathRules', () => {
+  it('保留 mcpServers / defaultDenyWrite / 其它 file 键', () => {
+    const base = sampleConfig();
+    (base.tools as Record<string, unknown>).file = {
+      enable: true,
+      defaultDenyWrite: true,
+      safeDeleteReportPath: 'x',
+    };
+    const { data, changed } = mergePathRules(base, [
+      { path: '/a', action: { write: 'deny' } },
+    ]);
+    expect(changed).toBe(true);
+    const file = (data.tools as Record<string, unknown>).file as Record<string, unknown>;
+    expect(file.defaultDenyWrite).toBe(true);
+    expect(file.safeDeleteReportPath).toBe('x');
+    expect(file.pathRules).toEqual([{ path: '/a', action: { write: 'deny' } }]);
+    expect((data.tools as Record<string, unknown>).mcpServers).toBeDefined();
+    expect(data.agents).toEqual(base.agents);
+  });
+
+  it('动作键序固定（read / write / delete），同一份规则两次保存 diff 为空', () => {
+    const rules = [rule('/a', { delete: 'deny', read: 'allow', write: 'deny' })];
+    const first = mergePathRules(sampleConfig(), [...rules]).data;
+    const second = mergePathRules(sampleConfig(), [...rules]).data;
+    expect(JSON.stringify(first)).toBe(JSON.stringify(second));
+  });
+
+  it('空数组 = 清空所有规则（整表替换语义）', () => {
+    const base = mergePathRules(sampleConfig(), [rule('/a', { write: 'deny' })]).data;
+    const { data } = mergePathRules(base, []);
+    expect(((data.tools as Record<string, unknown>).file as Record<string, unknown>).pathRules).toEqual([]);
+  });
+
+  it('整份 data 不是对象 → 拒绝合并（fail-closed）', () => {
+    // 运行期会拿到手写坏的配置（`tools` 被写成字符串），所以这条形状是真实输入
+    expect(mergePathRules('nope' as unknown as Record<string, unknown>, []).changed).toBe(false);
+  });
+
+  it('往返：写进去的规则能被 parse 回来', () => {
+    const rules = [
+      rule('/a', { write: 'deny' }),
+      rule('/b', { read: 'allow', delete: 'deny' }),
+    ];
+    const { data } = mergePathRules(sampleConfig(), rules);
+    expect(parsePathRules(((data.tools as Record<string, unknown>).file as Record<string, unknown>).pathRules)).toEqual(rules);
+  });
+});
+
+describe('fileToolsSignature：规则也进幂等签名', () => {
+  it('⭐ 删掉一条规则 → 签名必须变（否则保存被判成「没有变更」而不写盘）', () => {
+    const before = mergePathRules(sampleConfig(), [
+      rule('/a', { write: 'deny' }),
+      rule('/b', { read: 'deny' }),
+    ]).data;
+    const after = mergePathRules(before, [rule('/a', { write: 'deny' })]).data;
+    expect(fileToolsSignature(before)).not.toBe(fileToolsSignature(after));
+  });
+
+  it('同一份规则 → 签名相同（点两次保存不会第二次报「已修改」）', () => {
+    const rules = [rule('/a', { write: 'deny' })];
+    expect(fileToolsSignature(mergePathRules(sampleConfig(), rules).data)).toBe(
+      fileToolsSignature(mergePathRules(sampleConfig(), rules).data),
+    );
+  });
+
+  it('规则的书写顺序不影响签名（换顺序不该触发多余的重启）', () => {
+    const a = mergePathRules(sampleConfig(), [
+      rule('/a', { write: 'deny' }),
+      rule('/b', { read: 'deny' }),
+    ]).data;
+    const b = mergePathRules(sampleConfig(), [
+      rule('/b', { read: 'deny' }),
+      rule('/a', { write: 'deny' }),
+    ]).data;
+    expect(fileToolsSignature(a)).toBe(fileToolsSignature(b));
+  });
+
+  it('外部改动（mcpServers 变了）仍然不算「本次有变更」', () => {
+    // 两份都必须带**同一批**规则：否则差异来自规则本身，断言就偏了
+    const rules = [rule('/a', { write: 'deny' })];
+    const before = mergePathRules(sampleConfig(), rules).data;
+    const after = mergePathRules(sampleConfig(), rules).data;
+    (after.tools as Record<string, unknown>).mcpServers = { other: {} };
+    expect(fileToolsSignature(before)).toBe(fileToolsSignature(after));
   });
 });

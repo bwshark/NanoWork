@@ -3,6 +3,7 @@ import { Alert, Box, Button, Chip, Stack, Switch, Typography } from '@mui/materi
 import { SettingsCard, SettingsRow } from '@/components/settings/SettingsPrimitives';
 import { toast } from '@/components/Toast';
 import { useToolsPolicyStore } from '@/stores/toolsPolicyStore';
+import { PathRulesEditor } from '@/components/settings/sections/PathRulesEditor';
 
 /**
  * 引擎侧的两条硬边界（FR-8.4「默认拒绝写入策略」）。
@@ -160,6 +161,13 @@ export function SecuritySection() {
             />
           }
         />
+      </SettingsCard>
+
+      <SettingsCard
+        title="路径规则（读 / 写 / 删分别授权）"
+        description="给具体路径单独定「能不能读、能不能写、能不能删」。三者各自独立：想让某个目录只读，就只把「写」和「删」设成拒绝，读仍然放行。规则比上面的「默认拒绝写入」更具体，因此优先于它；但凭据目录那一组是无条件守卫，规则覆盖不了。"
+      >
+        <PathRulesEditor />
       </SettingsCard>
 
       <SettingsCard

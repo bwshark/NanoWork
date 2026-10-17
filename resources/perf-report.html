@@ -1,0 +1,380 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>nanowork 性能报告</title>
+<style>
+  :root {
+    --bg: #f6f7f9;
+    --surface: #ffffff;
+    --border: rgba(0, 0, 0, 0.12);
+    --text: #1a1c1f;
+    --muted: #5f6368;
+    --accent: #0b6b53;
+    --accent-soft: #d8ece5;
+    --warn: #8a4b00;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16181c;
+      --surface: #1f2329;
+      --border: rgba(255, 255, 255, 0.14);
+      --text: #e8eaed;
+      --muted: #9aa0a6;
+      --accent: #5dcaa5;
+      --accent-soft: #23443a;
+      --warn: #fbbf24;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 32px 24px 64px;
+    background: var(--bg);
+    color: var(--text);
+    font: 400 14px/1.6 -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  }
+  main { max-width: 940px; margin: 0 auto; }
+  h1 { font-size: 20px; font-weight: 500; margin: 0 0 4px; }
+  h2 { font-size: 15px; font-weight: 500; margin: 0 0 12px; }
+  .lead { color: var(--muted); margin: 0 0 24px; }
+  section {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+    margin-bottom: 20px;
+  }
+  #drop {
+    border: 1px dashed var(--border);
+    border-radius: 12px;
+    padding: 32px 20px;
+    text-align: center;
+    color: var(--muted);
+    cursor: pointer;
+  }
+  #drop.hot { border-color: var(--accent); background: var(--accent-soft); color: var(--text); }
+  #drop strong { color: var(--text); font-weight: 500; }
+  code {
+    background: var(--accent-soft);
+    border-radius: 4px;
+    padding: 1px 5px;
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+    font-size: 12px;
+  }
+  .cards { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 16px; }
+  .card {
+    background: var(--bg);
+    border-radius: 8px;
+    padding: 10px 14px;
+    min-width: 120px;
+  }
+  .card .k { font-size: 12px; color: var(--muted); }
+  .card .v { font-size: 20px; font-weight: 500; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+  th { font-weight: 500; color: var(--muted); }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .track { position: relative; height: 10px; background: var(--bg); border-radius: 5px; }
+  .bar { position: absolute; top: 0; height: 10px; border-radius: 5px; background: var(--accent); }
+  .hint { color: var(--muted); font-size: 13px; }
+  .warn { color: var(--warn); }
+  .hidden { display: none; }
+  ol.steps { margin: 8px 0 0; padding-left: 20px; color: var(--muted); }
+  ol.steps li { margin-bottom: 4px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>nanowork 性能报告</h1>
+  <p class="lead">
+    把 <code>startup-profile.jsonl</code> 与 <code>session-latency.jsonl</code> 拖进来即可渲染。
+    本页面<strong>不联网、无外部依赖</strong>，断网可用（FR-11.6 / FR-11.7）。
+  </p>
+
+  <div id="drop">
+    <p><strong>拖入 JSONL 文件</strong>，或点击选择</p>
+    <p class="hint">两个文件一起选也可以；按内容自动识别，不看文件名</p>
+    <input id="picker" type="file" multiple accept=".jsonl,.json,.txt" class="hidden" />
+  </div>
+
+  <div id="empty" class="hint" style="margin-top: 24px">
+    <p>没有数据？先打开采集开关：</p>
+    <ol class="steps">
+      <li>启动应用前设置环境变量 <code>NANOWORK_STARTUP_PROFILE=1</code>（默认关闭，关闭态零 I/O）</li>
+      <li>重启应用，让启动链路跑完一遍</li>
+      <li>文件在应用数据目录下：<code>startup-profile.jsonl</code>、<code>session-latency.jsonl</code></li>
+    </ol>
+  </div>
+
+  <section id="startup" class="hidden">
+    <h2>启动分段</h2>
+    <div class="cards" id="startupCards"></div>
+    <div id="startupBars"></div>
+    <div id="startupNote" class="hint"></div>
+  </section>
+
+  <section id="latency" class="hidden">
+    <h2>首字延迟（TTFT）</h2>
+    <div class="cards" id="latencyCards"></div>
+    <div id="latencyBars"></div>
+    <p class="hint" id="latencyNote"></p>
+  </section>
+</main>
+
+<script>
+(function () {
+  'use strict';
+
+  /** 千分位 + 单位；首字延迟小于 1 秒按毫秒展示，否则按秒 */
+  function ms(value) {
+    if (value === null || value === undefined || !isFinite(value)) return '—';
+    if (value < 1000) return Math.round(value) + ' ms';
+    return (Math.round(value / 100) / 10) + ' s';
+  }
+
+  function num(value) {
+    return typeof value === 'number' && isFinite(value) ? value : null;
+  }
+
+  /** 最近的样本排在后面（JSONL 是追加写的） */
+  function parseNdjson(text) {
+    const out = [];
+    for (const raw of text.split(/\r?\n/)) {
+      const line = raw.trim();
+      if (!line) continue;
+      try {
+        const value = JSON.parse(line);
+        if (value && typeof value === 'object') out.push(value);
+      } catch (err) {
+        // 半截行（应用正在写）直接跳过：为一行坏数据整份丢弃才是真的丢信息
+      }
+    }
+    return out;
+  }
+
+  function percentiles(values) {
+    if (!values.length) return null;
+    const sorted = values.slice().sort((a, b) => a - b);
+    const at = (p) => sorted[Math.min(sorted.length - 1, Math.max(0, Math.ceil((p / 100) * sorted.length) - 1))];
+    return { p50: at(50), p90: at(90), max: sorted[sorted.length - 1], count: sorted.length };
+  }
+
+  function card(label, value) {
+    const el = document.createElement('div');
+    el.className = 'card';
+    const k = document.createElement('div');
+    k.className = 'k';
+    k.textContent = label;
+    const v = document.createElement('div');
+    v.className = 'v';
+    v.textContent = value;
+    el.append(k, v);
+    return el;
+  }
+
+  function renderStartup(reports) {
+    if (!reports.length) return;
+    const section = document.getElementById('startup');
+    section.classList.remove('hidden');
+    const cards = document.getElementById('startupCards');
+    cards.textContent = '';
+    const latest = reports[reports.length - 1];
+    const extras = latest.extras || {};
+    cards.append(
+      card('总耗时（墙钟）', ms(latest.durationMs)),
+      card('区间并集', ms(latest.unionMs)),
+      card('分段数', String((latest.spans || []).length)),
+      card('版本', extras.version ? String(extras.version) : '—')
+    );
+
+    const bars = document.getElementById('startupBars');
+    bars.textContent = '';
+    const origin = num(latest.startedAtMs) || 0;
+    const total = Math.max(num(latest.durationMs) || 1, 1);
+    const table = document.createElement('table');
+    const head = document.createElement('tr');
+    for (const [label, cls] of [['分段', ''], ['起点', 'num'], ['耗时', 'num'], ['占比', '']]) {
+      const th = document.createElement('th');
+      th.textContent = label;
+      if (cls) th.className = cls;
+      head.append(th);
+    }
+    table.append(head);
+
+    for (const span of latest.spans || []) {
+      const start = num(span.startedAtMs) || 0;
+      const end = num(span.endedAtMs) || 0;
+      const row = document.createElement('tr');
+      const nameCell = document.createElement('td');
+      nameCell.textContent = String(span.name);
+      const offsetCell = document.createElement('td');
+      offsetCell.className = 'num';
+      offsetCell.textContent = ms(start - origin);
+      const durCell = document.createElement('td');
+      durCell.className = 'num';
+      durCell.textContent = ms(end - start);
+      const barCell = document.createElement('td');
+      const track = document.createElement('div');
+      track.className = 'track';
+      const bar = document.createElement('div');
+      bar.className = 'bar';
+      // 横轴按「相对启动原点」定位而不是从 0 拉满：并行阶段（serve / gateway）
+      // 的重叠关系是这张图最重要的信息，各段都从左边起画就把它抹掉了。
+      bar.style.left = (Math.max(0, (start - origin) / total) * 100).toFixed(2) + '%';
+      bar.style.width = (Math.max(0, (end - start) / total) * 100).toFixed(2) + '%';
+      track.append(bar);
+      barCell.append(track);
+      row.append(nameCell, offsetCell, durCell, barCell);
+      table.append(row);
+    }
+    bars.append(table);
+
+    // 并集与「各段相加」的差额说明：两者不等就说明存在并行/重叠阶段，
+    // 而人看到「各段加起来 15 秒」时第一反应是去优化一个不存在的瓶颈。
+    const sum = (latest.spans || []).reduce(
+      (acc, s) => acc + Math.max(0, (num(s.endedAtMs) || 0) - (num(s.startedAtMs) || 0)),
+      0
+    );
+    document.getElementById('startupNote').textContent =
+      '各段相加 ' + ms(sum) + '，去重后 ' + ms(latest.unionMs) +
+      '（差额来自并行阶段：窗口 / serve / gateway 是同时拉的）。';
+
+    if (reports.length > 1) {
+      const more = document.createElement('p');
+      more.className = 'hint';
+      more.textContent = '文件里有 ' + reports.length + ' 次启动记录，以上展示最新一次。';
+      bars.append(more);
+    }
+  }
+
+  function renderLatency(samples) {
+    if (!samples.length) return;
+    const section = document.getElementById('latency');
+    section.classList.remove('hidden');
+
+    // 只统计真的量到首字的样本：ttftMs 为 null 的记录是「没等到首字」，
+    // 把它们按 0 计入会把平均值算成一个偏快的假数字。
+    const ttft = samples.map((s) => num(s.ttftMs)).filter((v) => v !== null);
+    const waited = samples.map((s) => num(s.firstTokenLatencyMs)).filter((v) => v !== null);
+    const ttftStats = percentiles(ttft);
+
+    const cards = document.getElementById('latencyCards');
+    cards.textContent = '';
+    cards.append(
+      card('样本数', String(samples.length)),
+      card('量到首字', String(ttft.length)),
+      card('p50 首字节→首字', ttftStats ? ms(ttftStats.p50) : '—'),
+      card('p90 首字节→首字', ttftStats ? ms(ttftStats.p90) : '—')
+    );
+
+    const bars = document.getElementById('latencyBars');
+    bars.textContent = '';
+    const waitedStats = percentiles(waited);
+    if (waitedStats) {
+      const p = document.createElement('p');
+      p.className = 'hint';
+      p.textContent =
+        '用户侧等待（响应头 → 首字）：p50 ' + ms(waitedStats.p50) +
+        ' · p90 ' + ms(waitedStats.p90) + ' · 最长 ' + ms(waitedStats.max);
+      bars.append(p);
+    }
+
+    if (ttftStats) {
+      const tail = samples.slice(-20).filter((s) => num(s.ttftMs) !== null);
+      const max = Math.max(ttftStats.max, 1);
+      const table = document.createElement('table');
+      const head = document.createElement('tr');
+      for (const [label, cls] of [['最近样本', ''], ['首字节→首字', 'num'], ['用户侧等待', 'num'], ['', '']]) {
+        const th = document.createElement('th');
+        th.textContent = label;
+        if (cls) th.className = cls;
+        head.append(th);
+      }
+      table.append(head);
+      for (const sample of tail) {
+        const row = document.createElement('tr');
+        const timeCell = document.createElement('td');
+        timeCell.textContent = sample.at ? new Date(sample.at).toLocaleTimeString() : '—';
+        const ttftCell = document.createElement('td');
+        ttftCell.className = 'num';
+        ttftCell.textContent = ms(num(sample.ttftMs));
+        const waitCell = document.createElement('td');
+        waitCell.className = 'num';
+        waitCell.textContent = ms(num(sample.firstTokenLatencyMs));
+        const barCell = document.createElement('td');
+        const track = document.createElement('div');
+        track.className = 'track';
+        const bar = document.createElement('div');
+        bar.className = 'bar';
+        bar.style.left = '0%';
+        bar.style.width = ((num(sample.ttftMs) || 0) / max * 100).toFixed(2) + '%';
+        track.append(bar);
+        barCell.append(track);
+        row.append(timeCell, ttftCell, waitCell, barCell);
+        table.append(row);
+      }
+      bars.append(table);
+    }
+
+    const p90 = ttftStats ? ttftStats.p90 : null;
+    document.getElementById('latencyNote').innerHTML = p90 === null
+      ? '还没有量到首字的样本 —— 首字延迟只在<b>流式</b>响应上量得到（非流式没有「首字」这回事）。'
+      : (p90 > 3000
+        ? '<span class="warn">p90 已超过 3 秒</span>（非功能需求「首字延迟 ≤ 3s」的判据）。'
+        : 'p90 在 3 秒以内，满足「首字延迟 ≤ 3s」。');
+  }
+
+  function accept(text) {
+    const rows = parseNdjson(text);
+    if (!rows.length) return false;
+    // 按内容识别而不是按文件名：用户重命名过、或一次选中两个文件时都不会错配。
+    const isLatency = rows.some((r) => 'ttftMs' in r || 'firstTokenAtMs' in r);
+    const isStartup = rows.some((r) => 'durationMs' in r && 'spans' in r);
+    if (isLatency) renderLatency(rows);
+    if (isStartup) renderStartup(rows);
+    if (isLatency || isStartup) document.getElementById('empty').classList.add('hidden');
+    return isLatency || isStartup;
+  }
+
+  const drop = document.getElementById('drop');
+  const picker = document.getElementById('picker');
+
+  drop.addEventListener('click', () => picker.click());
+  picker.addEventListener('change', () => {
+    for (const file of Array.from(picker.files || [])) readFile(file);
+  });
+
+  for (const type of ['dragenter', 'dragover']) {
+    drop.addEventListener(type, (e) => {
+      e.preventDefault();
+      drop.classList.add('hot');
+    });
+  }
+  for (const type of ['dragleave', 'drop']) {
+    drop.addEventListener(type, () => drop.classList.remove('hot'));
+  }
+  drop.addEventListener('drop', (e) => {
+    e.preventDefault();
+    for (const file of Array.from((e.dataTransfer && e.dataTransfer.files) || [])) readFile(file);
+  });
+
+  function readFile(file) {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const ok = accept(String(reader.result || ''));
+      if (!ok) {
+        // 认不出来要说话：静默什么都不发生，用户会以为页面坏了
+        const note = document.createElement('p');
+        note.className = 'hint warn';
+        note.textContent = '认不出「' + file.name + '」的内容（既不是启动剖析也不是延迟采样）。';
+        drop.after(note);
+      }
+    };
+    reader.readAsText(file);
+  }
+})();
+</script>
+</body>
+</html>
