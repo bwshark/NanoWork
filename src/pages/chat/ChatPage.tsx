@@ -16,6 +16,7 @@ import { chatColumnSx } from "./chatColumnSx";
 import { MessageStream } from "./MessageStream";
 import { Composer, type ComposerApi } from "./Composer";
 import { ApprovalCard } from "@/components/ApprovalCard";
+import { readDeepLinkPrompt } from "@/types/deepLink";
 import {
   HERO_MODES,
   type HeroMode,
@@ -46,9 +47,9 @@ export function ChatPage() {
   const location = useLocation();
   const navigate = useNavigate();
   // 深链 `new-chat?prompt=` 的一次性意图（由 App.tsx 经路由 state 传入）。
-  const deepLinkPrompt = (
-    location.state as { deepLinkPrompt?: unknown } | null
-  )?.deepLinkPrompt;
+  // 键名取自 `@/types/deepLink` 的共享常量：App 写、这里读，两边各写字面量时
+  // 拼错不报错、只会静默变成「开了会话但输入框是空的」。
+  const deepLinkPrompt = readDeepLinkPrompt(location.state);
   // 空状态输入框受控文本:点击提示词标签时填入对应提示词。
   // 初值直接取深链 prompt——否则会先渲染一个空框、下一帧才被 effect 填上，闪一下。
   const [heroText, setHeroText] = useState(

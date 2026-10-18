@@ -18,7 +18,10 @@ import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import FolderOpenIcon from "@mui/icons-material/FolderOpen";
 import ExtensionOutlinedIcon from "@mui/icons-material/ExtensionOutlined";
 import { usePluginsStore } from "@/stores/pluginsStore";
+import { useSessionsStore } from "@/stores/sessionsStore";
 import { useAgentsStore } from "@/stores/agentsStore";
+import { collectMissingSessionPluginRefs } from "@/lib/sessionPluginRefs";
+import { SessionPluginRefNotice } from "./SessionPluginRefNotice";
 import { computePluginToolGaps } from "@/lib/pluginToolGaps";
 import { platform } from "@/platform";
 import { toast } from "@/components/Toast";
@@ -80,6 +83,23 @@ export function PluginsPage({ embedded = false }: { embedded?: boolean }) {
   const installPlugin = usePluginsStore((s) => s.install);
   const uninstallPlugin = usePluginsStore((s) => s.uninstall);
   const clearFeedback = usePluginsStore((s) => s.clearFeedback);
+  // 会话引用集（FR-3.9 ①）。直接订阅 sessions 本体：选择器里做 `.map` 会每次
+  // 返回新数组，订阅反而更频繁；把投影放进 useMemo 才是这里要的。
+  const sessions = useSessionsStore((s) => s.sessions);
+
+  /** 「会话当初用的那一版，本机没有」——缺了才提示，纯对账、无副作用。 */
+  const missingSessionRefs = useMemo(
+    () =>
+      collectMissingSessionPluginRefs(
+        sessions.map((x) => ({
+          id: x.id,
+          title: x.title,
+          pluginVersions: x.pluginVersions,
+        })),
+        installed,
+      ),
+    [sessions, installed],
+  );
 
   // 当前 Agent（决定「声明工具是否被收窄」的基线）：优先用全局激活的 Agent，
   // 回落到内置通用助手。插件列表是全局配置页，没有会话上下文，所以用
@@ -225,6 +245,9 @@ export function PluginsPage({ embedded = false }: { embedded?: boolean }) {
           `plugin.json`），已跳过：{skipped.join("、")}
         </Alert>
       )}
+
+      {/* 会话引用了本机没有的插件版本（FR-3.9 ①）。 */}
+      <SessionPluginRefNotice rows={missingSessionRefs} />
 
       {loaded && installed.length === 0 && (
         <Box

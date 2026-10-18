@@ -2170,6 +2170,9 @@ export function Composer({
             <IconButton
               size="small"
               onClick={onSend}
+              // 供「命中注入文本时仍能发送」这条判据定位（FR-8.6 ③：
+              // 注入检测只提示不拦截，必须有一条用例能点到它才算钉住）。
+              data-testid="composer-send"
               disabled={!text.trim() && attachments.length === 0 && sessionQuotes.length === 0}
               sx={{
                 bgcolor: "primary.main",

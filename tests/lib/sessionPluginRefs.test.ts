@@ -10,6 +10,7 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  collectMissingSessionPluginRefs,
   referencedCopyPathsForSessions,
   resolveSessionPluginRefs,
   snapshotSessionPluginVersions,
@@ -142,5 +143,72 @@ describe('referencedCopyPathsForSessions：GC 要保护哪些副本', () => {
   it('本地直装的副本不进保护集（它不在市场缓存目录里）', () => {
     const views = [view({ name: 'demo', version: '0.1.9', market: null, root: '/plugins/demo' })];
     expect(referencedCopyPathsForSessions(views, [{ demo: '0.1.9' }])).toEqual([]);
+  });
+});
+
+function session(id: string, title: string, refs?: Record<string, string> | null) {
+  return { id, title, pluginVersions: refs ?? undefined };
+}
+
+describe('collectMissingSessionPluginRefs：界面上要提示的缺失项', () => {
+  const views = [view({ name: 'demo', version: '0.1.10', root: '/cache/m/demo/0.1.10' })];
+
+  it('会话要的那一版本机没有 → 出现在结果里', () => {
+    const rows = collectMissingSessionPluginRefs(
+      [session('s1', '在别台机器上建的会话', { demo: '0.1.9' })],
+      views,
+    );
+    expect(rows).toEqual([
+      {
+        sessionId: 's1',
+        sessionTitle: '在别台机器上建的会话',
+        plugin: 'demo',
+        version: '0.1.9',
+      },
+    ]);
+  });
+
+  it('版本对得上 → 不提示（`resolveSessionPluginRefs` 的 missing 才有意义）', () => {
+    const rows = collectMissingSessionPluginRefs(
+      [session('s1', '本机建的', { demo: '0.1.10' })],
+      views,
+    );
+    expect(rows).toEqual([]);
+  });
+
+  it('没有引用集的会话一律不参与（缺声明 ≠ 缺版本）', () => {
+    const rows = collectMissingSessionPluginRefs([session('s1', '旧会话'), session('s2', 'x', null)], views);
+    expect(rows).toEqual([]);
+  });
+
+  it('多个会话的缺失合并，并按会话标题稳定排序', () => {
+    const rows = collectMissingSessionPluginRefs(
+      [
+        session('s2', 'zeta 会话', { demo: '0.1.9' }),
+        session('s1', 'alpha 会话', { demo: '0.1.9' }),
+      ],
+      views,
+    );
+    expect(rows.map((r) => r.sessionId)).toEqual(['s1', 's2']);
+  });
+
+  it('同一会话缺多个插件时按插件名排序', () => {
+    const rows = collectMissingSessionPluginRefs(
+      [session('s1', '多插件会话', { zeta: '2.0.0', alpha: '1.0.0' })],
+      [],
+    );
+    expect(rows.map((r) => r.plugin)).toEqual(['alpha', 'zeta']);
+  });
+
+  it('没有会话 / 没有插件视图时不炸', () => {
+    expect(collectMissingSessionPluginRefs([], views)).toEqual([]);
+    expect(collectMissingSessionPluginRefs([session('s1', '孤儿会话', { demo: '1' })], [])).toEqual([
+      {
+        sessionId: 's1',
+        sessionTitle: '孤儿会话',
+        plugin: 'demo',
+        version: '1',
+      },
+    ]);
   });
 });

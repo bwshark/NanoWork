@@ -48,6 +48,11 @@ WorkBuddy 式智能体客户端：React18+TS+Vite 渲染层 + Electron 主进程
 - **B4-03 运行时自助安装**：recipe 与 `engineSelfCheck` remedy 同源，渲染层只发「开始/取消」不传命令(否则任意代码执行)；`quote()` 复用。仅「解释器/导入」失败显「一键修复」(配置失败不给)。进度经 `engine:install-progress`；装成功主进程清 `engineSelfCheckInflight`。测试 20 例；变异：去 ANSI 清洗→1红。
 - **B4 全量构建/测试因宿主内存(OOM≈1.3-2.1GB)未跑通**；复核命令：`CODEBUDDY_SAFE_DELETE_ENABLED=0 npm run build` + `npx vitest run --maxWorkers=3`。
 
+## 测试技巧（本轮审计沉淀，非显然）
+- ⚠️ **`AgentLoop` 可用 mock 真实构造**：`AgentLoop(bus=MagicMock(), provider=MagicMock(), workspace=Path)`（已验证）。想测 `run()` 的顺序类判据时，给 bus 一个「吐一条消息后 `sleep(3600)`」的假 `consume_inbound`，`create_task(run())` 后轮询目标 future 再 `task.cancel()`，即可真实驱动一次迭代——不必重构 loop 抽出接缝。
+- ⚠️ **测子代理/渠道审批必须选非 scoped 渠道**：`scoped_channels={websocket,api}` 会忽略逐渠道 `tool_approval` 映射，要用 feishu/dingtalk 之类才能得到 `ask`（用 api 会静默保持 auto，测试假绿）。
+- 发送控件等无 aria-label 的 MUI 按钮，加 `data-testid` 换可测性是划算的（本轮给 Composer 发送按钮加了 `composer-send`，换来「命中注入仍能发送」这条 DoD 的真门锁）。
+
 ## B5 数据驱动决策（2026-10-18，决策记录，无代码交付）
 - **B5-01 关掉 CLI 预热池**：实测 `serve.spawn→listen`=4.4s(暖机)却被 app 启动并行预热覆盖；首字延迟(p50 5s/p95 47s/max 61s，15 真实样本)由远端 LLM 主导，是引擎启动 10 倍以上→预热池收益边际。
 - **B5-02 采纳只读 sqlite 尺寸监控、拒绝跨进程 WAL checkpoint**：引擎确有 `llm_usage.sqlite3`(180KB)；`processes.json` 增只读 `stat` 字段约 5 行，非 V1.7 硬交付，排诊断后续小步。

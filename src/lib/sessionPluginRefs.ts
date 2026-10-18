@@ -109,6 +109,49 @@ export function resolveSessionPluginRefs(
 }
 
 /**
+ * 把所有会话的引用集与本机副本对账，挑出**缺失**项。
+ *
+ * 这就是模块开头说的第 2 个问题（「不一致看不见」）的界面侧答案：数据层早就算得出来，
+ * 但没人调它，界面就永远「一切正常」。调用方据此提示用户即可。
+ *
+ * 规模上它是「会话 × 引用项」，但缺失本就是罕见的例外，先取会话再对账比
+ * 先建倒排索引直白得多——可读性优先，这个量级不涉及性能。
+ *
+ * 排序为了界面稳定展示：按会话标题、再按插件名。
+ */
+export interface MissingSessionPluginRef {
+  sessionId: string;
+  sessionTitle: string;
+  plugin: string;
+  version: string;
+}
+
+export function collectMissingSessionPluginRefs(
+  sessions: readonly {
+    id: string;
+    title: string;
+    pluginVersions?: SessionPluginVersions | null;
+  }[],
+  views: readonly PluginView[],
+): MissingSessionPluginRef[] {
+  const out: MissingSessionPluginRef[] = [];
+  for (const session of sessions) {
+    for (const row of resolveSessionPluginRefs(session.pluginVersions ?? undefined, views)) {
+      if (row.state !== 'missing') continue;
+      out.push({
+        sessionId: session.id,
+        sessionTitle: session.title,
+        plugin: row.name,
+        version: row.version,
+      });
+    }
+  }
+  return out.sort(
+    (a, b) => a.sessionTitle.localeCompare(b.sessionTitle) || a.plugin.localeCompare(b.plugin),
+  );
+}
+
+/**
  * 被**会话引用集**要求保留的副本路径（GC 保护用）。
  *
  * 与 `referencedCopyPaths(views)`（本机生效副本）取**并集**：前者回答「我本地正在用

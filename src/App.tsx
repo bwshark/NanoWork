@@ -13,6 +13,7 @@ import { useMcpStore } from '@/stores/mcpStore';
 import { useSessionsStore } from '@/stores/sessionsStore';
 import { useStorageInfoStore } from '@/stores/storageInfoStore';
 import { PromptLibrary } from '@/lib/promptLibrary';
+import { createDeepLinkExecutor } from '@/lib/deepLinkExecutor';
 import { IdentityService } from '@/lib/identity';
 import { getDeviceId } from '@/lib/deviceId';
 import { disposeSyncRuntime, initSyncRuntime } from '@/sync';
@@ -48,24 +49,14 @@ export function App() {
    * 布局层会让登录页期间的深链无人接收。根组件在**所有**路由下都挂载。
    */
   useEffect(() => {
-    const off = platform.onAppDeepLink((action) => {
-      const sessions = useSessionsStore.getState();
-      if (action.kind === 'open-session') {
-        // 会话不存在时 `selectSession` 只是把 activeId 指过去，`loadSession` 早退，
-        // 页面表现为空会话——**不报错、不白屏**，符合「坏链接不该炸应用」。
-        sessions.selectSession(action.sessionId);
-        navigate(ROUTES.chat);
-        return;
-      }
-      // new-chat：先建一条空会话（空会话 → 聊天页走大标题空态，输入框是受控的
-      // hero 版本），prompt 经路由 state 交给 ChatPage 预填。
-      // why 不用 store 传：这是**一次性**意图，路由 state 天然随本次导航消费掉，
-      // 不需要额外清理，也不会在刷新后幽灵般复现。
-      const prompt = action.prompt;
-      const title = prompt.trim().slice(0, 24) || '新会话';
-      sessions.createSession(undefined, title);
-      navigate(ROUTES.chat, { state: { deepLinkPrompt: prompt } });
+    // 动作的执行逻辑抽在 deepLinkExecutor 里（可单测），这里只剩接线。
+    const execute = createDeepLinkExecutor({
+      // 每次取最新 store：闭包持有快照会在 store 重建后失效。
+      getSessions: () => useSessionsStore.getState(),
+      navigate,
+      chatRoute: ROUTES.chat,
     });
+    const off = platform.onAppDeepLink(execute);
     // ⚠️ **先订阅、后报到**：顺序反了，主进程 flush 的那一刻监听还没挂上，
     // 冷启动的深链就被静默丢掉了（窗口亮起、目标会话不打开）。
     void platform.appRendererReady();
