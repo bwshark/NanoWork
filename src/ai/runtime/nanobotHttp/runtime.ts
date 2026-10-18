@@ -20,6 +20,7 @@ import {
   type ChatHandle,
   type ChatRequest,
   type ConnectionStatus,
+  type DreamReviewResponse,
   type ModelInfo,
   type RunQuery,
   type RuntimeCapabilities,
@@ -192,5 +193,24 @@ export class NanobotHttpRuntime implements AgentRuntime {
 
   setPluginEnabled(name: string, enabled: boolean): Promise<{ ok: boolean; error?: string }> {
     return this.client.setPluginEnabled(name, enabled);
+  }
+
+  /**
+   * FR-4.6 Dream 审查闸门：拉取待审查候选 diff，委托 transport。
+   * 网关未升级（无 `/v1/dream/review` 路由）时调用方判 `getDreamReview` 是否存在降级，
+   * 不在这里兜底——「没有该方法」本身就是能力声明。
+   */
+  getDreamReview(): Promise<DreamReviewResponse> {
+    return this.client.getDreamReview();
+  }
+
+  /** FR-4.6 Dream 审查闸门：采纳候选，委托 transport。 */
+  acceptDream(): Promise<{ ok: boolean; updated: number }> {
+    return this.client.acceptDream();
+  }
+
+  /** FR-4.6 Dream 审查闸门：丢弃候选，委托 transport。 */
+  rejectDream(): Promise<{ ok: boolean }> {
+    return this.client.rejectDream();
   }
 }

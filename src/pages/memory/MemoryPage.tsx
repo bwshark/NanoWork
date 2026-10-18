@@ -21,6 +21,7 @@ import RestoreIcon from '@mui/icons-material/Restore';
 import { MemoryService, memoryDiskPath } from '@/lib/memory';
 import { FactListView } from '@/pages/memory/FactListView';
 import { UserMemoryEditor } from '@/pages/memory/UserMemoryEditor';
+import { DreamReviewPanel } from '@/pages/memory/DreamReviewPanel';
 import { applyManualMemoryEdit } from '@/lib/memoryEdit';
 import {
   CURATED_MEMORY_FILE,
@@ -363,6 +364,8 @@ export function MemoryPage({
           文件（高级）
         </ToggleButton>
       </ToggleButtonGroup>
+
+      <DreamReviewPanel scope={scope} reloadToken={reloadToken} />
 
       {/*
         边界说明（FR-M36）。刻意是**静态文案**而不是面板：读引擎自己的记忆状态需要

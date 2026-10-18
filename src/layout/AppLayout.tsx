@@ -51,7 +51,7 @@ export function AppLayout() {
             height: "100%",
           }}
         >
-          {/* <ConnectionBanner /> */}
+          {platform.env === "electron" && <ConnectionBanner />}
           <Box sx={{ flex: 1, display: "flex", minHeight: 0 }}>
             <Box sx={{ flex: 1, overflow: "auto", minWidth: 0 }}>
               {/* FR-13.5 路由懒加载的边界。**放在这里而不是路由表上**：侧栏 / 标题栏 /

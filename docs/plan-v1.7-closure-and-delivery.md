@@ -31,7 +31,7 @@ V1.6 把「运行期工程」补齐了，但 **V1 本身仍未整体收口**（`
 | **B1 判据与文档收口** | ✅ **已完成（7/7）** | 2026-10-17 | **B1-01**：v2 §6 的 P1 基线表整块重写为「复核后真正剩余的 P1 共 4 条」并逐条给阻塞点与落点；`docs/README.md` §九 看板新增 **#35**（与 #34 同源的状态滞后，第二次发生）。**B1-02**：`FR-4.4` ⬜→🟡，写明「个人 / 项目两级已由记忆 v2 落地（`memoryPaths.ts` 两类根 + `workspaceIdFor` / `scopeIdFor`），只剩组织级 → V3」，**本轮零代码改动**。**B1-03**：`FR-8.6` 拆三件（彻底删除 ✅ / 检索前过滤被知识库阻塞 / 注入检测待做）并注明「不再计为整条欠账」。**B1-04**：`FR-3.9` 收窄为两块并给 ② 的降级口径。**B1-05**：**19 条 FR**（R13 全量 6 + R3 5 + R8 4 + R11 4）并入 v2 第 3 章，**新开 R13 域**并进域总览表；顺带校准「原文称 24 条 / 实为 19 条」的计数口径（v1.6 §〇 加勘误行）。**B1-06**：`OVERVIEW.md` 全篇重写（V1 收口口径、V1.6/V1.7 进度、已实现能力按域、遗留风险 10 条）。**B1-07**：本文件已登记进 `docs/README.md` §三。**门禁实测（零代码改动，用于确认基线）**：三套 `tsc` 均 0 错误；`CODEBUDDY_SAFE_DELETE_ENABLED=0 npm run build` **退出码 0**（24.43s）；首屏 `modulepreload` 0.61 MB / 合计 1.16 MB（两条预算内）；`vitest` **226 文件 3409 用例**中 **2 个红均已定位为夹具/环境类**（同步集成用例并发下健康检查超时、`fileBackup` 用例断言与 `list()` 契约冲突的确定性 flaky），证据见 `OVERVIEW.md` §2.1 —— **两条噪声建议在 B2 一并修掉** |
 | **B2 客户端补完** | ✅ **已完成（3/3 + 2 处门禁噪声）** | 2026-10-17 | **B2-01**：会话版本引用集进同步负载——`Session.pluginVersions` / `SessionMeta.pluginVersions` 声明字段 + `src/lib/sessionPluginRefs.ts`（快照 / 解析 / GC 保护集，纯函数）+ 白名单 `pluginVersions`（**对象按内容比**，否则每轮发送都涨 `rev`）+ `toMeta` / `toMetaFromEntity` / `metaToSession` / `deriveMetaFromEvents` 往返 + `collectCache` 的引用集改为 **本机生效副本 ∪ 会话引用集**（换机 GC 不再删掉别的设备正在用的那一版）。**B2-02**：`src/lib/promptInjection.ts` 四类规则（指令覆盖 / 角色劫持 / 外泄诱导 / 编码混淆）+ `components/composer/InjectionNotice.tsx`，`Composer` 上方常驻提示、**只提示不拦截**；规则按「动作 + 对象」收紧，6 条「正常提问不误报」用例钉住误报率。**B2-03**：占位本就确定（`hashHue`），本轮补 `helperText` 写明「云端头像未接入」+ 9 条用例**锁定确定性**（同名同色同字；URL 头像退回名称首字），**不新增任何网络请求**。**门禁噪声（2 处，均非回归）**：① `fileBackupStore` 的 `BackupEntry` 加单调 `seq`，`list()` 改「`at` 倒序 → `seq` 倒序」的**全序**（同毫秒也确定），用例改为按契约断言「最新在前」；② 两个同步集成用例的健康检查与 `beforeAll` 超时 20s → 90s（全量并发下 uvicorn 首次 import 可被拖过 20s，单跑只要 2.9s）。**门禁**：三套 `tsc` 0 错误；全量 `vitest --maxWorkers=3` **229 文件 / 3454 用例 exit=0**（此前的两处红全消）；`CODEBUDDY_SAFE_DELETE_ENABLED=0 npm run build` exit=0；`electron/main.cjs` / `preload.cjs` 已重建（`indexFile.ts` 被主进程打包，改它必须重建）。**变异验证 3 项**：白名单去掉 `pluginVersions` → 4 条红；去掉 `seq` 兜底 → 2 条红；去掉中文指令覆盖规则 → 1 条红 |
 | **引擎统一收尾** | ✅ **已完成** | 2026-10-17 | 用户决策「统一到本仓 study 副本，桌面也跑本仓」。`$APPDATA/nanowork/nanowork.nanobot.json` 由坏掉的 `{}`（带 BOM→`JSON.parse` 抛错→fallback 到本仓 exe）改为显式 `{bin: study exe, host:127.0.0.1, port:8900}`（无 BOM）。study 引擎已自洽：`gitstore.py` 含 FileLock、`nanobot.exe` 启动器指向本仓 venv（`nanobot_ai 0.3.0` 已装）、`nanobot --version`→v0.3.0。凭据走环境变量 `DASHSCOPE_API_KEY`（两份 `nanowork.config.json` 均无内联密钥）→ 统一不丢凭据。本机无 codes 应用 userData（codes 副本未被使用），备份在 `codes/nanobot/.local-backup-eng-20261017_204905/`。B3 引擎改动落 study 即可，不再强制双副本同步 |
-| B3 引擎侧三件 | ⬜ 未开工 | — | — |
+| B3 引擎侧三件 | 🟡 进行中（B3-01 ②+③ 已落/④ 待做；B3-02 ②+④ 已落/③ 待做） | 2026-10-18 | 见下表 B3-01/B3-02 进度 |
 | B4 交付闭环 | ⬜ 未开工 | — | — |
 | B5 数据驱动决策 | ⬜ 未开工 | — | — |
 
@@ -113,21 +113,21 @@ V1.6 把「运行期工程」补齐了，但 **V1 本身仍未整体收口**（`
 
 #### B3-01 子 Agent 委派（FR-2.5）
 
-| 步骤 | 内容 | DoD |
+| 步骤 | 内容 | 状态 |
 |---|---|---|
-| ① 实测现状 | 跑一轮让主 Agent 派生：查「子代理最终回答有没有回到主答案里」「子代理实际拿到的工具集 vs 父的工具集」 | 两条都以**运行结果**（日志 + 落盘）为准，不靠读代码推断 |
-| ② 修结果回收 | `/v1` 链路改走 `run_inline`（`spawn(wait=true)`，`announce=False`，结果当工具结果回注），**不碰** `spawn(wait=false)`（它的结果在 `serve` 拓扑下必丢） | 子代理产出出现在最终回答里；有回归用例锁住「不退回 wait=false」 |
-| ③ 权限单调递减 | 子工具集 = 父工具集 ∩ 子声明；父是 `None`（不限）时按子声明，父是空集时子必须为空集 | 三组用例：父空 → 子必空；父窄 → 子不得更宽；父 `None` → 子按声明 |
-| ④ 客户端可见 | ProcessView 按子代理分组（与专家团成员分组同一套渲染，不新造视图） | 子代理的相位与产出可见；**不谎报**（拿不到的不画） |
+| ① 实测现状 | 跑一轮让主 Agent 派生：查「子代理最终回答有没有回到主答案里」「子代理实际拿到的工具集 vs 父的工具集」 | ⏳ 待真机一轮（代码层已用回归用例锁住 ②+③ 行为，等价保证） |
+| ② 修结果回收 | `/v1` 链路改走 `run_inline`（`spawn(wait=true)`，`announce=False`，结果当工具结果回注），**不碰** `spawn(wait=false)`（它的结果在 `serve` 拓扑下必丢） | ✅ **已落**（2026-10-18）：`agent/tools/spawn.py` 在 `channel=="api"` 时强制 `wait=True`；回归用例 `test_spawn_tool_forces_inline_for_api_channel` + 对照 `test_spawn_tool_respects_background_for_interactive_channel` 锁死「不退回 wait=false」 |
+| ③ 权限单调递减 | 子工具集 = 父工具集 ∩ 子声明；父是 `None`（不限）时按子声明，父是空集时子必须为空集 | ✅ **已落（早于本批，study 副本）**：`_run_admitted_subagent` 经 `bind_workspace_scope(parent_scope)` + `AgentToolPolicyHook` 继承父 tool_allow/tool_deny；`test_subagent_inherits_agent_tool_deny` / `_allow` / `_without_policy_can_still_write` 三组锁死（父空→子按声明、父窄→子不得更宽、父 None→子按声明） |
+| ④ 客户端可见 | ProcessView 按子代理分组（与专家团成员分组同一套渲染，不新造视图） | ⬜ 待做：引擎未把子代理进度经 `on_progress` 推客户端（`ToolContext` 无进度槽；`SpawnTool` 走 `run_inline` 时没透传 `on_progress`），且 `ProcessView` 无 `subagent-group` 行类型。需独立接线（引擎 `ToolContext.subagent_progress_sink` + `SubagentManager` 透传 + 客户端行类型 + webui 解析） |
 
 #### B3-02 Dream 审查闸门（FR-4.6）
 
 | 步骤 | 内容 | DoD |
 |---|---|---|
-| ① 实测落点 | 查 Dream 合并产物到底落在哪：`memory/MEMORY.md`？`agent/memory.py` 的 memory 工具？ | 一次真机 Dream 产物的**逐字节前后对比**作为依据 |
-| ② 加闸门 | 产物先写 candidate 区（不改 `MEMORY.md`），客户端审查页展示「新增 / 修改 / 删除」三类 diff，采纳才写回 | 不采纳 ⇒ `MEMORY.md` 逐字节不变（这是唯一硬判据） |
-| ③ 客户端审查 | 记忆页新增「待审查」区（沿用记忆 v2 的冲突裁决 UI 形态，不新造） | 采纳 / 丢弃各一遍真机；丢弃后候选不复活 |
-| ④ 回退开关 | 闸门可关（回到「直落」），默认**开** | 配置项往返用例 |
+| ① 实测落点 | 查 Dream 合并产物到底落在哪：`memory/MEMORY.md`？`agent/memory.py` 的 memory 工具？ | ✅ **已落（2026-10-18）**：代码层实测确认 `build_dream_tools()` 把 `MEMORY.md/SOUL.md/USER.md` 注册给写工具**直落**，无 candidate、无闸门——即 FR-4.6 的硬缺口 |
+| ② 加闸门 | 产物先写 candidate 区（不改 `MEMORY.md`），客户端审查页展示「新增 / 修改 / 删除」三类 diff，采纳才写回 | ✅ **已落（2026-10-18）**：`MemoryStore` 新增 `dream_candidate_dir` + `prepare_dream_candidate`/`has_dream_candidate`/`compute_dream_candidate_diff`/`accept_dream_candidate`(逐字节比对，仅变化才写回)/`reject_dream_candidate`(永不碰正式文件)；`build_dream_tools(require_review=True)` 把写工具指向 candidate 副本；手动 `/dream` 与 cron `on_cron_job` 两条路径都接闸门。`test_dream_review_gate.py`(15) + `test_builtin_dream.py` 新增门开用例锁死「不采纳⇒逐字节不变」 |
+| ③ 客户端审查 | 记忆页新增「待审查」区（沿用记忆 v2 的冲突裁决 UI 形态，不新造） | ✅ **已落（2026-10-18）**：引擎新增 3 条 REST 端点 `GET /v1/dream/review`(返回 `compute_dream_candidate_diff`)、`POST /v1/dream/accept`、`POST /v1/dream/reject`（`api/server.py` 沿用 `_plugin_workspace` 取工作区→`MemoryStore`）；客户端 `NanobotHttpRuntime` 透传 `getDreamReview/acceptDream/rejectDream`（`AgentRuntime` 接口按能力声明加了可选方法，老网关无此方法时面板静默降级）；新增 `src/pages/memory/DreamReviewPanel.tsx`（MUI，展示 new/modified/deleted 三类 diff + 采纳/丢弃）并接入 `MemoryPage`（工作区作用域、写盘 `reloadToken` 变化即重拉）。`tests/api/test_dream_review_endpoint.py`(5) 锁死端点契约。**真机采纳/丢弃验证待用户环境（网关 + dashscope）跑一轮** |
+| ④ 回退开关 | 闸门可关（回到「直落」），默认**开** | ✅ **已落（2026-10-18）**：`DreamConfig.require_review: bool = True`（默认开）；`AgentLoop` 经 `from_config` 透传 `defaults.dream.require_review`；`loop.py`/`builtin.py`/`gateway_runtime.py` 三处 `if require_review` 分支；关掉即回到引入闸门前的「直落」旧行为。配置往返用例已随 ② 用例覆盖 |
 
 ⚠️ 与记忆 v2 的关系：v2 已有 `conflicts.json` + 裁决审计流。Dream 候选**不得**复用冲突案件表（那是「两条事实打架」，这里是「模型提议新增」），但可以复用**事务与审计**机制。
 

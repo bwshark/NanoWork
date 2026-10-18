@@ -580,6 +580,36 @@ export interface AgentRuntime {
    * 也走同一个出口（`error` 里说明是版本问题），调用方无需区分这两种情况。
    */
   readUsageStats(): Promise<UsageStats>;
+
+  /**
+   * FR-4.6 Dream 审查闸门：拉取待审查的候选 diff。
+   * 引擎开闸门（默认开）时 Dream 产物先落 candidate 区，不直写记忆文件。
+   * **方法存在性即能力声明**：不支持的引擎实现不定义此方法，调用方判空降级。
+   */
+  getDreamReview?(): Promise<DreamReviewResponse>;
+
+  /** FR-4.6 Dream 审查闸门：采纳候选，写回正式记忆文件。 */
+  acceptDream?(): Promise<{ ok: boolean; updated: number }>;
+
+  /** FR-4.6 Dream 审查闸门：丢弃候选，正式记忆文件不动。 */
+  rejectDream?(): Promise<{ ok: boolean }>;
+}
+
+/**
+ * FR-4.6 Dream 审查闸门：候选 diff 的单文件条目。
+ * status 只可能是 new / modified / deleted（unchanged 不会进入 diff）。
+ */
+export interface DreamCandidateFile {
+  status: 'new' | 'modified' | 'deleted';
+  old: string;
+  new: string;
+  path: string;
+}
+
+/** FR-4.6 Dream 审查闸门：GET /v1/dream/review 的响应。 */
+export interface DreamReviewResponse {
+  pending: boolean;
+  diff: Record<string, DreamCandidateFile>;
 }
 
 /** 该引擎实现不支持某个配置域时抛出（调用方据此走降级分支，而非静默） */

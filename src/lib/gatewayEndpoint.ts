@@ -81,16 +81,20 @@ export interface GatewayListenInfo {
  * 症状是「地址被改坏」或「永远不同步」，而两者在 jsdom 里都看不出来——只有把判据本身
  * 钉住才能守住。组件那边只剩「拿到非 null 就写入 store」一行。
  *
- * 三条判据（缺一不可）：
- * 1. `running` 为真 —— 子进程没跑时端口是历史值，照它改会把地址指向空处；
- * 2. `port` 已知 —— 尚未解析出端口时同样不能改；
- * 3. 当前地址是**本机**地址 —— 用户填的内网/远程网关与本地子进程无关，覆盖它等于改坏配置。
+ * 判据（缺一不可）：
+ * 1. `port` 已知 —— 主进程只在**确认该端口有网关监听**后才写 port（spawn 路径等到
+ *    端口进入监听；复用路径 `isPortInUse` 探到既有服务），所以「port 有值」本身就
+ *    蕴含了「有东西可连」。⚠️ 不能再额外要求 `running`：复用外部网关时
+ *    `running=false`（子进程非本应用托管）但 port 有值——正是这种场景最需要对齐
+ *    （用户手动先拉起 `nanobot serve` 再开桌面端），要求 running 会让地址永远停在
+ *    旧默认端口上，所有 REST 请求 `Failed to fetch`。
+ * 2. 当前地址是**本机**地址 —— 用户填的内网/远程网关与本地子进程无关，覆盖它等于改坏配置。
  * @param current 当前网关地址（`settings.gatewayEndpoint`）
  * @param info 主进程回报的实际监听信息
  * @returns 需要改成的新地址；已对齐或不该改时返回 null
  */
 export function nextGatewayEndpoint(current: string, info: GatewayListenInfo): string | null {
-  if (!info.running || info.port === null) return null;
+  if (info.port === null) return null;
   if (!isLocalGatewayEndpoint(current)) return null;
   const next = localGatewayEndpoint(info.host ?? '127.0.0.1', info.port);
   return next === current ? null : next;

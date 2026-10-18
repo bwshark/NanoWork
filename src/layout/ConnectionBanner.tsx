@@ -4,11 +4,10 @@ import CloudDoneIcon from "@mui/icons-material/CloudDone";
 import CloudOffIcon from "@mui/icons-material/CloudOff";
 import PowerIcon from "@mui/icons-material/Power";
 import { useSettingsStore } from "@/stores/settingsStore";
-import { connectionManager } from "@/ai/connectionManager";
+import { applyGatewayEndpointInfo, connectionManager } from "@/ai/connectionManager";
 import { platform } from "@/platform";
 import { nanobotBridge } from "@/platform/nanobotBridge";
 import { DEFAULT_GATEWAY_PORT } from "@/lib/constants";
-import { nextGatewayEndpoint } from "@/lib/gatewayEndpoint";
 import type { NanobotGatewayInfo } from "@/platform/types";
 
 /**
@@ -19,16 +18,15 @@ import type { NanobotGatewayInfo } from "@/platform/types";
  * 一个没人监听的端口 —— 表现为「网关离线」而子进程明明活着。
  *
  * 判据全部收在 `nextGatewayEndpoint`（纯函数，已单测）：本机地址才同步、端口未知不动、
- * 已对齐则返回 null。这里取 store 的**实时值**而非闭包值 —— 轮询间隔内用户可能刚改过地址。
+ * 已对齐则返回 null。**判据本体已下沉到 `connectionManager`**（心跳里无条件跑），
+ * 这里只是让横幅自己的那次轮询复用同一套判定 —— 两处各写一份必然会漂移。
+ * 这里取 store 的**实时值**而非闭包值 —— 轮询间隔内用户可能刚改过地址。
  *
  * 写完立即回探一次：不动手的话要等下一个心跳（15s）才转绿，用户会以为「换了端口就连不上」。
  * @param info 主进程返回的实际监听信息
  */
 function syncGatewayEndpoint(info: NanobotGatewayInfo): void {
-  const store = useSettingsStore.getState();
-  const next = nextGatewayEndpoint(store.settings.gatewayEndpoint, info);
-  if (next === null) return;
-  store.setSettings({ gatewayEndpoint: next });
+  if (!applyGatewayEndpointInfo(info)) return;
   void connectionManager.probe();
 }
 

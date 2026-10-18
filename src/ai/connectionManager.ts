@@ -1,9 +1,41 @@
 import { useSettingsStore } from '@/stores/settingsStore';
 import type { ConnectionStatus as Status } from '@/types';
+import { platform } from '@/platform';
+import { nanobotBridge } from '@/platform/nanobotBridge';
+import { nextGatewayEndpoint } from '@/lib/gatewayEndpoint';
 import { getRuntime } from './runtime';
 import type { AgentRuntime } from './runtime/types';
+import type { NanobotGatewayInfo } from '@/platform/types';
 
 type Listener = () => void;
+
+/**
+ * 把 `settings.gatewayEndpoint` 对齐到主进程**实际**监听的端口（判据见 `nextGatewayEndpoint`）。
+ *
+ * 为什么放在连接管理器而不是 `ConnectionBanner` 里：那条路径是**可选的 UI 组件**
+ * （本项目当前就没挂它）。挂在 UI 上意味着「组件一不渲染，地址对齐就整体失效」——
+ * 症状是所有 REST 请求 `ERR_CONNECTION_REFUSED`（模型列表空、Dream 面板 Failed to fetch），
+ * 而界面上没有任何元素解释得了原因。放在心跳里才与「这条横幅显不显示」无关。
+ *
+ * 无副作用的输入（判据不成立）一律返回 false，调用方据此决定要不要接着探测。
+ */
+export function applyGatewayEndpointInfo(info: NanobotGatewayInfo): boolean {
+  const store = useSettingsStore.getState();
+  const next = nextGatewayEndpoint(store.settings.gatewayEndpoint, info);
+  if (next === null) return false;
+  store.setSettings({ gatewayEndpoint: next });
+  return true;
+}
+
+/** 桌面端探测前先按主进程回报的真实端口对齐地址；Web 端 / 桥不可用时静默跳过 */
+async function alignGatewayEndpoint(): Promise<void> {
+  if (platform.env !== 'electron') return;
+  try {
+    await nanobotBridge.info().then(applyGatewayEndpointInfo);
+  } catch {
+    // 桥不可用（测试环境 / 主进程未就绪）：保留用户填的地址，不猜端口
+  }
+}
 
 /**
  * 启动就绪等待的默认上限。
@@ -82,6 +114,9 @@ class ConnectionManager {
   private probeOnce(): Promise<Status> {
     if (this.inflightProbe) return this.inflightProbe;
     this.inflightProbe = (async () => {
+      // 先对齐地址再探：拿旧端口去探一个刚顺延过的网关，必然 ECONNREFUSED，
+      // 那样状态会红着「离线」，而真实原因只是地址没跟上。
+      await alignGatewayEndpoint();
       try {
         const ok = await this.engine.probe();
         return ok === 'connected' ? 'connected' : 'offline';

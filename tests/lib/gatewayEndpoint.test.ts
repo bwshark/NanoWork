@@ -91,13 +91,20 @@ describe('nextGatewayEndpoint', () => {
     expect(nextGatewayEndpoint(DEFAULT_GATEWAY, running(DEFAULT_GATEWAY_PORT))).toBeNull();
   });
 
-  it('子进程没在跑就不动地址：端口是历史值，照它改会把地址指向空处', () => {
-    expect(nextGatewayEndpoint(DEFAULT_GATEWAY, { running: false, host: '127.0.0.1', port: 18901 })).toBeNull();
+  it('复用外部网关也跟着对齐：running=false 但 port 有值（用户先手动 serve 再开桌面端）', () => {
+    // 复用路径下 running=false（子进程非本应用托管），但 port 是 isPortInUse
+    // 刚验证过的真实监听端口 —— 这正是最需要对齐的场景：不同步则地址停在旧默认
+    // 端口上，所有 REST 请求 Failed to fetch（2026-10-18 Dream 审查页真机翻车）。
+    expect(
+      nextGatewayEndpoint(DEFAULT_GATEWAY, { running: false, host: '127.0.0.1', port: 8900 }),
+    ).toBe('http://127.0.0.1:8900/v1');
   });
 
   it('端口未知时不动地址', () => {
     expect(nextGatewayEndpoint(DEFAULT_GATEWAY, running(null))).toBeNull();
     expect(nextGatewayEndpoint(DEFAULT_GATEWAY, { running: true, host: null, port: null })).toBeNull();
+    // 子进程没跑且端口未知（spawn 未就绪 / 已退出清理）→ 无从对齐
+    expect(nextGatewayEndpoint(DEFAULT_GATEWAY, { running: false, host: '127.0.0.1', port: null })).toBeNull();
   });
 
   it('用户填的远端/内网地址绝不被覆盖', () => {

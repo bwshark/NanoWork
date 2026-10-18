@@ -1,5 +1,5 @@
 ﻿import { describe, it, expect, vi, afterEach } from 'vitest';
-import { connectionManager, __setSleepForTest } from '@/ai/connectionManager';
+import { applyGatewayEndpointInfo, connectionManager, __setSleepForTest } from '@/ai/connectionManager';
 import { NanobotClient } from '@/ai/runtime/nanobotHttp/chat';
 import { useSettingsStore, DEFAULT_TRANSCRIPTION, DEFAULT_DESKTOP } from '@/stores/settingsStore';
 import { DEFAULT_MEMORY_POLICY } from '@/types';
@@ -180,14 +180,65 @@ describe('connectionManager: 稳态心跳（网关中途起停自愈）', () => 
     );
     resetSettings();
 
-    // 先并发发起两次（都不 await），确认 probe 只被调用一次后再放行
+    // 先并发发起两次（都不 await），确认 probe 只被调用一次后再放行。
+    // probe 现在排在一次**异步的地址对齐**之后（心跳里先对齐再探），断言前需放过微任务队列；
+    // 去重本身没变——`inflightProbe` 仍是同步置位的，第二次调用照样被折叠掉。
     const p1 = connectionManager.getClient();
     const p2 = connectionManager.getClient();
+    await Promise.resolve();
+    await Promise.resolve();
     expect(probe).toHaveBeenCalledTimes(1);
 
     resolveProbe('connected');
     const [a, b] = await Promise.all([p1, p2]);
 
     expect(a).toBe(b);
+  });
+});
+
+/**
+ * 地址对齐必须与「那条横幅显不显示」无关。
+ *
+ * 回归背景：本项目 AppLayout 里 `ConnectionBanner` 是注释掉的，地址对齐曾整条挂在这个
+ * 可选组件上 —— 于是所有 REST 请求都打死出厂默认端口（模型列表空、Dream 面板
+ * Failed to fetch），而界面上没有任何元素解释得了。现在对齐下沉到心跳，判据仍在这里。
+ */
+describe('applyGatewayEndpointInfo: 探测前把地址对齐到真实监听端口', () => {
+  it('复用既有网关（running=false 但 port 有值）同样要对齐', () => {
+    resetSettings();
+    const changed = applyGatewayEndpointInfo({
+      running: false, host: '127.0.0.1', port: 8900, preferredPort: 18900, fallback: true,
+    });
+    expect(changed).toBe(true);
+    expect(useSettingsStore.getState().settings.gatewayEndpoint).toBe('http://127.0.0.1:8900/v1');
+  });
+
+  it('端口尚未解析出来时不动地址', () => {
+    resetSettings();
+    const changed = applyGatewayEndpointInfo({
+      running: false, host: null, port: null, preferredPort: 18900, fallback: false,
+    });
+    expect(changed).toBe(false);
+    expect(useSettingsStore.getState().settings.gatewayEndpoint).toBe('http://127.0.0.1:8765/v1');
+  });
+
+  it('用户填的是内网网关时不覆盖（那是他的配置，不是本机子进程）', () => {
+    useSettingsStore.setState({
+      settings: { ...useSettingsStore.getState().settings, gatewayEndpoint: 'http://10.0.0.8:8900/v1' },
+    });
+    const changed = applyGatewayEndpointInfo({
+      running: true, host: '127.0.0.1', port: 8900, preferredPort: 8900, fallback: false,
+    });
+    expect(changed).toBe(false);
+    expect(useSettingsStore.getState().settings.gatewayEndpoint).toBe('http://10.0.0.8:8900/v1');
+  });
+
+  it('已对齐时返回 false，不产生无谓写入', () => {
+    resetSettings();
+    const changed = applyGatewayEndpointInfo({
+      running: true, host: '127.0.0.1', port: 8765, preferredPort: 8765, fallback: false,
+    });
+    expect(changed).toBe(false);
+    expect(useSettingsStore.getState().settings.gatewayEndpoint).toBe('http://127.0.0.1:8765/v1');
   });
 });

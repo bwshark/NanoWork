@@ -1,103 +1,68 @@
 # 项目长期记忆 — nanowork
 
-WorkBuddy 式智能体客户端：React 18 + TS + Vite 渲染层 + Electron 主进程 + nanobot 引擎（Python）。
-详述全在 skill `nanowork-dev-gate`（环境/门禁/重建/引擎契约/同步/产物等）。
-**完整 FR 状态索引见 `docs/README.md` §九 看板（以代码为准）**——本文件只留最硬规则与高频踩坑，避免重复。
+WorkBuddy 式智能体客户端：React18+TS+Vite 渲染层 + Electron 主进程 + nanobot 引擎(Python)。完整 FR 状态索引见 `docs/README.md` §九 看板。
 
 ## 硬规则
+- ⛔ 模型不得执行任何 git 写操作(提交/推送由用户定)；`nanobot/` 独立 .git 且对象库受损 → 只读。
+- 渲染层只 `src/platform/**` 认识 `window.electronAPI`(CI检查一)；引擎 wire 键名只 `src/ai/runtime/nanobotHttp/**`(CI检查二)。
+- 核心逻辑/测试单引号；UI 混用双引号 → 先看现有风格别整体格式化。注释写「为什么」。
+- ⛔ `vitest` 与根 `vite` 同代：锁 `vitest@3.2.7`+根 `vite@5.4.21`，升 vitest4 必须同升 vite≥6。
+- 判超时只看 `err.name==='AbortError'`(abort 抛 DOMException，跨 realm `instanceof Error` 恒 false)。
+- 门禁三套 tsc 一起跑(`typecheck`/`typecheck:electron`/`typecheck:tests`；tests 不在 build 内)。
+- 改 `electron/**.ts` 必须重建 `main.cjs`+`preload.cjs`。
+- 门禁带 `--maxWorkers=3`；全量带 `CODEBUDDY_SAFE_DELETE_ENABLED=0`(否则 `fs.rm` 被安全删除守卫拦→假报12失败)。永远看退出码。
+- `tests/` 被 `.gitignore` 整目录忽略 → 新测试 `git add -f`；`tasks/` 已补前导斜杠。
+- 写 `platform.storage.set` 新 key 要登记 `STORAGE_KEYS`；裸字符串别落 json 路由(主进程 `JSON.parse` 必崩)。
+- 引擎 `Base` `extra="ignore"`：未声明键静默丢弃 → 新增声明式字段先改 `schema.py`+加往返用例。
 
-- 核心逻辑/测试**单引号**；UI 层混用双引号 → 动文件先看现有风格，别整体格式化。注释写「为什么」。
-- ⛔ **模型不得执行任何 git 写操作**（提交/推送由用户决定）；`nanobot/` 独立 .git 且对象库受损 → 只读。
-- 渲染层只允许 `src/platform/**` 认识 `window.electronAPI`（CI 检查一）；引擎 wire 键名只允许在 `src/ai/runtime/nanobotHttp/**`（CI 检查二）。两处基线已清空。
-- 读持久化值要**解析两次**（`createJSONStorage` + `WebStorageAdapter` 各一次）。
-- ⛔ **`vitest` 与根 `vite` 同代**：现锁 `vitest@3.2.7` + 根 `vite@5.4.21`。升 vitest 4 必须同时升根 vite ≥6。
-- ⚠️ **判超时只看 `err.name === 'AbortError'`**（abort 抛 DOMException，跨 realm `instanceof Error` 恒 false）。
-- 门禁**三套 tsc 一起跑**（`typecheck`/`typecheck:electron`/`typecheck:tests`）；`typecheck:tests` 不在 `build` 内。
-- 改 `electron/**.ts` 必须**重建 `main.cjs` + `preload.cjs`**。
-- ⚠️ 门禁命令带 **`--maxWorkers=3`**（并行拉满时 `tests/electron/` 互相干扰）。
-- ⚠️ 跑全量门禁要带 **`CODEBUDDY_SAFE_DELETE_ENABLED=0`**，否则 4 个预存文件的 `afterEach` `fs.rm(recursive)` 被安全删除守卫拦截超时 → 假报 12 个失败。判定**永远看退出码**。
-- ⚠️ **`tests/` 被 `.gitignore` 整目录忽略** → 新测试要 `git add -f`；同坑 `tasks/`（已补前导斜杠）。
-- 写 `platform.storage.set` 新 key 必须先登记 `STORAGE_KEYS`；**裸字符串别落 json 路由**（主进程 `JSON.parse` 必崩，写入静默丢）。
+## 引擎编排/日志
+- ⚠️ `spawn(wait=false)` 丢结果：serve 进程无 inbound 消费者(唯一 `consume_inbound` 在 `AgentLoop.run()`)。FR-2.4/编排用 `run_inline` 直接 await，不走总线。
+- 两套 logger 占位符不同：`loop.py` 用 loguru(`{}`)、`expert_group.py` 用标准 logging(`%s`)。写反不报错。改日志前看文件 import。
+- ⚠️ `**kwargs` 透传撞形参=无声改语义：透传整体进具名容器(如 `member_extra`)。
+- 成员/专家模型未校验别透传 provider：配了预设目录没命中→退本轮 runtime+告警；目录为空允许透传。
+- 回退链两态(`preset`|`inline`)不许拍平；失效引用让网关起不来(加载校验链每项必须存在)。
+- 「查不到≠不支持」：元数据缺失一律宽松。
 
-## 高频踩坑（保命，细节见 docs/README.md §九 看板）
+## 引擎 import 环 / 路径
+- ⚠️ `agent/context.py` 里 `from nanobot.agent.plugins import ...` 只能函数内局部导入：`agent/__init__` 重导出 context，plugins 模块级 import `config.loader`→环闭→`schema.py` 末尾 `_resolve_tool_config_refs` 静默失败 → 任何 `Config.model_validate` 报 `WebToolsConfig not fully defined`。
+- 路径规则优先级：凭据 `no_access` > 允许根包含性 > 路径规则 > `default_deny_write`。匹配=对该 kind 有表态的规则里最具体。
+- 删除复用写解析路径须传 `kind='delete'`，否则 `delete=deny` 不生效。
 
-- ⚠️ **`spawn(wait=false)` 丢结果**：serve 进程无 inbound 消费者（唯一 `consume_inbound()` 在 `AgentLoop.run()`）。与 FR-2.4 **无依赖**——编排用 `run_inline` 直接 await，不走总线。
-- ✅ **专家团 FR-2.4 三模式已真实执行（2026-10-06 落地、10-07 真机验证）**：引擎 `agent/expert_group.py` 调度、`loop.py` 命中即接管本轮；成员的人设/工具/模型**均已接线并配生产接线测试**（`tests/agent/test_expert_group_wiring.py` 13 例 + 4 条变异验证）。⚠️ 历史教训：`_run_member` 曾为闭包 → 这段逻辑**永远测不到**，才有了「人设只被解析从未使用」的静默缺陷。给不可测的接线段留闭包＝埋雷。
-- ⚠️ **引擎两套 logger 并存，占位符不同**：`loop.py` 用 **loguru（`{}`）**、`expert_group.py` 用**标准 logging（`%s`）**。写反不报错——loguru 里 `%s` 只是不替换（告警无具体值），标准 logging 里 `{}` 要等真有 handler 才炸 `TypeError`。已有守卫 `tests/test_log_placeholder_contract.py`（AST 全仓扫描）。**改日志前先看该文件的 import**。
-- ⚠️ **成员模型/专家模型不要在未校验时透传给 provider**：配了预设目录却没命中 → 必须退回本轮 runtime + 告警，否则 provider 回 `The model 'x' does not exist`，**一个成员写错会拖垮整团**。但「目录为空」时必须允许透传（没配预设 ≠ 全部失效）。
-- ⚠️ **`**kwargs` 透传撞形参 = 无声改变语义**：`_on_progress` 的成员载荷若把 `extra` 平铺成 kwarg，coordinator 的 `plan` 键会命中同名形参（期望 dict）→ `**str` TypeError → 被 `_emit` 的 `except Exception` 吞掉 → 「事件凭空消失、不报错」。透传一律**整体进 `member_extra`** 这类具名容器。
-- ⚠️ **专家模型绑定 FR-2.3**：`Agent.model` 存预设名（与 `Session.model` 同域）；下发前必须拦失效预设；目录未加载返回 `null` 非空集。
-- ⚠️ **store 两条写路径不对称**（`createAgent`/`updateAgent`/`mergeAgents`）→ 加新字段三处一起改，否则「保存瞬间消失/重启变回」。
-- ⚠️ **StrictMode**：换请求清状态用 `key={id}` 卸载重挂，别用渲染期 ref+setState；测试入口 `mountStrict()`。
-- ⚠️ **回退链两态**（`preset`|`inline`）不许拍平；失效引用会让网关起不来（配置加载时校验链上每项必须存在）。
-- ⚠️ **配置类编辑用草稿+保存**（`syncNanobotModels` 每次写入重启网关）。
-- ⚠️ 引擎 `Base` `extra="ignore"`：未声明键静默丢弃 → 新增声明式字段先改 `schema.py` + 加往返用例。别从 grep 推断序列化。
-- ⚠️ **「查不到 ≠ 不支持」**：元数据缺失（Web/引擎离线/手填模型）一律宽松。
-- ⚠️ **`input_tokens` 已含缓存读取** → 计价三档（未命中/缓存读/输出），缓存单价缺省按输入价。
-- ⚠️ **绿灯 ≠ 门禁过**：全绿但 `exit=1` = Unhandled Error（MUI 过渡 `setTimeout` 不归 React 管）→ 该文件 `afterEach` 卸组件 + 等 400ms。**判门禁看退出码**。
-- ⚠️ **`.tsx` 里 `return (<JSX>,)` 的逗号运算符 = tsc 报 TS1109、vite/vitest 却正常**（TS 5.9 实测）：报错落在**收尾的 `);` 那一行**，与真正的病灶隔着几十行 → 极易误判成「文件写坏了」并开始怀疑人生。定位手段：esbuild 解析同一文件（能过就说明是 tsc 的问题，不是语法错）；`return (<JSX>)` **不要带逗号**（既有测试文件都不带）。
-- ⚠️ **`printf '%s\n'` 写探针文件时 `\n` 是字面量**（bash 双引号不转义）→ 探针文件全带字面 `\n`，tsc/esbuild 报的是**探针自己的错**，结论全错。要用 heredoc（`cat > f <<'EOF'`）。
-- ⚠️ **同上一条的变体（2026-10-17 踩到）**：Bash heredoc 里给 **Python** 传 `"\n"` 也会落成**字面量 `/n`**（`pattern:\n      /(...)` 写成 `pattern:/n      /(...`，esbuild 报语法错、报错行还指向别处）。**改文件里的换行一律用 Edit 工具或 `chr(10)`**，别在 heredoc 的 python 字符串里写 `\n`；改完用 `grep -c '/n '` 自查一遍。
-- ⚠️ **`.gitignore` 裸目录名匹配任意层级**：`tasks/` 曾误吞 `src/**/tasks/` 源码（已补前导斜杠）。
-- ⚠️ **可选的 prop 不能当功能开关**：`Composer` 的编辑桥接 `registerComposerEdit(...)` 曾写在 `if (!apiRef) return` 之后，而 `ChatPage` 里**只有空态那个 hero 输入区**传 `apiRef` → 一进对话桥接整体为 `null`：「添加到对话」送不去焦点、标题栏「编辑」菜单三动作一起失灵，**且都不报错**。已改为无条件注册（变异验证：退回旧写法 → 单测 `expected null not to be null` 变红）。
-- ⚠️ **改输入区「有没有内容」的判据要两处同改**：`onSend` 的前置判断与发送按钮的 `disabled` 必须同源，否则出现「按钮亮的、点了没反应」（引用胶囊曾踩）。
+## 客户端/渲染
+- ⛔ **副作用别挂在可选 UI 组件上**：`AppLayout.tsx` 里 `{/* <ConnectionBanner /> */}` 是注释掉的，而网关地址自动对齐曾整条只活在该组件的轮询里 → 组件不渲染 ⇒ 地址永远停出厂默认 18900 ⇒ 全部 REST `ERR_CONNECTION_REFUSED`（模型列表空、Dream 面板 Failed to fetch）。已下沉到 `connectionManager.probeOnce()`（先 `alignGatewayEndpoint()` 再探），判据只有 `applyGatewayEndpointInfo` 一处。改地址/能力同步类逻辑先确认它挂在哪。
+- 端口职责（2026-10-18 实测）：`serve` 才提供 `/api` REST（`/v1/models`、`/v1/dream/*`）；`gateway` 只有 channel + `/health`，`/v1/*` 一律 404。同一应用两个进程两个端口，别把 health 端口当 API 端口。
+- ⚠️ 网关地址同步判据：`nextGatewayEndpoint`（src/lib/gatewayEndpoint.ts）只看 `port`（主进程仅在端口验证过监听后才写 port）。**复用外部网关时 `running=false` 但 `port` 有值——这是最需要对齐的场景**，别再加回 `running` 判据（2026-10-18 修过：加了就永远不同步 → 全部 REST `Failed to fetch`）。
+- StrictMode：换请求清状态用 `key={id}` 卸载重挂，别渲染期 ref+setState。
+- store 两条写路径不对称(`createAgent`/`updateAgent`/`mergeAgents`)→加新字段三处一起改，否则「保存瞬间消失/重启变回」。
+- ⚠️ `.tsx` `return (<JSX>,)` 逗号运算符=tsc TS1109 但 vite/vitest 正常，报错落 `);` 行与病灶隔几十行。`return (<JSX>)` 不带逗号。
+- ⚠️ Bash heredoc 给 Python 传 `"\n"` 落字面 `/n`，esbuild 报语法错且指错行 → 改文件换行用 Edit 或 `chr(10)`，改完 `grep -c '/n '` 自查。
+- 可选 prop 不能当功能开关；改输入区「有没有内容」判据要两处同改(`onSend` 前置 + 按钮 `disabled` 同源)。
 
-## 记忆功能现状
-
-- 三层落点真实可用；9 测试文件 195 用例全绿。
-- ⚠️ **未修缺陷**：`looksLikeSystemError`（`src/lib/memory.ts`）漏判三类报错文案 → 报错被写进长期记忆（生产已脏 4 条 `2026-09-20|21.md`）。详见 `.workbuddy/memory/2026-10-01.md`。
+## 引擎统一(2026-10-17 收尾)
+- 用户决策：统一到本仓 study 副本，桌面也跑本仓。study 引擎自洽(`gitstore.py` 含 FileLock、启动器指向本仓 venv、`nanobot_ai 0.3.0` 已装)。
+- 覆盖配置 `$APPDATA/nanowork/nanowork.nanobot.json`：现**不写 bin**(回落代码兜底两层 venv `nanobot/nanobot/.venv`)，显式 `config=D:/Workspace/study/nanowork/nanowork.config.json`(无内联密钥，凭据走 `DASHSCOPE_API_KEY` 环境变量)。
+- ⚠️ 两个 venv 并存：网关实测用一层 `nanobot/.venv`；代码兜底 `engineInterpreterCandidates` 解析两层 `nanobot/nanobot/.venv`。override 不写 bin 时走两层(自带 lark_oapi、websockets 15.0.1)。
+- ⚠️ 渠道依赖自动安装会搞坏 venv：`channels.feishu` 有真实实例→启动自动 `uv pip install`→lark-oapi 要求降级 websockets(16.1.1→15.0.1)，卸载时 `.pyd` 被占→拒绝访问→包删一半没装回→`ModuleNotFoundError`。防复发：渠道依赖预先装进活动 venv；`websockets` dist-info 仍在时普通安装判定 satisfied 静默跳过，必须 `--reinstall`。
+- ⚠️ `readLaunchConfigFromDisk`：override 写 bin 会丢掉 `-m nanobot`(`args: cfg.bin?[]:fallback.args`)。真实命令 `gateway --foreground --config <path> -v`。不带 `--foreground` 的 gateway 会 daemon 化，`timeout` 杀不干净。
 
 ## 真机验证铁律
+1. 布局量几何(`getBoundingClientRect`+`getComputedStyle`)别只看截图 2. Playwright `args:['--no-proxy-server']`(本机 `http_proxy` 劫持 127.0.0.1) 3. dev server 与 `vite build` 不并发 4. 启动 dev 前 `mv node_modules/.vite/deps_temp_* /tmp` 5. 真机切场景每场景 `ctx.newPage()`，桩落 localStorage 且 `Object.assign` 内存对象 6. 判上游真伪 `curl --noproxy '*' -i` + `/openapi.json`。
 
-1. 布局量几何（`getBoundingClientRect`+`getComputedStyle`），别只看截图。
-2. Playwright 必须 `args:['--no-proxy-server']`（本机 `http_proxy` 劫持 `127.0.0.1`）。
-3. dev server 与 `vite build` 不要并发；dev 端口以 `vite.config.ts` 为准（2026-10-01 = 5176）。
-4. 启动 dev 前先 `mv node_modules/.vite/deps_temp_* /tmp`（改 `@mui/icons-material` 图标重优化依赖会撞安全删除守卫崩 dev）。
-5. 真机切场景 = 每场景 `ctx.newPage()`；桩数据落 `localStorage` **且** `Object.assign` 内存对象。
-6. 判断上游真伪用 `curl --noproxy '*' -i` + `/openapi.json`。
+## B3 引擎侧三件(🟡 进行中)
+- **B3-01 FR-2.5 子代理委派**：②✅ `agent/tools/spawn.py` 在 `channel=="api"` 强制 `wait=True` 走 `run_inline`(结果回注)，回归用例锁死；③✅ 权限单调递减已在 study 用 `bind_workspace_scope(parent)`+`AgentToolPolicyHook` 实现，3 组回归用例。①待真机一轮；④⬜ 客户端 `subagent-group` 行类型 + 引擎经 `on_progress` 推子代理进度（`ToolContext` 无进度槽，需独立接线）。
+- **B3-02 FR-4.6 Dream 闸门**：①✅ 实测 Dream 经 `build_dream_tools()` 直落 `MEMORY.md`(无 candidate/闸门) ②✅ 闸门已落：`MemoryStore` 加 candidate 生命周期(`prepare/has/compute/accept`/`reject`)，`build_dream_tools(require_review=True)` 把写工具指向 candidate 副本；手动 `/dream` + cron `on_cron_job` 双路径接闸门。③✅ 客户端审查页已落：引擎加 REST `GET /v1/dream/review` + `POST /v1/dream/accept`/`reject`(`_plugin_workspace` 取工作区→`MemoryStore`)；`NanobotHttpRuntime` 透传 `getDreamReview/acceptDream/rejectDream`(`AgentRuntime` 接口按能力声明加可选方法，老网关无此方法时面板静默降级)；`src/pages/memory/DreamReviewPanel.tsx`(MUI，new/modified/deleted 三类 diff + 采纳/丢弃) 接入 `MemoryPage`。④✅ `DreamConfig.require_review=True` 默认开(`AgentLoop.from_config` 透传，三处 `if require_review` 分支；关掉回退「直落」旧行为)。
+- **B3-03 FR-6.5 IM 审批**：①审批请求转渠道卡片(批准/拒绝+TTL) ②回调 `POST /v1/tool-approvals/{id}`(复用既有端点) ③fail-closed(渠道不可用/超时/重放一律不执行)；桌面权限弹窗不受影响(两路并存)。
 
-## 引擎提示词层（FR-3.10 ChainLoader）· 2026-10-16
+## 引擎 local patch 清单(本仓 study 副本)
+- `config/schema.py` `DreamConfig.require_review: bool=True` — FR-4.6 闸门开关(默认开)。
+- `agent/memory.py` `MemoryStore` 增 `dream_candidate_dir` + `prepare/has/compute/accept/reject_dream_candidate` + `build_dream_tools(require_review=)` — FR-4.6 闸门核心。
+- `agent/tools/spawn.py` `channel=="api"` 强制 `wait=True` — FR-2.5。
+- `command/builtin.py` `cmd_dream` 接闸门；新增 `cmd_dream_review`/`accept`/`reject` — FR-4.6 命令面。
+- `cli/gateway_runtime.py` `on_cron_job` Dream 分支接闸门(修过一次缩进 bug：`Dream` 块曾被误嵌进 `_silent` 进度回调，等于 cron Dream 永不执行)。
+- `agent/loop.py` `AgentLoop` 增 `dream_require_review` 构造参 + `from_config` 透传 `defaults.dream.require_review`。
+- `api/server.py` 新增 `GET /v1/dream/review` + `POST /v1/dream/accept`/`reject`(`_plugin_workspace` 取工作区→`MemoryStore`)，供客户端审查页用。
+- 客户端：`src/ai/runtime/types.ts` `AgentRuntime` 接口按能力声明加 `getDreamReview?`/`acceptDream?`/`rejectDream?`；`chat.ts`(`NanobotClient`) 实现三方法；`runtime.ts`(`NanobotHttpRuntime`) 透传；新增 `src/pages/memory/DreamReviewPanel.tsx` 并接入 `MemoryPage`。
 
-- ⚠️ **Jinja 自定义 loader 的 `get_source` 找不到时必须 `raise TemplateNotFound`，不能 `return None`**：`BaseLoader.load` 会解包返回值，返回 None 抛 `TypeError: cannot unpack non-iterable NoneType object`，而 `ChoiceLoader` 只捕 `TemplateNotFound` → 错误带着与模板名无关的栈冒到业务代码。
-- ⚠️ **ChainLoader 的内置 `FileSystemLoader` 必须始终在链尾**：漏掉它时唯一那个 loader 抛错后无人接手，内置模板（如 `agent/platform_policy.md`）直接解析失败，报错像「模板文件不见了」。
-- ⚠️ **覆盖模板必须走 loader，不能用 `Environment.from_string`**：`from_string` 产出的模板**没有 loader** → 覆盖文件里的 `{% include %}` 一律解析不到（上游式覆盖的既有缺陷）。
-- 插件片段模板名基准是**包根**（`demo/fragments/domain.md`），不是被声明目录吃掉后的相对名。
-- 清单里单值字段（`tools: "shell"`）必须走 `_string_list`；用 `_string_tuple` 会静默读成空 = 不约束 → **安全方向的静默失效**。
-- 测试报告类 HTML 页面：jsdom 里 `body.textContent` **包含 inline `<script>` 源码** → 拿注释里的字样当 waitFor 判据会立刻通过（用例变恒真）。
-- `jsdom` 无 `.d.ts` → 已在 `tests/jsdom.d.ts` 补最小声明（不引 `@types/jsdom`）。
-
-## 插件市场（FR-3.7 / 3.8 / 3.13）· 2026-10-16
-
-- ⚠️ **依赖是「市场级」语义，归 `marketplace.json`（索引文件），不是包清单的一维** → 落点只有 `electron/pluginMarketplace.ts`，`pluginPackage.ts` 不用动。
-- ⚠️ **索引是可选元数据，不是白名单**：`resolveInstallOrder` 遇到「索引没提到这个包」必须按**单包**处理，否则一份没写全的索引会变成「市场里别的包装不上」的硬故障。
-- ⚠️ **索引文件每次同步覆盖写**（与包副本的「只增不改」相反）；`listMarketPackages` 要**显式跳过**它，不能靠「拿文件 readdir 必然失败」来跳过。
-- ⚠️ **版本比较永远用 `src/lib/semverRange` 的 `compareVersions`**，别字符串比：`'0.1.9' > '0.1.10'` 会装到旧版且无报错。
-- 拓扑序/环检测 = DFS + `visiting`/`done` 三态；**循环要把环打印出来**（`a → b → a`），只说「存在循环」用户没法行动。
-
-## 工具策略门（FR-3.12 plugin_tools）· 2026-10-16
-
-- ⚠️ **「白名单只能收紧」是 `CompositeHook` 免费提供的**：`_decide_for_each_hook` 只收集 `allowed=False`，`allow()` 被直接丢弃 → 任何门都只能加 deny，**门的位置不改变语义**。
-- ⚠️⚠️ **Hook 装配字段的工厂必须用 `isinstance` 认形状，不能只判 `is not None`**：喂进来一个「长得像但不是」的值（实测是单测里 mock 掉 `ContextBuilder` 后的 `MagicMock`）→ 门挂上、白名单空、**所有工具全被拒**，且拒绝原因里连来源名都没有（最坏的一种故障：整轮不可用 + 无法解释）。认不出形状＝当没声明 + warn。
-- ⚠️ **变异验证必须先确认「用例真的覆盖了那一层」**：手工拼 `CompositeHook([...])` 的用例**证不了装配**（`build_agent_turn_hook`）——「有声明就跳过审批门」写进装配时它照绿。走真实装配的用例要放在那里。
-- ⚠️ **多份声明（技能 frontmatter ∩ 插件清单）取交集**；并集会让任一份都能放宽另一份。
-- `tools:` 是既有 frontmatter 的**新键** → 按硬白名单解释前先 `grep -rn '^tools:' <skills>/` 确认没撞名。
-- 单值 `tools: shell` **必须收**（技能侧拿到的是原始值，这条规则是唯一防线）；`tools: []` = 显式全拒（不读成「没声明」）。
-
-## 首屏治理（FR-13.5 / 13.6）· 2026-10-16
-
-- ⚠️⚠️ **Vite 的 `__vitePreload` 助手必须单独成一个 chunk**：它被每个含动态 `import()` 的 chunk 副作用导入 → **它落在哪个 chunk，那个 chunk 就必然进入口的静态图**、被 `modulepreload`。手工 `manualChunks: { markdown: [...] }` 会把 772 KB 拽上首屏（本意相反），摘掉 markdown 后助手又落进 `mermaid`（665 KB 上首屏）。解法：`manualChunks(id) { if (id.includes('vite/preload-helper')) return 'preload-helper'; ... }`。
-- ⚠️ **判据不能只卡 `modulepreload`**：把大依赖改回静态 `import` 时它会**并进入口 chunk**（553 KB → 1340 KB）而不是变成一条 preload → 只卡那一条的判据被绕过。判据见 `tasks/verify-b5-first-paint.mjs`（两条预算：modulepreload ≤ 1.2 MB、首屏合计 ≤ 1.5 MB）。
-- ⚠️ **`const Page = lazy(() => import(...))` 必须写在 `createBrowserRouter([...])` 之前**：路由表在模块求值时就读它们，`const` 没有提升（tsc 报 TS2448/TS2454）。
-- ⚠️ **`Suspense` 边界放 `AppLayout` 的 `<Outlet />` 外**（不是路由表）：放路由表会让带壳布局卸载重建。**全屏页（`/auth`）必须自己一个边界**，否则懒加载一路上抛到根级（无边界）→ 白屏。
-- ⚠️ **测试等懒加载用轮询**（`tests/helpers/reactMount.ts` 的 `waitForSettled`）：`flush()` 是固定 10 轮 `setTimeout(0)`，等不完一个真实 `import()`。
-- ⚠️⚠️ **本机有两个 venv，装错层＝白装**：`engineInterpreterCandidates`（`electron/engineSelfCheck.ts:84`）的兜底是**两层** `<appRoot>/nanobot/nanobot/.venv`；但 `$APPDATA/nanowork/nanowork.nanobot.json` 的 override `bin` 指向**一层** `<appRoot>/nanobot/.venv`（2026-10-17 网关日志实测用的就是它，桌面实际跑这个）。**改 venv 前先确认当前生效的是哪层**。
-- ⚠️ **渠道依赖自动安装会把 venv 搞坏（2026-10-17 踩）**：配置里 `channels.feishu` 有真实实例 → 网关启动时自动 `uv pip install` 其依赖 → lark-oapi 要求**降级 websockets（16.1.1→15.0.1）**，卸载时 `.pyd` 被进程占用 →「拒绝访问 os error 5」→ 包删一半（`asyncio/` 只剩 `__pycache__`）却没装回 → 启动期 `from websockets.asyncio.server import ...` 直接 `ModuleNotFoundError` → 网关 exit=1。**坑**：`websockets-*.dist-info` 仍留着 → 包管理器认为"已装"，普通 `pip/uv pip install websockets` 判定 satisfied **静默跳过**，必须 `--reinstall`。**防复发**：把渠道依赖（如 lark-oapi）预先装进活动 venv，启动期就不再触发破坏性安装。已验证 nanobot 在 websockets 15.0.1 下 `asyncio.server`/`unix_serve`/`http11.Request` 全可用。
-- ⚠️ **引擎统一（2026-10-17 收尾，覆盖本条旧叙述）**：用户决策「统一到本仓 `D:\Workspace\study\nanowork\nanobot`，桌面也跑本仓副本」。**study 引擎已自洽**：`nanobot/nanobot/utils/gitstore.py` 含跨进程 `FileLock`（从 codes 拷入，4 处引用，API 兼容）；`nanobot/.venv/Scripts/nanobot.exe` 启动器目标 = 本仓 `nanobot/.venv/Scripts/python.exe`（distlib 重建），venv 内 `nanobot_ai 0.3.0`+`uvicorn` 已装；`nanobot --version`→v0.3.0（exit 0）。**凭据非内联**：study 与 codes 的 `nanobot.config.json` 均不含 `api_key`/`dashscope`，走环境变量 `DASHSCOPE_API_KEY`（桌面进程继承）→ 统一到 study 不丢凭据。桌面应用身份：study 应用名 `nanowork`→userData=`$APPDATA/nanowork/`；codes 应用名 `sciherd-cloud-smartagent`，**本机无其 userData 目录（未被使用）**。覆盖配置 `$APPDATA/nanowork/nanowork.nanobot.json` 已由坏掉的 `{}`（带 BOM→`JSON.parse` 抛错→fallback 到本仓 exe）改为显式 `{bin: study exe, host:127.0.0.1, port:8900}`（无 BOM），桌面自动拉起即本仓引擎；`config` 留空回落引擎默认（不动用户现有 `~/.nanobot` 会话/记忆落点）。study 应用根**无自有 `nanobot.config.json`**（fallback 指向的 `study/nanowork/nanobot.config.json` 不存在，引擎用默认配置）。codes 副本备份在 `codes/nanobot/.local-backup-eng-20261017_204905/`（7.3M，可回滚）。⚠️ **B3 引擎改动落 study 即可**；codes 副本若仍被别处使用才需同步，否则不再强制双副本同步。
-
-## 引擎 import 环与路径规则（B6）· 2026-10-17
-
-- ⚠️⚠️ **`agent/context.py` 里 `from nanobot.agent.plugins import ...` 只能是函数内局部导入**：`agent/__init__.py` 重导出 `context`，而 `plugins.py` 模块级 import `config.loader` → 环闭 → `config/schema.py` 末尾的 `_resolve_tool_config_refs()` 静默失败 → **任何** `Config.model_validate` 抛 `` `Config` is not fully defined; you should define `WebToolsConfig` ``。排查提示就写在 schema.py 末尾。
-- ⚠️ **判定「是不是自己改坏的」必须跑 skill 登记的四目录基线**（`tests/utils tests/agent tests/command tests/config`）：我跑 `tests/agent`+`tests/utils` 子集时把上面那条误判成环境问题，`tests/config` 才照出来。
-- 路径规则优先级：**凭据 `no_access`（无条件）> 允许根包含性 > 路径规则 > `default_deny_write`**。规则匹配是「对该 kind 有表态的规则里挑最具体」——写反了会让细规则意外放宽粗规则。
-- 删除复用写解析路径但必须传 `kind='delete'`，否则 `delete=deny` 不生效。
-- ⚠️ **变异要真能改变行为**：改到被前置过滤挡住的分支 / 只换执行顺序，都是空转变异（看到全绿会误导）。
+## 记忆功能现状
+- 三层落点真实可用；测试全绿(详情见每日日志)。
+- ⚠️ 未修缺陷：`looksLikeSystemError`(`src/lib/memory.ts`)漏判三类报错文案 → 报错被写进长期记忆(详见 `2026-10-01.md`)。

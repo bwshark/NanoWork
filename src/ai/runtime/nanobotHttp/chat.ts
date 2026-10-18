@@ -28,6 +28,7 @@ import {
 import { readUsageFromRuntime, type UsageRequestContext } from './usage';
 import type { MemberEventPhase } from '@/types/process';
 import type { PluginEngineIndex } from '@/types/plugin';
+import type { DreamReviewResponse } from '../types';
 
 /**
  * 网关 [LOCAL PATCH] 注入的进度事件结构（delta.nanobot_event）。
@@ -507,6 +508,55 @@ export class NanobotClient {
       // 也会在自身超时后继续——留着会让这个 id 永久抑制静默超时（内存与语义双漏）。
       this.pendingApprovals.delete(requestId);
     }
+  }
+
+  /**
+   * FR-4.6 Dream 审查闸门：拉取待审查的候选 diff。
+   *
+   * 网关开闸门（默认开）时，Dream 的合并产物先落 `memory/.dream_candidate/`，
+   * 不直写 `MEMORY.md`。客户端从这里拿到「新增 / 修改 / 删除」三类 diff 供人审。
+   * 没有候选时返回 `{ pending: false }`。
+   */
+  async getDreamReview(): Promise<DreamReviewResponse> {
+    const { endpoint } = this.getConfig();
+    const res = await fetch(`${endpoint}/dream/review`, {
+      method: 'GET',
+      headers: { 'Content-Type': 'application/json', ...this.authHeaders() },
+    });
+    if (!res.ok) {
+      throw new Error(`拉取 Dream 候选失败：HTTP ${res.status} ${res.statusText}`);
+    }
+    return (await res.json()) as DreamReviewResponse;
+  }
+
+  /**
+   * FR-4.6 Dream 审查闸门：采纳候选，把变化写回正式记忆文件。
+   */
+  async acceptDream(): Promise<{ ok: boolean; updated: number }> {
+    const { endpoint } = this.getConfig();
+    const res = await fetch(`${endpoint}/dream/accept`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...this.authHeaders() },
+    });
+    if (!res.ok) {
+      throw new Error(`采纳 Dream 候选失败：HTTP ${res.status} ${res.statusText}`);
+    }
+    return (await res.json()) as { ok: boolean; updated: number };
+  }
+
+  /**
+   * FR-4.6 Dream 审查闸门：丢弃候选，正式记忆文件不动。
+   */
+  async rejectDream(): Promise<{ ok: boolean }> {
+    const { endpoint } = this.getConfig();
+    const res = await fetch(`${endpoint}/dream/reject`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...this.authHeaders() },
+    });
+    if (!res.ok) {
+      throw new Error(`丢弃 Dream 候选失败：HTTP ${res.status} ${res.statusText}`);
+    }
+    return (await res.json()) as { ok: boolean };
   }
 
   /**
