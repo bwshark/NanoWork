@@ -78,6 +78,14 @@ WorkBuddy 式智能体客户端：React18+TS+Vite 渲染层 + Electron 主进程
 - `api/server.py` 新增 `GET /v1/dream/review` + `POST /v1/dream/accept`/`reject`(`_plugin_workspace` 取工作区→`MemoryStore`)，供客户端审查页用。
 - 客户端：`src/ai/runtime/types.ts` `AgentRuntime` 接口按能力声明加 `getDreamReview?`/`acceptDream?`/`rejectDream?`；`chat.ts`(`NanobotClient`) 实现三方法；`runtime.ts`(`NanobotHttpRuntime`) 透传；新增 `src/pages/memory/DreamReviewPanel.tsx` 并接入 `MemoryPage`。
 
+## B4 交付闭环
+- **B4-02 深链 `nanowork://` ✅(2026-10-18)**：`electron/deepLink.ts`(`parseDeepLink`/`findDeepLinkArg`/`createDeepLinkRouter`) + `main.ts` 三入口(冷启动 argv / second-instance argv / macOS `open-url`) + `builder.config.json` `protocols`；渲染层 `App.tsx` 执行动作、`ChatPage` 经路由 state 预填 prompt。首批动作：`open-session?id=` / `new-chat?prompt=`。
+  - ⚠️ **必须 `app:renderer-ready` 握手**：主进程在渲染层挂监听前 `send` = **静默丢**。`App.tsx` 先订阅再 `appRendererReady()`；`did-start-loading` 时 `resetRenderer()` 重新排队。
+  - ⚠️ `new URL()` 对自定义 scheme：`nanowork://x` → `hostname=x`、`pathname=""`；`nanowork:///x` → `hostname=""`、`pathname="/x"`。两种都要认。
+  - ⚠️ `acquireSingleInstance` 回调现在带 `(argv, workingDirectory)`——只唤起窗口不看 argv，就是「应用已在运行时双击链接不生效」的根因。
+  - 测试 `tests/electron/deepLink.test.ts`(17) + `singleInstance.test.ts`(3)；改 `electron/**.ts` 后 `main.cjs`/`preload.cjs` 已重建。
+- B4-01 自动更新 / B4-03 运行时自助安装 / B4-04 反馈包：⬜ 未开工。B4-01 需先定发布源(generic 静态目录)。
+
 ## 记忆功能现状
 - 三层落点真实可用；测试全绿(详情见每日日志)。
 - ⚠️ 未修缺陷：`looksLikeSystemError`(`src/lib/memory.ts`)漏判三类报错文案 → 报错被写进长期记忆(详见 `2026-10-01.md`)。
