@@ -582,6 +582,18 @@ export interface AgentRuntime {
   readUsageStats(): Promise<UsageStats>;
 
   /**
+   * 让引擎热加载磁盘上的配置，使模型增删改「保存即生效」（无需重启网关）。
+   *
+   * 为什么需要：引擎把 modelPresets 装配成**启动时的快照**，客户端写完配置文件
+   * 不打这一枪，`/v1/models` 仍是旧目录——这正是以前 UI 只能提示「保存后自动重启
+   * 网关」的原因。
+   *
+   * 契约：`false` = 这个网关不支持热加载（老版本端点不存在），调用方据此退回
+   * 「需重启」提示。**不抛异常**——「不支持」不是失败，配置已经写盘了。
+   */
+  reloadEngineConfig?(): Promise<boolean>;
+
+  /**
    * FR-4.6 Dream 审查闸门：拉取待审查的候选 diff。
    * 引擎开闸门（默认开）时 Dream 产物先落 candidate 区，不直写记忆文件。
    * **方法存在性即能力声明**：不支持的引擎实现不定义此方法，调用方判空降级。

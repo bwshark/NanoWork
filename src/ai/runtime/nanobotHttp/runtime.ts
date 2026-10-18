@@ -196,6 +196,14 @@ export class NanobotHttpRuntime implements AgentRuntime {
   }
 
   /**
+   * 配置热加载（模型保存即生效），委托 transport。
+   * 老网关没有 `/v1/config/reload` 时返回 `false`，由调用方退回「需重启」提示。
+   */
+  reloadEngineConfig(): Promise<boolean> {
+    return this.client.reloadEngineConfig();
+  }
+
+  /**
    * FR-4.6 Dream 审查闸门：拉取待审查候选 diff，委托 transport。
    * 网关未升级（无 `/v1/dream/review` 路由）时调用方判 `getDreamReview` 是否存在降级，
    * 不在这里兜底——「没有该方法」本身就是能力声明。

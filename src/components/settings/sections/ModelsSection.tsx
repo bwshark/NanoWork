@@ -121,7 +121,7 @@ export function ModelsSection() {
     <Box>
       <SettingsCard
         title="自定义模型"
-        description="添加的模型写入引擎配置的 modelPresets 与 providers，保存后自动重启网关；对话页顶部的模型选择器会立刻出现它们。设为默认后，新对话的「Auto」即指向它。"
+        description="添加的模型写入引擎配置的 modelPresets 与 providers，保存后引擎立即热加载；对话页顶部的模型选择器会立刻出现它们。设为默认后，新对话的「Auto」即指向它。"
         action={
           <Button
             variant="contained"

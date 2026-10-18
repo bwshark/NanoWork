@@ -478,6 +478,27 @@ export class NanobotClient {
    *
    * 副作用：把该请求从 `pendingApprovals` 摘掉，让静默超时恢复正常计时。
    */
+  /**
+   * 让引擎**热加载**磁盘上的配置（模型增删改 / 换默认模型「保存即生效」）。
+   *
+   * 为什么需要它：`/v1/models` 来自引擎启动时装配的预设目录，光写配置文件不起作用，
+   * 以前只能靠重启网关。返回 `false` 表示这个网关不支持热加载（老版本），调用方
+   * 据此退回「需重启」提示——不抛错，因为「不支持」不是失败。
+   */
+  async reloadEngineConfig(): Promise<boolean> {
+    const { endpoint } = this.getConfig();
+    try {
+      const res = await fetch(`${endpoint}/config/reload`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...this.authHeaders() },
+      });
+      // 404/501 = 端点不存在（老网关）；其余不 ok 也不该阻断保存——配置已写盘。
+      return res.ok;
+    } catch {
+      return false;
+    }
+  }
+
   async respondApproval(
     requestId: string,
     decision: ApprovalDecision,

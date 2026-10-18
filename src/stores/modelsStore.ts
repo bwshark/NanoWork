@@ -362,6 +362,27 @@ export function buildMutation(value: ModelFormValue): NanobotModelsMutation {
   };
 }
 
+/**
+ * 写盘之后让引擎**热加载**这份配置，使「保存即生效」，并按结果修正 `needsRestart`。
+ *
+ * 为什么必须有这一步：引擎的模型目录是**启动时的快照**（预设 loader 还闭包住那个
+ * Config 对象），只写配置文件的话 `/v1/models` 仍是旧目录 —— 以前只能提示用户重启网关。
+ *
+ * 返回 `false` = 这个网关不支持热加载（老版本端点不存在）或请求失败：此时保留主进程
+ * 给的 `needsRestart`，UI 照旧提示重启。**不抛错**——配置已经写盘了。
+ */
+async function applyConfigToEngine(result: ModelsSyncResult): Promise<ModelsSyncResult> {
+  if (!result.ok) return result;
+  try {
+    const client = await connectionManager.getClient();
+    if (typeof client.reloadEngineConfig !== 'function') return result;
+    const applied = await client.reloadEngineConfig();
+    return applied ? { ...result, needsRestart: false } : result;
+  } catch {
+    return result;
+  }
+}
+
 export const useModelsStore = create<ModelsState>()((set, get) => ({
   models: [],
   loading: false,
@@ -427,8 +448,10 @@ export const useModelsStore = create<ModelsState>()((set, get) => ({
 
   saveModel: async (value) => {
     const mutation = buildMutation(value);
-    const result = await platform.syncNanobotModels(JSON.stringify(mutation));
-    if (!result.ok) return result;
+    const raw = await platform.syncNanobotModels(JSON.stringify(mutation));
+    if (!raw.ok) return raw;
+    // 先热加载再回读：反了会拉到旧目录，用户看到「保存了但列表没变」
+    const result = await applyConfigToEngine(raw);
     await get().loadManaged(true);
     // 预设目录在 serve 启动时构建 → 必须强制重拉，否则下拉里看不到新模型
     await get().refresh(true);
@@ -442,8 +465,10 @@ export const useModelsStore = create<ModelsState>()((set, get) => ({
       preset: name,
       providerKey: target?.custom ? target.providerKey : undefined,
     };
-    const result = await platform.syncNanobotModels(JSON.stringify(mutation));
-    if (!result.ok) return result;
+    const raw = await platform.syncNanobotModels(JSON.stringify(mutation));
+    if (!raw.ok) return raw;
+    // 先热加载再回读：反了会拉到旧目录，用户看到「保存了但列表没变」
+    const result = await applyConfigToEngine(raw);
     await get().loadManaged(true);
     await get().refresh(true);
     return result;
@@ -451,8 +476,10 @@ export const useModelsStore = create<ModelsState>()((set, get) => ({
 
   setDefaultModel: async (name) => {
     const mutation: NanobotModelsMutation = { op: 'setDefault', preset: name };
-    const result = await platform.syncNanobotModels(JSON.stringify(mutation));
-    if (!result.ok) return result;
+    const raw = await platform.syncNanobotModels(JSON.stringify(mutation));
+    if (!raw.ok) return raw;
+    // 先热加载再回读：反了会拉到旧目录，用户看到「保存了但列表没变」
+    const result = await applyConfigToEngine(raw);
     await get().loadManaged(true);
     await get().refresh(true);
     return result;
@@ -460,8 +487,10 @@ export const useModelsStore = create<ModelsState>()((set, get) => ({
 
   setFailover: async (fallbacks, providerRetryMode) => {
     const mutation: NanobotModelsMutation = { op: 'setFailover', fallbacks, providerRetryMode };
-    const result = await platform.syncNanobotModels(JSON.stringify(mutation));
-    if (!result.ok) return result;
+    const raw = await platform.syncNanobotModels(JSON.stringify(mutation));
+    if (!raw.ok) return raw;
+    // 先热加载再回读：反了会拉到旧目录，用户看到「保存了但列表没变」
+    const result = await applyConfigToEngine(raw);
     // 以磁盘为准回读：主进程会做「引用归一」（字符串引用 ↔ 两态联合），
     // 拿本地那份乐观状态继续显示就可能与文件里的实际内容不一致
     await get().loadManaged(true);

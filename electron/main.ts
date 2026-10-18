@@ -101,6 +101,7 @@ import {
   killProcessTree,
   waitForProcessExit,
 } from './childProcesses';
+import { reapOrphanEngineProcesses } from './orphanProcesses';
 import {
   restartServe,
   SERVE_PORT_RELEASE_TIMEOUT_MS,
@@ -4931,6 +4932,16 @@ app.whenReady().then(async () => {
   // 不会与上一轮残留的互相干扰（引擎侧有 lease/supervisor，但 Electron 从不 acquire，
   // 所以这一遍得客户端自己扫）。成本是几次 readdir+readFile，不值得为它异步。
   await sweepGatewayRuntimeState();
+
+  // 再回收**上一实例遗留的引擎进程**。上一轮若是强杀/崩溃，`will-quit` 的整树
+  // taskkill 根本没跑，Python 会活下来占住 8900 / 18790；本次启动就会探测到端口被占
+  // → 走「复用既有网关」→ running=false 但 port 有值，界面一直指向一个本应用管不着的
+  // 引擎（症状：模型列表空、面板 Failed to fetch，且界面上没有任何线索）。
+  // 放在探测端口**之前**：顺序反了就变成对着已被占的端口解释「复用」。
+  const reaped = await reapOrphanEngineProcesses({ selfPid: process.pid });
+  if (reaped.reaped > 0) {
+    userDataLog('engine', 'warn', '已回收上一实例遗留的引擎进程', { reaped: reaped.reaped });
+  }
 
   // 桌面端：并行拉起 serve（/v1 API）与 gateway（IM channels 长连接），
   // 两者齐备智能体才能既对话又与飞书等机器人互通（失败不影响主程序，仅记录警告）
