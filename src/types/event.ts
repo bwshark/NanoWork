@@ -39,7 +39,7 @@
 import type { ArtifactChange, ArtifactType } from './artifact';
 import type { Role } from './message';
 import type { PlanVerdict } from './message';
-import type { MemberEventPhase } from './process';
+import type { MemberEventPhase, SubagentEventPhase } from './process';
 
 /** 事件类型全集（对齐设计文档 9.2；17 种） */
 export type EventType =
@@ -52,6 +52,7 @@ export type EventType =
   | 'plan' // Plan 模式产出的计划
   | 'plan-decision' // 计划审批结果
   | 'expert-group-member' // 专家团成员生命周期（FR-2.4）
+  | 'subagent-lifecycle' // 子代理生命周期（FR-2.5 第 4 步）
   | 'artifact' // 产物
   | 'file-history-snapshot' // 文件快照（回滚锚点）
   | 'commit' // commitSeq 推进（回滚边界）
@@ -381,6 +382,24 @@ export interface ExpertGroupMemberEvent extends BaseEvent, MessageScoped {
   error?: string;
 }
 
+/**
+ * 子代理生命周期事件（FR-2.5 第 4 步）。
+ *
+ * 落盘纪律与 `ExpertGroupMemberEvent` 完全一致：**必须落盘**，否则退出重进后
+ * 子代理归属凭空消失，而实时那一轮看起来完全正常（最难自查的一类）。
+ */
+export interface SubagentLifecycleEvent extends BaseEvent, MessageScoped {
+  type: 'subagent-lifecycle';
+  /** 子代理任务 id（同一子代理连续发多个相位，分组键） */
+  subagentId: string;
+  subagentName: string;
+  phase: SubagentEventPhase;
+  /** 任务摘要（started）/ 工具名（tool） */
+  text?: string;
+  /** 失败原因（error） */
+  error?: string;
+}
+
 /** 事件联合（判别字段为 `type`） */
 export type SessionEvent =
   | SessionStartEvent
@@ -392,6 +411,7 @@ export type SessionEvent =
   | PlanEvent
   | PlanDecisionEvent
   | ExpertGroupMemberEvent
+  | SubagentLifecycleEvent
   | ArtifactEvent
   | FileSnapshotEvent
   | CommitEvent

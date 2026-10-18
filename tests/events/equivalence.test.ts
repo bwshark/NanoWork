@@ -134,6 +134,25 @@ function mockRichTurn() {
         phase: 'finished',
         text: '现状如下。',
       });
+      // 子代理生命周期（FR-2.5 第 4 步）：与成员同一条纪律——必须**同时**进内存视图
+      // 与事件流。只改内存的写法在实时那一轮看起来完全正常，刷新后归属凭空消失。
+      handlers.onProcessSubagent?.({
+        subagentId: 'sa1',
+        subagentName: '资料员',
+        phase: 'started',
+        text: '查一下依赖版本',
+      });
+      handlers.onProcessSubagent?.({
+        subagentId: 'sa1',
+        subagentName: '资料员',
+        phase: 'tool',
+        text: 'web_search',
+      });
+      handlers.onProcessSubagent?.({
+        subagentId: 'sa1',
+        subagentName: '资料员',
+        phase: 'done',
+      });
       handlers.onStatus('done');
       handlers.onDone();
       return { done: Promise.resolve(), abort: () => {} };
@@ -254,15 +273,18 @@ describe('事件投影等价性：实时增量视图 ≡ 批量重放投影', ()
     // 4) 关键结构确实被覆盖到（避免「两边都空」也能通过的假绿）
     const assistant = replayed.messages.find((m) => m.role === 'assistant')!;
     expect(assistant.content).toBe('这是回答。');
-    // 穷举三类过程行（含 FR-2.4 的成员）。落库保持「一个相位一行」的原始事实，
-    // 按成员分组是渲染时的事（见 `lib/processDetail.ts`）——所以这里能看到两个成员行。
+    // 穷举四类过程行（含 FR-2.4 成员与 FR-2.5 子代理）。落库保持「一个相位一行」的
+    // 原始事实，按成员 / 子代理分组是渲染时的事（见 `lib/processDetail.ts`）
+    // ——所以这里能看到两行成员与三行子代理。
     expect(
       assistant.process?.map((p) =>
         p.kind === 'tool'
           ? p.tool
           : p.kind === 'reasoning'
             ? p.content
-            : `member:${p.memberId}/${p.phase}`,
+            : p.kind === 'member'
+              ? `member:${p.memberId}/${p.phase}`
+              : `subagent:${p.subagentId}/${p.phase}`,
       ),
     ).toEqual([
       '先思考一下',
@@ -270,6 +292,9 @@ describe('事件投影等价性：实时增量视图 ≡ 批量重放投影', ()
       '再确认',
       'member:m1/started',
       'member:m1/finished',
+      'subagent:sa1/started',
+      'subagent:sa1/tool',
+      'subagent:sa1/done',
     ]);
     expect(assistant.artifacts?.[0]?.title).toBe('示例片段');
     // 计划本体随事件复原：步骤与待裁决状态都在，刷新后仍能批准

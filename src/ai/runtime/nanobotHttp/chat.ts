@@ -26,7 +26,7 @@ import {
   type PluginToggleOutcome,
 } from './plugins';
 import { readUsageFromRuntime, type UsageRequestContext } from './usage';
-import type { MemberEventPhase } from '@/types/process';
+import type { MemberEventPhase, SubagentEventPhase } from '@/types/process';
 import type { PluginEngineIndex } from '@/types/plugin';
 import type { DreamReviewResponse } from '../types';
 
@@ -62,6 +62,13 @@ interface NanobotStreamEvent {
   member_event?: string;
   output?: string;
   plan?: string;
+  /**
+   * kind=subagent：归属子代理（`id` / `label`）与生命周期相位 `subagent_event`；
+   * `task` / `tool` / `error` 是该相位的透传载荷（按相位取其一）。
+   */
+  subagent?: { id?: string; label?: string };
+  subagent_event?: string;
+  task?: string;
 }
 
 /** 结果/错误展示文本截断上限（过程时间线仅做摘要展示） */
@@ -84,6 +91,19 @@ const MEMBER_PHASES: Record<string, MemberEventPhase> = {
   member_finished: 'finished',
   member_failed: 'failed',
   group_aggregating: 'aggregating',
+};
+
+/**
+ * 子代理相位（FR-2.5 第 4 步）。
+ *
+ * 与成员相位表同一个纪律：未知相位**忽略不猜**。引擎将来加新相位时，
+ * 这里不补映射的表现是「少显示一条」，而不是把不认识的状态渲染成「已完成」。
+ */
+const SUBAGENT_PHASES: Record<string, SubagentEventPhase> = {
+  started: 'started',
+  tool: 'tool',
+  done: 'done',
+  error: 'error',
 };
 
 /** 任意工具结果转展示文本：字符串原样、其余 JSON 序列化，超长截断 */
@@ -921,6 +941,27 @@ export class NanobotClient {
               handlers.onProcessMember?.({
                 memberId,
                 memberName: String(rawName || rawId || memberId),
+                phase,
+                ...(text !== undefined ? { text } : {}),
+                ...(nbEvent.error !== undefined
+                  ? { error: toDisplayText(nbEvent.error) }
+                  : {}),
+              });
+            }
+          } else if (nbEvent.kind === 'subagent' && nbEvent.subagent_event) {
+            // FR-2.5 第 4 步：子代理归属。相位未知一律忽略（与成员同纪律）。
+            const phase = SUBAGENT_PHASES[nbEvent.subagent_event];
+            if (phase) {
+              const rawId = nbEvent.subagent?.id;
+              const rawName = nbEvent.subagent?.label;
+              // 分组键稳定且非空，否则同一个子代理被拆成多组（判据同成员分支）
+              const subagentId = String(rawId || rawName || 'unknown');
+              // started 带任务摘要、tool 带工具名——两者都缺时留空，别拿 iteration 充数
+              const text =
+                phase === 'tool' ? nbEvent.tool : toDisplayText(nbEvent.task ?? nbEvent.output);
+              handlers.onProcessSubagent?.({
+                subagentId,
+                subagentName: String(rawName || rawId || subagentId),
                 phase,
                 ...(text !== undefined ? { text } : {}),
                 ...(nbEvent.error !== undefined

@@ -179,6 +179,13 @@ export class EventFactory {
     return this.emit('expert-group-member', payload, opts);
   }
 
+  subagentLifecycle(
+    payload: EventPayload<'subagent-lifecycle'>,
+    opts?: EmitOptions,
+  ): EventOfType<'subagent-lifecycle'> {
+    return this.emit('subagent-lifecycle', payload, opts);
+  }
+
   artifact(payload: EventPayload<'artifact'>, opts?: EmitOptions): EventOfType<'artifact'> {
     return this.emit('artifact', payload, opts);
   }

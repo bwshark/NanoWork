@@ -68,5 +68,39 @@ export interface MemberEvent {
   error?: string;
 }
 
+/**
+ * 子代理的生命周期相位（FR-2.5 第 4 步）。
+ *
+ * 与成员相位的差别：子代理**会**上报它内部每次工具调用（成员跑在子代理里、没有回传
+ * 通道，拿不到内部动作），所以多一个 `tool` 相位——这是子代理分组比专家团成员分组
+ * 更有信息量的地方，也是它值得单列一类的原因。
+ */
+export type SubagentEventPhase = 'started' | 'tool' | 'done' | 'error';
+
+/**
+ * 子代理事件（过程时间线里的「子代理」行）。
+ *
+ * 与 `MemberEvent` 平行但**刻意不合并**：两者的分组语义不同——成员是「一次编排里的
+ * 固定席位」，子代理是「模型临场派生的一次委派」，没有预定成员表。合并成一个 kind
+ * 会让「按成员分组」和「按派生分组」共用一套字段，其中一半永远是空的。
+ */
+export interface SubagentEvent {
+  id: string;
+  kind: 'subagent';
+  /** 子代理任务 id（同一子代理的多个相位共用 → 分组键） */
+  subagentId: string;
+  /** 展示名（引擎传 label，缺省回退成 id） */
+  subagentName: string;
+  phase: SubagentEventPhase;
+  /** started 时是任务摘要；tool 时是被调用的工具名 */
+  text?: string;
+  /** error 时携失败原因 */
+  error?: string;
+}
+
 /** 过程时间线事件联合 */
-export type ProcessEvent = ReasoningEvent | ProcessToolRow | MemberEvent;
+export type ProcessEvent =
+  | ReasoningEvent
+  | ProcessToolRow
+  | MemberEvent
+  | SubagentEvent;

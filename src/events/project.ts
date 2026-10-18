@@ -342,6 +342,22 @@ export function projectMessages(path: readonly SessionEvent[]): Message[] {
         });
         break;
       }
+      case 'subagent-lifecycle': {
+        if (!ev.messageId) break;
+        // 与实时路径 `handleProcessSubagent` 同一形状；行 id 取事件 id，
+        // 两条路径 React key 一致，刷新前后不会整块重建。
+        const rows = processOf(ev.messageId);
+        rows.push({
+          id: ev.id,
+          kind: 'subagent',
+          subagentId: ev.subagentId,
+          subagentName: ev.subagentName,
+          phase: ev.phase,
+          ...(ev.text !== undefined ? { text: ev.text } : {}),
+          ...(ev.error !== undefined ? { error: ev.error } : {}),
+        });
+        break;
+      }
       case 'artifact': {
         if (!ev.messageId) break;
         const list = artifacts.get(ev.messageId) ?? [];

@@ -76,6 +76,31 @@ export interface MemberGroupRow {
 
 /** 成员组状态：仍在跑 / 已收口 / 失败 */
 export type MemberGroupStatus = 'running' | 'done' | 'failed';
+
+/**
+ * 子代理组行（FR-2.5 第 4 步）：把**同一个子代理**的全部相位合成一块。
+ *
+ * 与 `MemberGroupRow` 的差别只有两点，且都是事实决定的、不是设计选择：
+ * 1. 子代理**有**内部工具调用（成员跑在子代理里、没有回传通道），所以多一个
+ *    `tools` 列表——这让「它在干什么」不必只靠一句摘要猜；
+ * 2. 子代理的 `text` 是**任务摘要**（started 时给的），不是产出——产出走工具结果回注。
+ */
+export interface SubagentGroupRow {
+  kind: 'subagent-group';
+  /** 稳定 React key：`subagent:` 前缀避免与成员组撞 id */
+  id: string;
+  subagentId: string;
+  subagentName: string;
+  status: MemberGroupStatus;
+  /** 任务摘要（started 载荷；没有就空——不拿工具名冒充任务） */
+  task?: string;
+  /** 内部依次调用过的工具（去重保序） */
+  tools: string[];
+  /** 迭代轮次（done 时引擎回报；仅展示用） */
+  iterations?: number;
+  /** 失败原因（任一相位失败即带上） */
+  error?: string;
+}
 /** 成员当前动作（决定 `running` 文案：制定计划中 / 执行中 / 汇总中） */
 export type MemberGroupActivity = 'planning' | 'working' | 'aggregating';
 
@@ -86,7 +111,12 @@ export type MemberGroupActivity = 'planning' | 'working' | 'aggregating';
  * 单独成行——它必被合进 `MemberGroupRow`（见 `groupMemberEvents`）。把它留在联合里
  * 会让每个消费方都多出「这个 case 怎么画」的问号，而正确答案是「画不到」。
  */
-export type ProcessViewRow = ReasoningEvent | ProcessToolRow | AggregateRow | MemberGroupRow;
+export type ProcessViewRow =
+  | ReasoningEvent
+  | ProcessToolRow
+  | AggregateRow
+  | MemberGroupRow
+  | SubagentGroupRow;
 
 /**
  * 档位过滤 + 连续段聚合的**唯一入口**。
@@ -128,6 +158,9 @@ export function buildProcessRows(
    * 按相邻分组会把同一个成员劈成两块、在界面上出现两次——正是验收里要防的「事件串了」。
    */
   const groups = groupMemberEvents(events, tier);
+  // [LOCAL PATCH] FR-2.5：子代理组与成员组**各自成表**。共用一张表时两个 id
+  // （成员 id 与 task_id 都可能是 `a1`）会互相吸收对方的事件，界面串行。
+  const subagentGroups = groupSubagentEvents(events, tier);
   const emitted = new Set<string>();
 
   for (const ev of events) {
@@ -145,6 +178,18 @@ export function buildProcessRows(
       const group = groups.get(ev.memberId);
       if (group && !emitted.has(ev.memberId)) {
         emitted.add(ev.memberId);
+        out.push(group);
+      }
+      continue;
+    }
+
+    if (ev.kind === 'subagent') {
+      // 与成员同一套落位规则：组在首次出现处落位，后续相位被吸收。
+      // 用 `subagent:` 前缀与成员组区分——两个 map 的键可能撞成同一个 id。
+      const key = `subagent:${ev.subagentId}`;
+      const group = subagentGroups.get(key);
+      if (group && !emitted.has(key)) {
+        emitted.add(key);
         out.push(group);
       }
       continue;
@@ -229,6 +274,66 @@ function groupMemberEvents(
   if (tier === 'result') {
     for (const [id, group] of groups) {
       if (group.status !== 'failed') groups.delete(id);
+    }
+  }
+  return groups;
+}
+
+/**
+ * 子代理事件 → 按 `subagentId` 分组，保持首次出现顺序（即 `spawn` 的发生顺序）。
+ *
+ * 状态判定与成员组同一条原则：取**最强的终态**——出现过 `error` 就是失败
+ * （哪怕之后又来了一条 `done`），否则有过 `done` 就是完成，都没有才是仍在跑。
+ * 渲染层不该比事实更乐观。
+ */
+function groupSubagentEvents(
+  events: readonly ProcessEvent[],
+  tier: ProcessDetailLevel,
+): Map<string, SubagentGroupRow> {
+  const groups = new Map<string, SubagentGroupRow>();
+  for (const ev of events) {
+    if (ev.kind !== 'subagent') continue;
+
+    const key = `subagent:${ev.subagentId}`;
+    let group = groups.get(key);
+    if (!group) {
+      group = {
+        kind: 'subagent-group',
+        id: key,
+        subagentId: ev.subagentId,
+        subagentName: ev.subagentName,
+        status: 'running',
+        tools: [],
+      };
+      groups.set(key, group);
+    }
+
+    // 名字取第一个非空值，之后不再改（后续相位不带名字时会退化成 id）
+    if (!group.subagentName) group.subagentName = ev.subagentName;
+
+    if (ev.phase === 'error') {
+      group.status = 'failed';
+      if (ev.error) group.error = ev.error;
+      continue;
+    }
+    if (ev.phase === 'done') {
+      if (group.status !== 'failed') group.status = 'done';
+      continue;
+    }
+    if (ev.phase === 'started') {
+      // 任务摘要只在 started 相位带；工具名与它语义不同，不能混进同一个字段
+      if (ev.text) group.task = ev.text;
+      continue;
+    }
+    if (ev.phase === 'tool' && ev.text && !group.tools.includes(ev.text)) {
+      group.tools.push(ev.text);
+    }
+  }
+
+  // 聚焦结果档只保留失败的子代理（与成员组同一条原则：异常不隐身）
+  if (tier === 'result') {
+    for (const [key, group] of groups) {
+      if (group.status !== 'failed') groups.delete(key);
     }
   }
   return groups;

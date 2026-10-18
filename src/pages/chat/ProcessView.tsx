@@ -2,11 +2,17 @@ import { Children, useState } from 'react';
 import { Box, CircularProgress, Collapse, Tooltip } from '@mui/material';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import PersonIcon from '@mui/icons-material/Person';
+import SmartToyIcon from '@mui/icons-material/SmartToy';
 import { MarkdownView } from '@/components/MarkdownView';
 import { REASONING_MD_SX, ReasoningBlock } from './ReasoningBlock';
 import { describeTool } from './toolDescribe';
 import { buildProcessRows } from '@/lib/processDetail';
-import type { AggregateRow, MemberGroupRow, ProcessViewRow } from '@/lib/processDetail';
+import type {
+  AggregateRow,
+  MemberGroupRow,
+  ProcessViewRow,
+  SubagentGroupRow,
+} from '@/lib/processDetail';
 import type { ProcessDetailLevel, ProcessEvent, ProcessToolRow } from '@/types';
 
 /**
@@ -310,6 +316,159 @@ function MemberGroupView({
 }
 
 /**
+ * 子代理状态文案。
+ *
+ * 与 `memberStatus` 同一条判据：**流式结束后仍没收到终态就说「结果未返回」**——
+ * 那时侯把它说成「完成」是骗人（后台 spawn 的结果可能走 bus 回注，也可能压根没回来）。
+ */
+function subagentStatus(group: SubagentGroupRow, live: boolean): { label: string; color: string } {
+  if (group.status === 'failed') return { label: '失败', color: 'error.main' };
+  if (group.status === 'done') return { label: '完成', color: 'text.disabled' };
+  if (live) return { label: '执行中', color: 'text.secondary' };
+  return { label: '结果未返回', color: 'warning.main' };
+}
+
+/**
+ * 子代理行（FR-2.5 第 4 步）：名字 + 此刻状态 + 按需展开的任务摘要与工具链。
+ *
+ * 形态与 `MemberGroupView` 刻意一致（同一份时间线的同级行不该长得不一样），
+ * 差别只在展开体：成员展开的是**产出 Markdown**，子代理展开的是**任务摘要 + 依次
+ * 调用过的工具**——子代理的产出走工具结果回注成主对话内容，不是这里的一行文本。
+ */
+function SubagentGroupView({
+  group,
+  live,
+}: {
+  group: SubagentGroupRow;
+  live: boolean;
+}) {
+  const [manualOpen, setManualOpen] = useState<boolean | null>(null);
+  const hasBody = Boolean(group.task) || group.tools.length > 0;
+  const open = hasBody && (manualOpen ?? false);
+  const { label, color } = subagentStatus(group, live);
+
+  const toggle = () => {
+    if (hasBody) setManualOpen(!open);
+  };
+
+  return (
+    <Box sx={{ minWidth: 0 }}>
+      <Box
+        {...(hasBody
+          ? {
+              role: 'button' as const,
+              tabIndex: 0,
+              'aria-expanded': open,
+              'aria-label': open ? '收起子代理详情' : '展开子代理详情',
+              onClick: toggle,
+              onKeyDown: (e: React.KeyboardEvent) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  toggle();
+                }
+              },
+            }
+          : {})}
+        sx={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 0.5,
+          py: 0.4,
+          fontSize: 13,
+          color: 'text.secondary',
+          cursor: hasBody ? 'pointer' : 'default',
+          userSelect: 'none',
+          '&:hover': hasBody ? { color: 'text.primary' } : undefined,
+          '&:hover .subagent-chevron': { opacity: 1 },
+        }}
+      >
+        <SmartToyIcon sx={{ fontSize: 14, flexShrink: 0, color: 'text.disabled' }} />
+        <Box component="span" sx={{ color: 'text.primary', flexShrink: 0 }}>
+          {group.subagentName}
+        </Box>
+        <Box component="span" sx={{ color, flexShrink: 0 }}>
+          {label}
+        </Box>
+        {group.status === 'running' && live && (
+          <CircularProgress size={9} sx={{ color: 'text.secondary', flexShrink: 0 }} />
+        )}
+        {hasBody && (
+          <ChevronRightIcon
+            className="subagent-chevron"
+            sx={{
+              fontSize: 14,
+              opacity: open ? 1 : 0,
+              transform: open ? 'rotate(90deg)' : 'none',
+              transition: 'transform .15s, opacity .15s',
+            }}
+          />
+        )}
+      </Box>
+      {/* 失败原因**不折叠**：异常永不隐身（与成员行同一条原则） */}
+      {group.status === 'failed' && group.error && (
+        <Box
+          sx={{
+            ml: 0.25,
+            pl: 1.25,
+            py: 0.25,
+            fontSize: 12.5,
+            lineHeight: 1.6,
+            color: 'error.main',
+            whiteSpace: 'pre-wrap',
+            wordBreak: 'break-word',
+          }}
+        >
+          {group.error}
+        </Box>
+      )}
+      {hasBody && (
+        <Collapse in={open} unmountOnExit>
+          <Box
+            sx={{
+              mt: 0.5,
+              mb: 0.25,
+              ml: 0.25,
+              pl: 1.25,
+              pr: 1,
+              py: 0.75,
+              borderLeft: '2px solid',
+              borderColor: 'divider',
+              bgcolor: 'action.hover',
+              borderRadius: '0 8px 8px 0',
+              maxHeight: MEMBER_BODY_MAX_HEIGHT,
+              overflowY: 'auto',
+              scrollbarGutter: 'stable',
+              overscrollBehavior: 'contain',
+              '&::-webkit-scrollbar': { width: 6 },
+            }}
+          >
+            {group.task && (
+              <Box sx={{ fontSize: 12.5, lineHeight: 1.6, color: 'text.primary' }}>
+                {group.task}
+              </Box>
+            )}
+            {group.tools.length > 0 && (
+              <Box
+                sx={{
+                  mt: group.task ? 0.5 : 0,
+                  fontSize: 12,
+                  lineHeight: 1.6,
+                  color: 'text.secondary',
+                  wordBreak: 'break-word',
+                }}
+              >
+                调用工具：{group.tools.join(' → ')}
+                {group.iterations !== undefined && ` · ${group.iterations} 轮迭代`}
+              </Box>
+            )}
+          </Box>
+        </Collapse>
+      )}
+    </Box>
+  );
+}
+
+/**
  * 过程时间线：把**深度思考段与工具执行行按到达顺序交错**渲染成一条流。
  *
  * 顺序由数据保证（store 按 SSE 事件到达顺序 push），这里只做「按序铺开」，
@@ -384,6 +543,9 @@ export function ProcessView({
         }
         if (row.kind === 'member-group') {
           return <MemberGroupView key={row.id} group={row} live={live} tier={tier} />;
+        }
+        if (row.kind === 'subagent-group') {
+          return <SubagentGroupView key={row.id} group={row} live={live} />;
         }
         return <ToolRow key={row.id} row={row} live={live} />;
       })}

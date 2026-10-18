@@ -57,6 +57,10 @@ export function digestProcess(events: ProcessEvent[]): ProcessDigest {
   let thinkingCount = 0;
   /** memberId → 是否仍在跑（false = 已收口或已失败） */
   const members = new Map<string, { running: boolean; failed: boolean }>();
+  /** [LOCAL PATCH] FR-2.5：子代理同样**按个**计数，不按相位加。
+   * 一次 spawn 会发「started + N 个 tool + done」，按相位相加会把「派了 1 个子代理」
+   * 显示成「8 步」——比一个诚实的「1」更难读。 */
+  const subagents = new Map<string, { running: boolean; failed: boolean }>();
 
   for (const ev of events) {
     if (ev.kind === 'reasoning') {
@@ -78,6 +82,20 @@ export function digestProcess(events: ProcessEvent[]): ProcessDigest {
       members.set(ev.memberId, cur);
       continue;
     }
+    if (ev.kind === 'subagent') {
+      const cur = subagents.get(ev.subagentId) ?? { running: false, failed: false };
+      // 与成员同一条判据：`done` 必须把 running 拨回 false，否则「N 步执行中」永远不消
+      if (ev.phase === 'error') {
+        cur.failed = true;
+        cur.running = false;
+      } else if (ev.phase === 'done') {
+        cur.running = false;
+      } else {
+        cur.running = true;
+      }
+      subagents.set(ev.subagentId, cur);
+      continue;
+    }
     steps += 1;
     if (ev.status === 'running') running += 1;
     else if (ev.status === 'error') errors += 1;
@@ -88,6 +106,11 @@ export function digestProcess(events: ProcessEvent[]): ProcessDigest {
     // 失败优先：一个失败的成员不该因为「之前跑过」而被算成正常步骤
     if (m.failed) errors += 1;
     else if (m.running) running += 1;
+  }
+  for (const a of subagents.values()) {
+    steps += 1;
+    if (a.failed) errors += 1;
+    else if (a.running) running += 1;
   }
   return { steps, running, errors, thinkingCount };
 }

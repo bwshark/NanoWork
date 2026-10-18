@@ -92,6 +92,7 @@ import type {
   ChatRequest,
   PlanProposal,
   ProcessMemberEvent,
+  ProcessSubagentEvent,
   ProcessToolEvent,
   ToolCallEvent,
   UploadFile,
@@ -341,6 +342,8 @@ interface SessionsState {
    * 这里不做聚合：聚合是展示档位的事，落库保持「一个相位一行」的原始事实。
    */
   handleProcessMember: (sessionId: string, messageId: string, ev: ProcessMemberEvent) => void;
+  /** 子代理生命周期行（FR-2.5 第 4 步）；与成员同构，落盘 + 实时两条路径同形 */
+  handleProcessSubagent: (sessionId: string, messageId: string, ev: ProcessSubagentEvent) => void;
   /**
    * 引擎发来逐条批准请求（引擎已挂起该工具调用）：入队 + 在消息上记一条
    * pending 行，并把会话状态置为 tooling。
@@ -1024,6 +1027,8 @@ async function streamAssistantReply(
         useSessionsStore.getState().handleProcessTool(sessionId, assistantId, ev),
       onProcessMember: (ev) =>
         useSessionsStore.getState().handleProcessMember(sessionId, assistantId, ev),
+      onProcessSubagent: (ev) =>
+        useSessionsStore.getState().handleProcessSubagent(sessionId, assistantId, ev),
       onApprovalRequest: (r) =>
         useSessionsStore.getState().handleApprovalRequest(sessionId, assistantId, r),
       onPlan: (plan) =>
@@ -2672,6 +2677,40 @@ export const useSessionsStore = create<SessionsState>()(
           kind: 'member',
           memberId: ev.memberId,
           memberName: ev.memberName,
+          phase: ev.phase,
+          ...(ev.text !== undefined ? { text: ev.text } : {}),
+          ...(ev.error !== undefined ? { error: ev.error } : {}),
+        };
+        return { ...base, process: [...(base.process ?? []), row] };
+      });
+    },
+
+    /**
+     * 子代理生命周期行（FR-2.5 第 4 步）。
+     *
+     * 与 `handleProcessMember` 逐行同构：先闭合思考段（子代理开始意味着上一段思考
+     * 写完了）、再落事件、最后更新视图——三者顺序与 `seq` 一致，重放才是同样的排列。
+     */
+    handleProcessSubagent: (sessionId, messageId, ev) => {
+      flushReasoning(sessionId, messageId);
+      const recorded = recordFor(sessionId, (f) =>
+        f.subagentLifecycle({
+          messageId,
+          subagentId: ev.subagentId,
+          subagentName: ev.subagentName,
+          phase: ev.phase,
+          ...(ev.text !== undefined ? { text: ev.text } : {}),
+          ...(ev.error !== undefined ? { error: ev.error } : {}),
+        }),
+      );
+      const rowId = recorded[0]?.id ?? genId();
+      get().updateMessage(sessionId, messageId, (m) => {
+        const base = closeOpenReasoning(m);
+        const row: ProcessEvent = {
+          id: rowId,
+          kind: 'subagent',
+          subagentId: ev.subagentId,
+          subagentName: ev.subagentName,
           phase: ev.phase,
           ...(ev.text !== undefined ? { text: ev.text } : {}),
           ...(ev.error !== undefined ? { error: ev.error } : {}),

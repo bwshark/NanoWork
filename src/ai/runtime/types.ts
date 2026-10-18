@@ -30,7 +30,7 @@ import type {
   UsageStats,
 } from '@/types';
 import type { ExecutionMode, PlanStep } from '@/types/event';
-import type { MemberEventPhase } from '@/types/process';
+import type { MemberEventPhase, SubagentEventPhase } from '@/types/process';
 import type { PluginEngineIndex } from '@/types/plugin';
 // 首字延迟采样（FR-11.7）：纯客户端测量值的形状，与引擎 wire 格式无关，
 // 故可以直接从 `@/lib` 引类型（不违反「契约层不得出现引擎特有字段」）。
@@ -201,6 +201,23 @@ export interface ProcessMemberEvent {
   error?: string;
 }
 
+/**
+ * 子代理进度事件载荷（FR-2.5 第 4 步）。
+ *
+ * 与 `ProcessMemberEvent` 的差别：子代理**会**上报内部工具调用（引擎侧
+ * `subagent_progress` 把每次 `before_execute_tools` 都发出来了），所以多一个
+ * `tool` 相位；而它的身份是「模型临场派生的一次委派」，没有预定成员表。
+ */
+export interface ProcessSubagentEvent {
+  subagentId: string;
+  subagentName: string;
+  phase: SubagentEventPhase;
+  /** started 时是任务摘要；tool 时是被调用的工具名 */
+  text?: string;
+  /** 失败原因（error 时携） */
+  error?: string;
+}
+
 /** 工具调用事件载荷（权限门控用） */
 export interface ToolCallEvent {
   id: string;
@@ -295,6 +312,13 @@ export interface StreamHandlers {
    * （见 `lib/expertGroupRequest.ts`），因此这里不会收到无意义的单成员事件。
    */
   onProcessMember?(ev: ProcessMemberEvent): void;
+  /**
+   * 子代理进度（FR-2.5 第 4 步）：一次 `spawn` 委派里「谁在做什么」。
+   *
+   * 老网关没有这个事件源时不会触发——**没有事件 ≠ 出错**，渲染层拿不到子代理行
+   * 只是一次 spawn 显示成普通工具调用，与升级前一致。
+   */
+  onProcessSubagent?(ev: ProcessSubagentEvent): void;
   /**
    * 逐条批准请求：引擎已挂起该工具调用，等待 `respondApproval()` 回话。
    *
