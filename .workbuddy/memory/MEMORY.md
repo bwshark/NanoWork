@@ -22,7 +22,14 @@ WorkBuddy 式智能体客户端：React18+TS+Vite 渲染层 + Electron 主进程
 - ⚠️ `agent/__init__` 半初始化：测试首行加 `import nanobot.agent` 绕开 progress_events 触发环。
 - 端口职责：`serve` 才提供 `/api` REST(`/v1/models`、`/v1/dream/*`)；`gateway` 只有 channel + `/health`，`/v1/*` 一律 404。两进程两端口，别把 health 端口当 API 端口。
 
+## 产物登记的两条路径（2026-10-19）
+- 任务会话：`handleProcessTool`(phase=end)→`deriveFileArtifacts`→`handleArtifact`(同时写 `message.artifacts` 与 `artifactsStore`)；富产物是流结束后 `extractArtifacts(全文)` 跑一次。
+- 导入会话（IM 频道 / 定时任务执行）：**推理在引擎侧**，本地只有磁盘 JSONL 重放，没有流式回调 → 产物登记时机只有 `sessionsStore.openExternal`（6 个调用点的唯一入口），由 `sessionImport.attachImportedFileArtifacts` / `attachImportedTextArtifacts` 补齐。判据刻意与上面同套，别为导入会话单开一套。
+- ⚠️ **`recordArtifact` 对「整段历史重放」不幂等**：轮询每 4 秒重建 Session 重放全部写入，会把版本链一路叠长(v2→v4…)。登记前必须用 `hasContentHashInHistory` 跳过已在版本链里的 hash（新写入 hash 未见过才入库）。
+- ⚠️ 断言产物正文别读 `bySession[i].content`（恒空串，那是去 content 的引用），要 `resolveArtifactContent(entry.contentHash, bodies, '')`。
+
 ## 客户端/渲染事实（不可从代码直接推断）
+- ⛔ 消息渲染**不分会话类型**：`MessageStream` 对任务/助理/定时任务都用同一套 `UserMessage`/`AssistantMessage`；两类视图看着不一样，原因在数据侧不在渲染层，改前先查数据源（`message.artifacts` / `artifactsStore.bySession`）。
 - ⛔ 副作用别挂可选 UI 组件：`ConnectionBanner` 注释掉过，网关地址自动对齐已下沉到 `connectionManager.probeOnce()`，判据只有 `applyGatewayEndpointInfo` 一处。
 - ⚠️ 网关地址同步判据 `nextGatewayEndpoint` 只看 `port`(主进程仅端口验证监听后才写)。**复用外部网关 `running=false` 但 `port` 有值——最需对齐场景，别加回 `running` 判据**(加了就永远不同步→全部 REST `Failed to fetch`)。
 - ⚠️ `.tsx` `return (<JSX>,)` 逗号运算符=tsc TS1109 但 vite/vitest 正常，报错行与病灶隔几十行。`return (<JSX>)` 不带逗号。

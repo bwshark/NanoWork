@@ -86,6 +86,19 @@ export function buildIndexEntry(
   return entry;
 }
 
+/**
+ * 这个 hash 是否已经出现在产物的版本链里（`contentHash` / `previousVersion` / `versions`）。
+ *
+ * 用途是**重放去抖**：导入会话（频道 / 定时任务）每次打开都会把整段 JSONL 重放一遍，
+ * 若不加这一步，同一份历史里的每一次写入都会被当成新改动再升一版——轮询每几秒就
+ * 把版本链叠长一节（2026-10-19）。在这里集中判据，免得调用方各写一遍列表比较。
+ */
+export function hasContentHashInHistory(entry: ArtifactIndexEntry, hash: string): boolean {
+  if (entry.contentHash === hash) return true;
+  if (entry.previousVersion === hash) return true;
+  return Array.isArray(entry.versions) && entry.versions.some((v) => v.contentHash === hash);
+}
+
 /** 检索视图里的「一条产物」：索引元数据 + 内容本体（关键词要搜正文） */
 export interface ArtifactItem {
   entry: ArtifactIndexEntry;

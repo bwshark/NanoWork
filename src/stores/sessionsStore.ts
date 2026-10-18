@@ -5,7 +5,12 @@ import { genId } from '@/lib/id';
 import { toast } from '@/components/Toast';
 import { connectionManager } from '@/ai/connectionManager';
 import { getRuntime } from '@/ai/runtime';
-import { CRON_SESSION_ID_PREFIX } from '@/lib/sessionImport';
+import {
+  attachImportedFileArtifacts,
+  attachImportedTextArtifacts,
+  CRON_SESSION_ID_PREFIX,
+} from '@/lib/sessionImport';
+import { artifactContentHash, hasContentHashInHistory } from '@/lib/artifactIndex';
 import {
   createRecorder,
   dropRecorder,
@@ -1735,10 +1740,35 @@ export const useSessionsStore = create<SessionsState>()(
     },
 
     openExternal: (session) => {
+      // 导入会话（频道 / 定时任务）没有流式回调，产物登记只有这一个时机：从磁盘
+      // JSONL 重放出的已完成写类工具调用推导文件产物（纯计算在 sessionImport，
+      // 判据与 handleProcessTool 同一套），再逐条入索引切片——右侧「产物」面板
+      // 与消息流卡片的两个数据源由此一起补齐。幂等：轮询反复重放同内容会被
+      // recordArtifact 去重，不会反复升版。
+      // - 文本产物：助手回复里的 ``` 围栏代码块（与任务会话同源的提取器）
+      // - 文件产物：写类工具真正落到磁盘的文件（与 handleProcessTool 同判据）
+      const imported = attachImportedFileArtifacts(session);
+      const records = [...attachImportedTextArtifacts(session), ...imported.records];
+      const removedIds = imported.removedIds;
       set((s) => ({
         sessions: [session, ...s.sessions.filter((x) => x.id !== session.id)],
         activeId: session.id,
       }));
+      if (records.length > 0 || removedIds.length > 0) {
+        const artifacts = useArtifactsStore.getState();
+        for (const { messageId, artifact } of records) {
+          // 幂等：整段历史每打开一次都会重放，重放出来的多半是**历史版本**而不是
+          // 新改动。正文已在该产物版本链里的记录直接跳过（它们被重新登记时会各自
+          // 升一版，轮询几秒一轮就把版本链叠长一节）。真正的新写入→新 hash→照常入
+          // 库，不影响版本链继续生长。
+          const existing = artifacts.index[artifact.id];
+          if (existing && hasContentHashInHistory(existing, artifactContentHash(artifact))) {
+            continue;
+          }
+          artifacts.recordArtifact(session.id, messageId, artifact);
+        }
+        if (removedIds.length > 0) artifacts.removeArtifacts(removedIds);
+      }
       rememberActiveSession(session.id);
     },
 

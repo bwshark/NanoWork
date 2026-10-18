@@ -1,5 +1,7 @@
 import { genId } from '@/lib/id';
-import type { Message, Session, ToolCall } from '@/types';
+import { deletedFilePathFrom, deriveFileArtifacts, fileArtifactId } from '@/lib/fileArtifact';
+import { extractArtifacts } from '@/ai/runtime/nanobotHttp/artifactExtractor';
+import type { Artifact, Message, Session, ToolCall } from '@/types';
 
 /**
  * nanobot 磁盘会话（JSONL 消息行）→ 本地只读 Session 的共享映射逻辑。
@@ -107,6 +109,122 @@ export function mapRecordsToMessages(
     messages.push(base);
   });
   return messages;
+}
+
+/**
+ * 导入会话的**文本产物**补齐：AssistantMessage 的「执行过程 / 产物」两块数据源
+ * 统一挂在 `Session` 上，这里补 `message.artifacts` 与调用方入库所需的 `messageId`。
+ */
+export function attachImportedTextArtifacts(session: Session): ImportedArtifactRecord[] {
+  const records: ImportedArtifactRecord[] = [];
+  for (const message of session.messages) {
+    // 任务会话是在流结束后对最终文本跑一次提取（`chat.ts` 的 `extractArtifacts`），
+    // 这里复用同一个提取器避免漂移；不这么做，同一句带 ``` 围栏的回复在任务里
+    // 是内联富产物、在助理里却只是代码块——渲染就分叉了。
+    if (message.role !== 'assistant' || !message.content) continue;
+    for (const ev of extractArtifacts(message.content)) {
+      const artifact: Artifact = {
+        id: ev.id,
+        type: ev.type,
+        title: ev.title,
+        content: ev.content,
+        createdAt: message.createdAt,
+        ...(ev.language !== undefined ? { language: ev.language } : {}),
+        ...(ev.url !== undefined ? { url: ev.url } : {}),
+      };
+      message.artifacts = [...(message.artifacts ?? []), artifact];
+      records.push({ messageId: message.id, artifact });
+    }
+  }
+  return records;
+}
+
+/** `attachImportedFileArtifacts` 返回的单条待登记产物（`messageId` 供索引切片归属） */
+export interface ImportedArtifactRecord {
+  messageId: string;
+  artifact: Artifact;
+}
+
+export interface ImportedArtifactResult {
+  /** 按发生顺序排列的产物记录（调用方逐条 `recordArtifact` 入索引切片） */
+  records: ImportedArtifactRecord[];
+  /** 被后续删除工具收回的产物 id（调用方 `removeArtifacts` 摘除） */
+  removedIds: string[];
+}
+
+/**
+ * 从导入会话（频道 / 定时任务）的已完成工具调用推导**文件产物**。
+ *
+ * 这类会话的推理发生在引擎侧（IM / cron），本地只有磁盘 JSONL 的重放，收不到
+ * 流式 Runtime 回调（`onProcessTool`），产物登记因此完全缺位——右侧「产物」
+ * 面板恒为「暂无内容」。这里按发生顺序重放每条助手消息的 toolCalls，判据与
+ * 任务会话的 `handleProcessTool` 完全一致（同一套 `deriveFileArtifacts` 白名单、
+ * 同样的「删除先于登记」「本会话已见过的路径 = 改写」语义），保证两类会话的
+ * 产物卡片与面板表现相同。
+ *
+ * 就地修改 `session.messages`（把产物挂上 `message.artifacts`，消息流卡片的
+ * 数据源）；入库（`recordArtifact` / `removeArtifacts`）由调用方完成——本模块
+ * 保持纯计算，不 import store。
+ *
+ * 幂等性：同一份 JSONL 重放（轮询刷新）会得到相同产物内容，`recordArtifact`
+ * 对同 id 同内容直接去重，不会反复升版。
+ */
+export function attachImportedFileArtifacts(session: Session): ImportedArtifactResult {
+  const records: ImportedArtifactRecord[] = [];
+  const removedIds: string[] = [];
+  /** 本会话内已产出过产物的路径（同路径再写 = 改写既有文件，而非新建） */
+  const seenPaths = new Set<string>();
+
+  for (const message of session.messages) {
+    if (message.role !== 'assistant') continue;
+    for (const call of message.toolCalls ?? []) {
+      // 与流式路径同一纪律：只认成功落地的调用，失败的写入不能凭空造卡片
+      if (call.status !== 'done') continue;
+      // 「收回」优先于「登记」：删除工具成功后，早先那张卡片必须消失
+      // （模型写完临时脚本自己 delete_file 清理是真实场景，面板不能留死卡片）
+      const deletedPath = deletedFilePathFrom(call.tool, call.args);
+      if (deletedPath !== undefined) {
+        const removedId = fileArtifactId(session.id, deletedPath);
+        removedIds.push(removedId);
+        // 待登记列表里一并摘除（删除可能紧跟在写入之后）
+        for (let i = records.length - 1; i >= 0; i -= 1) {
+          if (records[i].artifact.id === removedId) records.splice(i, 1);
+        }
+        continue;
+      }
+      const drafts = deriveFileArtifacts(call.tool, call.args, call.id);
+      for (const draft of drafts) {
+        const change =
+          seenPaths.has(draft.path) || draft.op === 'edit' ? 'modified' : 'created';
+        records.push({
+          messageId: message.id,
+          artifact: {
+            id: fileArtifactId(session.id, draft.path),
+            type: 'file',
+            title: draft.name,
+            content: draft.content,
+            createdAt: message.createdAt,
+            path: draft.path,
+            change,
+            ...(draft.size !== undefined ? { size: draft.size } : {}),
+            ...(draft.language !== undefined ? { language: draft.language } : {}),
+            ...(draft.fingerprint !== undefined ? { fingerprint: draft.fingerprint } : {}),
+          },
+        });
+        seenPaths.add(draft.path);
+      }
+    }
+  }
+
+  // 挂到消息上（按 id 覆盖：导入消息本不该自带 artifacts，防御重复重放）
+  for (const { messageId, artifact } of records) {
+    const message = session.messages.find((m) => m.id === messageId);
+    if (!message) continue;
+    const existing = (message.artifacts ?? []).filter((a) => a.id !== artifact.id);
+    message.artifacts = [...existing, artifact];
+  }
+
+  return { records, removedIds };
 }
 
 /**
