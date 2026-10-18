@@ -12,6 +12,8 @@ import type {
   ToolsSyncResult,
 } from '../src/platform/types';
 import type { DeepLinkAction } from '../src/types/deepLink';
+import type { UpdateStatus } from '../src/types/update';
+import type { EngineInstallState } from '../src/types/engine';
 
 /**
  * preload：通过 contextBridge 安全地暴露 window.electronAPI。
@@ -128,6 +130,7 @@ const api: ElectronAPI = {
     ipcRenderer.invoke('nanobot:disconnectChannel', kind),
   /** 在系统文件管理器中打开路径（资源管理器/Finder） */
   openPath: (path: string) => ipcRenderer.invoke('shell:openPath', path),
+  showItemInFolder: (path: string) => ipcRenderer.invoke('shell:showItemInFolder', path),
   /** 用系统默认浏览器打开 http(s) 链接（主进程侧有协议白名单） */
   openUrl: (url: string) => ipcRenderer.invoke('shell:openUrl', url),
   /** 读取本地文件为 base64（复制消息粘贴恢复附件用） */
@@ -166,6 +169,15 @@ const api: ElectronAPI = {
   diagnosticsStats: () => ipcRenderer.invoke('diagnostics:stats'),
   /** FR-13.6 引擎运行时自检：返回**结构化报告**（三项逐项），`true` 强制重跑 */
   engineSelfCheck: (refresh?: boolean) => ipcRenderer.invoke('engine:selfCheck', refresh === true),
+  // —— 一键修复（B4-03）——
+  engineInstall: () => ipcRenderer.invoke('engine:install'),
+  engineInstallCancel: () => ipcRenderer.invoke('engine:install:cancel'),
+  engineInstallState: () => ipcRenderer.invoke('engine:install:state'),
+  onEngineInstallProgress: (cb: (state: EngineInstallState) => void) => {
+    const listener = (_e: unknown, state: EngineInstallState) => cb(state);
+    ipcRenderer.on('engine:install-progress', listener);
+    return () => ipcRenderer.removeListener('engine:install-progress', listener);
+  },
   exportDiagnostics: () => ipcRenderer.invoke('diagnostics:export'),
   /** FR-8.9 工具网关审计日志：读 `<data_dir>/audit/tool-gateway.ndjson` 的 NDJSON 文本 */
   auditRead: () => ipcRenderer.invoke('audit:read'),
@@ -201,6 +213,16 @@ const api: ElectronAPI = {
     return () => ipcRenderer.removeListener('app:deep-link', listener);
   },
   appRendererReady: () => ipcRenderer.invoke('app:renderer-ready'),
+  // —— 自动更新（B4-01）——
+  updaterGetStatus: () => ipcRenderer.invoke('updater:getStatus'),
+  updaterCheck: () => ipcRenderer.invoke('updater:check'),
+  updaterDownload: () => ipcRenderer.invoke('updater:download'),
+  updaterInstall: () => ipcRenderer.invoke('updater:install'),
+  onUpdaterStatus: (cb: (status: UpdateStatus) => void) => {
+    const listener = (_e: unknown, status: UpdateStatus) => cb(status);
+    ipcRenderer.on('updater:status', listener);
+    return () => ipcRenderer.removeListener('updater:status', listener);
+  },
   onAppOpenAbout: (cb: () => void) => {
     const listener = () => cb();
     ipcRenderer.on('app:open-about', listener);

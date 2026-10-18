@@ -354,7 +354,12 @@ describe('diagnostics：诊断包', () => {
     expect(text[logEntry]).toContain('sk-a...0XYZ');
 
     const meta = JSON.parse(text['meta.json']!);
-    expect(meta.redaction).toEqual({ applied: true, hits: 1 });
+    // B4-04：除命中数外还带 `patterns` 清单——界面要能告诉用户脱敏覆盖了哪几类。
+    expect(meta.redaction).toEqual({
+      applied: true,
+      hits: 1,
+      patterns: ['credential-kv', 'bearer', 'sk', 'jwt'],
+    });
     expect(text['README.txt']).toContain('命中 1 处');
   });
 

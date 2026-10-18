@@ -128,8 +128,13 @@ export const defaultSelfCheckIO: EngineSelfCheckIO = {
   },
 };
 
-/** 命令与路径放进 shell 里要能直接用：含空格 / 引号时加引号 */
-function quote(value: string): string {
+/**
+ * 命令与路径放进 shell 里要能直接用：含空格 / 引号时加引号。
+ *
+ * 导出给 `engineInstall.ts` 复用：一键执行的 recipe 与界面上「可复制命令」
+ * 必须是同一个渲染函数，否则两处各写一份，含空格的路径迟早会在一边漏引号。
+ */
+export function quote(value: string): string {
   return /[\s"]/.test(value) ? `"${value.replace(/"/g, '\\"')}"` : value;
 }
 

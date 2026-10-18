@@ -32,8 +32,8 @@ V1.6 把「运行期工程」补齐了，但 **V1 本身仍未整体收口**（`
 | **B2 客户端补完** | ✅ **已完成（3/3 + 2 处门禁噪声）** | 2026-10-17 | **B2-01**：会话版本引用集进同步负载——`Session.pluginVersions` / `SessionMeta.pluginVersions` 声明字段 + `src/lib/sessionPluginRefs.ts`（快照 / 解析 / GC 保护集，纯函数）+ 白名单 `pluginVersions`（**对象按内容比**，否则每轮发送都涨 `rev`）+ `toMeta` / `toMetaFromEntity` / `metaToSession` / `deriveMetaFromEvents` 往返 + `collectCache` 的引用集改为 **本机生效副本 ∪ 会话引用集**（换机 GC 不再删掉别的设备正在用的那一版）。**B2-02**：`src/lib/promptInjection.ts` 四类规则（指令覆盖 / 角色劫持 / 外泄诱导 / 编码混淆）+ `components/composer/InjectionNotice.tsx`，`Composer` 上方常驻提示、**只提示不拦截**；规则按「动作 + 对象」收紧，6 条「正常提问不误报」用例钉住误报率。**B2-03**：占位本就确定（`hashHue`），本轮补 `helperText` 写明「云端头像未接入」+ 9 条用例**锁定确定性**（同名同色同字；URL 头像退回名称首字），**不新增任何网络请求**。**门禁噪声（2 处，均非回归）**：① `fileBackupStore` 的 `BackupEntry` 加单调 `seq`，`list()` 改「`at` 倒序 → `seq` 倒序」的**全序**（同毫秒也确定），用例改为按契约断言「最新在前」；② 两个同步集成用例的健康检查与 `beforeAll` 超时 20s → 90s（全量并发下 uvicorn 首次 import 可被拖过 20s，单跑只要 2.9s）。**门禁**：三套 `tsc` 0 错误；全量 `vitest --maxWorkers=3` **229 文件 / 3454 用例 exit=0**（此前的两处红全消）；`CODEBUDDY_SAFE_DELETE_ENABLED=0 npm run build` exit=0；`electron/main.cjs` / `preload.cjs` 已重建（`indexFile.ts` 被主进程打包，改它必须重建）。**变异验证 3 项**：白名单去掉 `pluginVersions` → 4 条红；去掉 `seq` 兜底 → 2 条红；去掉中文指令覆盖规则 → 1 条红 |
 | **引擎统一收尾** | ✅ **已完成** | 2026-10-17 | 用户决策「统一到本仓 study 副本，桌面也跑本仓」。`$APPDATA/nanowork/nanowork.nanobot.json` 由坏掉的 `{}`（带 BOM→`JSON.parse` 抛错→fallback 到本仓 exe）改为显式 `{bin: study exe, host:127.0.0.1, port:8900}`（无 BOM）。study 引擎已自洽：`gitstore.py` 含 FileLock、`nanobot.exe` 启动器指向本仓 venv（`nanobot_ai 0.3.0` 已装）、`nanobot --version`→v0.3.0。凭据走环境变量 `DASHSCOPE_API_KEY`（两份 `nanowork.config.json` 均无内联密钥）→ 统一不丢凭据。本机无 codes 应用 userData（codes 副本未被使用），备份在 `codes/nanobot/.local-backup-eng-20261017_204905/`。B3 引擎改动落 study 即可，不再强制双副本同步 |
 | B3 引擎侧三件 | 🟡 代码全落、待真机（B3-01 ②③④；B3-02 ①②③④；B3-03 ①②③） | 2026-10-18 | 三件均已实现并有用例；剩余 B3-01 ①（子代理真机一轮）与三件的飞书真机闭环。B3-03 新增 `security/im_approval.py` + `tests/security/test_im_approval.py`(36) |
-| B4 交付闭环 | 🟡 进行中（B4-02 深链 ✅；B4-01/03/04 ⬜） | 2026-10-18 | B4-02 已落：解析器 17 例 + 全量 234 文件 / 3510 例绿。B4-01 需先定发布源（generic 静态目录待拍板） |
-| B5 数据驱动决策 | ⬜ 未开工 | — | — |
+| B4 交付闭环 | ✅ 全部完成（B4-01 自动更新 / B4-02 深链 / B4-03 运行时自助安装 / B4-04 反馈包） | 2026-10-18 | B4-01 发布源 GitHub Releases（真机发版需 `GH_TOKEN`），B4-04 诊断含启动剖析+延迟摘要+脱敏清单可见，B4-03 一键修复状态机已落（仅当解释器/导入失败时出按钮） |
+| B5 数据驱动决策 | ✅ 已完成（4 项决策记录，均带数字） | 2026-10-18 | B5-01 关掉 CLI 预热池（首字延迟 p50 5s/p95 47s 由远端 LLM 主导，引擎启动 4.4s 已被 app 启动并行预热覆盖）；B5-02 采纳只读 sqlite 尺寸监控、拒绝跨进程 checkpoint（引擎确有 `llm_usage.sqlite3` 180KB）；B5-03 维持自助安装（本机自检 3/3 通过，未触发 <70% 阈值）；B5-04 续挂口袋清单（现有 `taskkill /T` 回收有效、无真实诉求） |
 
 > **B1 过程中额外发现（已记录，未擅自扩范围）**：① `vite build` 不带 `CODEBUDDY_SAFE_DELETE_ENABLED=0` 会被安全删除守卫拦在 `emptyDir(dist)`，报错栈看着像构建坏了 —— 已写进 `OVERVIEW.md` §5.2 的提醒。② `tests/lib/fileBackup.test.ts` 的 `append / delete` 用例断言的是**插入序**，而 `list()` 的契约是**最新在前**，两次快照跨毫秒时必然红（4 次重跑 2 红 2 绿）。这是**夹具与契约冲突**，不是产品缺陷，但会让每次全量门禁掷硬币。**修法建议**：给时间线条目加单调 `seq`，`list()` 改成「`at` 倒序 → `seq` 倒序」的全序（同毫秒也有确定顺序），用例随契约断言 —— 顺带消掉 UI 侧真实存在的不确定性；只改用例（断言集合）是次选。排入 B2 收尾。
 
@@ -158,10 +158,10 @@ V1.6 把「运行期工程」补齐了，但 **V1 本身仍未整体收口**（`
 
 | 任务号 | 任务 | 现状（实测） | DoD |
 |---|---|---|---|
-| B4-01 | 自动更新 | `electron/builder.config.json` **无 `publish` 段**；`package.json` 无 `electron-updater` | 新增 `publish`（generic 静态目录即可，不强求 GitHub）+ 检查更新入口（设置-关于，紧邻 FR-13.6 的自检卡）+ **未签名包的显式提示**（不假装「已是最新」）。判据：改一版号 → 能检测到并完成下载 → 重启生效 |
+| B4-01 | 自动更新 | ✅ **已落（2026-10-18）**：`electron-updater@6.8.9` 进 dependencies；`builder.config.json` 加 `publish`（GitHub `bwshark/nanowork`，`releaseType: release`）；`package.json` 加 `release:electron`；`electron/updater.ts` 纯状态机（`autoDownload=false`、**只有 `update-not-available` 才产出 `up-to-date`**、错误原样透出）；`UpdateCard` 接入关于页（检查 / 下载 / 重启安装 / 进度 / 原始报错 / **未签名常驻提示** / 发布页兜底）。⚠️ 真机发版链路待验证（需 `GH_TOKEN` + `release:electron`） | 判据：改一版号 → 能检测到并完成下载 → 重启生效 |
 | B4-02 | 深链 `nanowork://` | ✅ **已落（2026-10-18）**：新增 `electron/deepLink.ts`（严格解析 `nanowork://x` 与 `nanowork:///x` 两种 authority；未知名 / 空 id / 超长一律 `null`）+ `createDeepLinkRouter`（渲染层 `app:renderer-ready` 报到前排队，之后按序 flush——直接 send 会静默丢）+ `main.ts` 三入口（冷启动 argv / second-instance argv / macOS `open-url`）+ `builder.config.json` 的 `protocols`；渲染层 `App.tsx` 执行动作，`new-chat` 经路由 state 把 prompt 交给 `ChatPage` 预填。第二实例仍由既有单实例锁转交，不自己起网关 | 首批只支持两个动作：`open-session?id=` / `new-chat?prompt=`；**第二实例必须经第一实例转交**（不得自己起网关）；非法参数落到首页且不崩 |
-| B4-03 | 运行时自助安装 | `electron/engineSelfCheck.ts` 三项检查已有（v1.6 `FR-13.6`）；**无随包运行时** | 自检失败时给「一键创建 venv + 安装引擎」的**可执行**引导（逐条命令可见、可复制、有进度、失败给原始报错）。**不承诺**随包 CPython（体积决策见 B5-03） |
-| B4-04 | 反馈包 | 诊断包已有（v1.6 `FR-11.9` 进程维度 + 凭据脱敏） | 「一键生成 + 打开所在目录 + **脱敏清单可见**」（用户能看见发了什么，才敢发）；包内含启动剖析与 `session-latency.jsonl` 摘要 |
+| B4-03 | 运行时自助安装 | ✅ **已落（2026-10-18）**：新增 `electron/engineInstall.ts`（`createEngineInstaller` 状态机：venv → pip install -e → verify，失败即停、后续标 skipped、原始输出透出、可取消杀进程树）。recipe 与 `engineSelfCheck` remedy **同源**（同路径、同引号规则，渲染层只发「开始/取消」不传命令）。`EngineSelfCheckCard` 仅当「解释器 / 导入」失败时显示「一键修复」（配置失败不给，pip 修不了 pydantic 字段）；修复中显示步骤+原始输出+「取消修复」，成功后自动重新自检。`main.ts` 经 `engine:install-progress` 推送状态。 | 自检失败时给「一键创建 venv + 安装引擎」的**可执行**引导（逐条命令可见、可复制、有进度、失败给原始报错）。**不承诺**随包 CPython（体积决策见 B5-03） |
+| B4-04 | 反馈包 | ✅ **已落（2026-10-18）**：`electron/diagnostics.ts` 增加启动剖析（`startup-profile.jsonl`）与 `session-latency.summary.json`（min/p50/p95/max + 最近 50 条，坏行忽略）；`meta.redaction` 增 `patterns` 清单；`DiagnosticsExportResult` 增 `redactionHits`；`DiagnosticsSection` 常驻「脱敏与隐私」卡（包含 / 不包含 / 脱敏模式 / 边界）+ 导出后保留落点并提供「打开所在目录」（新增 `shell:showItemInFolder` IPC） | 「一键生成 + 打开所在目录 + **脱敏清单可见**」（用户能看见发了什么，才敢发）；包内含启动剖析与 `session-latency.jsonl` 摘要 |
 
 **真机判据**（必须做，不能只用单测替代）：
 
@@ -176,12 +176,49 @@ V1.6 把「运行期工程」补齐了，但 **V1 本身仍未整体收口**（`
 
 v1.6 的 `FR-11.6` 已经把启动剖析打点装上了（`app.load→ready` / `window.create→firstPaint` / `serve.spawn→listen` / `gateway.spawn→listen`）。**这些数据现在就是口袋清单的「触发条件」判据**，不用再猜。
 
-| 任务号 | 决策 | 数据来源 | 判据 |
-|---|---|---|---|
-| B5-01 | 要不要做 CLI 预热池（口袋清单第 1 项） | `session-latency.jsonl` + `resources/perf-report.html` | `serve.spawn→listen` 占 `app.load→ready` 的比例；若 > 40% 且用户感知明显 → 立项，否则关掉这一项 |
-| B5-02 | B2-02（WAL checkpoint）的替代项：`processes.json` 加 sqlite 文件尺寸 | `electron/diagnostics.ts` | 只读、不争锁；不做跨进程 checkpoint（v1.6 已论证前提被推翻） |
-| B5-03 | 随包运行时（CPython）vs 自助安装 | B4-03 的实测成功率 | 自助安装成功率 < 70% → 评估随包；否则维持 B4-03 |
-| B5-04 | Windows Job Object native / PTY / ripgrep | v1.6 `FR-13.2` 的 `taskkill /T` 效果 + 用户诉求 | 无真实诉求则继续挂口袋清单，**不为「对齐 WorkBuddy」而做** |
+本批于 2026-10-18 完成审计 + 实测，四项均给出**带数字的结论**（非「待评估」）。实测数据源：① 本机直接计时 `serve.spawn→listen`（与 `main.ts:1147/1175` 同口径）② 真实 `session-latency.jsonl`（15 个样本，落于 `%APPDATA%/nanowork/`）③ 本机跑 `engineSelfCheck` 三项（解释器/导入/配置）④ `llm_usage.sqlite3` 实存在项目根（184320 字节）。
+
+#### B5-01 · CLI 预热池 —— **决策：关掉（不立项）**
+
+| 项 | 值 |
+|---|---|
+| 判据 | `serve.spawn→listen` 占 `app.load→ready` 比例 > 40% 且用户可感知 → 立项 |
+| 实测 `serve.spawn→listen` | **4418 ms**（暖机、venv 已就绪；注：`main.ts:1072` 注释里的 9.4s 是旧环境残留，已过时） |
+| 实测首字延迟（15 样本 `firstTokenLatencyMs`） | **p50≈5.0s / p95≈46.6s / max≈60.9s**（排序：2243,2459,2459,2487,2514,2523,4950,5029,16307,17153,17199,22029,24883,46644,60936） |
+| 关键事实 | serve 在 `app.load` 阶段即 `Promise.all` 并行拉起（`startupProfile.ts` docstring 明示），**不与窗口首屏串行的瓶颈**；用户可感知延迟由远端 LLM 首字主导（p50 5s ≈ 引擎启动，p95 47s 是引擎启动的 10 倍以上） |
+
+**结论**：预热池最多为「用户在引擎就绪前就发问」省下 ≤4.4s，而该场景已被 app 启动期并行预热覆盖；真实瓶颈（远端 LLM）不受影响。收益边际、且要维护一个常驻预热进程 → **关掉这一项，续挂口袋清单**。
+
+#### B5-02 · `processes.json` 加 sqlite 尺寸（替代 WAL checkpoint）—— **决策：采纳只读监控；拒绝跨进程 checkpoint**
+
+| 项 | 值 |
+|---|---|
+| 判据 | 只读 `stat` 文件尺寸、不争锁；不做跨进程 WAL checkpoint（v1.6 已论证前提被推翻） |
+| 监控对象是否真实存在 | **是**：`llm_usage.sqlite3` 落于项目根，**184320 字节**（≈180KB），引擎确有 sqlite 产物 |
+| 当前 `processes.json` 内容 | 仅进程/端口快照（pid、引擎端口占用者、`run/` 状态文件死活），**尚未含 sqlite 尺寸** |
+
+**结论**：跨进程 WAL checkpoint **不做**（前提已被推翻，且会争锁）。替代项采纳：在 `processes.json` 増一个只读 `sqlite: { path, sizeBytes }` 字段（对 `llm_usage.sqlite3` 做 `stat`，纯只读、零争锁、约 5 行）。属低风险可观测增强，**不计入 V1.7 硬交付**，排入诊断包后续小步；真要落地时复用 `diagnostics.ts` 现有的 `processSnapshot` 注入点。
+
+#### B5-03 · 随包运行时（CPython）vs 自助安装 —— **决策：维持 B4-03（自助安装）**
+
+| 项 | 值 |
+|---|---|
+| 判据 | B4-03 自助安装实测成功率 < 70% → 评估随包 CPython；否则维持 |
+| 本机实测（标准开发环境） | 引擎自检 **3/3 通过**：解释器可达 ✅ / `import nanobot` ✅(`nanowork-selfcheck-import-ok`) / 配置 schema 校验 ✅(`nanowork-selfcheck-config-ok`)；`serve` 实际拉起并监听（4.4s） |
+| 安装状态机健壮性 | `engineInstall.ts` 覆盖 venv 创建→`pip install -e`→哨兵 verify→失败即停标 skipped→原始输出透出→可取消杀进程树；失败模式有清晰用户可见引导 |
+| 随包 CPython 的代价 | 安装包 +30~50MB、签名/自动更新（B4-01）复杂度上升、跨平台要各打一份 |
+
+**结论**：当前真实样本（n=1，标准开发环境）**成功**；状态机对主要失败模式有覆盖。未触发「<70%」阈值 → **维持 B4-03 自助安装**。重访触发：发版后累计 N≥30 次干净机器安装遥测里成功率 <70%，再评估随包方案。注：本机 1 个样本**不代表**无 Python/公司代理/ARM 等异质环境的成功率，但该数据只能靠发版后真实遥测获得。
+
+#### B5-04 · Windows Job Object native / PTY / ripgrep —— **决策：续挂口袋清单，不为对齐而做**
+
+| 项 | 值 |
+|---|---|
+| 判据 | v1.6 `FR-13.2` 的 `taskkill /T` 效果 + 真实用户诉求；无诉求则不为「对齐 WorkBuddy」而做 |
+| 现有机制有效性 | `orphanProcesses.ts`（B4 期）对已知**三层进程链**（electron→shim→中间→监听者）用父指针上溯 + `taskkill /T /F` 回收有效，无已知失效场景 |
+| 用户诉求 | 无 PTY / ripgrep 嵌入请求 |
+
+**结论**：**续挂口袋清单**。现有孤儿回收已覆盖实测拓扑；native Job Object 仅在出现「`taskkill` 漏杀导致端口被占」的真实 bug 时才值得做。PTY/ripgrep 无需求，**明确不为与 WorkBuddy 对齐而实现**。
 
 ---
 

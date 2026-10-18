@@ -10,10 +10,11 @@
  *    `null`，那是「没有本地引擎这回事」，把它显示成三条红会让 Web 用户以为坏了。
  */
 
+import { act } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { platform } from '@/platform';
 import { EngineSelfCheckCard } from '@/components/settings/sections/EngineSelfCheckCard';
-import type { EngineSelfCheckReport } from '@/types/engine';
+import type { EngineInstallState, EngineSelfCheckReport } from '@/types/engine';
 import { buttonByText, click, flush, mount, unmount } from './helpers/reactMount';
 
 const PYTHON = 'C:\\app\\nanobot\\nanobot\\.venv\\Scripts\\python.exe';
@@ -64,12 +65,29 @@ function chipLabels(): string[] {
 }
 
 const engineSelfCheck = vi.fn();
+const engineInstall = vi.fn();
+const engineInstallCancel = vi.fn();
+const engineInstallState = vi.fn();
+let progressCb: ((state: EngineInstallState) => void) | null = null;
 
 beforeEach(() => {
   engineSelfCheck.mockReset();
+  engineInstall.mockReset().mockResolvedValue({ phase: 'running', steps: [] });
+  engineInstallCancel.mockReset().mockResolvedValue({ phase: 'canceled', steps: [] });
+  engineInstallState.mockReset().mockResolvedValue({ phase: 'idle', steps: [] });
+  progressCb = null;
   vi.spyOn(platform, 'engineSelfCheck').mockImplementation((refresh?: boolean) =>
     engineSelfCheck(refresh),
   );
+  vi.spyOn(platform, 'engineInstall').mockImplementation(() => engineInstall());
+  vi.spyOn(platform, 'engineInstallCancel').mockImplementation(() => engineInstallCancel());
+  vi.spyOn(platform, 'engineInstallState').mockImplementation(() => engineInstallState());
+  vi.spyOn(platform, 'onEngineInstallProgress').mockImplementation((cb) => {
+    progressCb = cb;
+    return () => {
+      progressCb = null;
+    };
+  });
 });
 
 afterEach(() => {
@@ -166,5 +184,84 @@ describe('EngineSelfCheckCard', () => {
     await flush();
 
     expect(host.textContent).toContain('2026-10-16 12:00:00');
+  });
+
+  it('只有「解释器 / 导入」失败才给「一键修复」；配置失败不给', async () => {
+    engineSelfCheck.mockResolvedValue(interpreterFailedReport());
+    const host = mount(<EngineSelfCheckCard />);
+    await flush();
+    expect(buttonByText(host, '一键修复')).not.toBeNull();
+    unmount();
+
+    const configOnly = okReport();
+    configOnly.ok = false;
+    configOnly.findings = configOnly.findings.map((finding) =>
+      finding.id === 'config'
+        ? { ...finding, status: 'failed' as const, summary: '配置不合法' }
+        : finding,
+    );
+    engineSelfCheck.mockResolvedValue(configOnly);
+    const host2 = mount(<EngineSelfCheckCard />);
+    await flush();
+
+    // pip install 修不了 pydantic 字段：给按钮只会让用户白等一轮下载。
+    expect(buttonByText(host2, '一键修复')).toBeNull();
+  });
+
+  it('点击「一键修复」后展示步骤与原始输出，并可取消', async () => {
+    engineSelfCheck.mockResolvedValue(interpreterFailedReport());
+    const host = mount(<EngineSelfCheckCard />);
+    await flush();
+
+    click(buttonByText(host, '一键修复'));
+    await flush();
+    expect(engineInstall).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      progressCb?.({
+        phase: 'running',
+        steps: [
+          {
+            id: 'venv',
+            title: '创建虚拟环境',
+            status: 'running',
+            command: 'python -m venv X',
+            outputTail: 'creating...',
+          },
+          {
+            id: 'install',
+            title: '安装引擎',
+            status: 'pending',
+            command: 'python -m pip install -e Y',
+          },
+        ],
+      });
+    });
+    await flush();
+
+    expect(host.textContent).toContain('创建虚拟环境');
+    // 原始输出要出现在界面上（失败时用户才可能自己判断是网络还是权限）
+    expect(host.textContent).toContain('creating...');
+    expect(host.textContent).toContain('取消修复');
+
+    click(buttonByText(host, '取消修复'));
+    await flush();
+    expect(engineInstallCancel).toHaveBeenCalledTimes(1);
+  });
+
+  it('修复成功后自动重新自检（refresh=true）', async () => {
+    engineSelfCheck.mockResolvedValue(interpreterFailedReport());
+    const host = mount(<EngineSelfCheckCard />);
+    await flush();
+    expect(engineSelfCheck).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      progressCb?.({ phase: 'succeeded', steps: [] });
+    });
+    await flush();
+
+    // 不重跑就会一直显示安装前那份「需处理」报告，用户以为装了个寂寞。
+    expect(engineSelfCheck).toHaveBeenCalledTimes(2);
+    expect(engineSelfCheck).toHaveBeenLastCalledWith(true);
   });
 });

@@ -35,6 +35,12 @@ export function DiagnosticsSection() {
   const [stats, setStats] = useState<DiagnosticsStats | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [exporting, setExporting] = useState(false);
+  // 最近一次导出：用户点「导出」之后最可能的下一步是「把这个文件发出去」，
+  // 所以要把落点与脱敏命中数留在界面上，而不是只闪一条 toast。
+  const [lastExport, setLastExport] = useState<{
+    path: string;
+    redactionHits: number;
+  } | null>(null);
 
   const refresh = useCallback(async () => {
     const next = await platform.diagnosticsStats();
@@ -72,12 +78,25 @@ export function DiagnosticsSection() {
         return;
       }
       const skipped = res.skipped ? `，因体积上限略过 ${res.skipped} 个文件` : '';
-      toast.success(`已导出诊断包（${formatBytes(res.bytes)}，${res.entryCount} 个文件）${skipped}`);
+      const hits = res.redactionHits ?? 0;
+      if (res.path) {
+        setLastExport({ path: res.path, redactionHits: hits });
+      }
+      // 把「脱敏了多少处」说在 toast 里：用户不看 README 也知道这包被改过。
+      toast.success(
+        `已导出诊断包（${formatBytes(res.bytes)}，${res.entryCount} 个文件，脱敏 ${hits} 处）${skipped}`,
+      );
       await refresh();
     } finally {
       setExporting(false);
     }
   }, [refresh]);
+
+  const revealLastExport = useCallback(async () => {
+    if (!lastExport) return;
+    const res = await platform.showItemInFolder(lastExport.path);
+    if (!res.ok) toast.error(`打不开所在目录：${res.error ?? '未知原因'}`);
+  }, [lastExport]);
 
   if (!loaded) {
     return (
@@ -136,6 +155,28 @@ export function DiagnosticsSection() {
           }
         />
 
+        {lastExport ? (
+          <SettingsRow
+            label="最近一次导出"
+            hint={
+              <>
+                落点：{lastExport.path}
+                <br />
+                本次脱敏 {lastExport.redactionHits} 处（值形如 ab12...wxyz）。
+              </>
+            }
+            control={
+              <Button
+                size="small"
+                startIcon={<FolderOpenOutlinedIcon />}
+                onClick={() => void revealLastExport()}
+              >
+                打开所在目录
+              </Button>
+            }
+          />
+        ) : null}
+
         <SettingsRow
           label="运行日志"
           hint={
@@ -183,6 +224,31 @@ export function DiagnosticsSection() {
         <SettingsRow
           label="自动清理"
           hint={`日志保留 ${DEFAULT_LOG_KEEP_DAYS} 天、trace 保留 ${DEFAULT_TRACE_KEEP_DAYS} 天，启动时与运行中按小时自动清理；要长期留存请先用上面的按钮导出。`}
+        />
+      </SettingsCard>
+
+      {/* 脱敏清单（B4-04）：**发出去之前**就能看见「有什么 / 没什么 / 改过什么」。
+          以前这些只写在包内 README 里——那是用户最不方便看的地方（要先解压）。
+          清单必须是常驻的，因为「敢不敢发」这个问题在点导出之前就已经存在了。 */}
+      <SettingsCard
+        title="脱敏与隐私"
+        description="发送前先看清包里有什么、没什么、改过什么。"
+      >
+        <SettingsRow
+          label="包含"
+          hint="应用与运行时版本、平台、设备 ID、运行日志、全链路 trace、进程与端口快照；若开启启动剖析则含 startup-profile.jsonl，跑过对话则含首字延迟摘要（min / p50 / p95 / max + 最近样本）。"
+        />
+        <SettingsRow
+          label="不包含"
+          hint="对话提问正文、事件流（projects/**/*.jsonl）、nanowork.config.json / channels.json / connectors/（含明文凭据）。"
+        />
+        <SettingsRow
+          label="脱敏"
+          hint="键值对（api_key / apikey / access_key / secret / token / password / credential / authorization）、Authorization: Bearer、sk-…、三段式 JWT。命中处保留首尾各 4 位，中间打码（如 ab12...wxyz）。"
+        />
+        <SettingsRow
+          label="边界"
+          hint="脱敏是模式匹配，覆盖不了「长得不像凭据」的凭据；真正的保证是含凭据的配置文件根本不进包。工具参数与输出会原样带上，发送前请自行确认。"
         />
       </SettingsCard>
 

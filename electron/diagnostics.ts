@@ -49,6 +49,20 @@ export const DIAGNOSTICS_MAX_BYTES = 25 * 1024 * 1024;
 /** trace 单次最多带多少个（每个可能几百 KB，默认带上最近的 50 个） */
 export const DIAGNOSTICS_MAX_TRACES = 50;
 
+/**
+ * 会话首字延迟样本的文件名。
+ *
+ * ⚠️ **与 `main.ts` 的写入点共用这一个常量**：两处各写一份 `'session-latency.jsonl'`
+ * 时，改名只会在一边生效，表现为「包里永远没有延迟摘要」且没有任何报错。
+ */
+export const SESSION_LATENCY_FILE = 'session-latency.jsonl';
+
+/** 启动剖析报告文件名；只有 `NANOWORK_STARTUP_PROFILE=1` 时才会存在。 */
+export const STARTUP_PROFILE_FILE = 'startup-profile.jsonl';
+
+/** 额外文件（启动剖析 / 延迟样本）的读取上限：摘要不需要把无限增长的文件整份读进内存。 */
+const MAX_EXTRA_READ_BYTES = 2 * 1024 * 1024;
+
 export interface DiagnosticsAppInfo {
   appName?: string;
   version?: string;
@@ -69,6 +83,116 @@ export interface DiagnosticsBundle {
   entries: string[];
   /** 因体积上限被丢弃的文件数 */
   skipped: number;
+  /**
+   * 本次进包时被脱敏的匹配数。
+   *
+   * 必须回传给界面：用户要能看见「这包被改过多少处」才敢发出去。
+   * 只写在包内 README 里等于把清单藏在用户最不方便看的那个地方。
+   */
+  redactionHits: number;
+}
+
+/** 单个延迟指标的四分位摘要（毫秒）。 */
+export interface LatencyMetric {
+  min: number;
+  p50: number;
+  p95: number;
+  max: number;
+}
+
+/** `session-latency.jsonl` 的摘要（**不**整份进包：原始样本会无限增长）。 */
+export interface LatencySummary {
+  /** 解析到的样本行数（含未测到的行）。 */
+  count: number;
+  /** `ttftMs` 有效样本的摘要；一条有效值都没有时缺省。 */
+  ttftMs?: LatencyMetric;
+  /** `firstTokenLatencyMs` 有效样本的摘要；同上。 */
+  firstTokenLatencyMs?: LatencyMetric;
+  /** 最近若干条，供报告直接画时间轴（只带 at 与 ttft，不重复整份记录）。 */
+  recent: Array<{ at: number; ttftMs: number | null }>;
+}
+
+function percentile(sorted: readonly number[], p: number): number {
+  if (sorted.length === 0) return 0;
+  // 最近秩法：p95 落在「第 95% 个样本」上。样本很少时退化为最大值，
+  // 而不是插值出一个不存在的耗时——报告要能被对照回真实请求。
+  const rank = Math.min(
+    sorted.length - 1,
+    Math.max(0, Math.ceil((p / 100) * sorted.length) - 1),
+  );
+  return sorted[rank];
+}
+
+function metricOf(values: readonly number[]): LatencyMetric | undefined {
+  if (values.length === 0) return undefined;
+  const sorted = [...values].sort((a, b) => a - b);
+  return {
+    min: sorted[0],
+    p50: percentile(sorted, 50),
+    p95: percentile(sorted, 95),
+    max: sorted[sorted.length - 1],
+  };
+}
+
+function readTail(text: string, maxLines: number): string[] {
+  const lines = text.split('\n').filter((line) => line.trim() !== '');
+  return lines.slice(-maxLines);
+}
+
+/**
+ * 把 `session-latency.jsonl` 聚合成摘要。
+ *
+ * 逐行解析、坏行忽略：这个文件是**运行期追加**的，进程被杀时最后一行可能是半条；
+ * 一条坏行不该让整份摘要消失。
+ */
+export function summarizeLatencySamples(
+  text: string,
+  options: { maxLines?: number; recentLimit?: number } = {},
+): LatencySummary | null {
+  const lines = readTail(text, options.maxLines ?? 5000);
+  if (lines.length === 0) return null;
+
+  const ttft: number[] = [];
+  const firstToken: number[] = [];
+  const recent: Array<{ at: number; ttftMs: number | null }> = [];
+  for (const line of lines) {
+    let record: Record<string, unknown>;
+    try {
+      const parsed: unknown = JSON.parse(line);
+      if (!parsed || typeof parsed !== 'object') continue;
+      record = parsed as Record<string, unknown>;
+    } catch {
+      continue;
+    }
+    const at = typeof record.at === 'number' && Number.isFinite(record.at) ? record.at : null;
+    const ttftMs =
+      typeof record.ttftMs === 'number' && Number.isFinite(record.ttftMs)
+        ? record.ttftMs
+        : null;
+    const firstTokenLatencyMs =
+      typeof record.firstTokenLatencyMs === 'number' &&
+      Number.isFinite(record.firstTokenLatencyMs)
+        ? record.firstTokenLatencyMs
+        : null;
+    if (ttftMs !== null) ttft.push(ttftMs);
+    if (firstTokenLatencyMs !== null) firstToken.push(firstTokenLatencyMs);
+    if (at !== null) recent.push({ at, ttftMs });
+  }
+
+  if (ttft.length === 0 && firstToken.length === 0) return null;
+  return {
+    count: lines.length,
+    ttftMs: metricOf(ttft),
+    firstTokenLatencyMs: metricOf(firstToken),
+    recent: recent.slice(-(options.recentLimit ?? 50)),
+  };
+}
+
+/** 截断到上限内，并在换行处收口（避免留下半条 JSON，让人误判为坏数据）。 */
+function capText(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const cut = text.lastIndexOf('\n', max);
+  return cut > 0 ? text.slice(0, cut + 1) : text.slice(0, max);
 }
 
 export interface BuildDiagnosticsOptions {
@@ -103,6 +227,8 @@ function readmeText(counts: {
   skipped: number;
   now: number;
   hasProcesses: boolean;
+  hasStartupProfile: boolean;
+  hasLatencySummary: boolean;
   redactedHits: number;
 }): string {
   return [
@@ -116,6 +242,12 @@ function readmeText(counts: {
       : []),
     `  ${LOG_DIR_NAME}/  运行日志（按日期目录 / 模块分文件，一行一条）`,
     `  ${TRACE_DIR_NAME}/  全链路 trace（按进程 pid 分目录，一个回合一份）`,
+    ...(counts.hasStartupProfile
+      ? ['  startup-profile.jsonl  启动剖析（每次启动一行；仅开启 NANOWORK_STARTUP_PROFILE 时存在）']
+      : []),
+    ...(counts.hasLatencySummary
+      ? ['  session-latency.summary.json  会话首字延迟摘要（min / p50 / p95 / max + 最近样本）']
+      : []),
     `  本次装入：日志 ${counts.logFiles} 个、trace ${counts.traceFiles} 个` +
       (counts.skipped > 0 ? `；因体积上限跳过 ${counts.skipped} 个（已是最新优先）` : ''),
     '',
@@ -131,7 +263,9 @@ function readmeText(counts: {
       : []),
     '',
     '脱敏说明：',
-    `  日志与 trace 进包前已做凭据脱敏（本次命中 ${counts.redactedHits} 处，形如 ab12...wxyz）。`,
+    `  日志、trace 与启动剖析进包前已做凭据脱敏（本次命中 ${counts.redactedHits} 处，形如 ab12...wxyz）。`,
+    '  模式：键值对（api_key / apikey / access_key / secret / token / password /',
+    '  credential / authorization）、Authorization: Bearer、sk-…、三段式 JWT。',
     '  脱敏是模式匹配，覆盖不了长得不像凭据的凭据；真正的保证是含凭据的配置文件',
     '  （nanowork.config.json / channels.json / connectors/）根本不进这个包。',
     '',
@@ -183,6 +317,43 @@ export async function buildDiagnosticsBundle(
     }
   }
 
+  // —— 额外产物：启动剖析 + 延迟摘要（B4-04）——
+  // 两者都不是「日志」，但都是排查「启动慢 / 首字慢」的直接证据；缺席才是常态
+  // （剖析默认关、新装用户没有对话样本），所以读不到时静默跳过，不报错。
+  const extraEntries: ZipEntryInput[] = [];
+  let hasStartupProfile = false;
+  let hasLatencySummary = false;
+  try {
+    const raw = capText(
+      await fs.readFile(join(options.userData, STARTUP_PROFILE_FILE), 'utf-8'),
+      MAX_EXTRA_READ_BYTES,
+    );
+    const { text, hits } = redactSecrets(raw);
+    redactedHits += hits;
+    if (text.trim()) {
+      extraEntries.push({ name: STARTUP_PROFILE_FILE, data: text });
+      hasStartupProfile = true;
+    }
+  } catch {
+    /* 未开启剖析：没有这个文件是常态 */
+  }
+  try {
+    const raw = capText(
+      await fs.readFile(join(options.userData, SESSION_LATENCY_FILE), 'utf-8'),
+      MAX_EXTRA_READ_BYTES,
+    );
+    const summary = summarizeLatencySamples(raw);
+    if (summary) {
+      extraEntries.push({
+        name: 'session-latency.summary.json',
+        data: `${JSON.stringify(summary, null, 2)}\n`,
+      });
+      hasLatencySummary = true;
+    }
+  } catch {
+    /* 还没跑过对话：没有样本是常态 */
+  }
+
   const counts = {
     logFiles: fileEntries.filter((e) => e.name.startsWith(`${LOG_DIR_NAME}/`)).length,
     logBytes,
@@ -197,8 +368,18 @@ export async function buildDiagnosticsBundle(
     retention: { logKeepDays: DEFAULT_LOG_KEEP_DAYS, traceKeepDays: DEFAULT_TRACE_KEEP_DAYS },
     counts,
     // 脱敏是「出口」行为：如实记下这包被改过、改了多少处，别让拿到包的人
-    // 以为里面的值就是日志里的原值。
-    redaction: { applied: true, hits: redactedHits },
+    // 以为里面的值就是日志里的原值。patterns 是**清单**，让用户不用读代码
+    // 就知道脱敏覆盖了哪几类。
+    redaction: {
+      applied: true,
+      hits: redactedHits,
+      patterns: ['credential-kv', 'bearer', 'sk', 'jwt'],
+    },
+    // 额外产物的「有没有」只记事实，不重复正文（同一事实一个落点）。
+    artifacts: {
+      startupProfile: hasStartupProfile,
+      latencySummary: hasLatencySummary,
+    },
     // 快照本体只放 processes.json，meta 里只留一个「有没有」的指针——
     // 同一份事实放两处，早晚会不一致（一个事实一个落点）。
     ...(options.processSnapshot
@@ -211,6 +392,8 @@ export async function buildDiagnosticsBundle(
     skipped: logsTake.skipped + tracesTake.skipped,
     now,
     hasProcesses: Boolean(options.processSnapshot),
+    hasStartupProfile,
+    hasLatencySummary,
     redactedHits,
   });
 
@@ -220,6 +403,7 @@ export async function buildDiagnosticsBundle(
     ...(options.processSnapshot
       ? [{ name: 'processes.json', data: `${JSON.stringify(options.processSnapshot, null, 2)}\n` }]
       : []),
+    ...extraEntries,
     ...fileEntries,
   ];
 
@@ -231,5 +415,6 @@ export async function buildDiagnosticsBundle(
     entryCount: pushed.length,
     entries: pushed,
     skipped: allLogs.length + allTraces.length - fileEntries.length,
+    redactionHits: redactedHits,
   };
 }

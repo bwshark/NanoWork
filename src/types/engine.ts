@@ -66,3 +66,51 @@ export interface EngineSelfCheckReport {
     engineRoot: string;
   };
 }
+
+// ——— 一键修复（B4-03）———
+
+/**
+ * 修复步骤标识。
+ *
+ * 只有三步，且与自检 remedy 里的命令**同源**：`venv` 建环境、`install` 装引擎、
+ * `verify` 验证导入。配置校验失败**不**走这条链——改 pydantic 字段不是装包能解决的。
+ */
+export type EngineInstallStepId = 'venv' | 'install' | 'verify';
+
+export type EngineInstallStepStatus =
+  | 'pending'
+  | 'running'
+  | 'ok'
+  | 'failed'
+  | 'skipped';
+
+export type EngineInstallPhase =
+  | 'idle'
+  | 'running'
+  | 'succeeded'
+  | 'failed'
+  | 'canceled';
+
+export interface EngineInstallStep {
+  id: EngineInstallStepId;
+  title: string;
+  status: EngineInstallStepStatus;
+  /** 展示用的完整命令（含真实路径；与 remedy 里的命令一致） */
+  command: string;
+  /**
+   * 原始输出尾部（stdout + stderr，已去 ANSI）。
+   *
+   * **不加工、不摘要**：失败时用户要看到 pip 的原文，才可能自己判断是网络、
+   * 权限还是包版本问题。
+   */
+  outputTail?: string;
+}
+
+export interface EngineInstallState {
+  phase: EngineInstallPhase;
+  steps: EngineInstallStep[];
+  /** 失败 / 取消时的一句话原因；成功时不填 */
+  message?: string;
+  startedAt?: string;
+  endedAt?: string;
+}

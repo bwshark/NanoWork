@@ -22,6 +22,25 @@ export const APP_NAME = `${APP_DISPLAY_NAME} ${APP_DISPLAY_SUB}`;
 export const APP_VERSION = '0.1.0';
 
 /**
+ * GitHub Releases 发布页（B4-01）。
+ *
+ * 自动更新失败时的手动兜底：未签名构建可能被系统拦截，用户至少有一条明确的退路。
+ * ⚠️ 与 `electron/builder.config.json` 的 `publish.owner/repo` 是同一事实的两处镜像，
+ * 换仓库时一起改（与 `APP_VERSION` / 端口同一套约定）。
+ */
+export const RELEASES_URL = 'https://github.com/bwshark/nanowork/releases/latest';
+
+/**
+ * 未签名构建的显式提示。
+ *
+ * **宁可说清边界，也不要假装「已是最新」**：本仓当前没有代码签名证书，
+ * Windows SmartScreen / macOS Gatekeeper 可能拦截自动更新。把这句话放在更新卡片上，
+ * 用户失败时才知道该手动下载，而不是以为「更新功能坏了」。
+ */
+export const UPDATE_UNSIGNED_HINT =
+  '当前构建未签名：系统可能拦截自动更新。若检查或安装失败，请到 Releases 手动下载安装包。';
+
+/**
  * 首选网关端口。
  *
  * ⚠️ **与 `electron/main.ts` 的 `DEFAULT_GATEWAY_PORT` 是同一份事实的两处镜像**——

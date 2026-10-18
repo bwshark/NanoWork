@@ -32,6 +32,7 @@ function stats(patch: Partial<DiagnosticsStats> = {}): DiagnosticsStats {
 const diagnosticsStats = vi.fn();
 const exportDiagnostics = vi.fn();
 const openPath = vi.fn();
+const showItemInFolder = vi.fn();
 
 beforeEach(() => {
   vi.restoreAllMocks();
@@ -39,9 +40,11 @@ beforeEach(() => {
   diagnosticsStats.mockReset().mockResolvedValue(stats());
   exportDiagnostics.mockReset().mockResolvedValue({ ok: true, path: 'D:/out.zip', bytes: 2048, entryCount: 9, skipped: 0 });
   openPath.mockReset().mockResolvedValue({ ok: true });
+  showItemInFolder.mockReset().mockResolvedValue({ ok: true });
   vi.spyOn(platform, 'diagnosticsStats').mockImplementation(diagnosticsStats);
   vi.spyOn(platform, 'exportDiagnostics').mockImplementation(exportDiagnostics);
   vi.spyOn(platform, 'openPath').mockImplementation(openPath);
+  vi.spyOn(platform, 'showItemInFolder').mockImplementation(showItemInFolder);
 });
 
 describe('DiagnosticsSection：三种「没有数据」分开说', () => {
@@ -132,6 +135,46 @@ describe('DiagnosticsSection：导出', () => {
     await flush();
 
     expect(useToastStore.getState().items.at(-1)?.message).toContain('略过 7 个文件');
+    unmount();
+  });
+
+  it('导出后保留落点与脱敏命中，并能定位到文件（B4-04）', async () => {
+    exportDiagnostics.mockResolvedValue({
+      ok: true,
+      path: 'D:/out.zip',
+      bytes: 2048,
+      entryCount: 9,
+      skipped: 0,
+      redactionHits: 12,
+    });
+    const host = mount(<DiagnosticsSection />);
+    await flush();
+
+    click(buttonByText(host, '导出…'));
+    await flush();
+
+    // 只在 toast 里闪一下是不够的：用户下一步是「把这个包发出去」，
+    // 落点与「改过多少处」要留在界面上。
+    expect(host.textContent).toContain('D:/out.zip');
+    expect(host.textContent).toContain('脱敏 12 处');
+
+    click(buttonByText(host, '打开所在目录'));
+    await flush();
+    expect(showItemInFolder).toHaveBeenCalledWith('D:/out.zip');
+    unmount();
+  });
+});
+
+describe('DiagnosticsSection：脱敏清单（B4-04）', () => {
+  it('发出去之前就能看见「有什么 / 没什么 / 改过什么」', async () => {
+    const host = mount(<DiagnosticsSection />);
+    await flush();
+
+    const text = host.textContent ?? '';
+    expect(text).toContain('脱敏与隐私');
+    // 「不包含」必须点名那几份含凭据的文件——这是用户敢不敢发的主要依据。
+    expect(text).toContain('nanowork.config.json');
+    expect(text).toContain('Authorization: Bearer');
     unmount();
   });
 });

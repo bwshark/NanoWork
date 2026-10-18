@@ -46,6 +46,20 @@ import type {
   TaskSyncResult,
 } from './types';
 import type { ChannelConnectResponse } from './types';
+import type { UpdateStatus } from '@/types/update';
+import type { EngineInstallState } from '@/types/engine';
+
+/**
+ * Web 端 / 无主进程时的一致回答：没有自动更新这回事。
+ * 注意它**不是** `up-to-date`——把「不支持」显示成「已是最新」正是这条需求要避免的谎报。
+ */
+const UNSUPPORTED_UPDATE: UpdateStatus = {
+  phase: 'unsupported',
+  currentVersion: '',
+};
+
+/** Web 端 / 无主进程时的修复状态：没有本地引擎可装。 */
+const IDLE_INSTALL: EngineInstallState = { phase: 'idle', steps: [] };
 
 /**
  * 运行时选择 web / electron 实现并导出统一 API。
@@ -380,6 +394,16 @@ export const platform: PlatformAdapter = {
       error: 'Web 端不支持此操作，请使用桌面端',
     });
   },
+  /** 在文件管理器中定位（选中）一个文件（诊断包「打开所在目录」） */
+  showItemInFolder: (path: string) => {
+    if (isElectron() && window.electronAPI) {
+      return window.electronAPI.showItemInFolder(path);
+    }
+    return Promise.resolve({
+      ok: false,
+      error: 'Web 端不支持此操作，请使用桌面端',
+    });
+  },
   /**
    * 用系统默认浏览器打开 http(s) 链接。
    *
@@ -530,6 +554,23 @@ export const platform: PlatformAdapter = {
     // 「Web 端不适用」，而不是给用户看三条红。
     return Promise.resolve(null);
   },
+  // —— 一键修复（B4-03）：Web 端没有可执行的本地安装，统一回 idle ——
+  engineInstall: () => {
+    const api = electronBridge();
+    return api ? api.engineInstall() : Promise.resolve(IDLE_INSTALL);
+  },
+  engineInstallCancel: () => {
+    const api = electronBridge();
+    return api ? api.engineInstallCancel() : Promise.resolve(IDLE_INSTALL);
+  },
+  engineInstallState: () => {
+    const api = electronBridge();
+    return api ? api.engineInstallState() : Promise.resolve(IDLE_INSTALL);
+  },
+  onEngineInstallProgress: (cb) => {
+    const api = electronBridge();
+    return api ? api.onEngineInstallProgress(cb) : () => undefined;
+  },
   exportDiagnostics: () => {
     if (isElectron() && window.electronAPI) return window.electronAPI.exportDiagnostics();
     return Promise.resolve({
@@ -572,6 +613,26 @@ export const platform: PlatformAdapter = {
   appRendererReady: () => {
     const api = electronBridge();
     return api ? api.appRendererReady() : Promise.resolve();
+  },
+  updaterGetStatus: () => {
+    const api = electronBridge();
+    return api ? api.updaterGetStatus() : Promise.resolve(UNSUPPORTED_UPDATE);
+  },
+  updaterCheck: () => {
+    const api = electronBridge();
+    return api ? api.updaterCheck() : Promise.resolve(UNSUPPORTED_UPDATE);
+  },
+  updaterDownload: () => {
+    const api = electronBridge();
+    return api ? api.updaterDownload() : Promise.resolve(UNSUPPORTED_UPDATE);
+  },
+  updaterInstall: () => {
+    const api = electronBridge();
+    return api ? api.updaterInstall() : Promise.resolve(false);
+  },
+  onUpdaterStatus: (cb) => {
+    const api = electronBridge();
+    return api ? api.onUpdaterStatus(cb) : () => undefined;
   },
   onAppOpenAbout: (cb) => {
     const api = electronBridge();

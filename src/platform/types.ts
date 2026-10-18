@@ -18,8 +18,9 @@ import type {
 import type { LogLevel, LogModule } from '@/observability/logging';
 import type { TraceFile } from '@/observability/trace';
 import type { SessionLatencySample } from '@/lib/sseLatency';
-import type { EngineSelfCheckReport } from '@/types/engine';
+import type { EngineInstallState, EngineSelfCheckReport } from '@/types/engine';
 import type { DeepLinkAction } from '@/types/deepLink';
+import type { UpdateStatus } from '@/types/update';
 
 // 插件领域类型声明在 `@/types/plugin.ts`（**唯一声明处**，主进程也引它）。
 // 这里只做转出，让 platform 消费方「只 import 一处」即可拿到完整契约面。
@@ -798,6 +799,8 @@ export interface DiagnosticsExportResult {
   bytes?: number;
   entryCount?: number;
   skipped?: number;
+  /** 本次进包时被脱敏的匹配数；界面用它告诉用户「这包被改过多少处」。 */
+  redactionHits?: number;
   error?: string;
 }
 
@@ -1048,6 +1051,15 @@ export interface PlatformAdapter {
    */
   openPath(path: string): Promise<{ ok: boolean; error?: string }>;
   /**
+   * 在文件管理器中**定位**（选中）一个文件。诊断包导出后的「打开所在目录」用它。
+   *
+   * 与 `openPath` 分开：后者会把文件交给默认程序打开（zip → 压缩软件），
+   * 而用户要的是「在资源管理器里选中它」，好把包拖进邮件 / 聊天框。
+   * - electron：`shell.showItemInFolder`；
+   * - web：无原生能力，返回失败。
+   */
+  showItemInFolder(path: string): Promise<{ ok: boolean; error?: string }>;
+  /**
    * 用系统默认浏览器打开一个 http(s) 链接（设置页「查看文档」这类外链入口）。
    *
    * 与 `openPath` 分开而不是复用它：`openPath` 是**文件路径**语义（主进程直接交给
@@ -1164,6 +1176,17 @@ export interface PlatformAdapter {
    * 信号，用户只会看到窗口被唤起、目标会话却不打开。
    */
   appRendererReady(): Promise<void>;
+  // —— 自动更新（B4-01，GitHub Releases）——
+  /** 打开「关于」时取一次当前状态，避免错过挂载前的推送；web 端 unsupported */
+  updaterGetStatus(): Promise<UpdateStatus>;
+  /** 检查更新；未打包 / Web 端返回 unsupported（**不是**「已是最新」） */
+  updaterCheck(): Promise<UpdateStatus>;
+  /** 下载已发现的更新 */
+  updaterDownload(): Promise<UpdateStatus>;
+  /** 重启并安装；返回是否真的发起（仅 downloaded 时） */
+  updaterInstall(): Promise<boolean>;
+  /** 订阅更新状态推送；返回取消订阅函数，web 端为空实现 */
+  onUpdaterStatus(cb: (status: UpdateStatus) => void): () => void;
   /** 订阅主进程下发的「打开关于弹窗」指令（托盘菜单「关于」）；返回取消订阅函数，web 端为空实现 */
   onAppOpenAbout(cb: () => void): () => void;
   /** 窗口最小化；web 端 no-op */
@@ -1241,6 +1264,15 @@ export interface PlatformAdapter {
    * `diagnosticsStats` 同一条口径，界面据此显示「Web 端不适用」而不是一片红。
    */
   engineSelfCheck(refresh?: boolean): Promise<EngineSelfCheckReport | null>;
+  // —— 一键修复（B4-03）——
+  /** 开始一键修复（建 venv → 装引擎 → 验证导入）；已在运行时返回当前状态 */
+  engineInstall(): Promise<EngineInstallState>;
+  /** 取消正在进行的修复（杀进程树）；未在运行时原样返回当前状态 */
+  engineInstallCancel(): Promise<EngineInstallState>;
+  /** 读当前/最近一次修复状态（打开设置时取一次，避免错过挂载前的推送） */
+  engineInstallState(): Promise<EngineInstallState>;
+  /** 订阅修复进度；返回取消订阅函数，web 端为空实现 */
+  onEngineInstallProgress(cb: (state: EngineInstallState) => void): () => void;
   /**
    * 导出诊断包（zip）：弹保存对话框 → 打包 → 写盘。
    * 用户取消时 `{ ok: false, canceled: true }`——**不是错误**，界面不该弹红。
@@ -1593,6 +1625,15 @@ export interface ElectronAPI {
   nanobotDisconnectChannel(kind: string): Promise<GatewayRestartResult>;
   /** 在系统文件管理器中打开路径（资源管理器/Finder）；失败返回错误描述 */
   openPath(path: string): Promise<{ ok: boolean; error?: string }>;
+  /**
+   * 在文件管理器中**定位**（选中）一个文件。诊断包导出后的「打开所在目录」用它。
+   *
+   * 与 `openPath` 分开：后者会把文件交给默认程序打开（zip → 压缩软件），
+   * 而用户要的是「在资源管理器里选中它」，好把包拖进邮件 / 聊天框。
+   * - electron：`shell.showItemInFolder`；
+   * - web：无原生能力，返回失败。
+   */
+  showItemInFolder(path: string): Promise<{ ok: boolean; error?: string }>;
   /** 用系统默认浏览器打开 http(s) 链接；协议不合法或打开失败返回 ok=false */
   openUrl(url: string): Promise<{ ok: boolean; error?: string }>;
   /** 读取本地文件为 base64；失败返回 ok=false 与错误描述 */
@@ -1652,6 +1693,11 @@ export interface ElectronAPI {
   diagnosticsStats(): Promise<DiagnosticsStats>;
   /** 引擎运行时三项自检（FR-13.6）；`true` 强制重跑 */
   engineSelfCheck(refresh?: boolean): Promise<EngineSelfCheckReport>;
+  // —— 一键修复（B4-03）——
+  engineInstall(): Promise<EngineInstallState>;
+  engineInstallCancel(): Promise<EngineInstallState>;
+  engineInstallState(): Promise<EngineInstallState>;
+  onEngineInstallProgress(cb: (state: EngineInstallState) => void): () => void;
   /** 导出诊断包（zip）：弹保存对话框 → 打包 → 写盘 */
   exportDiagnostics(): Promise<DiagnosticsExportResult>;
   /**
@@ -1696,6 +1742,17 @@ export interface ElectronAPI {
   onAppDeepLink(cb: (action: DeepLinkAction) => void): () => void;
   /** 渲染层深链监听已挂上：主进程 flush 排队动作；web 端 no-op */
   appRendererReady(): Promise<void>;
+  // —— 自动更新（B4-01，GitHub Releases）——
+  /** 读取当前更新状态（打开「关于」时取一次，避免错过事件推送） */
+  updaterGetStatus(): Promise<UpdateStatus>;
+  /** 检查更新；未打包返回 unsupported */
+  updaterCheck(): Promise<UpdateStatus>;
+  /** 下载已发现的更新 */
+  updaterDownload(): Promise<UpdateStatus>;
+  /** 重启并安装；返回是否真的发起 */
+  updaterInstall(): Promise<boolean>;
+  /** 订阅更新状态推送；返回取消订阅函数 */
+  onUpdaterStatus(cb: (status: UpdateStatus) => void): () => void;
   /** 订阅主进程下发的「打开关于弹窗」指令（托盘菜单「关于」）；返回取消订阅函数 */
   onAppOpenAbout(cb: () => void): () => void;
   /**

@@ -17,12 +17,15 @@ import {
   findDeepLinkArg,
   parseDeepLink,
 } from './deepLink';
+import { createUpdateController } from './updater';
+import { autoUpdater } from 'electron-updater';
 import type { DeepLinkAction } from '../src/types/deepLink';
 import {
   engineInterpreterCandidates,
   runEngineSelfCheck,
   type EngineSelfCheckTarget,
 } from './engineSelfCheck';
+import { createEngineInstaller } from './engineInstall';
 import type { EngineSelfCheckReport } from '../src/types/engine';
 import { normalizeEngineChannelAllowFrom } from './channelAllowFrom';
 import { disconnectChannelInConfig, resolveWeixinAccountPath, type DisconnectChannelKind } from './channelDisconnect';
@@ -102,7 +105,11 @@ import {
 // （后者不 import `@/platform`），因此可以被 esbuild 直接打进 main.cjs。
 import { appendLogLine, createFileLogger, logStats, pruneLogs } from './logStore';
 import { pruneTraces, traceStats, writeTrace } from './traceStore';
-import { buildDiagnosticsBundle } from './diagnostics';
+import {
+  SESSION_LATENCY_FILE,
+  STARTUP_PROFILE_FILE,
+  buildDiagnosticsBundle,
+} from './diagnostics';
 // —— 启动性能剖析（FR-11.6）——
 // 该模块**零依赖**（不 import electron / store / config / logger）—— 不是洁癖：
 // 剖析器若依赖 logger，它测出来的「启动耗时」里就含它自己引入的模块加载成本，
@@ -193,7 +200,7 @@ const startupProfile = createStartupProfiler({
     // 让观测手段把启动链路搞崩，正是这个模块开头警告的那种耦合。
     try {
       appendFileSync(
-        join(DIAGNOSTICS_USER_DATA, 'startup-profile.jsonl'),
+        join(DIAGNOSTICS_USER_DATA, STARTUP_PROFILE_FILE),
         `${JSON.stringify(report)}\n`,
         'utf8',
       );
@@ -949,10 +956,15 @@ let engineSelfCheckInflight: Promise<EngineSelfCheckReport> | null = null;
  * 「配置文件里的那个 bin」，用户把 bin 指到别处之后就会看到一份「检查通过」而引擎
  * 照旧起不来的报告。
  */
-function engineSelfCheck(refresh = false): Promise<EngineSelfCheckReport> {
-  if (refresh) engineSelfCheckInflight = null;
-  if (engineSelfCheckInflight !== null) return engineSelfCheckInflight;
-  const targetPromise: Promise<EngineSelfCheckTarget> = readNanobotConfig()
+/**
+ * 解析自检 / 一键修复共用的目标。
+ *
+ * 抽出来是因为 B4-03 的安装器必须往**同一个** venv 里装包：自检报的是
+ * `engineRoot/nanobot/nanobot/.venv`，安装器若自己再算一遍路径，两者迟早分叉，
+ * 表现为「装完了自检还是红」。
+ */
+function resolveEngineSelfCheckTarget(): Promise<EngineSelfCheckTarget> {
+  return readNanobotConfig()
     .then((launch) => ({
       bin: launch.bin,
       // `config` 在启动配置里是可选的；兜底到引擎默认那份路径 —— 自检要能报出
@@ -968,7 +980,12 @@ function engineSelfCheck(refresh = false): Promise<EngineSelfCheckReport> {
         engineRoot: join(__dirname, '..'),
       };
     });
-  engineSelfCheckInflight = targetPromise
+}
+
+function engineSelfCheck(refresh = false): Promise<EngineSelfCheckReport> {
+  if (refresh) engineSelfCheckInflight = null;
+  if (engineSelfCheckInflight !== null) return engineSelfCheckInflight;
+  engineSelfCheckInflight = resolveEngineSelfCheckTarget()
     .then((target) => runEngineSelfCheck(target))
     .then((report) => {
       engineSelfCheckReport = report;
@@ -3590,8 +3607,7 @@ ipcMain.on('trace:write', (_e, file: unknown) => {
   })();
 });
 
-/** 会话首字延迟样本的落点（与 trace 分文件，见下方注释） */
-const SESSION_LATENCY_FILE = 'session-latency.jsonl';
+/** 会话首字延迟样本的落点（与 trace 分文件，见下方注释）；文件名与诊断包共用一个常量。 */
 
 /** 只接受「有限非负数」，其余一律 `null`（＝未测到，与「0 毫秒」是两件事） */
 function latencyNumber(value: unknown): number | null {
@@ -3640,6 +3656,24 @@ ipcMain.on('perf:latency', (_e, raw: unknown) => {
  * 三项的修法完全不同，糊成一句「引擎失败」等于把黑盒换个地方摆。
  */
 ipcMain.handle('engine:selfCheck', (_e, refresh: unknown) => engineSelfCheck(refresh === true));
+
+// ——— 一键修复（B4-03）———
+//
+// 渲染层只发「开始/取消/查状态」，**不传任何命令**：recipe 固定在本进程
+// （`engineInstall.ts`），与自检 remedy 用同一套路径与引号规则。
+const engineInstaller = createEngineInstaller({
+  resolveTarget: resolveEngineSelfCheckTarget,
+  emit: (state) => {
+    mainWindow?.webContents.send('engine:install-progress', state);
+    // 装成功后让下一次自检重新跑：否则界面拿到的还是安装前那份缓存报告，
+    // 用户会看到「装完了还是红」。
+    if (state.phase === 'succeeded') engineSelfCheckInflight = null;
+  },
+});
+
+ipcMain.handle('engine:install', () => engineInstaller.start());
+ipcMain.handle('engine:install:cancel', () => engineInstaller.cancel());
+ipcMain.handle('engine:install:state', () => engineInstaller.getState());
 
 ipcMain.handle('diagnostics:stats', async () => {
   const [logs, traces] = await Promise.all([
@@ -3697,6 +3731,8 @@ ipcMain.handle('diagnostics:export', async () => {
       bytes: bundle.bytes.length,
       entryCount: bundle.entryCount,
       skipped: bundle.skipped,
+      // 让界面能把「这包被脱敏了多少处」直接说出来，而不是逼用户解压读 README。
+      redactionHits: bundle.redactionHits,
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -3716,6 +3752,24 @@ ipcMain.handle('shell:openPath', async (_e, path: string) => {
   // shell.openPath 返回空字符串=成功；非空字符串为系统级错误描述
   const errorMessage = await shell.openPath(normalized);
   if (errorMessage) return { ok: false, error: errorMessage };
+  return { ok: true };
+});
+
+/**
+ * 在文件管理器中**定位**一个文件（诊断包导出后的「打开所在目录」）。
+ *
+ * 与 `shell:openPath` 的分工：`openPath` 会把文件交给默认程序打开——对 zip 来说
+ * 就是弹压缩软件；用户真正要的是「在资源管理器里选中它」，好把包拖进邮件 / 聊天框。
+ * `shell.showItemInFolder` 正是这个语义。
+ */
+ipcMain.handle('shell:showItemInFolder', (_e, path: string) => {
+  if (typeof path !== 'string' || !path.trim()) {
+    return { ok: false, error: '路径为空' };
+  }
+  if (!existsSync(path)) {
+    return { ok: false, error: `文件不存在（可能已被移动或删除）：${path}` };
+  }
+  shell.showItemInFolder(path);
   return { ok: true };
 });
 
@@ -3872,6 +3926,25 @@ ipcMain.on('window:toggle-fullscreen', () => {
   if (!mainWindow) return;
   mainWindow.setFullScreen(!mainWindow.isFullScreen());
 });
+
+// ——— 自动更新（B4-01，GitHub Releases）———
+//
+// 状态机在 `electron/updater.ts`（纯逻辑、可单测）；这里只做三件事：把真实
+// `autoUpdater` 接进去、把状态推给渲染层、注册四个 IPC。
+//
+// **未打包时 `check()` 直接返回 unsupported**：开发态没有 `app-update.yml`，
+// 真去 check 只会抛一个看起来像「发布流程坏了」的错。
+const updateController = createUpdateController({
+  updater: autoUpdater,
+  isPackaged: app.isPackaged,
+  currentVersion: app.getVersion(),
+  emit: (status) => mainWindow?.webContents.send('updater:status', status),
+});
+
+ipcMain.handle('updater:getStatus', () => updateController.getStatus());
+ipcMain.handle('updater:check', () => updateController.check());
+ipcMain.handle('updater:download', () => updateController.download());
+ipcMain.handle('updater:install', () => updateController.install());
 
 // ——— 应用元信息（关于弹窗用）———
 /**

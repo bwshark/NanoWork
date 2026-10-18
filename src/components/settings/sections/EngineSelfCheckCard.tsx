@@ -4,6 +4,9 @@ import { SettingsCard } from '@/components/settings/SettingsPrimitives';
 import { toast } from '@/components/Toast';
 import { platform } from '@/platform';
 import type {
+  EngineInstallPhase,
+  EngineInstallState,
+  EngineInstallStepStatus,
   EngineSelfCheckFinding,
   EngineSelfCheckReport,
   EngineSelfCheckStatus,
@@ -34,6 +37,29 @@ const STATUS_META: Record<EngineSelfCheckStatus, { label: string; color: 'succes
   ok: { label: '通过', color: 'success' },
   failed: { label: '需处理', color: 'error' },
   skipped: { label: '未判定', color: 'default' },
+};
+
+/** 一键修复的整体状态（B4-03） */
+const INSTALL_PHASE_META: Record<
+  EngineInstallPhase,
+  { label: string; color: 'default' | 'info' | 'success' | 'warning' | 'error' }
+> = {
+  idle: { label: '未开始', color: 'default' },
+  running: { label: '修复中', color: 'info' },
+  succeeded: { label: '已完成', color: 'success' },
+  failed: { label: '失败', color: 'error' },
+  canceled: { label: '已取消', color: 'default' },
+};
+
+const STEP_STATUS_META: Record<
+  EngineInstallStepStatus,
+  { label: string; color: 'default' | 'info' | 'success' | 'warning' | 'error' }
+> = {
+  pending: { label: '等待', color: 'default' },
+  running: { label: '执行中', color: 'info' },
+  ok: { label: '完成', color: 'success' },
+  failed: { label: '失败', color: 'error' },
+  skipped: { label: '跳过', color: 'default' },
 };
 
 /** 等宽块：命令与报错原文都用它（可横向滚，不折行改语义） */
@@ -115,6 +141,9 @@ export function EngineSelfCheckCard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [applies, setApplies] = useState(true);
+  // 一键修复（B4-03）：状态来自主进程推送，组件只负责渲染与「取消」。
+  const [install, setInstall] = useState<EngineInstallState | null>(null);
+  const [installError, setInstallError] = useState<string | null>(null);
 
   const run = useCallback((refresh: boolean) => {
     setLoading(true);
@@ -133,11 +162,66 @@ export function EngineSelfCheckCard() {
     run(false);
   }, [run]);
 
+  // 先取一次当前修复状态（可能上次关设置时正在跑），再订阅进度。
+  useEffect(() => {
+    let alive = true;
+    void platform
+      .engineInstallState()
+      .then((next) => {
+        if (alive) setInstall(next);
+      })
+      .catch(() => undefined);
+    const off = platform.onEngineInstallProgress((next) => {
+      setInstall(next);
+      setInstallError(null);
+    });
+    return () => {
+      alive = false;
+      off();
+    };
+  }, []);
+
+  // 装成功后立刻重新自检：否则界面上还是安装前那份「需处理」报告，
+  // 用户会以为装了个寂寞。
+  useEffect(() => {
+    if (install?.phase === 'succeeded') run(true);
+  }, [install?.phase, run]);
+
+  // 只有「解释器 / 导入」这两类能靠装包解决。配置校验失败不在其中——
+  // 那是改 pydantic 字段，pip install 修不了，给个按钮只会误导。
+  const fixable =
+    report?.findings.some(
+      (finding) =>
+        finding.status === 'failed' &&
+        (finding.id === 'interpreter' || finding.id === 'engine-import'),
+    ) ?? false;
+  const installing = install?.phase === 'running';
+
+  const startInstall = useCallback(() => {
+    setInstallError(null);
+    // 进度走 `engine:install-progress` 事件；这里只兜「启动就失败」的异常
+    // （例如目标解析失败），否则它会变成一条无人处理的 rejection。
+    void platform.engineInstall().catch((err: unknown) => {
+      setInstallError(err instanceof Error ? err.message : String(err));
+    });
+  }, []);
+
   const action = (
     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
       {loading ? <CircularProgress size={14} /> : null}
-      {/* 首次取缓存时可能在跑，此时禁用：连点只会排队等同一份结果 */}
-      <Button size="small" disabled={loading} onClick={() => run(true)}>
+      {fixable ? (
+        <Button
+          size="small"
+          variant="contained"
+          disabled={loading || installing}
+          onClick={() => startInstall()}
+        >
+          {installing ? '修复中…' : '一键修复'}
+        </Button>
+      ) : null}
+      {/* 首次取缓存时可能在跑，此时禁用：连点只会排队等同一份结果。
+          安装中也禁用：这时自检必然失败，报红只会误导。 */}
+      <Button size="small" disabled={loading || installing} onClick={() => run(true)}>
         重新自检
       </Button>
     </Box>
@@ -168,6 +252,91 @@ export function EngineSelfCheckCard() {
             {report.checkedAt.slice(0, 19).replace('T', ' ')}
             {` · 解释器：${report.target.bin}`}
           </Typography>
+
+          {installError ? (
+            <Typography sx={{ fontSize: 12, color: 'error.main', mt: 1 }}>
+              修复未能启动：{installError}
+            </Typography>
+          ) : null}
+
+          {install && install.phase !== 'idle' ? (
+            <Box sx={{ mt: 1.5, pt: 1.5, borderTop: '1px solid', borderColor: 'divider' }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+                <Typography sx={{ fontSize: 13, fontWeight: 500 }}>一键修复</Typography>
+                <Chip
+                  size="small"
+                  label={INSTALL_PHASE_META[install.phase].label}
+                  color={INSTALL_PHASE_META[install.phase].color}
+                  variant="outlined"
+                />
+                {installing ? <CircularProgress size={14} /> : null}
+              </Box>
+
+              {install.message ? (
+                <Typography
+                  sx={{
+                    fontSize: 12,
+                    mb: 1,
+                    color: install.phase === 'failed' ? 'error.main' : 'text.secondary',
+                  }}
+                >
+                  {install.message}
+                </Typography>
+              ) : null}
+
+              {install.steps.map((step) => (
+                <Box key={step.id} sx={{ mb: 1.5 }}>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
+                    <Typography sx={{ fontSize: 12.5, fontWeight: 500 }}>
+                      {step.title}
+                    </Typography>
+                    <Chip
+                      size="small"
+                      label={STEP_STATUS_META[step.status].label}
+                      color={STEP_STATUS_META[step.status].color}
+                      variant="outlined"
+                    />
+                  </Box>
+                  {/* 实际执行的命令与「可复制命令」同源：用户点过一键修复后，
+                      仍能拿这串去终端里复现。 */}
+                  <Typography component="pre" sx={MONO_SX}>
+                    {step.command}
+                  </Typography>
+                  {step.outputTail ? (
+                    <Typography
+                      component="pre"
+                      sx={{ ...MONO_SX, mt: 0.5, maxHeight: 180, overflowY: 'auto' }}
+                    >
+                      {step.outputTail}
+                    </Typography>
+                  ) : null}
+                </Box>
+              ))}
+
+              <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'center' }}>
+                {installing ? (
+                  <Button
+                    size="small"
+                    onClick={() => {
+                      void platform.engineInstallCancel();
+                    }}
+                  >
+                    取消修复
+                  </Button>
+                ) : null}
+                {install.phase === 'succeeded' ? (
+                  <Typography sx={{ fontSize: 12, color: 'text.secondary' }}>
+                    安装完成。引擎若已在运行，请重启应用后生效。
+                  </Typography>
+                ) : null}
+                {install.phase === 'failed' ? (
+                  <Typography sx={{ fontSize: 12, color: 'text.secondary' }}>
+                    原始输出已保留；也可按上面的命令手动执行。
+                  </Typography>
+                ) : null}
+              </Box>
+            </Box>
+          ) : null}
         </>
       )}
     </SettingsCard>

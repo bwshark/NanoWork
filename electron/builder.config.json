@@ -11,6 +11,14 @@
   "directories": {
     "output": "release"
   },
+  "publish": [
+    {
+      "provider": "github",
+      "owner": "bwshark",
+      "repo": "nanowork",
+      "releaseType": "release"
+    }
+  ],
   "files": [
     "dist/**/*",
     "electron/main.cjs",

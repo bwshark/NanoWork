@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Box, Button, Typography } from '@mui/material';
 import { SettingsCard, SettingsRow } from '@/components/settings/SettingsPrimitives';
 import { EngineSelfCheckCard } from '@/components/settings/sections/EngineSelfCheckCard';
+import { UpdateCard } from '@/components/settings/sections/UpdateCard';
 import { toast } from '@/components/Toast';
 import { APP_DISPLAY_NAME, APP_DISPLAY_SUB, APP_NAME, APP_VERSION } from '@/lib/constants';
 import { platform } from '@/platform';
@@ -107,6 +108,10 @@ export function AboutSection() {
       {/* 引擎自检（FR-13.6）：放在「运行环境」之后 —— 上面说「你是什么环境」，
           这里说「这个环境的引擎到底能不能跑」，两件事挨着看最顺。 */}
       <EngineSelfCheckCard />
+
+      {/* 自动更新（B4-01）：紧邻自检卡。两者是同一类问题——「这个安装到底能不能
+          长期用下去」：自检管现在能不能跑，更新管以后怎么升上去。 */}
+      <UpdateCard />
 
       <SettingsCard
         title="说明"
