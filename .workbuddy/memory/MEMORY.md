@@ -37,6 +37,9 @@ WorkBuddy 式智能体客户端：React18+TS+Vite 渲染层 + Electron 主进程
 - ⚠️ `.tsx` `return (<JSX>,)` 逗号运算符=tsc TS1109 但 vite/vitest 正常，报错落 `);` 行与病灶隔几十行。`return (<JSX>)` 不带逗号。
 - ⚠️ Bash heredoc 给 Python 传 `"\n"` 落字面 `/n`，esbuild 报语法错且指错行 → 改文件换行用 Edit 或 `chr(10)`，改完 `grep -c '/n '` 自查。
 - 可选 prop 不能当功能开关；改输入区「有没有内容」判据要两处同改(`onSend` 前置 + 按钮 `disabled` 同源)。
+- ⚠️ **`nanowork.config.json` 是 camelCase**（`modelPresets` / `modelPreset` / `fallbackModels` / `providerRetryMode`）。用 snake_case 探测会读到 `None` → 误判成「没写进去」并改错地方（2026-10-18 踩过）。
+- ⚠️ 模型「默认」有**两条解析路径**：`resolve_preset()`（认 `modelPreset`，运行时用）vs `resolve_default_preset()`（只读 `agents.defaults.model`，隐式 default 用）。任何「读默认模型」的新代码都要确认读的是哪条——两者不一致时界面显示与实际行为分叉且零报错。不变量：**指针有效 ⇒ defaults 6 字段与之一致**（`electron/modelDefaultsConfig.ts` 的 `syncDefaultsToPointer`）。
+- ⚠️ vitest 全量偶发 `EPERM ... node-brokered-fs-shim` → worker 崩 → `ERR_IPC_CHANNEL_CLOSED` + 大量 errors。**是沙箱拦截读文件，不是用例红**；同命令重跑即绿。
 
 ## 引擎统一(2026-10-17 收尾)
 - 用户决策：统一到本仓 study 副本，桌面也跑本仓。study 引擎自洽(`gitstore.py` 含 FileLock、启动器指向本仓 venv、`nanobot_ai 0.3.0` 已装)。

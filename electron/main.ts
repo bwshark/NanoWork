@@ -75,6 +75,12 @@ import {
   renameFallbackRef,
   serializeFallbacks,
 } from './modelFallbacksConfig';
+// — 隐式默认模型字段与预设指针的同步（「设为默认」要连带展开）—
+import {
+  DEFAULT_MODEL_FIELDS,
+  pickFallbackDefaultPreset,
+  syncDefaultsToPointer,
+} from './modelDefaultsConfig';
 // —— FR-8.4 写入策略（tools.file.default_deny_write）——
 // 纯逻辑，不 import electron，可直接在 vitest 里跑
 import {
@@ -2485,9 +2491,17 @@ async function mergeModelMutationIntoConfig(
     if (mutation.setDefault) defaults.modelPreset = mutation.preset;
   } else if (mutation.op === 'delete') {
     delete presets[mutation.preset];
-    // 默认指针清空后引擎回落到「隐式 default 预设」（agents.defaults 那套字段），
-    // 这是唯一安全的兜底——指向一个已删除的预设会让每轮请求都炸。
-    if (defaults.modelPreset === mutation.preset) defaults.modelPreset = null;
+    // 删掉的正是当前默认 → **顶上另一个预设**，而不是把指针置空。
+    //
+    // 置空的后果是引擎回落到 `agents.defaults` 那组字段（隐式 default）。如果没有
+    // 下面的同步，那组字段就停在**上一个默认**上：用户删了一个模型，助手悄悄换成
+    // 了另一个毫不相干的模型，且没有任何报错能解释。
+    // `syncDefaultsToPointer` 保证「指针有效 ⇒ 字段与之一致」，所以这里顶上谁都行。
+    // 只有「一个预设都不剩」时才真的置空（那时没有可选的人，保留最后已知的 model 串
+    // 比清空更可用）。
+    if (defaults.modelPreset === mutation.preset) {
+      defaults.modelPreset = pickFallbackDefaultPreset(presets, mutation.preset);
+    }
 
     // 回退链里对它的引用必须一起摘掉，理由同上面的改名：留着它就是一条
     // 「引用了不存在预设」的记录，引擎会在下一次启动时直接拒绝加载配置。
@@ -2514,6 +2528,11 @@ async function mergeModelMutationIntoConfig(
     defaults.modelPreset = mutation.preset;
   }
 
+  // 统一同步：指针指向的预设存在 ⇒ 把它的 model/provider/参数展开进 defaults。
+  // 一处收口而不是每个分支各写一遍——三条路径（setDefault / 改名 / 改预设本体）漏掉
+  // 任何一条，后果都是「删除预设时才炸」，而那时没人会把两件事联系起来。
+  syncDefaultsToPointer(defaults, presets);
+
   agents.defaults = defaults;
   data.agents = agents;
   data.modelPresets = presets;
@@ -2521,6 +2540,14 @@ async function mergeModelMutationIntoConfig(
 
   // 幂等检测只比「模型相关的几段」：config.json 里还有 channels / tools 等
   // 别人也会写的段，拿整份 data 比对会把无关的差异也算进来。
+  //
+  // 只挑 `DEFAULT_MODEL_FIELDS` 那 6 个键：其余 defaults 字段（workspace / 技能覆盖 /
+  // 审批模式…）不是这次写操作的产物，纳入比较会让「升级配置」变成每次都写盘。
+  const defaultFieldsOf = (source: Record<string, unknown>) => {
+    const out: Record<string, unknown> = {};
+    for (const field of DEFAULT_MODEL_FIELDS) out[field] = source[field] ?? null;
+    return out;
+  };
   const modelSegments = (source: Record<string, unknown>) => {
     const d = asObject(asObject(source.agents).defaults);
     return {
@@ -2532,6 +2559,10 @@ async function mergeModelMutationIntoConfig(
       // 「没变化」，于是那次清理根本不会落盘。
       fallbacks: Array.isArray(d.fallbackModels) ? d.fallbackModels : [],
       retryMode: d.providerRetryMode ?? null,
+      // 隐式默认字段也算「模型相关」：`syncDefaultsToPointer` 会就地改它们。
+      // 不纳入比较的话，「指针没变、只有 defaults 被同步」这种修复会被判成
+      // 「没变化」而直接跳过写盘 —— 缺陷留在文件里，而调用方收到「成功但没变」。
+      defaultFields: defaultFieldsOf(d),
     };
   };
   const before = JSON.stringify(modelSegments(JSON.parse(raw) as Record<string, unknown>));
@@ -2541,6 +2572,7 @@ async function mergeModelMutationIntoConfig(
     defaultPreset: defaults.modelPreset,
     fallbacks: Array.isArray(defaults.fallbackModels) ? defaults.fallbackModels : [],
     retryMode: defaults.providerRetryMode ?? null,
+    defaultFields: defaultFieldsOf(defaults),
   });
   if (before === after) return false;
 
