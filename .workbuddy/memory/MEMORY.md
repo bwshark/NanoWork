@@ -51,10 +51,15 @@ WorkBuddy 式智能体客户端：React18+TS+Vite 渲染层 + Electron 主进程
 ## 真机验证铁律
 1. 布局量几何(`getBoundingClientRect`+`getComputedStyle`)别只看截图 2. Playwright `args:['--no-proxy-server']`(本机 `http_proxy` 劫持 127.0.0.1) 3. dev server 与 `vite build` 不并发 4. 启动 dev 前 `mv node_modules/.vite/deps_temp_* /tmp` 5. 真机切场景每场景 `ctx.newPage()`，桩落 localStorage 且 `Object.assign` 内存对象 6. 判上游真伪 `curl --noproxy '*' -i` + `/openapi.json`。
 
-## B3 引擎侧三件(🟡 进行中)
-- **B3-01 FR-2.5 子代理委派**：②✅ `agent/tools/spawn.py` 在 `channel=="api"` 强制 `wait=True` 走 `run_inline`(结果回注)，回归用例锁死；③✅ 权限单调递减已在 study 用 `bind_workspace_scope(parent)`+`AgentToolPolicyHook` 实现，3 组回归用例。①待真机一轮；④⬜ 客户端 `subagent-group` 行类型 + 引擎经 `on_progress` 推子代理进度（`ToolContext` 无进度槽，需独立接线）。
+## B3 引擎侧三件(🟡 代码全落、待真机)
+- **B3-01 FR-2.5 子代理委派**：②✅ `agent/tools/spawn.py` 在 `channel=="api"` 强制 `wait=True` 走 `run_inline`(结果回注)，回归用例锁死；③✅ 权限单调递减用 `bind_workspace_scope(parent)`+`AgentToolPolicyHook` 实现，3 组回归用例。④✅ 客户端可见已落(2026-10-18)：引擎 `agent/subagent_progress.py`(进度槽 contextvar)+`_SubagentHook` 发 SSE `kind:subagent`；客户端 `sessionsStore.handleProcessSubagent`→`processDetail.groupSubagentEvents`→`ProcessView.SubagentGroupView`。①待真机一轮。
 - **B3-02 FR-4.6 Dream 闸门**：①✅ 实测 Dream 经 `build_dream_tools()` 直落 `MEMORY.md`(无 candidate/闸门) ②✅ 闸门已落：`MemoryStore` 加 candidate 生命周期(`prepare/has/compute/accept`/`reject`)，`build_dream_tools(require_review=True)` 把写工具指向 candidate 副本；手动 `/dream` + cron `on_cron_job` 双路径接闸门。③✅ 客户端审查页已落：引擎加 REST `GET /v1/dream/review` + `POST /v1/dream/accept`/`reject`(`_plugin_workspace` 取工作区→`MemoryStore`)；`NanobotHttpRuntime` 透传 `getDreamReview/acceptDream/rejectDream`(`AgentRuntime` 接口按能力声明加可选方法，老网关无此方法时面板静默降级)；`src/pages/memory/DreamReviewPanel.tsx`(MUI，new/modified/deleted 三类 diff + 采纳/丢弃) 接入 `MemoryPage`。④✅ `DreamConfig.require_review=True` 默认开(`AgentLoop.from_config` 透传，三处 `if require_review` 分支；关掉回退「直落」旧行为)。
-- **B3-03 FR-6.5 IM 审批**：①审批请求转渠道卡片(批准/拒绝+TTL) ②回调 `POST /v1/tool-approvals/{id}`(复用既有端点) ③fail-closed(渠道不可用/超时/重放一律不执行)；桌面权限弹窗不受影响(两路并存)。
+- **B3-03 FR-6.5 IM 审批**：✅ **代码全落(2026-10-18)**，真机待验证。①`build_bus_progress_callback` 新增 `approval_request` 分支，以**普通出站**(非 `ProgressEvent`，否则被 `send_progress` 静音)下发卡片，含工具/参数/TTL/短编号 + `buttons=[["允许","拒绝"]]`。②新增 `security/im_approval.py`(`ApprovalInbox` + 纯函数 `parse_approval_verdict`/`build_approval_card`)，在 `AgentLoop.run()` 里**先于命令分发与 pending 队列**吸收裁决。③fail-closed：跨会话不消耗、重放不二次裁决、多条裸裁决要求带编号、超时由钩子判 deny。
+  - ⚠️ **关键架构事实**：IM 轮次跑在 **gateway 进程**，`POST /v1/tool-approvals/{id}` 只在 **serve 进程**；两进程各有自己的 `PENDING_APPROVALS` → HTTP 投过去必落空。裁决只能**进程内** `registry.resolve`。
+  - ⚠️ **飞书 `send` 不渲染 `buttons`**(代码实测)，所以契约以**文本回复**为准(允许/同意/approve/allow；拒绝/不同意/deny/reject)，按钮只服务 Telegram/Slack 等已支持渠道。
+  - ⚠️ **必须先开渠道开关**：`scoped_channels` 只有 `{websocket, api}`，IM 走 `default()` → `tool_approval="auto"`，钩子不介入。新增 `channels.<name>.tool_approval: "ask"`(`channel_tool_approval_modes` + `WorkspaceScopeResolver.default_for`)；默认 auto，不改桌面请求级 `approval_mode`。
+  - ⚠️ 群聊里同会话任一已配对成员都能拍板(未绑定原始 sender)；如要收紧需把 sender_id 存进 `ApprovalRequest`。
+  - 测试 `tests/security/test_im_approval.py`(41)：裁决词/编号消歧/会话归属/重放/重复点击/卡片非 ProgressEvent/渠道开关/钩子全链路。变异：包回 ProgressEvent → 1 红；去掉会话校验 → 1 红；`for_turn` 退回 `default()` → 2 红。
 
 ## 引擎 local patch 清单(本仓 study 副本)
 - `config/schema.py` `DreamConfig.require_review: bool=True` — FR-4.6 闸门开关(默认开)。
@@ -63,6 +68,13 @@ WorkBuddy 式智能体客户端：React18+TS+Vite 渲染层 + Electron 主进程
 - `command/builtin.py` `cmd_dream` 接闸门；新增 `cmd_dream_review`/`accept`/`reject` — FR-4.6 命令面。
 - `cli/gateway_runtime.py` `on_cron_job` Dream 分支接闸门(修过一次缩进 bug：`Dream` 块曾被误嵌进 `_silent` 进度回调，等于 cron Dream 永不执行)。
 - `agent/loop.py` `AgentLoop` 增 `dream_require_review` 构造参 + `from_config` 透传 `defaults.dream.require_review`。
+- `security/tool_approval.py` `ApprovalRequest.timeout_seconds`(payload 增量字段) + `PendingApprovals.pending_for_session`/`find_by_token` — FR-6.5。
+- `security/im_approval.py` **新增**：`parse_approval_verdict` / `build_approval_card` / `ApprovalInbox` — FR-6.5 出卡 + 裁决解释。
+- `bus/progress.py` `build_bus_progress_callback` 增 `approval_request` 参数，审批卡走普通出站 — FR-6.5。
+- `agent/loop.py` `AgentLoop.__init__` 建 `ApprovalInbox(PENDING_APPROVALS, publish=bus.publish_outbound)`；`run()` 在 `handle_runtime_control` 后吸收裁决 — FR-6.5。
+- `agent/hooks/tool_approval.py` `ApprovalRequest(..., timeout_seconds=policy.timeout_seconds)` — 与 `wait_for` 同源。
+- `security/workspace_access.py` `channel_tool_approval_modes()` + `WorkspaceScopeResolver.default_tool_approval_by_channel`/`default_for()`；`for_turn` 对未纳入作用域的渠道走 `default_for(channel)` — FR-6.5 的 IM 启用开关。
+- `agent/loop.py` `WorkspaceScopeResolver(..., default_tool_approval_by_channel=channel_tool_approval_modes(channels_config))` — 把 `channels.<name>.tool_approval` 接进作用域。
 - `api/server.py` 新增 `GET /v1/dream/review` + `POST /v1/dream/accept`/`reject`(`_plugin_workspace` 取工作区→`MemoryStore`)，供客户端审查页用。
 - 客户端：`src/ai/runtime/types.ts` `AgentRuntime` 接口按能力声明加 `getDreamReview?`/`acceptDream?`/`rejectDream?`；`chat.ts`(`NanobotClient`) 实现三方法；`runtime.ts`(`NanobotHttpRuntime`) 透传；新增 `src/pages/memory/DreamReviewPanel.tsx` 并接入 `MemoryPage`。
 

@@ -19,6 +19,7 @@ import type { LogLevel, LogModule } from '@/observability/logging';
 import type { TraceFile } from '@/observability/trace';
 import type { SessionLatencySample } from '@/lib/sseLatency';
 import type { EngineSelfCheckReport } from '@/types/engine';
+import type { DeepLinkAction } from '@/types/deepLink';
 
 // 插件领域类型声明在 `@/types/plugin.ts`（**唯一声明处**，主进程也引它）。
 // 这里只做转出，让 platform 消费方「只 import 一处」即可拿到完整契约面。
@@ -1154,6 +1155,15 @@ export interface PlatformAdapter {
   appQuit(): void;
   /** 订阅主进程下发的路由跳转（托盘菜单「打开设置」）；返回取消订阅函数，web 端为空实现 */
   onAppNavigate(cb: (path: string) => void): () => void;
+  /** 订阅深链动作（`nanowork://`，B4-02）；返回取消订阅函数，web 端为空实现 */
+  onAppDeepLink(cb: (action: DeepLinkAction) => void): () => void;
+  /**
+   * 渲染层的深链监听已挂上：主进程据此 flush 排队中的动作。
+   *
+   * **必须调用**：冷启动 / 第二实例唤起的链接都先排在主进程队列里，不报到这个
+   * 信号，用户只会看到窗口被唤起、目标会话却不打开。
+   */
+  appRendererReady(): Promise<void>;
   /** 订阅主进程下发的「打开关于弹窗」指令（托盘菜单「关于」）；返回取消订阅函数，web 端为空实现 */
   onAppOpenAbout(cb: () => void): () => void;
   /** 窗口最小化；web 端 no-op */
@@ -1682,6 +1692,10 @@ export interface ElectronAPI {
   appQuit(): void;
   /** 订阅主进程下发的路由跳转（托盘菜单「打开设置」）；返回取消订阅函数 */
   onAppNavigate(cb: (path: string) => void): () => void;
+  /** 订阅深链动作（`nanowork://`，B4-02）；返回取消订阅函数 */
+  onAppDeepLink(cb: (action: DeepLinkAction) => void): () => void;
+  /** 渲染层深链监听已挂上：主进程 flush 排队动作；web 端 no-op */
+  appRendererReady(): Promise<void>;
   /** 订阅主进程下发的「打开关于弹窗」指令（托盘菜单「关于」）；返回取消订阅函数 */
   onAppOpenAbout(cb: () => void): () => void;
   /**

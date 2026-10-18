@@ -36,11 +36,18 @@ export interface AcquireSingleInstanceResult {
  * 与主实例抢同一个端口。
  *
  * @param host `app` 的适配面（见模块注释为何不直接传 `app`）
- * @param onSecondInstance 主实例收到「第二个实例被启动」时的回调：唤起并聚焦既有窗口
+ * @param onSecondInstance 主实例收到「第二个实例被启动」时的回调。
+ *
+ * ⚠️ **回调必须收下 argv**（B4-02）：深链是「第二个实例带着一条 URL 启动」的
+ * 典型场景——`nanowork://open-session?id=…` 就在 `argv` 里。把参数吞掉，用户
+ * 双击链接时应用只会被唤起，却不会打开目标会话，且没有任何报错。
  */
 export function acquireSingleInstance(
   host: SingleInstanceHost,
-  onSecondInstance: () => void,
+  onSecondInstance: (
+    argv: readonly string[],
+    workingDirectory: string,
+  ) => void,
 ): AcquireSingleInstanceResult {
   const isPrimary = host.requestSingleInstanceLock();
 
@@ -51,6 +58,6 @@ export function acquireSingleInstance(
     return { isPrimary: false };
   }
 
-  host.onSecondInstance(() => onSecondInstance());
+  host.onSecondInstance((argv, workingDirectory) => onSecondInstance(argv, workingDirectory));
   return { isPrimary: true };
 }

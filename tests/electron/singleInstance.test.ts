@@ -51,17 +51,18 @@ describe('acquireSingleInstance', () => {
     expect(onSecondInstance).not.toHaveBeenCalled();
   });
 
-  it('second-instance 触发时调用唤起回调', () => {
+  it('second-instance 触发时把 argv / 工作目录一起交给回调', () => {
     const { host, listeners } = createHost(true);
     const onSecondInstance = vi.fn();
 
     acquireSingleInstance(host, onSecondInstance);
     expect(listeners).toHaveLength(1);
 
-    listeners[0](['nanowork.exe', '--foo'], 'D:\\Workspace');
+    const argv = ['nanowork.exe', '--foo', 'nanowork://open-session?id=abc'];
+    listeners[0](argv, 'D:\\Workspace');
 
     expect(onSecondInstance).toHaveBeenCalledTimes(1);
-    // 回调不消费 argv / 工作目录——只关心「有人想唤起我」
-    expect(onSecondInstance).toHaveBeenCalledWith();
+    // B4-02：深链就在 argv 里。吞掉参数会让「双击链接」只唤起窗口、不打开会话。
+    expect(onSecondInstance).toHaveBeenCalledWith(argv, 'D:\\Workspace');
   });
 });

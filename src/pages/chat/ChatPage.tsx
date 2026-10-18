@@ -6,6 +6,7 @@ import {
   useState,
 } from "react";
 import { Box, Button, IconButton, InputBase, Typography } from "@mui/material";
+import { useLocation, useNavigate } from "react-router-dom";
 import ChevronLeftIcon from "@mui/icons-material/ChevronLeft";
 import ChevronRightIcon from "@mui/icons-material/ChevronRight";
 import SouthEastIcon from "@mui/icons-material/SouthEast";
@@ -42,9 +43,32 @@ import { channelIconKind } from "@/lib/channelSession";
 export function ChatPage() {
   const [activeMode, setActiveMode] = useState<HeroModeId>("office");
   const [activeSkillId, setActiveSkillId] = useState<string | null>(null);
-  // 空状态输入框受控文本:点击提示词标签时填入对应提示词
-  const [heroText, setHeroText] = useState("");
+  const location = useLocation();
+  const navigate = useNavigate();
+  // 深链 `new-chat?prompt=` 的一次性意图（由 App.tsx 经路由 state 传入）。
+  const deepLinkPrompt = (
+    location.state as { deepLinkPrompt?: unknown } | null
+  )?.deepLinkPrompt;
+  // 空状态输入框受控文本:点击提示词标签时填入对应提示词。
+  // 初值直接取深链 prompt——否则会先渲染一个空框、下一帧才被 effect 填上，闪一下。
+  const [heroText, setHeroText] = useState(
+    typeof deepLinkPrompt === "string" ? deepLinkPrompt : "",
+  );
   const composerApi = useRef<ComposerApi | null>(null);
+
+  // 深链 prompt：挂载时已在初值里，这里兜「页面已挂载时又来一条」的情况。
+  useEffect(() => {
+    if (typeof deepLinkPrompt !== "string") return;
+    if (deepLinkPrompt) {
+      setHeroText(deepLinkPrompt);
+      composerApi.current?.focus();
+    }
+    // 消费掉这条 state：留着会让刷新 / 前进后退把用户改过的草稿再次冲掉。
+    navigate(`${location.pathname}${location.search}`, {
+      replace: true,
+      state: null,
+    });
+  }, [deepLinkPrompt, navigate, location.pathname, location.search]);
 
   const activeId = useSessionsStore((s) => s.activeId);
   const session = useSessionsStore((s) =>

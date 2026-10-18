@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
-import { Outlet } from 'react-router-dom';
+import { Outlet, useNavigate } from 'react-router-dom';
 import { ToastContainer } from '@/components/Toast';
+import { ROUTES } from '@/lib/constants';
 import { connectionManager } from '@/ai/connectionManager';
 import { platform } from '@/platform';
 import { useSkillsStore } from '@/stores/skillsStore';
@@ -38,6 +39,38 @@ import type { SyncRuntime } from '@/sync';
 export function App() {
   // 同步运行时的持有引用：`dispose()` 在卸载清理函数里调用（见下）。
   const syncRuntimeRef = useRef<SyncRuntime | null>(null);
+  const navigate = useNavigate();
+
+  /**
+   * 深链（B4-02）：主进程把 `nanowork://…` 解析成动作，这里只负责「执行」。
+   *
+   * 挂在根组件而不是 `AppLayout`：`/auth` 是 `AppLayout` 之外的平级页面，挂在
+   * 布局层会让登录页期间的深链无人接收。根组件在**所有**路由下都挂载。
+   */
+  useEffect(() => {
+    const off = platform.onAppDeepLink((action) => {
+      const sessions = useSessionsStore.getState();
+      if (action.kind === 'open-session') {
+        // 会话不存在时 `selectSession` 只是把 activeId 指过去，`loadSession` 早退，
+        // 页面表现为空会话——**不报错、不白屏**，符合「坏链接不该炸应用」。
+        sessions.selectSession(action.sessionId);
+        navigate(ROUTES.chat);
+        return;
+      }
+      // new-chat：先建一条空会话（空会话 → 聊天页走大标题空态，输入框是受控的
+      // hero 版本），prompt 经路由 state 交给 ChatPage 预填。
+      // why 不用 store 传：这是**一次性**意图，路由 state 天然随本次导航消费掉，
+      // 不需要额外清理，也不会在刷新后幽灵般复现。
+      const prompt = action.prompt;
+      const title = prompt.trim().slice(0, 24) || '新会话';
+      sessions.createSession(undefined, title);
+      navigate(ROUTES.chat, { state: { deepLinkPrompt: prompt } });
+    });
+    // ⚠️ **先订阅、后报到**：顺序反了，主进程 flush 的那一刻监听还没挂上，
+    // 冷启动的深链就被静默丢掉了（窗口亮起、目标会话不打开）。
+    void platform.appRendererReady();
+    return off;
+  }, [navigate]);
 
   useEffect(() => {
     // 会话水合：列表来自事件流索引（不扫 JSONL），当前会话的消息按需加载。

@@ -11,6 +11,7 @@ import type {
   PlatformName,
   ToolsSyncResult,
 } from '../src/platform/types';
+import type { DeepLinkAction } from '../src/types/deepLink';
 
 /**
  * preload：通过 contextBridge 安全地暴露 window.electronAPI。
@@ -193,6 +194,13 @@ const api: ElectronAPI = {
     ipcRenderer.on('app:navigate', listener);
     return () => ipcRenderer.removeListener('app:navigate', listener);
   },
+  // —— 深链（B4-02）——
+  onAppDeepLink: (cb: (action: DeepLinkAction) => void) => {
+    const listener = (_e: unknown, action: DeepLinkAction) => cb(action);
+    ipcRenderer.on('app:deep-link', listener);
+    return () => ipcRenderer.removeListener('app:deep-link', listener);
+  },
+  appRendererReady: () => ipcRenderer.invoke('app:renderer-ready'),
   onAppOpenAbout: (cb: () => void) => {
     const listener = () => cb();
     ipcRenderer.on('app:open-about', listener);

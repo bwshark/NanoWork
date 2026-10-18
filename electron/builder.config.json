@@ -2,6 +2,12 @@
   "appId": "com.nanowork",
   "productName": "nanowork",
   "icon": "electron/assets/icon",
+  "protocols": [
+    {
+      "name": "NanoWork",
+      "schemes": ["nanowork"]
+    }
+  ],
   "directories": {
     "output": "release"
   },

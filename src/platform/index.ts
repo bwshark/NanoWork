@@ -565,6 +565,14 @@ export const platform: PlatformAdapter = {
     const api = electronBridge();
     return api ? api.onAppNavigate(cb) : () => undefined;
   },
+  onAppDeepLink: (cb) => {
+    const api = electronBridge();
+    return api ? api.onAppDeepLink(cb) : () => undefined;
+  },
+  appRendererReady: () => {
+    const api = electronBridge();
+    return api ? api.appRendererReady() : Promise.resolve();
+  },
   onAppOpenAbout: (cb) => {
     const api = electronBridge();
     return api ? api.onAppOpenAbout(cb) : () => undefined;

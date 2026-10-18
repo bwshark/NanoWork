@@ -1,5 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, Notification, safeStorage, shell } from 'electron';
-import { basename, dirname, extname, join } from 'node:path';
+import { basename, dirname, extname, join, resolve } from 'node:path';
 import { promises as fs, appendFileSync, existsSync, readFileSync, watch as fsWatch, type Dirent } from 'node:fs';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createConnection } from 'node:net';
@@ -11,6 +11,13 @@ import { parseWebuiResponseFrame } from './webuiFrames';
 import { canBindPort, resolveGatewayPort } from './gatewayPort';
 import { createWindowPreferences } from './windowPreferences';
 import { isDevToolsShortcut } from './devtoolsShortcut';
+import {
+  DEEP_LINK_SCHEME,
+  createDeepLinkRouter,
+  findDeepLinkArg,
+  parseDeepLink,
+} from './deepLink';
+import type { DeepLinkAction } from '../src/types/deepLink';
 import {
   engineInterpreterCandidates,
   runEngineSelfCheck,
@@ -199,6 +206,49 @@ const startupProfile = createStartupProfiler({
 // 「模块加载」这一段从此刻起算 —— 它是下面所有区间的公共原点。
 startupProfile.begin('app.load→ready');
 
+// —— 深链 nanowork://（B4-02）——
+//
+// 三条入口最终都汇到 `deepLinkRouter`：
+// 1. 冷启动 argv（Windows / Linux 双击链接）；
+// 2. 第二个实例的 argv（应用已在运行时再双击链接，见下面的 second-instance）；
+// 3. macOS 的 `open-url` 事件。
+//
+// **为什么要排队**：渲染层（React）挂上监听之前就 `webContents.send` 会**静默丢**
+// 那条链接——用户看到窗口被唤起，却没打开目标会话，且没有任何报错。所以先入队，
+// 等渲染层通过 `app:renderer-ready` 报到后再 flush。
+
+function sendDeepLinkToWindow(action: DeepLinkAction): void {
+  mainWindow?.webContents.send('app:deep-link', action);
+}
+
+const deepLinkRouter = createDeepLinkRouter(sendDeepLinkToWindow);
+
+ipcMain.handle('app:renderer-ready', () => {
+  deepLinkRouter.markRendererReady();
+});
+
+// 注册协议处理器。
+// - 打包态：由 builder 的 `protocols` 在安装时登记，运行时这句是幂等的兜底；
+// - 开发态（`electron .`）：必须显式把「可执行文件 + 应用目录」传进去，否则系统
+//   会把链接交给 Electron 本体而不是这个应用。
+const isDefaultApp = Boolean(
+  (process as NodeJS.Process & { defaultApp?: boolean }).defaultApp,
+);
+if (isDefaultApp && process.argv.length >= 2) {
+  app.setAsDefaultProtocolClient(DEEP_LINK_SCHEME, process.execPath, [resolve(process.argv[1])]);
+} else {
+  app.setAsDefaultProtocolClient(DEEP_LINK_SCHEME);
+}
+
+// macOS：协议 URL 不走 argv，走 open-url；**必须早于 ready 注册**，否则冷启动那条会丢。
+app.on('open-url', (event, url) => {
+  event.preventDefault();
+  const action = parseDeepLink(url);
+  if (!action) return;
+  showMainWindow();
+  deepLinkRouter.push(action);
+});
+
 // —— 单实例锁（FR-13.1）——
 //
 // **必须放在所有带副作用的模块级代码之前**：下面是 createEventStore（建目录）、
@@ -211,14 +261,26 @@ startupProfile.begin('app.load→ready');
 const singleInstance = acquireSingleInstance(
   {
     requestSingleInstanceLock: () => app.requestSingleInstanceLock(),
-    // 只透传 argv / 工作目录：本进程不需要知道第二个实例带了什么参数，
-    // 只需要知道「有人想唤起我」。
     onSecondInstance: (listener) =>
       app.on('second-instance', (_e, argv, workingDirectory) => listener(argv, workingDirectory)),
     exit: (code) => app.exit(code),
   },
-  () => showMainWindow(),
+  (argv) => {
+    showMainWindow();
+    // 第二个实例的 argv 里带着深链——这是「应用已在运行时双击链接」的唯一来源。
+    // 只唤起窗口、不看 argv，正是这条需求最容易漏掉的一半。
+    const raw = findDeepLinkArg(argv);
+    const action = raw ? parseDeepLink(raw) : null;
+    if (action) deepLinkRouter.push(action);
+  },
 );
+
+// 冷启动：链接就在自己的 argv 里。此刻渲染层必然未就绪 → 进队列，ready 后 flush。
+const initialDeepLink = findDeepLinkArg(process.argv);
+if (initialDeepLink) {
+  const action = parseDeepLink(initialDeepLink);
+  if (action) deepLinkRouter.push(action);
+}
 
 /** 本进程是否是主实例。第二个实例在上面就已经 exit 了，这里是双保险 */
 const isPrimaryInstance = singleInstance.isPrimary;
@@ -693,6 +755,10 @@ async function createWindow(): Promise<void> {
   } else {
     await mainWindow.loadFile(join(__dirname, '../dist/index.html'));
   }
+
+  // 页面开始重载：深链从此刻起重新排队。否则 HMR / 手动刷新期间到达的链接会被
+  // 发给即将销毁的旧页面，用户看到的是「窗口闪了一下、什么也没打开」。
+  win.webContents.on('did-start-loading', () => deepLinkRouter.resetRenderer());
 
   // 「首屏已加载」用一个 `once` 收口：`did-finish-load` 每次加载都会发（dev 分支的
   // HMR 重载、切换 devUrl 都会再发），而剖析只关心冷启动那一次。

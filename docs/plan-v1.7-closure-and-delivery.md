@@ -31,7 +31,7 @@ V1.6 把「运行期工程」补齐了，但 **V1 本身仍未整体收口**（`
 | **B1 判据与文档收口** | ✅ **已完成（7/7）** | 2026-10-17 | **B1-01**：v2 §6 的 P1 基线表整块重写为「复核后真正剩余的 P1 共 4 条」并逐条给阻塞点与落点；`docs/README.md` §九 看板新增 **#35**（与 #34 同源的状态滞后，第二次发生）。**B1-02**：`FR-4.4` ⬜→🟡，写明「个人 / 项目两级已由记忆 v2 落地（`memoryPaths.ts` 两类根 + `workspaceIdFor` / `scopeIdFor`），只剩组织级 → V3」，**本轮零代码改动**。**B1-03**：`FR-8.6` 拆三件（彻底删除 ✅ / 检索前过滤被知识库阻塞 / 注入检测待做）并注明「不再计为整条欠账」。**B1-04**：`FR-3.9` 收窄为两块并给 ② 的降级口径。**B1-05**：**19 条 FR**（R13 全量 6 + R3 5 + R8 4 + R11 4）并入 v2 第 3 章，**新开 R13 域**并进域总览表；顺带校准「原文称 24 条 / 实为 19 条」的计数口径（v1.6 §〇 加勘误行）。**B1-06**：`OVERVIEW.md` 全篇重写（V1 收口口径、V1.6/V1.7 进度、已实现能力按域、遗留风险 10 条）。**B1-07**：本文件已登记进 `docs/README.md` §三。**门禁实测（零代码改动，用于确认基线）**：三套 `tsc` 均 0 错误；`CODEBUDDY_SAFE_DELETE_ENABLED=0 npm run build` **退出码 0**（24.43s）；首屏 `modulepreload` 0.61 MB / 合计 1.16 MB（两条预算内）；`vitest` **226 文件 3409 用例**中 **2 个红均已定位为夹具/环境类**（同步集成用例并发下健康检查超时、`fileBackup` 用例断言与 `list()` 契约冲突的确定性 flaky），证据见 `OVERVIEW.md` §2.1 —— **两条噪声建议在 B2 一并修掉** |
 | **B2 客户端补完** | ✅ **已完成（3/3 + 2 处门禁噪声）** | 2026-10-17 | **B2-01**：会话版本引用集进同步负载——`Session.pluginVersions` / `SessionMeta.pluginVersions` 声明字段 + `src/lib/sessionPluginRefs.ts`（快照 / 解析 / GC 保护集，纯函数）+ 白名单 `pluginVersions`（**对象按内容比**，否则每轮发送都涨 `rev`）+ `toMeta` / `toMetaFromEntity` / `metaToSession` / `deriveMetaFromEvents` 往返 + `collectCache` 的引用集改为 **本机生效副本 ∪ 会话引用集**（换机 GC 不再删掉别的设备正在用的那一版）。**B2-02**：`src/lib/promptInjection.ts` 四类规则（指令覆盖 / 角色劫持 / 外泄诱导 / 编码混淆）+ `components/composer/InjectionNotice.tsx`，`Composer` 上方常驻提示、**只提示不拦截**；规则按「动作 + 对象」收紧，6 条「正常提问不误报」用例钉住误报率。**B2-03**：占位本就确定（`hashHue`），本轮补 `helperText` 写明「云端头像未接入」+ 9 条用例**锁定确定性**（同名同色同字；URL 头像退回名称首字），**不新增任何网络请求**。**门禁噪声（2 处，均非回归）**：① `fileBackupStore` 的 `BackupEntry` 加单调 `seq`，`list()` 改「`at` 倒序 → `seq` 倒序」的**全序**（同毫秒也确定），用例改为按契约断言「最新在前」；② 两个同步集成用例的健康检查与 `beforeAll` 超时 20s → 90s（全量并发下 uvicorn 首次 import 可被拖过 20s，单跑只要 2.9s）。**门禁**：三套 `tsc` 0 错误；全量 `vitest --maxWorkers=3` **229 文件 / 3454 用例 exit=0**（此前的两处红全消）；`CODEBUDDY_SAFE_DELETE_ENABLED=0 npm run build` exit=0；`electron/main.cjs` / `preload.cjs` 已重建（`indexFile.ts` 被主进程打包，改它必须重建）。**变异验证 3 项**：白名单去掉 `pluginVersions` → 4 条红；去掉 `seq` 兜底 → 2 条红；去掉中文指令覆盖规则 → 1 条红 |
 | **引擎统一收尾** | ✅ **已完成** | 2026-10-17 | 用户决策「统一到本仓 study 副本，桌面也跑本仓」。`$APPDATA/nanowork/nanowork.nanobot.json` 由坏掉的 `{}`（带 BOM→`JSON.parse` 抛错→fallback 到本仓 exe）改为显式 `{bin: study exe, host:127.0.0.1, port:8900}`（无 BOM）。study 引擎已自洽：`gitstore.py` 含 FileLock、`nanobot.exe` 启动器指向本仓 venv（`nanobot_ai 0.3.0` 已装）、`nanobot --version`→v0.3.0。凭据走环境变量 `DASHSCOPE_API_KEY`（两份 `nanowork.config.json` 均无内联密钥）→ 统一不丢凭据。本机无 codes 应用 userData（codes 副本未被使用），备份在 `codes/nanobot/.local-backup-eng-20261017_204905/`。B3 引擎改动落 study 即可，不再强制双副本同步 |
-| B3 引擎侧三件 | 🟡 进行中（B3-01 ②③④ 已落、①待真机；B3-02 ①②③④ 全落、待真机） | 2026-10-18 | 见下表 B3-01/B3-02 进度 |
+| B3 引擎侧三件 | 🟡 代码全落、待真机（B3-01 ②③④；B3-02 ①②③④；B3-03 ①②③） | 2026-10-18 | 三件均已实现并有用例；剩余 B3-01 ①（子代理真机一轮）与三件的飞书真机闭环。B3-03 新增 `security/im_approval.py` + `tests/security/test_im_approval.py`(36) |
 | B4 交付闭环 | ⬜ 未开工 | — | — |
 | B5 数据驱动决策 | ⬜ 未开工 | — | — |
 
@@ -133,11 +133,11 @@ V1.6 把「运行期工程」补齐了，但 **V1 本身仍未整体收口**（`
 
 #### B3-03 IM 内审批（FR-6.5）
 
-| 步骤 | 内容 | DoD |
-|---|---|---|
-| ① 推送 | 审批请求转成渠道卡片（批准 / 拒绝两键）+ 超时 TTL | 钉钉 / 飞书 / 企微至少 1 家真机收到卡片 |
-| ② 回调 | 渠道入站回调 → `POST /v1/tool-approvals/{id}`（复用既有端点，不新开协议） | 点「拒绝」⇒ 工具不执行且主对话收到 deny 结果（与桌面拒绝等价） |
-| ③ fail-closed | 渠道不可用 / 超时 / 回调重放 | 一律**不执行**；重放不重复裁决；用例锁死三条 |
+| 步骤 | 内容 | DoD | 状态 |
+|---|---|---|---|
+| ① 推送 | 审批请求转成渠道卡片（批准 / 拒绝两键）+ 超时 TTL | 钉钉 / 飞书 / 企微至少 1 家真机收到卡片 | ✅ **已落（2026-10-18）**：`build_bus_progress_callback` 新增 `approval_request` 分支，**以普通出站消息**下发（不包 `ProgressEvent`，否则被 `send_progress` 静音）；正文含工具名 / 参数摘要 / TTL / 短编号，`buttons=[["允许","拒绝"]]`。TTL 来自 `ApprovalRequest.timeout_seconds`（与 `wait_for` 同源）。⚠️ **飞书 `send` 不渲染按钮**（代码实测），因此契约以**文本回复**为准，按钮只服务 Telegram/Slack 等已支持渠道。**启用开关**：IM 原本是 `tool_approval=auto`（钩子根本不介入），新增 `channels.<name>.tool_approval: "ask"`（`channel_tool_approval_modes` + `WorkspaceScopeResolver.default_for`），默认 `auto` 不改桌面行为 |
+| ② 回调 | 渠道入站回调 → 裁决投回挂起的 future | 点「拒绝」⇒ 工具不执行且主对话收到 deny 结果（与桌面拒绝等价） | ✅ **已落（2026-10-18）**：新增 `security/im_approval.py`（`ApprovalInbox`）在 `AgentLoop.run()` 里、**先于命令分发与 pending 队列**吸收「允许 / 拒绝」；支持裸裁决（本会话唯一一条）与「允许 <编号>」（多条的消歧）。⚠️ **偏差**：走**进程内** `PENDING_APPROVALS.resolve`，不是 `POST /v1/tool-approvals/{id}`——IM 轮次在 **gateway 进程**，该端点只在 **serve 进程**，两个进程各有自己的注册表，HTTP 投过去只会落空。协议面未新增，仍复用 `ApprovalDecision` |
+| ③ fail-closed | 渠道不可用 / 超时 / 回调重放 | 一律**不执行**；重放不重复裁决；用例锁死三条 | ✅ **已落（2026-10-18）**：渠道不可用 → 卡片发不出 → 钩子 300s 超时判 deny；超时 → `asyncio.wait_for` 判 deny；重放 → `resolve` 二次返回 False + `ApprovalInbox` 回「已处理或已过期」；跨会话 → 不消耗、不裁决；多条待裁决 + 裸裁决 → 要求带编号，绝不猜。**真机（飞书）收卡 + 允许/拒绝闭环待验证** |
 
 **变异验证**：
 
