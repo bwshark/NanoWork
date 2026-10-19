@@ -124,6 +124,8 @@ const api: ElectronAPI = {
     ipcRenderer.invoke('nanobot:sendChannelMessage', params),
   nanobotRunChannelTurn: (params) =>
     ipcRenderer.invoke('nanobot:runChannelTurn', params),
+  nanobotGetChannelTurnProgress: (params) =>
+    ipcRenderer.invoke('nanobot:getChannelTurnProgress', params),
   nanobotChannelConnect: (action: ChannelConnectAction, channel: string, params: Record<string, string>) =>
     ipcRenderer.invoke('nanobot:channelConnect', action, channel, params),
   nanobotRestartGateway: (engineChannel?: string) =>

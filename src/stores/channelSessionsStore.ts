@@ -6,6 +6,7 @@ import {
   channelSessionKey,
   isExternalSession,
 } from '@/lib/channelSession';
+import { isChannelTurnWatching } from '@/lib/channelTurnLiveState';
 import { useSessionsStore } from './sessionsStore';
 import type { NanobotChannelSessionDetail, NanobotChannelSessionSummary } from '@/platform/types';
 import type { Session } from '@/types';
@@ -77,6 +78,11 @@ export const useChannelSessionsStore = create<ChannelSessionsState>()((set, get)
     if (!isExternalSession(active) || !active) return;
     const key = channelSessionKey(active.id);
     if (!key) return;
+    // 助理视图正在这一轮里挂「实时过程」占位消息（纯本地）：整份替换会把它冲掉。
+    // 引擎在轮次进行中会多次落盘（开工即写用户消息、每个工具轮次后再写一次），
+    // 所以这条抑制不是「优化」而是**功能前提**——不拦就表现为「实时思考闪一下又空了」。
+    // 收尾时 `channelTurnLive` 会解除登记并主动刷新，真实记录立刻接管。
+    if (isChannelTurnWatching(active.id)) return;
     const summary = summaries.find((s) => s.key === key);
     if (!summary) return;
     if (seenUpdatedAt.get(key) === summary.updatedAt) return;

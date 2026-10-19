@@ -29,6 +29,7 @@ import {
 } from "./heroPresets";
 import { toast } from "@/components/Toast";
 import { hasConversation } from "@/lib/conversation";
+import { watchChannelTurn } from "@/lib/channelTurnLive";
 import { platform } from "@/platform";
 import { useSessionsStore } from "@/stores/sessionsStore";
 
@@ -570,7 +571,10 @@ function ChannelComposer({
             toast.error(result.error ?? "发送失败");
             return;
           }
-          // 已受理。引擎这一轮还在跑，回复与最终记录由轮询带回来（最多 4 秒）。
+          // 已受理：引擎这一轮还在跑，磁盘上还没有可读记录。开一条实时过程占位
+          // 助手消息并轮询 `/v1/turn/progress`，让思考 / 工具行像任务视图一样
+          // 逐条出现；真实记录落盘后由 4 秒轮询整体替换它。
+          watchChannelTurn({ sessionId, channel, chatId });
         })
         .finally(() => setBusy(false));
     },

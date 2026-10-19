@@ -40,6 +40,9 @@ import { registerHotkey, unregisterAllHotkeys } from './hotkey';
 import type {
   ChannelSendParams,
   ChannelSendResult,
+  ChannelTurnProgress,
+  ChannelTurnProgressEvent,
+  ChannelTurnProgressParams,
   DesktopConfig,
   DesktopConfigResult,
   DiskUsage,
@@ -4312,6 +4315,141 @@ ipcMain.handle(
 ipcMain.handle(
   'nanobot:runChannelTurn',
   async (_e, params: ChannelSendParams) => runChannelTurn(params),
+);
+
+/**
+ * 读取某一轮实时进度（gateway health 端口 `GET /v1/turn/progress`）。
+ *
+ * 为什么需要它：`/v1/turn` 的 200 只代表「已受理」，之后整轮期间磁盘上还没有
+ * 任何落盘记录 —— 助理视图若只靠 4 秒轮询，界面上就是一片空白（用户会把
+ * 「正在想」误读成「没发出去」）。引擎把 `on_progress` 另存了一份内存快照，
+ * 这里按 seq 增量取回，渲染层据此画实时过程时间线。
+ *
+ * 容错策略（决定渲染层行为，故意分成三档）：
+ * - 404 / 连接被重置路由缺失 → `unsupported`：外部托管的老引擎不认这个端点，
+ *   调用方应停止轮询并退回旧行为，而不是每 0.6 秒失败一次；
+ * - 其它 HTTP 非 200 / 解析失败 → `ok=false`：这是**暂时**故障，调用方可以重试；
+ * - 正常 → 解码成 camelCase（wire 字段止步于此，渲染层不认识 `call_id`）。
+ */
+function getChannelTurnProgress(
+  params: ChannelTurnProgressParams,
+): Promise<ChannelTurnProgress> {
+  const query = new URLSearchParams({
+    channel: params.channel,
+    chat_id: params.chatId,
+    since: String(Math.max(0, Math.floor(params.since))),
+  });
+
+  return new Promise((resolve) => {
+    const req = httpRequest(
+      {
+        host: GATEWAY_HEALTH_HOST,
+        port: GATEWAY_HEALTH_PORT,
+        path: `/v1/turn/progress?${query.toString()}`,
+        method: 'GET',
+        timeout: 3000,
+      },
+      (res) => {
+      let raw = '';
+      res.on('data', (d) => (raw += d.toString()));
+      res.on('end', () => {
+        if (res.statusCode === 404) {
+          resolve({ ok: false, unsupported: true, known: false, active: false, seq: 0, events: [] });
+          return;
+        }
+        if (res.statusCode !== 200) {
+          resolve({
+            ok: false,
+            known: false,
+            active: false,
+            seq: 0,
+            events: [],
+            error: `网关返回 ${res.statusCode}`,
+          });
+          return;
+        }
+        const decoded = decodeChannelTurnProgress(raw);
+        if (!decoded) {
+          resolve({
+            ok: false,
+            known: false,
+            active: false,
+            seq: 0,
+            events: [],
+            error: '网关进度响应解析失败',
+          });
+          return;
+        }
+        resolve(decoded);
+      });
+    });
+    req.on('timeout', () => req.destroy(new Error('网关进度查询超时')));
+    // 轮询期间网关可能刚好在重启：连接错误不是「致命」，下一次轮询会自愈，
+    // 因此这里也报成 ok=false（可重试），而不是 unsupported（永久放弃）。
+    req.on('error', (err) =>
+      resolve({
+        ok: false,
+        known: false,
+        active: false,
+        seq: 0,
+        events: [],
+        error: `网关不可达：${err.message}`,
+      }),
+    );
+    req.end();
+  });
+}
+
+/** 把网关的 snake_case 进度快照解码成渲染层类型；结构不合法返回 null */
+function decodeChannelTurnProgress(raw: string): ChannelTurnProgress | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== 'object') return null;
+  const wire = parsed as Record<string, unknown>;
+  const rawEvents = Array.isArray(wire.events) ? wire.events : [];
+  const events: ChannelTurnProgressEvent[] = [];
+  for (const entry of rawEvents) {
+    if (!entry || typeof entry !== 'object') continue;
+    const ev = entry as Record<string, unknown>;
+    // 未知 kind 一律跳过：猜错会把工具行渲染成思考段，比少一条更误导。
+    if (ev.kind === 'reasoning' && typeof ev.content === 'string') {
+      events.push({ kind: 'reasoning', content: ev.content });
+    } else if (ev.kind === 'reasoning_end') {
+      events.push({ kind: 'reasoning_end' });
+    } else if (ev.kind === 'tool' && typeof ev.name === 'string') {
+      const phase = ev.phase === 'end' ? 'end' : ev.phase === 'error' ? 'error' : 'start';
+      events.push({
+        kind: 'tool',
+        id: String(ev.call_id || `tool-${ev.name}`),
+        tool: ev.name,
+        phase,
+        args:
+          ev.arguments && typeof ev.arguments === 'object'
+            ? (ev.arguments as Record<string, unknown>)
+            : {},
+        ...(phase === 'end' && ev.result !== undefined ? { result: String(ev.result) } : {}),
+        ...(phase === 'error' && ev.error !== undefined ? { error: String(ev.error) } : {}),
+      });
+    }
+  }
+  const startedAt = typeof wire.started_at === 'number' ? wire.started_at : undefined;
+  return {
+    ok: true,
+    known: wire.known === true,
+    active: wire.active === true,
+    seq: typeof wire.seq === 'number' ? wire.seq : 0,
+    ...(startedAt !== undefined ? { startedAtMs: Math.round(startedAt * 1000) } : {}),
+    events,
+  };
+}
+
+ipcMain.handle(
+  'nanobot:getChannelTurnProgress',
+  async (_e, params: ChannelTurnProgressParams) => getChannelTurnProgress(params),
 );
 
 // ——————————————————————————————————————————————

@@ -216,3 +216,29 @@ plugins → config.loader → config.schema` 闭成了环。症状是 `config/sc
 `` `Config` is not fully defined; you should define `WebToolsConfig` ``（`tests/config/test_model_presets.py`
 因此红了一整轮）。已改为**函数内局部导入**（schema.py 末尾本就写着这条排查提示）。
 合并上游时若看到 `context.py` 里出现模块级的 plugins 导入，按同一条理由驳回。
+
+---
+
+## 十、桌面端助理视图的实时进度旁路（2026-10-19 追加）
+
+> 这一批解决的是「助理（IM）视图在等回复期间界面全空」：任务视图走 `/v1/chat` 的 SSE
+> 能逐帧拿到思考与工具行，而 `/v1/turn` 那条链路只回「已受理」，进度经
+> `bus.publish_outbound` 全部发给了渠道自己（飞书卡片等），桌面端看不到。
+> 做法是在 `TurnDelivery` 的进度回调上**并联一个旁听者**，把同一份事件攒成内存快照，
+> 再经 gateway health 端口的 `GET /v1/turn/progress` 增量取走。
+
+| 文件（相对 `nanobot/`） | 本次改动 | 为什么不改上游做不到 |
+|---|---|---|
+| `gateway/turn_progress.py`（**新增**） | `TurnProgressStore`：`begin` / `observe` / `finish` / `snapshot(since)`；事件形状与 SSE 的 `nanobot_event` 对齐；只记登记过的会话；溢出丢最旧一段 | 引擎没有任何「进度快照」概念，进度是**一次性**投递给渠道的流，不落任何可读状态 |
+| `agent/turn_delivery.py` | `TurnDeliveryFactory(progress_observer=...)` + `TurnDelivery.progress_observer`；`progress_callback()` 返回「旁听 + 原样投递」的包装；包装形参**逐字对齐**底层回调 | 这是全轮进度事件的唯一汇合点。挂在渠道侧只服务那一个渠道；挂在 `on_progress` 外层拿不到 `session_key` |
+| `cli/gateway_runtime.py` | 装配 `TurnProgressStore` + 订阅 `TurnCompleted` / `TurnRunStatusChanged`；`/v1/turn` 受理前 `begin`；新增 `GET /v1/turn/progress` | 端点必须与 `/v1/turn` **同进程**：会话 key 的形态受 `unified_session` 影响，客户端自己算必错 |
+
+**三条给合并上游时的提醒**：
+
+1. **包装回调不能写 `**kwargs`**：引擎用 `inspect.signature` 判断通道能力
+   （`on_progress_accepts_plan_events` 等）。多一个 `**kwargs` 会把「不支持」变成「支持」，
+   调用方随即把 `plan` 事件发进来，再原样转发给底层回调 → `TypeError`。
+2. **旁听者的异常必须被吞掉**：进度只是「看得见」，渠道投递才是「发得出去」。
+   旁路写失败绝不能连带这一轮回复一起失败（`tests/gateway/test_turn_progress.py` 有用例钉住）。
+3. **`begin` 要在 `publish_inbound` 之前**：`publish_inbound` 会让出事件循环，
+   引擎的 `run()` 可能立刻开始回吐进度；先投递后登记会静默丢掉头几条（往往是整段思考）。

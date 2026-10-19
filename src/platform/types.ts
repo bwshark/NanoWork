@@ -581,6 +581,61 @@ export interface ChannelSendResult {
   error?: string;
 }
 
+/** 查询某一轮实时进度的参数（gateway `GET /v1/turn/progress`） */
+export interface ChannelTurnProgressParams {
+  /** nanobot 渠道名（session key 冒号前段，如 feishu.feishu） */
+  channel: string;
+  /** IM 会话 id（session key 冒号后段，如飞书 open_id） */
+  chatId: string;
+  /** 上一次读到的 seq，只取比它新的事件（首轮传 0） */
+  since: number;
+}
+
+/**
+ * 一条**实时进度**事件。
+ *
+ * 形状刻意与任务视图 SSE 里的 `nanobot_event` 同义（`kind` 取值一致）：两条链路
+ * 讲的是同一件事（引擎的 `on_progress`），客户端因此能复用同一个视觉映射。
+ * 差异只有一处：这里是**已经解码好的** camelCase，wire 字段名留在主进程。
+ */
+export type ChannelTurnProgressEvent =
+  | { kind: 'reasoning'; content: string }
+  | { kind: 'reasoning_end' }
+  | {
+      kind: 'tool';
+      id: string;
+      tool: string;
+      phase: 'start' | 'end' | 'error';
+      args: Record<string, unknown>;
+      result?: string;
+      error?: string;
+    };
+
+/**
+ * 一轮的实时进度快照。
+ *
+ * `known=false` 表示引擎还没登记这一轮（客户端可能比 `/v1/turn` 的响应早一步
+ * 开始轮询）——调用方应当**继续等**，而不是当成「已完成」立刻收尾。
+ * `unsupported=true` 表示网关不认这个端点（外部托管的老版本引擎）：此时只能退回
+ * 「发送后等 4 秒轮询」的旧行为，不能一直重试。
+ */
+export interface ChannelTurnProgress {
+  ok: boolean;
+  /** 网关不支持该端点（404 / 路由缺失）：调用方停止轮询，退回旧行为 */
+  unsupported?: boolean;
+  /** 失败原因（ok=false 且非 unsupported） */
+  error?: string;
+  /** 引擎是否已登记这一轮 */
+  known: boolean;
+  /** 这一轮是否仍在跑 */
+  active: boolean;
+  /** 服务端当前最大 seq（下次轮询的 since 直接用它） */
+  seq: number;
+  /** 本轮开始时间（epoch 毫秒；仅供展示） */
+  startedAtMs?: number;
+  events: ChannelTurnProgressEvent[];
+}
+
 /** 扫码接入动作（网关 settings.channel.connect.{action}） */
 export type ChannelConnectAction = 'start' | 'poll' | 'cancel';
 
@@ -1025,6 +1080,17 @@ export interface PlatformAdapter {
    * Web 端无法访问本地 gateway，返回失败（与 `sendChannelMessage` 同降级范式）。
    */
   runChannelTurn(params: ChannelSendParams): Promise<ChannelSendResult>;
+  /**
+   * 读取某一轮**正在进行的**实时进度（gateway `GET /v1/turn/progress`）。
+   *
+   * 助理视图发送后用它做「实时过程」：IM 会话在磁盘上只在轮次结束/分段落盘，
+   * 4 秒轮询拿不到中间态；这个接口按 seq 增量取回引擎刚吐出的思考与工具行。
+   * - electron：主进程 HTTP 调 gateway health 端口；
+   * - web：无 gateway 访问能力，返回 `unsupported`（退回旧行为）。
+   */
+  getChannelTurnProgress(
+    params: ChannelTurnProgressParams,
+  ): Promise<ChannelTurnProgress>;
   /**
    * IM 渠道扫码接入（经主进程认证 WS 桥调网关 settings.channel.connect.*）。
    * - electron：主进程签发 token 并经 webui WebSocket 发 mutation 帧；
@@ -1630,6 +1696,15 @@ export interface ElectronAPI {
   nanobotRunChannelTurn(
     params: ChannelSendParams,
   ): Promise<ChannelSendResult>;
+  /**
+   * 读取某一轮实时进度（gateway health 端口 `GET /v1/turn/progress`）。
+   *
+   * wire 字段（`snake_case` / `call_id` 等）在主进程解码，渲染层只拿到
+   * `ChannelTurnProgress`——渠道协议细节不越过平台层。
+   */
+  nanobotGetChannelTurnProgress(
+    params: ChannelTurnProgressParams,
+  ): Promise<ChannelTurnProgress>;
   /** 扫码接入（网关认证 WS 桥：settings.channel.connect.{start|poll|cancel}） */
   nanobotChannelConnect(
     action: ChannelConnectAction,

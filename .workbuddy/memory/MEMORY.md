@@ -33,6 +33,12 @@ WorkBuddy 式智能体客户端：React18+TS+Vite 渲染层 + Electron 主进程
 - ⚠️ 测 `AgentLoop` 的 **session key 解析**必须真驱动 `run()`：直连 `_process_message` 绕过 `_effective_session_key`，把 key 改成 `api:` 前缀时用例仍全绿。且 `run()` 用 `asyncio.wait_for(bus.consume_inbound(), 1.0)`——替换假 consumer 会被超时取消（消息进队列却送不到 loop，症状：队列在涨、模型从没被调）；正确姿势是预置 `bus.inbound.put_nowait()` + 等 `bus.consume_outbound()`。`Session.messages` 是 TypedDict，按 `m["role"]` 取。
 
 ## 客户端/渲染事实（不可从代码直接推断）
+- ⛔ IM 会话的进度**只投给渠道**（`bus.publish_outbound`→飞书卡片），桌面端拿不到 → 助理视图「等回复期间全空」不是渲染问题。
+  现由引擎旁路 `gateway/turn_progress.py` + `GET /v1/turn/progress`（health 18790）供客户端 600ms 增量轮询，
+  渲染层用**占位助手消息**（`startChannelTurnLive`，纯视图不写事件流）复用 `AssistantMessage` 的同一套过程视觉。
+- ⚠️ 实时观察期间**必须抑制** `channelSessionsStore.refreshActiveIfChanged` 的整份替换：引擎开工即落一次盘
+  （`_persist_user_message_early`）→ `updatedAt` 一变小，4 秒轮询就会把占位消息冲掉（症状：实时思考闪一下又空了）。
+  登记表在 `src/lib/channelTurnLiveState.ts`，收尾时解除并立刻 refresh 让真实记录接管。
 - ⛔ 消息渲染**不分会话类型**：`MessageStream` 对任务/助理/定时任务都用同一套 `UserMessage`/`AssistantMessage`；两类视图看着不一样，原因在数据侧不在渲染层，改前先查数据源（`message.artifacts` / `artifactsStore.bySession`）。
 - ⛔ 副作用别挂可选 UI 组件：`ConnectionBanner` 注释掉过，网关地址自动对齐已下沉到 `connectionManager.probeOnce()`，判据只有 `applyGatewayEndpointInfo` 一处。
 - ⚠️ 网关地址同步判据 `nextGatewayEndpoint` 只看 `port`(主进程仅端口验证监听后才写)。**复用外部网关 `running=false` 但 `port` 有值——最需对齐场景，别加回 `running` 判据**(加了就永远不同步→全部 REST `Failed to fetch`)。
@@ -44,7 +50,7 @@ WorkBuddy 式智能体客户端：React18+TS+Vite 渲染层 + Electron 主进程
 
 ## 引擎统一配置（2026-10-17 收尾）
 - 用户决策：统一到本仓 study 副本，桌面也跑本仓。覆盖配置 `$APPDATA/nanowork/nanowork.nanobot.json`：现**不写 bin**(回落两层 venv `nanobot/nanobot/.venv`)，显式 `config=D:/Workspace/study/nanowork/nanowork.config.json`(无内联密钥，凭据走 `DASHSCOPE_API_KEY` 环境变量)。
-- ⚠️ 两 venv 并存：网关实测用一层 `nanobot/.venv`；代码兜底 `engineInterpreterCandidates` 解析两层。override 不写 bin 时走两层(自带 lark_oapi、websockets 15.0.1)。
+- ⚠️ venv 真相（2026-10-19 复核）：**代码与网关实际只用一个 —— 两层 `nanobot/nanobot/.venv`**（Python 3.13.12，`python -m venv` 建；`engineInterpreterCandidates`/`fallbackLaunchConfig`/自检全解析它；当前运行中的 gateway `run/gateway.*.json` 也用它的 `Scripts/python.exe -m nanobot`）。一层 `nanobot/.venv` 是历史遗留（uv 建的 3.13.4，prompt=nanobot-ai），**无任何代码引用**，属废弃，可删。
 - ⚠️ 渠道依赖自动安装会搞坏 venv(`channels.feishu`→启动 `uv pip install`→lark-oapi 要求降级 websockets 16.1.1→15.0.1，卸载 `.pyd` 被占→删一半没装回→`ModuleNotFoundError`)。防复发：依赖预先装进活动 venv；必 `--reinstall`。
 - ⚠️ `readLaunchConfigFromDisk`：override 写 bin 会丢 `-m nanobot`(`args: cfg.bin?[]:fallback.args`)。真实命令 `gateway --foreground --config <path> -v`。不带 `--foreground` 会 daemon 化，`timeout` 杀不干净。
 

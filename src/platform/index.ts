@@ -360,6 +360,21 @@ export const platform: PlatformAdapter = {
       error: 'Web 端不支持向 IM 会话发言，请使用桌面端',
     });
   },
+  getChannelTurnProgress: (params) => {
+    if (isElectron() && window.electronAPI) {
+      return window.electronAPI.nanobotGetChannelTurnProgress(params);
+    }
+    // Web 端读不到 gateway 的实时进度：直接标记 unsupported，调用方停止轮询
+    // 并退回「等磁盘轮询」的旧行为（而不是每 0.6 秒失败一次、刷满控制台）。
+    return Promise.resolve({
+      ok: false,
+      unsupported: true,
+      known: false,
+      active: false,
+      seq: 0,
+      events: [],
+    });
+  },
   channelConnect: (
     action: ChannelConnectAction,
     channel: string,

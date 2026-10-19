@@ -90,6 +90,7 @@ import type {
   SyncMetaInput,
   ToolCall,
 } from '@/types';
+import type { ChannelTurnProgressEvent } from '@/platform/types';
 import type {
   ApprovalDecision,
   ApprovalRequestEvent,
@@ -226,6 +227,41 @@ interface SessionsState {
   appendChannelMessage: (sessionId: string, content: string) => string;
   /** 撤回一条乐观上屏的频道消息（发送失败时用；id 不存在则静默 no-op） */
   dropChannelMessage: (sessionId: string, messageId: string) => void;
+  /**
+   * 为 IM 会话开一条**实时过程**占位助手消息，返回其 id。
+   *
+   * 为什么需要一条「假」助手消息：助理视图的发送走 gateway `/v1/turn`，引擎那条
+   * 链路只回「已受理」，之后整轮期间磁盘上还没有可读记录（4 秒轮询拿不到中间态）。
+   * 不给占位消息，界面上就是一片空白 —— 用户会把「正在想」读成「没发出去」。
+   *
+   * 它**不写本地事件流**（频道会话真值在引擎侧，见 `isEventStreamSession`），
+   * 也不写 `message.artifacts` 之外的任何持久结构：这一轮结束时由引擎落盘记录
+   * 经 `openExternal` 整体替换掉它。
+   */
+  startChannelTurnLive: (sessionId: string) => string;
+  /**
+   * 把一条实时进度事件合流进占位助手消息（按到达顺序，与任务视图同一套视觉）。
+   *
+   * 刻意不复用 `appendReasoning` / `handleProcessTool`：那两个动作会同时往本地
+   * 事件流写 `functionCall` 等记录，而占位消息随后会被整体替换 —— 写进去的只是
+   * 一份永远对不上消息 id 的垃圾事件。
+   */
+  applyChannelTurnLiveEvent: (
+    sessionId: string,
+    messageId: string,
+    event: ChannelTurnProgressEvent,
+  ) => void;
+  /**
+   * 收尾占位消息：冻结耗时并让状态行停下；`drop` 时整条摘掉。
+   *
+   * `drop` 用于三种「这条占位消息不该留下」的情形：网关不支持该端点（老引擎，
+   * 退回旧行为）、引擎始终没登记这一轮、以及收尾后真实记录迟迟没到。
+   */
+  settleChannelTurnLive: (
+    sessionId: string,
+    messageId: string,
+    options?: { drop?: boolean; interrupted?: boolean },
+  ) => void;
   /**
    * 启动水合：**会话列表来自索引**（不扫 JSONL），消息留待选中时按需加载。
    * 索引缺失或损坏时自动重建一次（索引是可再生派生物）。
@@ -1246,6 +1282,21 @@ function closeOpenReasoning(m: Message, rowId?: string): Message {
 }
 
 /**
+ * 更新 IM 会话实时过程的状态行（助理视图专用）。
+ *
+ * 条目不存在或已收敛为 idle 时静默 no-op —— 收尾之后迟到的进度事件不能把
+ * 「流式中」的 UI 复活：那会让一条已经结束的消息永远转圈。
+ */
+function patchChannelStatus(sessionId: string, status: StreamStatus): void {
+  useSessionsStore.setState((s) => {
+    const cur = s.streams[sessionId];
+    if (!cur || cur.status === 'idle') return s;
+    if (cur.status === status) return s;
+    return { ...s, streams: { ...s.streams, [sessionId]: { ...cur, status } } };
+  });
+}
+
+/**
  * 取一个会话里**最后一条用户消息**的正文（跨会话召回的 query）。
  *
  * 为什么是「最后一条」而不是「全部历史」：召回的 query 要**自包含**——它描述「现在
@@ -1823,6 +1874,146 @@ export const useSessionsStore = create<SessionsState>()(
             : x,
         ),
       }));
+    },
+
+    /**
+     * 实时过程占位消息：结构与任务视图流式期间的那条助手消息完全一致
+     * （`content: ''` + 逐条追加的 `process`），因此渲染层不需要为新形态写分支。
+     *
+     * `streams` 必须同时置位：`AssistantMessage` 靠「本会话 status !== idle 且自己
+     * 是最后一条」才显示「已处理 Ns / 深度思考中」那一行。`active: false` 是有意的
+     * —— 这一轮的中断入口在引擎侧（gateway 没有 /v1/stop），摆出可点的停止按钮
+     * 只会让用户点了没反应。
+     */
+    startChannelTurnLive: (sessionId) => {
+      const id = genId();
+      const createdAt = nowIso();
+      set((s) => ({
+        sessions: s.sessions.map((x) =>
+          x.id === sessionId
+            ? {
+                ...x,
+                messages: [
+                  ...x.messages,
+                  { id, role: 'assistant', content: '', createdAt },
+                ],
+                updatedAt: createdAt,
+              }
+            : x,
+        ),
+        streams: {
+          ...s.streams,
+          [sessionId]: { status: 'thinking', active: false },
+        },
+      }));
+      return id;
+    },
+
+    applyChannelTurnLiveEvent: (sessionId, messageId, event) => {
+      const store = get();
+      if (event.kind === 'reasoning') {
+        store.updateMessage(sessionId, messageId, (m) => {
+          const process = [...(m.process ?? [])];
+          const last = process[process.length - 1];
+          if (last && last.kind === 'reasoning' && !last.closed) {
+            process[process.length - 1] = { ...last, content: last.content + event.content };
+          } else {
+            process.push({ id: genId(), kind: 'reasoning', content: event.content });
+          }
+          return { ...m, process };
+        });
+        patchChannelStatus(sessionId, 'reasoning');
+        return;
+      }
+      if (event.kind === 'reasoning_end') {
+        store.updateMessage(sessionId, messageId, (m) => closeOpenReasoning(m));
+        patchChannelStatus(sessionId, 'thinking');
+        return;
+      }
+      // 工具行：与 `handleProcessTool` 的**视图部分**逐字同形（含「工具开始先闭合
+      // 当前思考段」这条时机约定），只是不落事件流。两者若漂移，用户会看到
+      // 实时过程与刷新后的历史过程排布不一致。
+      store.updateMessage(sessionId, messageId, (m) => {
+        const base = closeOpenReasoning(m);
+        const process = [...(base.process ?? [])];
+        const idx = process.findIndex((row) => row.kind === 'tool' && row.id === event.id);
+        if (event.phase === 'start') {
+          if (idx === -1) {
+            process.push({
+              id: event.id,
+              kind: 'tool',
+              tool: event.tool,
+              args: event.args,
+              status: 'running',
+            });
+          } else {
+            process[idx] = {
+              ...(process[idx] as ProcessToolRow),
+              tool: event.tool,
+              args: event.args,
+              status: 'running',
+            };
+          }
+        } else {
+          const row: ProcessToolRow = {
+            ...(idx !== -1
+              ? (process[idx] as ProcessToolRow)
+              : {
+                  id: event.id,
+                  kind: 'tool' as const,
+                  tool: event.tool,
+                  args: event.args,
+                  status: 'running' as const,
+                }),
+            status: event.phase === 'end' ? 'done' : 'error',
+            ...(event.result !== undefined ? { result: event.result } : {}),
+            ...(event.error !== undefined ? { error: event.error } : {}),
+          };
+          if (idx !== -1) process[idx] = row;
+          else process.push(row);
+        }
+        return { ...base, process };
+      });
+      patchChannelStatus(sessionId, event.phase === 'start' ? 'tooling' : 'thinking');
+    },
+
+    settleChannelTurnLive: (sessionId, messageId, options) => {
+      set((s) => {
+        // 状态先收尾：真实记录替换整条消息后，残留的 「thinking」会让新消息
+        // 永远显示「等待模型响应」（`isStreaming` 只看 status，不看消息是不是同一条）。
+        const streams = { ...s.streams };
+        if (streams[sessionId]) {
+          streams[sessionId] = { status: 'idle', active: false };
+        }
+        const startedAt = Date.parse(
+          s.sessions
+            .find((x) => x.id === sessionId)
+            ?.messages.find((m) => m.id === messageId)?.createdAt ?? '',
+        );
+        return {
+          streams,
+          sessions: s.sessions.map((x) => {
+            if (x.id !== sessionId) return x;
+            if (options?.drop) {
+              return { ...x, messages: x.messages.filter((m) => m.id !== messageId) };
+            }
+            return {
+              ...x,
+              messages: x.messages.map((m) => {
+                if (m.id !== messageId) return m;
+                const settled: Message = { ...m };
+                // 已有耗时（重放/水合恢复）时不覆盖，与 send 的结算口径一致
+                if (settled.durationMs === undefined && !Number.isNaN(startedAt)) {
+                  const elapsed = Date.now() - startedAt;
+                  if (elapsed > 0) settled.durationMs = elapsed;
+                }
+                if (options?.interrupted) settled.interrupted = true;
+                return settled;
+              }),
+            };
+          }),
+        };
+      });
     },
 
     /**
