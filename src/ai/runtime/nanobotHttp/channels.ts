@@ -45,6 +45,11 @@ export interface NanobotChannels {
 export function toNanobotChannelEntry(cfg: ChannelConfig): Record<string, unknown> {
   const base: Record<string, unknown> = { enabled: cfg.enabled };
   if (cfg.allowFrom.length > 0) base.allowFrom = [...cfg.allowFrom];
+  // 平铺渠道（dingtalk / weixin / wecom）：条目即段，tool_approval 段级即条目级。
+  // 引擎按 snake_case 从 model_extra 原样读取（见 workspace_access.channel_tool_approval_modes），
+  // 故键名必须用 `tool_approval`，不可写成 camelCase。feishu / lark 走下方
+  // instances 分支、段级单独写，故此处不会落到实例里。
+  putIf(base, 'tool_approval', cfg.toolApproval);
 
   switch (cfg.kind) {
     case 'dingtalk':
@@ -83,17 +88,25 @@ export function toNanobotChannelEntry(cfg: ChannelConfig): Record<string, unknow
 export function toNanobotChannels(configs: ChannelConfig[]): NanobotChannels {
   const out: NanobotChannels = {};
   const feishuInstances: Array<Record<string, unknown>> = [];
+  // 引擎按 feishu 段级读取 tool_approval，feishu / lark 共用同一段：取单一取值，
+  // 以 feishu 优先，缺失时退回 lark（二者并存时通常取一致值）。
+  let feishuSectionApproval: 'ask' | 'auto' | undefined;
 
   for (const cfg of configs) {
     if (cfg.kind === 'feishu' || cfg.kind === 'lark') {
       feishuInstances.push(toNanobotChannelEntry(cfg));
+      if (cfg.toolApproval && (cfg.kind === 'feishu' || feishuSectionApproval === undefined)) {
+        feishuSectionApproval = cfg.toolApproval;
+      }
       continue;
     }
     out[cfg.kind] = toNanobotChannelEntry(cfg);
   }
 
   if (feishuInstances.length > 0) {
-    out.feishu = { instances: feishuInstances } satisfies NanobotFeishuSection;
+    const section: Record<string, unknown> = { instances: feishuInstances };
+    if (feishuSectionApproval) section.tool_approval = feishuSectionApproval;
+    out.feishu = section;
   }
   return out;
 }
@@ -171,6 +184,8 @@ export function fromNanobotChannels(
       cfg.botId = readStr(e, 'botId', 'bot_id');
       cfg.botSecret = readStr(e, 'secret');
     }
+    const approval = readStr(e, 'tool_approval');
+    if (approval === 'ask' || approval === 'auto') cfg.toolApproval = approval;
     out.push(cfg);
   };
 
@@ -181,6 +196,21 @@ export function fromNanobotChannels(
   const feishu = snapshot.feishu;
   if (typeof feishu === 'object' && feishu !== null && !Array.isArray(feishu)) {
     const section = feishu as Record<string, unknown>;
+    // 段级 tool_approval（feishu / lark 共用该段），回显到该段下每个实例配置。
+    // 引擎历史版本曾把它泄漏进 instances[]，段级缺失时兜底回收首个有效值。
+    let sectionApproval = readStr(section, 'tool_approval');
+    if (!sectionApproval && Array.isArray(section.instances)) {
+      for (const inst of section.instances) {
+        if (typeof inst !== 'object' || inst === null) continue;
+        const candidate = readStr(inst as Record<string, unknown>, 'tool_approval');
+        if (candidate === 'ask' || candidate === 'auto') {
+          sectionApproval = candidate;
+          break;
+        }
+      }
+    }
+    const approvalMode: 'ask' | 'auto' | undefined =
+      sectionApproval === 'ask' || sectionApproval === 'auto' ? sectionApproval : undefined;
     const instances = Array.isArray(section.instances)
       ? (section.instances as Array<Record<string, unknown>>).filter(
           (x) => typeof x === 'object' && x !== null,
@@ -202,6 +232,7 @@ export function fromNanobotChannels(
           'group_policy',
         ),
         topicIsolation: readBool(inst, 'topicIsolation', 'topic_isolation'),
+        toolApproval: approvalMode,
         allowFrom: normalizeAllowFromForDisplay(
           instKind,
           readStrArray(inst, 'allowFrom', 'allow_from'),

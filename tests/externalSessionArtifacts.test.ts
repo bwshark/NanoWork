@@ -203,3 +203,39 @@ describe('导入会话 → 文本产物（渲染对齐任务会话）', () => {
     expect(panelArtifacts()).toHaveLength(1);
   });
 });
+
+describe('同一轮合并为一条助手消息（对齐任务视图）', () => {
+  it('assistant(工具) + tool + assistant(正文) 不再裂成两个气泡', () => {
+    const session = open([
+      { role: 'user', content: '创建一个文件 kkk.txt', timestamp: '2026-10-18T12:00:00' },
+      ...writeRecord('call_1', PATH, 'a'.repeat(191)),
+      {
+        role: 'assistant',
+        content: '已创建 ✅\n文件: kkk.txt 位置: D:/work/abc.txt',
+        timestamp: '2026-10-18T12:00:03',
+      },
+    ]);
+
+    const assistants = session.messages.filter((m) => m.role === 'assistant');
+    expect(assistants, '同一轮的助手消息没有被合并').toHaveLength(1);
+    // 合并后的形状与任务会话的流式聚合一致：toolCalls 驱动过程行与产物卡片，content 是正文
+    expect(assistants[0].toolCalls).toHaveLength(1);
+    expect(assistants[0].content).toContain('已创建');
+    expect(assistants[0].artifacts ?? []).toHaveLength(1);
+  });
+
+  it('user 是轮边界：相邻两轮各自成条，不跨轮合并', () => {
+    const session = open([
+      ...writeRecord('call_1', PATH, 'a'),
+      { role: 'assistant', content: '第一轮完成', timestamp: '2026-10-18T12:00:03' },
+      { role: 'user', content: '再写一个', timestamp: '2026-10-18T12:01:00' },
+      ...writeRecord('call_2', 'D:/work/def.txt', 'b'),
+      { role: 'assistant', content: '第二轮完成', timestamp: '2026-10-18T12:01:03' },
+    ]);
+
+    expect(session.messages.map((m) => m.role)).toEqual(['assistant', 'user', 'assistant']);
+    expect(session.messages[0].content).toBe('第一轮完成');
+    expect(session.messages[2].content).toBe('第二轮完成');
+    expect(panelArtifacts()).toHaveLength(2);
+  });
+});

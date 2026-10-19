@@ -69,6 +69,15 @@ export const CHANNEL_METAS: ChannelMeta[] = [
       { key: 'clientId', label: 'Client ID', kind: 'string', placeholder: '钉钉应用 Client ID' },
       { key: 'clientSecret', label: 'Client Secret', kind: 'secret', placeholder: '钉钉应用 Client Secret' },
       { key: 'allowFrom', kind: 'list', label: '允许的用户 ID', placeholder: '留空表示不限制', hint: '每行一个用户 ID（StaffId）' },
+      {
+        key: 'toolApproval',
+        label: '工具调用审批',
+        kind: 'enum',
+        choices: [
+          { value: 'ask', label: '执行前需人工确认' },
+          { value: 'auto', label: '自动执行（引擎默认）' },
+        ],
+      },
     ],
   },
   {
@@ -97,6 +106,15 @@ export const CHANNEL_METAS: ChannelMeta[] = [
       },
       { key: 'allowFrom', kind: 'list', label: '允许的用户 ID', placeholder: '留空表示不限制', hint: '每行一个 open_id' },
       { key: 'topicIsolation', label: '群内按话题隔离会话', kind: 'bool', defaultBool: true },
+      {
+        key: 'toolApproval',
+        label: '工具调用审批',
+        kind: 'enum',
+        choices: [
+          { value: 'ask', label: '执行前需人工确认' },
+          { value: 'auto', label: '自动执行（引擎默认）' },
+        ],
+      },
     ],
   },
   {
@@ -125,6 +143,15 @@ export const CHANNEL_METAS: ChannelMeta[] = [
       },
       { key: 'allowFrom', kind: 'list', label: '允许的用户 ID', placeholder: '留空表示不限制', hint: '每行一个 open_id' },
       { key: 'topicIsolation', label: '群内按话题隔离会话', kind: 'bool', defaultBool: true },
+      {
+        key: 'toolApproval',
+        label: '工具调用审批',
+        kind: 'enum',
+        choices: [
+          { value: 'ask', label: '执行前需人工确认' },
+          { value: 'auto', label: '自动执行（引擎默认）' },
+        ],
+      },
     ],
   },
   {
@@ -142,6 +169,15 @@ export const CHANNEL_METAS: ChannelMeta[] = [
     fields: [
       { key: 'token', label: 'iLink Token', kind: 'secret', placeholder: '微信 iLink 机器人 Token' },
       { key: 'allowFrom', kind: 'list', label: '允许的用户 ID', placeholder: '留空表示不限制', hint: '每行一个微信用户 ID' },
+      {
+        key: 'toolApproval',
+        label: '工具调用审批',
+        kind: 'enum',
+        choices: [
+          { value: 'ask', label: '执行前需人工确认' },
+          { value: 'auto', label: '自动执行（引擎默认）' },
+        ],
+      },
     ],
   },
   {
@@ -156,6 +192,15 @@ export const CHANNEL_METAS: ChannelMeta[] = [
       { key: 'botId', label: 'Bot ID', kind: 'string', placeholder: '企业微信智能机器人 Bot ID' },
       { key: 'botSecret', label: 'Secret', kind: 'secret', placeholder: '企业微信智能机器人 Secret' },
       { key: 'allowFrom', kind: 'list', label: '允许的用户 ID', placeholder: '留空表示不限制', hint: '每行一个企业微信用户 ID' },
+      {
+        key: 'toolApproval',
+        label: '工具调用审批',
+        kind: 'enum',
+        choices: [
+          { value: 'ask', label: '执行前需人工确认' },
+          { value: 'auto', label: '自动执行（引擎默认）' },
+        ],
+      },
     ],
   },
 ];

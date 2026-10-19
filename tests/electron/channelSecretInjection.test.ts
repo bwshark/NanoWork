@@ -182,6 +182,46 @@ describe('carryOverChannelSecrets: 回补不到时保留磁盘值', () => {
   });
 });
 
+describe('tool_approval 兜底保留：渲染层模型外的引擎键不被整体替换抹掉', () => {
+  it('平铺渠道缺 tool_approval 而磁盘有值时保留（B3-03 手工配置不被启动同步抹掉）', () => {
+    const out = carryOverChannelSecrets(
+      { dingtalk: { enabled: true, clientId: 'cid' } },
+      { dingtalk: { enabled: true, clientId: 'cid', tool_approval: 'ask' } },
+    );
+    expect((out.dingtalk as Record<string, unknown>).tool_approval).toBe('ask');
+  });
+
+  it('飞书段级 tool_approval 缺失而磁盘有值时保留', () => {
+    const out = carryOverChannelSecrets(
+      { feishu: { instances: [{ instanceId: 'feishu', domain: 'feishu', appId: 'a' }] } },
+      {
+        feishu: {
+          tool_approval: 'ask',
+          instances: [{ instanceId: 'feishu', domain: 'feishu', appId: 'a' }],
+        },
+      },
+    );
+    expect(out.feishu).toHaveProperty('tool_approval', 'ask');
+    expect((out.feishu as { instances: unknown[] }).instances).toHaveLength(1);
+  });
+
+  it('待写条目自带 tool_approval 时以它为准（未来渲染层支持时不被磁盘覆盖）', () => {
+    const out = carryOverChannelSecrets(
+      { feishu: { tool_approval: 'auto', instances: [] } },
+      { feishu: { tool_approval: 'ask', instances: [] } },
+    );
+    expect(out.feishu).toHaveProperty('tool_approval', 'auto');
+  });
+
+  it('整条渠道不在待写片段里 = 用户删了它：tool_approval 一并消失', () => {
+    const out = carryOverChannelSecrets(
+      {},
+      { dingtalk: { enabled: true, tool_approval: 'ask' } },
+    );
+    expect(out).not.toHaveProperty('dingtalk');
+  });
+});
+
 describe('inject + carryOver 组合：两种失效方式都不会丢凭据', () => {
   it('保险库可用 → 回补；保险库不可用 → 保留磁盘值', async () => {
     const existing = { dingtalk: { enabled: true, clientId: 'cid', clientSecret: 'on-disk' } };

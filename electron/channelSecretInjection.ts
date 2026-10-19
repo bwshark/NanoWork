@@ -22,6 +22,13 @@
  *    一次启动同步就会把引擎侧唯一一份可用凭据抹掉。故：待写条目缺某密钥字段
  *    而磁盘上已有值时，**保留磁盘值**。
  *
+ * ## 不只是密钥：`tool_approval` 同理
+ *
+ * 渲染层 `ChannelConfig` 模型不认识 `tool_approval`（B3-03 IM 审批，引擎按
+ * `channels.<name>.tool_approval` 段级读取），用户手工写进 config.json 的该键
+ * 会在 `toNanobotChannels` 重建片段 + 托管键整体替换时被静默抹掉——症状与密钥
+ * 被抹完全同构（磁盘上没了，界面一切正常）。故归入同一兜底保留名单。
+ *
  * 两者的边界是「incoming **有键**才参与」——整条渠道不在 incoming 里代表用户删了它，
  * 那种情况下不能靠兜底把它复活。
  *
@@ -41,6 +48,15 @@ const PLAIN_CHANNEL_KINDS = ['dingtalk', 'weixin', 'wecom'] as const;
 
 /** 飞书段键（feishu 与 lark 两个 kind 共用此段，按实例的 domain 区分） */
 const FEISHU_SECTION_KEY = 'feishu';
+
+/**
+ * 渲染层片段不携带、但整体替换时必须保留的引擎侧配置键。
+ *
+ * 与密钥同一失效方式：`toNanobotChannels` 凭 UI 模型重建片段，模型外的键
+ * 一律缺席；`mergeChannelsIntoConfig` 对托管键是整体替换，不兜底就会静默抹掉。
+ * 现含 `tool_approval`（B3-03：IM 渠道工具审批模式，引擎按段级键读取）。
+ */
+const CARRIED_OVER_ENGINE_KEYS = ['tool_approval'] as const;
 
 /** 收窄为普通对象（数组、null、标量一律拒绝） */
 function asObject(value: unknown): Record<string, unknown> | null {
@@ -131,13 +147,19 @@ export function carryOverChannelSecrets(
     const next = asObject(incoming[kind]);
     const prev = asObject(existing[kind]);
     if (!next || !prev) continue;
-    out[kind] = carryOverKeys(next, prev, channelSecretKeys(kind));
+    out[kind] = carryOverKeys(next, prev, [
+      ...channelSecretKeys(kind),
+      ...CARRIED_OVER_ENGINE_KEYS,
+    ]);
   }
 
   const nextSection = asObject(incoming[FEISHU_SECTION_KEY]);
   const prevSection = asObject(existing[FEISHU_SECTION_KEY]);
   if (nextSection && prevSection) {
-    out[FEISHU_SECTION_KEY] = carryOverFeishuInstances(nextSection, prevSection);
+    // 段级键（tool_approval）与实例级密钥分两层兜底：前者挂在段上，
+    // 后者按 instanceId 逐实例匹配（见 carryOverFeishuInstances）
+    const section = carryOverKeys(nextSection, prevSection, CARRIED_OVER_ENGINE_KEYS);
+    out[FEISHU_SECTION_KEY] = carryOverFeishuInstances(section, prevSection);
   }
 
   return out;

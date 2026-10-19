@@ -64,10 +64,19 @@ export function parseToolCalls(
 
 /**
  * 将 nanobot JSONL 消息行映射为本地 Message 列表。
- * - user / assistant 直接映射；
- * - assistant 携带的 tool_calls 与后续 role=tool 的结果按 tool_call_id 关联，
- *   以「已完成」状态展示在对应助手消息卡片中；
+ * - user 直接映射；
+ * - **同一轮的全部 assistant / tool 记录合并为一条 assistant 消息**（见下）；
  * - 无对应 assistant 的孤立 tool 行忽略。
+ *
+ * ## 为什么必须按「轮」合并
+ *
+ * nanobot 落盘时把一轮对话拆成多条记录：`assistant(带 tool_calls，常无正文)` →
+ * `tool(结果)` → `assistant(最终回复文本)`。任务会话是流式聚合成**一条**助手
+ * 消息的——过程行、产物卡片、正文都在同一个气泡里，正文在底部；若这里一条
+ * 记录映射一条消息，同一轮会裂成两个「助手」气泡：产物卡片跟着第一条（带
+ * 工具调用的），正文孤立在第二条——与任务视图完全对不上（2026-10-19 用户
+ * 截图报的就是这个）。合并后，`AssistantMessage` 拿到的形状与流式聚合一致：
+ * toolCalls 驱动过程行与产物卡片，content 是最终正文。
  */
 export function mapRecordsToMessages(
   key: string,
@@ -81,33 +90,60 @@ export function mapRecordsToMessages(
     }
   }
 
-  // 第二遍：按序生成 user / assistant 消息
+  // 第二遍：按序生成消息；assistant 侧聚合「当前轮」，遇 user（或收尾）才落一条
   const messages: Message[] = [];
+  /** 当前正在聚合的同一轮：id / 时间取首轮记录，正文与工具调用按序累积 */
+  let turn: {
+    id: string;
+    createdAt: string;
+    texts: string[];
+    toolCalls: ToolCall[];
+  } | null = null;
+
+  const flushTurn = () => {
+    if (!turn) return;
+    const message: Message = {
+      id: turn.id,
+      role: 'assistant',
+      content: turn.texts.join('\n\n'),
+      createdAt: turn.createdAt,
+    };
+    if (turn.toolCalls.length > 0) message.toolCalls = turn.toolCalls;
+    messages.push(message);
+    turn = null;
+  };
+
   records.forEach((rec, index) => {
     const role = rec.role;
-    if (role !== 'user' && role !== 'assistant') return;
-    const base: Message = {
-      id: `${key}#${index}`,
-      role,
-      content: recordText(rec),
-      createdAt: toIso(rec.timestamp),
-    };
-    if (role === 'assistant') {
-      const calls = parseToolCalls(rec);
-      if (calls.length > 0) {
-        const toolCalls: ToolCall[] = calls.map((c) => ({
-          id: c.id,
-          tool: c.name,
-          args: c.args,
-          sensitive: false,
-          status: 'done',
-          result: toolResults.get(c.id),
-        }));
-        base.toolCalls = toolCalls;
-      }
+    if (role === 'user') {
+      // user 是轮的边界：先落掉上一轮，再独立成条
+      flushTurn();
+      messages.push({
+        id: `${key}#${index}`,
+        role: 'user',
+        content: recordText(rec),
+        createdAt: toIso(rec.timestamp),
+      });
+      return;
     }
-    messages.push(base);
+    if (role !== 'assistant') return; // tool 结果行是关联数据，不产生消息
+    const text = recordText(rec);
+    if (!turn) {
+      turn = { id: `${key}#${index}`, createdAt: toIso(rec.timestamp), texts: [], toolCalls: [] };
+    }
+    if (text !== '') turn.texts.push(text);
+    for (const c of parseToolCalls(rec)) {
+      turn.toolCalls.push({
+        id: c.id,
+        tool: c.name,
+        args: c.args,
+        sensitive: false,
+        status: 'done',
+        result: toolResults.get(c.id),
+      });
+    }
   });
+  flushTurn();
   return messages;
 }
 

@@ -56,6 +56,13 @@ export interface ChannelConfig extends SyncMetaFields {
   groupPolicy?: GroupPolicy;
   /** 群内按话题隔离会话（仅 feishu / lark 生效） */
   topicIsolation?: boolean;
+  /**
+   * 工具调用审批模式（B3-03 IM 审批）：'ask' = 工具执行前需人工确认；
+   * 'auto' = 直接执行（引擎默认）。引擎按 `channels.<name>.tool_approval`
+   * 段级读取；feishu / lark 共用 feishu 段，故二者共享同一取值。
+   * 缺省不写入，回落引擎默认 auto。
+   */
+  toolApproval?: 'ask' | 'auto';
 
   /** 最近一次同步时间（ISO 8601 UTC） */
   lastSyncAt?: string;
