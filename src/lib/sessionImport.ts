@@ -1,7 +1,7 @@
 import { genId } from '@/lib/id';
 import { deletedFilePathFrom, deriveFileArtifacts, fileArtifactId } from '@/lib/fileArtifact';
 import { extractArtifacts } from '@/ai/runtime/nanobotHttp/artifactExtractor';
-import type { Artifact, Message, Session, ToolCall } from '@/types';
+import type { Artifact, Message, ProcessEvent, Session, ToolCall } from '@/types';
 
 /**
  * nanobot 磁盘会话（JSONL 消息行）→ 本地只读 Session 的共享映射逻辑。
@@ -63,6 +63,40 @@ export function parseToolCalls(
 }
 
 /**
+ * 提取 assistant 记录里的深度思考正文（`reasoning_content`）。
+ *
+ * ## 为什么单独一个函数
+ *
+ * 引擎把思考**逐轮**写进 assistant 记录的 `reasoning_content`（真实落盘样例：
+ * `feishu.feishu:ou_xxx` 会话里每条 assistant 都带这个键，纯文本字符串）。
+ * 它与 `content` 是两回事：`content` 是给用户看的回答，`reasoning_content` 是
+ * 模型自己的思考——任务视图里前者进消息正文、后者进 `message.process` 的
+ * 「深度思考」段。两者混用就会出现「把内心独白当回答显示」。
+ *
+ * 兼容三种形态（不同 provider / 不同版本引擎的落盘差异）：
+ * - `string`：绝大多数（deepseek / qwen 等 OpenAI 兼容端点）
+ * - `{ text }` 对象 / content blocks 数组：部分 provider 的分段形式
+ * - 缺失 / `null` / 非字符串非对象：一律当作「这一轮没有思考」
+ */
+export function recordReasoning(record: Record<string, unknown>): string {
+  const raw = record.reasoning_content;
+  if (typeof raw === 'string') return raw.trim();
+  if (Array.isArray(raw)) {
+    return raw
+      .filter((b): b is Record<string, unknown> => typeof b === 'object' && b !== null)
+      .map((b) => (typeof b.text === 'string' ? b.text : typeof b.reasoning === 'string' ? b.reasoning : ''))
+      .join('')
+      .trim();
+  }
+  if (raw && typeof raw === 'object') {
+    const obj = raw as Record<string, unknown>;
+    if (typeof obj.text === 'string') return obj.text.trim();
+    if (typeof obj.reasoning === 'string') return obj.reasoning.trim();
+  }
+  return '';
+}
+
+/**
  * 将 nanobot JSONL 消息行映射为本地 Message 列表。
  * - user 直接映射；
  * - **同一轮的全部 assistant / tool 记录合并为一条 assistant 消息**（见下）；
@@ -77,6 +111,14 @@ export function parseToolCalls(
  * 工具调用的），正文孤立在第二条——与任务视图完全对不上（2026-10-19 用户
  * 截图报的就是这个）。合并后，`AssistantMessage` 拿到的形状与流式聚合一致：
  * toolCalls 驱动过程行与产物卡片，content 是最终正文。
+ *
+ * ## 深度思考（`process`）
+ *
+ * 同一轮里每条 assistant 记录各带一段 `reasoning_content`，必须按**到达顺序**
+ * 与工具行交错铺进 `message.process`——`ProcessView` 渲染的是一条时间线，
+ * 顺序错了就变成「先全部思考、再全部工具」。同一轮内**连续**的 reasoning 记录
+ * 累积成一段（与流式侧 `flushReasoning` 的聚合口径一致：一段思考被工具调用或
+ * 正文打断后才开新段）。
  */
 export function mapRecordsToMessages(
   key: string,
@@ -92,12 +134,13 @@ export function mapRecordsToMessages(
 
   // 第二遍：按序生成消息；assistant 侧聚合「当前轮」，遇 user（或收尾）才落一条
   const messages: Message[] = [];
-  /** 当前正在聚合的同一轮：id / 时间取首轮记录，正文与工具调用按序累积 */
+  /** 当前正在聚合的同一轮：id / 时间取首轮记录，正文、工具调用与过程行按序累积 */
   let turn: {
     id: string;
     createdAt: string;
     texts: string[];
     toolCalls: ToolCall[];
+    process: ProcessEvent[];
   } | null = null;
 
   const flushTurn = () => {
@@ -109,6 +152,7 @@ export function mapRecordsToMessages(
       createdAt: turn.createdAt,
     };
     if (turn.toolCalls.length > 0) message.toolCalls = turn.toolCalls;
+    if (turn.process.length > 0) message.process = turn.process;
     messages.push(message);
     turn = null;
   };
@@ -129,7 +173,31 @@ export function mapRecordsToMessages(
     if (role !== 'assistant') return; // tool 结果行是关联数据，不产生消息
     const text = recordText(rec);
     if (!turn) {
-      turn = { id: `${key}#${index}`, createdAt: toIso(rec.timestamp), texts: [], toolCalls: [] };
+      turn = {
+        id: `${key}#${index}`,
+        createdAt: toIso(rec.timestamp),
+        texts: [],
+        toolCalls: [],
+        process: [],
+      };
+    }
+    // 深度思考先于本记录的工具行：引擎一条记录里两者并存时，模型是先想再动手
+    const reasoning = recordReasoning(rec);
+    if (reasoning !== '') {
+      const last = turn.process[turn.process.length - 1];
+      // 连续 reasoning 累积成一段；被工具行打断后另起一段（与流式聚合同口径）
+      if (last && last.kind === 'reasoning' && last.closed !== true) {
+        turn.process[turn.process.length - 1] = {
+          ...last,
+          content: last.content ? `${last.content}\n\n${reasoning}` : reasoning,
+        };
+      } else {
+        turn.process.push({
+          id: `${key}#r${index}`,
+          kind: 'reasoning',
+          content: reasoning,
+        });
+      }
     }
     if (text !== '') turn.texts.push(text);
     for (const c of parseToolCalls(rec)) {
@@ -140,6 +208,16 @@ export function mapRecordsToMessages(
         sensitive: false,
         status: 'done',
         result: toolResults.get(c.id),
+      });
+      // 工具行与思考段共处一条时间线，插在思考之后（先想后做）。
+      // id 用 tool_call_id，与任务视图的进度事件同源，便于 ProcessView 归并。
+      turn.process.push({
+        id: c.id,
+        kind: 'tool',
+        tool: c.name,
+        args: c.args,
+        status: 'done',
+        ...(toolResults.get(c.id) !== undefined ? { result: toolResults.get(c.id) as string } : {}),
       });
     }
   });
