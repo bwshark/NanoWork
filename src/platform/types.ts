@@ -1018,6 +1018,14 @@ export interface PlatformAdapter {
    */
   sendChannelMessage(params: ChannelSendParams): Promise<ChannelSendResult>;
   /**
+   * 在已有的 IM 会话内跑一轮智能体（gateway /v1/turn）。
+   *
+   * 助理视图的发送走这条：文本进入引擎后由 AgentLoop 在该 IM 会话内续跑一轮，
+   * 回复真实投递回 IM 并落入会话历史，因此桌面端轮询能读到这一轮。
+   * Web 端无法访问本地 gateway，返回失败（与 `sendChannelMessage` 同降级范式）。
+   */
+  runChannelTurn(params: ChannelSendParams): Promise<ChannelSendResult>;
+  /**
    * IM 渠道扫码接入（经主进程认证 WS 桥调网关 settings.channel.connect.*）。
    * - electron：主进程签发 token 并经 webui WebSocket 发 mutation 帧；
    * - web：无法访问本地网关，返回失败。
@@ -1610,6 +1618,16 @@ export interface ElectronAPI {
   ): Promise<NanobotChannelSessionDetail | null>;
   /** 主动发送消息到 IM 频道用户（gateway /v1/send 出站） */
   nanobotSendChannelMessage(
+    params: ChannelSendParams,
+  ): Promise<ChannelSendResult>;
+  /**
+   * 在已有的 IM 会话内跑一轮智能体（gateway /v1/turn）。
+   *
+   * 与 `nanobotSendChannelMessage` 的分工：那条只是把写好的文本投递出去
+   * （智能体不参与），这条让文本作为渠道 inbound 消息进入引擎、在**同一个
+   * IM 会话**里续跑一轮，回复再真实投回 IM。会话不存在时返回 ok=false。
+   */
+  nanobotRunChannelTurn(
     params: ChannelSendParams,
   ): Promise<ChannelSendResult>;
   /** 扫码接入（网关认证 WS 桥：settings.channel.connect.{start|poll|cancel}） */

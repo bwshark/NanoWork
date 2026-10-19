@@ -5,16 +5,19 @@ import {
   useRef,
   useState,
 } from "react";
-import { Box, Button, IconButton, InputBase, Typography } from "@mui/material";
+import { Box, Button, IconButton, Typography } from "@mui/material";
 import { useLocation, useNavigate } from "react-router-dom";
 import ChevronLeftIcon from "@mui/icons-material/ChevronLeft";
 import ChevronRightIcon from "@mui/icons-material/ChevronRight";
 import SouthEastIcon from "@mui/icons-material/SouthEast";
-import SendIcon from "@mui/icons-material/Send";
 import { ChatHeader } from "./ChatHeader";
 import { chatColumnSx } from "./chatColumnSx";
 import { MessageStream } from "./MessageStream";
-import { Composer, type ComposerApi } from "./Composer";
+import {
+  Composer,
+  type ComposerApi,
+  type ComposerSubmitPayload,
+} from "./Composer";
 import { ApprovalCard } from "@/components/ApprovalCard";
 import { readDeepLinkPrompt } from "@/types/deepLink";
 import {
@@ -24,13 +27,10 @@ import {
   type HeroPromptTag,
   type HeroSkill,
 } from "./heroPresets";
-import { ChannelIcon } from "@/components/im/ChannelIcon";
 import { toast } from "@/components/Toast";
 import { hasConversation } from "@/lib/conversation";
 import { platform } from "@/platform";
 import { useSessionsStore } from "@/stores/sessionsStore";
-import { useChannelSessionsStore } from "@/stores/channelSessionsStore";
-import { channelIconKind } from "@/lib/channelSession";
 
 /**
  * 会话页。
@@ -243,8 +243,7 @@ export function ChatPage() {
         </Box>
         {session?.channel ? (
           <ChannelComposer sessionId={session.id} channel={session.channel} />
-        ) : session?.readonly ? (
-          // 只读会话(如定时任务执行留痕):隐藏输入框,仅展示执行过程
+        ) : session?.readonly ? (          // 只读会话(如定时任务执行留痕):隐藏输入框,仅展示执行过程
           <Box
             sx={{
               px: 2,
@@ -513,9 +512,27 @@ function PromptTagButton({
 }
 
 /**
- * 频道会话发送栏:智能体侧主动向 IM 用户发消息。
- * 经 gateway `/v1/send` 出站投递,gateway 同时把消息镜像进会话历史,
- * 发送成功后主动刷新一次历史,使消息立即上屏(无需等待轮询)。
+ * 助理（IM 频道）视图的输入区：**与任务视图同一个 Composer**，只是发送出口不同。
+ *
+ * ## 为什么不能直接用 `Composer` 的默认发送
+ *
+ * 默认出口是 `sessionsStore.send` → `streamAssistantReply` → 网关 `/v1/chat`，
+ * 而引擎在那里执行 `session_key = f"api:{session_id}"`：客户端传什么都会被加上
+ * `api:` 前缀，落到一个**全新的、与该 IM 线程无关**的会话。后果有两条，都很糟：
+ * 1. 这一轮的历史不进 IM 会话，IM 那边的智能体看不到；
+ * 2. 本地乐观上屏的消息会在下一次 4 秒轮询 `openExternal` 重建会话时被整段冲掉。
+ *
+ * 所以这里改走 `platform.runChannelTurn`（gateway `/v1/turn`）：文本作为渠道
+ * inbound 消息进引擎，由 `AgentLoop` 在 `f"{channel}:{chat_id}"` 这个**本来就
+ * 属于该 IM 线程**的会话里续跑一轮，回复经渠道出站真实投回 IM 并落盘。
+ *
+ * ## 为什么保留乐观上屏
+ *
+ * 引擎这一轮要跑若干秒，而回包只是「已受理」。不等轮询（最长 4 秒）先把自己的
+ * 消息显示出来，手感才跟任务视图一致。**它不是最终事实**——真正的记录由引擎
+ * 落盘后由轮询带回来覆盖，两边文本一致，所以覆盖是无感的。
+ *
+ * 失败时把这条乐观消息摘掉：宁可少一条，也不能留一条「说了但没发出去」的假消息。
  */
 function ChannelComposer({
   sessionId,
@@ -524,76 +541,48 @@ function ChannelComposer({
   sessionId: string;
   channel: string;
 }) {
-  const [text, setText] = useState("");
-  const [sending, setSending] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const appendMessage = useSessionsStore((s) => s.appendChannelMessage);
+  const dropMessage = useSessionsStore((s) => s.dropChannelMessage);
 
-  /** 从 `nb:{channel}:{chatId}` 还原出站目标 chatId */
+  /** 从 `nb:{channel}:{chatId}` 还原出站目标 chatId（chatId 本身可含冒号） */
   const chatId = sessionId.startsWith("nb:")
     ? sessionId.slice(3).split(":").slice(1).join(":")
     : "";
 
-  const handleSend = async () => {
-    const content = text.trim();
-    if (!content || sending || !chatId) return;
-    setSending(true);
-    try {
-      const result = await platform.sendChannelMessage({
-        channel,
-        chatId,
-        content,
-      });
-      if (result.ok) {
-        setText("");
-        // 镜像写入有极短延迟,稍候再刷新历史确保上屏
-        setTimeout(
-          () => void useChannelSessionsStore.getState().refresh(),
-          400,
-        );
-      } else {
-        toast.error(result.error ?? "发送失败");
+  const handleSubmit = useCallback(
+    ({ text, attachmentCount }: ComposerSubmitPayload) => {
+      const content = text.trim();
+      if (!content || busy || !chatId) return;
+      // 外部通道只收纯文本：附件无处可去，明确提示而不是静默丢弃
+      if (attachmentCount > 0) {
+        toast.warning("向 IM 会话发言暂不支持附件，已仅发送文字");
       }
-    } finally {
-      setSending(false);
-    }
-  };
+      const optimisticId = appendMessage(sessionId, content);
+      setBusy(true);
+      void platform
+        .runChannelTurn({ channel, chatId, content })
+        .then((result) => {
+          if (!result.ok) {
+            // 撤回乐观消息 + 提示原因：这一轮没成立，输入框里的内容也已清掉，
+            // 用户需要知道该重发，而不是对着一句永远等不到的回复。
+            dropMessage(sessionId, optimisticId);
+            toast.error(result.error ?? "发送失败");
+            return;
+          }
+          // 已受理。引擎这一轮还在跑，回复与最终记录由轮询带回来（最多 4 秒）。
+        })
+        .finally(() => setBusy(false));
+    },
+    [appendMessage, busy, channel, chatId, dropMessage, sessionId],
+  );
 
   return (
-    <Box
-      sx={{
-        px: 2,
-        py: 1.2,
-        borderTop: "1px solid",
-        borderColor: "divider",
-        display: "flex",
-        alignItems: "flex-end",
-        gap: 1,
-      }}
-    >
-      <ChannelIcon kind={channelIconKind(channel)} />
-      <InputBase
-        multiline
-        maxRows={6}
-        value={text}
-        disabled={sending}
-        placeholder="向该 IM 用户发送消息…"
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && !e.shiftKey) {
-            e.preventDefault();
-            void handleSend();
-          }
-        }}
-        sx={{ flex: 1, fontSize: 13.5, py: 0.5 }}
-      />
-      <IconButton
-        color="primary"
-        size="small"
-        disabled={sending || text.trim() === ""}
-        onClick={() => void handleSend()}
-        aria-label="发送"
-      >
-        <SendIcon fontSize="small" />
-      </IconButton>
-    </Box>
+    <Composer
+      placeholder="向该 IM 会话发言，助手会在同一会话里回复…"
+      variant="floating"
+      onSubmit={handleSubmit}
+      busy={busy}
+    />
   );
 }

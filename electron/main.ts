@@ -4210,24 +4210,25 @@ const GATEWAY_HEALTH_PORT = 18790;
 const DIAGNOSTIC_PORTS = [DEFAULT_GATEWAY_PORT, GATEWAY_HEALTH_PORT, GATEWAY_WS_PORT];
 
 /**
- * 智能体侧主动发送消息到 IM 频道用户：POST gateway `/v1/send`。
- * gateway 经渠道长连接投递消息并镜像进会话历史；
- * 失败（网关未启动 / 渠道未启用 / 参数非法）返回 ok=false 与原因，不抛异常。
- * @param params channel / chatId / content
- * @returns 发送结果
+ * gateway 出站端点 POST（health server 同端口，仅本地回环监听）。
+ *
+ * `/v1/send` 与 `/v1/turn` 的**唯一区别是路径**，请求体形状、错误解析、超时策略
+ * 完全一致，故合并成一个函数：两条链路的差异只该体现在那一个字符串上，
+ * 顺带避免「改了一处忘了另一处」的历史/错误处理漂移。
+ *
+ * @param path 端点路径（`/v1/send` 或 `/v1/turn`）
+ * @param body 已序列化好的 JSON 请求体
  */
-function sendChannelMessage(params: ChannelSendParams): Promise<ChannelSendResult> {
+function postGateway(
+  path: string,
+  body: string,
+): Promise<ChannelSendResult> {
   return new Promise((resolve) => {
-    const body = JSON.stringify({
-      channel: params.channel,
-      chat_id: params.chatId,
-      content: params.content,
-    });
     const req = httpRequest(
       {
         host: GATEWAY_HEALTH_HOST,
         port: GATEWAY_HEALTH_PORT,
-        path: '/v1/send',
+        path,
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -4254,7 +4255,7 @@ function sendChannelMessage(params: ChannelSendParams): Promise<ChannelSendResul
         });
       },
     );
-    req.on('timeout', () => req.destroy(new Error('gateway /v1/send 超时')));
+    req.on('timeout', () => req.destroy(new Error(`gateway ${path} 超时`)));
     req.on('error', (err) =>
       resolve({ ok: false, error: `网关不可达：${err.message}` }),
     );
@@ -4262,10 +4263,55 @@ function sendChannelMessage(params: ChannelSendParams): Promise<ChannelSendResul
   });
 }
 
+/**
+ * 智能体侧主动发送消息到 IM 频道用户：POST gateway `/v1/send`。
+ * gateway 经渠道长连接投递消息并镜像进会话历史；
+ * 失败（网关未启动 / 渠道未启用 / 参数非法）返回 ok=false 与原因，不抛异常。
+ * @param params channel / chatId / content
+ * @returns 发送结果
+ */
+function sendChannelMessage(params: ChannelSendParams): Promise<ChannelSendResult> {
+  return postGateway(
+    '/v1/send',
+    JSON.stringify({
+      channel: params.channel,
+      chat_id: params.chatId,
+      content: params.content,
+    }),
+  );
+}
+
+/**
+ * 在**已有的 IM 会话内**跑一轮智能体：POST gateway `/v1/turn`。
+ *
+ * 与 `sendChannelMessage` 的分工：那条只是把写好的文本投递出去（智能体不参与），
+ * 这条把文本当作渠道 inbound 消息投进引擎，由 AgentLoop 在**同一个 IM 会话**
+ * 里续跑一轮，回复再经渠道出站真实投回 IM。
+ *
+ * 会话不存在时引擎返回 404（不会凭空建一个空会话让模型对着空气回答），
+ * 原样透出原因。
+ */
+function runChannelTurn(params: ChannelSendParams): Promise<ChannelSendResult> {
+  return postGateway(
+    '/v1/turn',
+    JSON.stringify({
+      channel: params.channel,
+      chat_id: params.chatId,
+      content: params.content,
+    }),
+  );
+}
+
 // 主动出站：渲染层频道会话发送栏 → 主进程 → gateway /v1/send → IM 用户
 ipcMain.handle(
   'nanobot:sendChannelMessage',
   async (_e, params: ChannelSendParams) => sendChannelMessage(params),
+);
+
+// 助理视图发送：在该 IM 会话内跑一轮智能体（gateway /v1/turn）
+ipcMain.handle(
+  'nanobot:runChannelTurn',
+  async (_e, params: ChannelSendParams) => runChannelTurn(params),
 );
 
 // ——————————————————————————————————————————————

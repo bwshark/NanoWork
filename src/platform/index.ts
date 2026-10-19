@@ -350,6 +350,16 @@ export const platform: PlatformAdapter = {
       error: 'Web 端不支持主动发送，请使用桌面端',
     });
   },
+  runChannelTurn: (params) => {
+    if (isElectron() && window.electronAPI) {
+      return window.electronAPI.nanobotRunChannelTurn(params);
+    }
+    // Web 端无法访问本地 gateway：助理视图发起的这一轮同样不可用
+    return Promise.resolve({
+      ok: false,
+      error: 'Web 端不支持向 IM 会话发言，请使用桌面端',
+    });
+  },
   channelConnect: (
     action: ChannelConnectAction,
     channel: string,

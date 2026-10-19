@@ -124,6 +124,19 @@ export interface ComposerHeroSkill {
   icon?: React.ReactNode;
 }
 
+/**
+ * 自定义发送的载荷（`Composer` 的 `onSubmit`）。
+ *
+ * 附件**不传内容**，只给个数：`/v1/turn` 这类外部通道只收纯文本，把 base64
+ * 递给它没有意义。调用方据此提示「该通道暂不支持附件」而不是静默丢弃。
+ */
+export interface ComposerSubmitPayload {
+  /** 已拼好引用块的正文 */
+  text: string;
+  /** 本次携带的附件数量 */
+  attachmentCount: number;
+}
+
 /** 附件大类中文名（@ 引用浮层的副标题用） */
 const KIND_LABEL: Record<AttachmentKind, string> = {
   image: "图片",
@@ -307,6 +320,9 @@ export function Composer({
   heroSkill,
   onHeroSkillRemove,
   apiRef,
+  onSubmit,
+  disabled,
+  busy,
 }: {
   placeholder?: string;
   variant?: "hero" | "floating";
@@ -318,6 +334,21 @@ export function Composer({
   onHeroSkillRemove?: (id: string) => void;
   /** 暴露 focus 等命令式能力给父组件 */
   apiRef?: React.MutableRefObject<ComposerApi | null>;
+  /**
+   * 自定义发送出口：提供时**接管**发送动作，输入框不再走 `sessionsStore.send`。
+   *
+   * 助理（IM 频道）视图用它把这一轮交给引擎的 `/v1/turn`——那条链路在**同一个
+   * IM 会话**里跑（见 `platform.runChannelTurn`），与任务视图的本地事件流
+   * 是两套事实源，所以不能共用 `send`。
+   *
+   * 不变式：无论走哪条出口，输入框的清空 / 引用块消费 / 附件释放都照旧发生
+   * （清空放在调用方之前），调用方只负责「把这段文本送到哪去」。
+   */
+  onSubmit?: (payload: ComposerSubmitPayload) => void;
+  /** 整块禁用（如该 IM 会话已不可用） */
+  disabled?: boolean;
+  /** 发送在途：发送按钮显示为「停止」之外的禁用态，避免连点重复投递 */
+  busy?: boolean;
 }) {
   const [internalText, setInternalText] = useState("");
   const controlled = value !== undefined;
@@ -948,13 +979,30 @@ export function Composer({
     // 引用已随消息发出：胶囊与消息里的虚线下划线一起收掉
     if (sessionQuotes.length > 0) clearQuotes();
     closePicker();
+
+    // 自定义出口（助理视图）：这一轮由调用方投给引擎，清空与引用消费已在上面完成。
+    // 附件不在载荷里——外部通道只收纯文本，由调用方按 attachmentCount 提示。
+    if (onSubmit) {
+      onSubmit({ text: outgoing, attachmentCount: payload.length });
+      payload.forEach(revokeAttachmentPreview);
+      resetUndoAfterSend(payload);
+      return;
+    }
+
     void send(outgoing, undefined, payload, rich).then(() => {
       // 消息已入库（持久化副本不含 object URL）后再释放预览地址，避免图片闪一下空白
       payload.forEach(revokeAttachmentPreview);
     });
-    // 发送成功后清空撤销历史：避免「撤销」把刚发出去的内容又拉回输入框。
-    // 清空前释放栈里仍引用的「已删除未发送」附件 object URL；
-    // payload 内的附件由 .then 里释放，这里按 id 去重跳过
+    resetUndoAfterSend(payload);
+  };
+
+  /**
+   * 发送成功后清空撤销历史：避免「撤销」把刚发出去的内容又拉回输入框。
+   *
+   * 清空前释放栈里仍引用的「已删除未发送」附件 object URL；
+   * payload 内的附件由调用方在发送完成后释放，这里按 id 去重跳过。
+   */
+  function resetUndoAfterSend(payload: Attachment[]) {
     const seen = new Set(payload.map((a) => a.id));
     const { past, present, future } = undoRef.current;
     [...past, present, ...future].forEach((s) =>
@@ -968,7 +1016,7 @@ export function Composer({
       edit: { html: "", rich: "", caret: 0 },
       attachments: [],
     });
-  };
+  }
 
   const handleAgentChange = (id: string) => {
     setActiveAgent(id);
@@ -1850,7 +1898,7 @@ export function Composer({
         {/* 富输入区：contentEditable，文本与附件徽章可在光标处混排 */}
         <Box
           ref={editableRef}
-          contentEditable
+          contentEditable={!disabled}
           suppressContentEditableWarning
           role="textbox"
           aria-multiline="true"
@@ -2173,7 +2221,10 @@ export function Composer({
               // 供「命中注入文本时仍能发送」这条判据定位（FR-8.6 ③：
               // 注入检测只提示不拦截，必须有一条用例能点到它才算钉住）。
               data-testid="composer-send"
-              disabled={!text.trim() && attachments.length === 0 && sessionQuotes.length === 0}
+              disabled={
+                busy ||
+                (!text.trim() && attachments.length === 0 && sessionQuotes.length === 0)
+              }
               sx={{
                 bgcolor: "primary.main",
                 color: "primary.contrastText",

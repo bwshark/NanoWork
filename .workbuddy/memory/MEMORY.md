@@ -28,6 +28,8 @@ WorkBuddy 式智能体客户端：React18+TS+Vite 渲染层 + Electron 主进程
 - ⚠️ nanobot JSONL 把一轮拆成 `assistant(tool_calls)`→`tool`→`assistant(正文)` 多条记录；`mapRecordsToMessages` 必须**按轮聚合**成一条消息（user 是轮边界），否则一轮裂成两个「助手」气泡、产物卡片与正文分家——任务视图是流式聚合成一条的，两边形状必须一致。
 - ⚠️ **`recordArtifact` 对「整段历史重放」不幂等**：轮询每 4 秒重建 Session 重放全部写入，会把版本链一路叠长(v2→v4…)。登记前必须用 `hasContentHashInHistory` 跳过已在版本链里的 hash（新写入 hash 未见过才入库）。
 - ⚠️ 断言产物正文别读 `bySession[i].content`（恒空串，那是去 content 的引用），要 `resolveArtifactContent(entry.contentHash, bodies, '')`。
+- ⛔ **IM 会话发言绝不能走 `/v1/chat`**：引擎 `api/server.py` 执行 `session_key = f"api:{session_id}"`，客户端传什么都被加 `api:` 前缀 → 落进与 IM 线程无关的新会话（历史不进 IM，且下次 4s 轮询 `openExternal` 重建即丢本地消息），**全程零报错**。已在 IM 会话内发言必须用 gateway `POST /v1/turn`（把文本当渠道 `InboundMessage` 投进 bus 交 `AgentLoop.run()`，会话 key 由 `f"{channel}:{chat_id}"` 解析、落盘+出站全白拿）。
+- ⚠️ 测 `AgentLoop` 的 **session key 解析**必须真驱动 `run()`：直连 `_process_message` 绕过 `_effective_session_key`，把 key 改成 `api:` 前缀时用例仍全绿。且 `run()` 用 `asyncio.wait_for(bus.consume_inbound(), 1.0)`——替换假 consumer 会被超时取消（消息进队列却送不到 loop，症状：队列在涨、模型从没被调）；正确姿势是预置 `bus.inbound.put_nowait()` + 等 `bus.consume_outbound()`。`Session.messages` 是 TypedDict，按 `m["role"]` 取。
 
 ## 客户端/渲染事实（不可从代码直接推断）
 - ⛔ 消息渲染**不分会话类型**：`MessageStream` 对任务/助理/定时任务都用同一套 `UserMessage`/`AssistantMessage`；两类视图看着不一样，原因在数据侧不在渲染层，改前先查数据源（`message.artifacts` / `artifactsStore.bySession`）。

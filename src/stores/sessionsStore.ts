@@ -216,6 +216,17 @@ interface SessionsState {
    */
   openExternal: (session: Session) => void;
   /**
+   * 往 IM 频道会话**乐观**追加一条用户消息，返回其 id（撤回时用）。
+   *
+   * 助理视图发送时立刻上屏用：这一轮真正的记录由引擎落盘后经轮询带回来
+   * （`openExternal` 整体替换），所以这条只是「等待引擎确认」的过渡态。
+   * 失败时调 `dropChannelMessage` 摘掉它——宁可少一条，也不能留一条
+   * 「说了但没发出去」的假消息。
+   */
+  appendChannelMessage: (sessionId: string, content: string) => string;
+  /** 撤回一条乐观上屏的频道消息（发送失败时用；id 不存在则静默 no-op） */
+  dropChannelMessage: (sessionId: string, messageId: string) => void;
+  /**
    * 启动水合：**会话列表来自索引**（不扫 JSONL），消息留待选中时按需加载。
    * 索引缺失或损坏时自动重建一次（索引是可再生派生物）。
    */
@@ -1770,6 +1781,48 @@ export const useSessionsStore = create<SessionsState>()(
         if (removedIds.length > 0) artifacts.removeArtifacts(removedIds);
       }
       rememberActiveSession(session.id);
+    },
+
+    /**
+     * 乐观上屏：把刚发出的一条用户消息先塞进频道会话的内存视图。
+     *
+     * 只改内存、**不落事件流**（频道会话本就不写本地事件流，见
+     * `isEventStreamSession`），因此它天然是「等待引擎确认」的过渡态：
+     * 引擎那一轮跑完落盘后，轮询经 `openExternal` 整体替换会话把它换成真记录。
+     * 两边文本一致，所以覆盖对用户是无感的。
+     *
+     * 返回消息 id：`runChannelTurn` 失败时据此撤回（见 `dropChannelMessage`）。
+     */
+    appendChannelMessage: (sessionId, content) => {
+      const id = genId();
+      set((s) => ({
+        sessions: s.sessions.map((x) =>
+          x.id === sessionId
+            ? {
+                ...x,
+                messages: [
+                  ...x.messages,
+                  { id, role: 'user', content, createdAt: nowIso() },
+                ],
+              }
+            : x,
+        ),
+      }));
+      return id;
+    },
+
+    /**
+     * 撤回一条乐观上屏的消息。id 不存在（已被轮询的真实记录替换掉）时静默 no-op
+     * ——那种情况下消息已经真的发出去了，撤回反而会删掉一条真实记录。
+     */
+    dropChannelMessage: (sessionId, messageId) => {
+      set((s) => ({
+        sessions: s.sessions.map((x) =>
+          x.id === sessionId
+            ? { ...x, messages: x.messages.filter((m) => m.id !== messageId) }
+            : x,
+        ),
+      }));
     },
 
     /**
