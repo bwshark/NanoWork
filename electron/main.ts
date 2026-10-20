@@ -1078,6 +1078,21 @@ function isPortInUse(host: string, port: number): Promise<boolean> {
 const LAUNCH_READY_TIMEOUT_MS = 30_000;
 
 /**
+ * 网关的等待窗口必须比 serve 宽得多。
+ *
+ * 为什么不能共用 30s：网关的健康端点是**渠道连上之后**才打印的
+ * （引擎 `cli/gateway_runtime.py` 的启动顺序：Cron → 渠道握手 → Agent loop
+ * → Health endpoint）。飞书那一步要拿 app token、访问开放平台，
+ * 冷启实测 23~26s，弱网更久。拿 30s 去等一个**网络依赖**的步骤 =
+ * 拿本地超时窗口赌网络，慢一点就判失败。
+ *
+ * 真机代价（2026-10-20 实测）：网关恰好在第 31 秒就绪，app 在第 30 秒
+ * 判「未进入监听」→ 随后进程被回收 → 日志留下 `进程退出 code=1`，
+ * 用户看到的是「网关起不来」，而引擎其实完全正常。
+ */
+const GATEWAY_READY_TIMEOUT_MS = 90_000;
+
+/**
  * 退出时等待单个引擎子进程真正消失的上限。
  *
  * 取 3 秒：`taskkill /T /F` 正常在几百毫秒内完成，3 秒已经覆盖「句柄被占用、
@@ -1285,13 +1300,13 @@ async function startNanobotGateway(): Promise<boolean> {
       nanobotGatewayProcess = null;
     });
     // 同 serve：等到 health 端口真正进入监听再返回，避免"进程在跑但网关未就绪"
-    const ready = await waitForPort('127.0.0.1', 18790, LAUNCH_READY_TIMEOUT_MS, () =>
+    const ready = await waitForPort('127.0.0.1', 18790, GATEWAY_READY_TIMEOUT_MS, () =>
       nanobotGatewayProcess === null,
     );
     startupProfile.end('gateway.spawn→listen');
     if (!ready) {
       console.warn(
-        `[nanobot] gateway 18790 在 ${LAUNCH_READY_TIMEOUT_MS / 1000} 秒内未进入监听（进程可能已退出）`,
+        `[nanobot] gateway 18790 在 ${GATEWAY_READY_TIMEOUT_MS / 1000} 秒内未进入监听（进程可能已退出）`,
       );
     }
     return ready;
@@ -5300,11 +5315,15 @@ app.whenReady().then(async () => {
 
   // 桌面端：并行拉起 serve（/v1 API）与 gateway（IM channels 长连接），
   // 两者齐备智能体才能既对话又与飞书等机器人互通（失败不影响主程序，仅记录警告）
-  nanobotStartupPromise = Promise.all([startNanobot(), startNanobotGateway()]).then(
-    ([serveOk]) => serveOk,
-  );
-  void nanobotStartupPromise.then((ok) => {
-    if (ok) console.log('[nanobot] 网关已在后台启动');
+  const startupPair = Promise.all([startNanobot(), startNanobotGateway()]);
+  nanobotStartupPromise = startupPair.then(([serveOk]) => serveOk);
+  void startupPair.then(([serveOk, gatewayOk]) => {
+    // [LOCAL PATCH] 就绪提示必须**分别**报 serve 与网关。原写法只取 serve 的
+    // 结果就打印「网关已在后台启动」：网关失败而 serve 成功时照样打这一句，
+    // 属于假绿提示——用户以为 IM 通了，实际一个渠道都没连上。
+    if (serveOk) console.log('[nanobot] serve（/v1 API）已就绪');
+    if (gatewayOk) console.log('[nanobot] 网关已就绪');
+    else console.warn('[nanobot] 网关未就绪：IM 渠道不可用（原因见上方引擎日志）');
     // 剖析结果在这里写一次：此刻所有并行阶段（窗口 / serve / gateway）都已收敛。
     // 延后 3 秒是为了让窗口首屏那一段也闭合（冷启动下它与网关就绪同量级）。
     // `unref()` 让采样定时器不拖住进程退出——观测手段不该影响被观测对象的行为。

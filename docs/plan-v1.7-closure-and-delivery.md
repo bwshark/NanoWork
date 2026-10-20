@@ -293,3 +293,80 @@ B1 ──┬─→ B2 ────────────────┐
 | B3 | 子代理 / Dream 闸门 / IM 审批都要动引擎，**一批做完只同步一次副本** |
 | B4 | 从「开发者能跑」到「别人能装」：更新、深链、自助安装、敢发的反馈包 |
 | B5 | 用 v1.6 装上的仪表盘决定口袋清单里哪些该做、哪些该关掉 |
+
+---
+
+## 附录 C：真机验证清单（V1.7 收口放行前必过）
+
+> **主阻塞**：DashScope 密钥欠费 → 所有依赖模型的链路真机跑不起来。先充值 + 重启桌面应用（所有引擎 Python 改动 / 主进程 cjs 改动需重启 serve+gateway 才生效；B4 的 cjs 已于 2026-10-18 重建）。
+> 代码层行为已被单测锁死（见各批变异验证），本清单只验「端到端在真实环境跑通」，不重复单测判据。
+
+### C.0 前置（每次真机前）
+- [ ] DashScope 密钥有额度（普通聊天能拿到模型回复；之前报 `out of quota or arrears`）
+- [ ] 重启桌面应用，确认网关由两层 venv 拉起（`run/gateway.*.json` 引用 `nanobot/nanobot/.venv`）
+- [ ] 连接横幅地址与实际监听端口一致（复用场景 `running=false` 但 `port` 有值也要同步，见 MEMORY `nextGatewayEndpoint` 只看 port）
+
+### C.1 B3-01 子代理委派（FR-2.5）
+- [ ] 任务会话让主 Agent 派生子代理：子代理回答回到最终答案
+- [ ] ProcessView 出现「子代理」分组行（`SubagentGroupView`），含 `started→tool→done` 序列
+- [ ] 权限单调递减：父 `tool_deny` 生效于子代理（子不得更宽）
+
+### C.2 B3-02 Dream 审查闸门（FR-4.6）
+- [ ] 跑一轮 `/dream` 产生候选 → 记忆页「待审查」区出现 new/modified/deleted 三类 diff
+- [ ] 点「采纳」→ 仅变化项写回正式 `MEMORY.md`（逐字节比对，未变化项不重写）
+- [ ] 点「丢弃」→ 正式文件逐字节不变、候选区清空
+- [ ] 回退开关：关 `defaults.dream.require_review` 回到直落旧行为
+
+### C.3 B3-03 IM 内审批（FR-6.5）
+- [ ] 微信 / 飞书渠道 `tool_approval:"ask"` 已配、且重启不被启动同步抹掉（已修 `CARRIED_OVER_ENGINE_KEYS` + feishu 段级唯一权威 `SECTION_ONLY_KEYS`）
+- [ ] 写类工具（如 `write_file`）在 IM 触发审批文本卡（飞书不渲染按钮，以文本回复为准）
+- [ ] 回复「允许」→ 工具执行；「拒绝」→ 不执行且主对话收到 deny
+- [ ] 超时（300s）→ 判 deny；重放不重复裁决；多条挂起时「允许 <短编号>」消歧
+
+> **2026-10-20 根因修复（此前「审批挂起」不出现的唯一原因）**
+>
+> 症状：飞书发「创建文件」，**没有审批挂起**，工具直接执行；全程零报错。
+>
+> 根因：**运行时渠道名 ≠ 配置段名**，审批开关查表必然 miss。
+> - 审批表键 = **配置段名** `feishu`（`channels.feishu.tool_approval`）
+> - 运行时 `InboundMessage.channel` = **运行时渠道名** `feishu.<instanceId>`
+>   （`channels/feishu/instances.py::runtime_channel_name`；本机 `instanceId="feishu"`
+>   而非 `default`，故运行时名为 `feishu.feishu`）
+> - `WorkspaceScopeResolver.default_for` 精确查表 → miss → 模式退回 `auto`
+>   → `ToolApprovalHook.before_execute_tool` 在 `tool_approval != "ask"` 处直接放行
+>
+> 修复（`nanobot/security/workspace_access.py`）：新增 `resolve_channel_tool_approval()`，
+> 精确匹配优先，未命中则按渠道契约（`channels/contracts.py::_validate_runtime_name`：
+> 运行时名 == 段名 或以 `"<段名>."` 开头）**回退到段名**，多段命中取最长。
+> `source_channel` 仍保留运行时名（审计 / loopback 判定按运行时渠道走）。
+>
+> 判据：`tests/security/test_im_approval.py` 新增 4 条用例（运行时名回退 / 最长优先 /
+> 精确优先 / 未配置不误伤）+ 1 条**完整闭环**用例（挂起 → 裁决 → 执行，全程用真实
+> 运行时名 `feishu.feishu`）。变异验证：删掉前缀回退 → 2 条变红，失败点正是
+> 「运行时名必须命中段级 ask」。
+>
+> ⚠️ 修复在**引擎 Python 层**，改完必须重启 serve+gateway 才生效（桌面端 `electron .` 重启即可）。
+> ⚠️ 飞书流式卡片另需应用权限 `cardkit:card:write`（与审批卡无关：审批卡走普通出站文本路径）。
+
+### C.4 B4-01 自动更新
+- [ ] `GH_TOKEN=... npm run release:electron` 发新版本 → 旧版「检查更新」检测到 → 下载 → 重启后版本号变化
+- [ ] 未签名场景：关于页常驻提示 + 发布页兜底，不谎报「已是最新」
+
+### C.5 B4-02 深链
+- [ ] `nanowork://open-session?id=…` 打开指定会话
+- [ ] `nanowork://new-chat?prompt=…` 预填并新建会话
+- [ ] 应用已运行时双击链接（second-instance 路径）复用窗口、不二次起网关
+- [ ] 非法参数落到首页不崩
+
+### C.6 B4-03 运行时自助安装
+- [ ] 干净机器 / 新用户目录首启：引擎未就绪时给「一键修复」引导（venv→`pip install -e`→verify，命令可见、可取消、原始输出透出）
+- [ ] 修复成功后自动重新自检
+
+### C.7 B4-04 反馈包
+- [ ] 生成反馈包 → 解压自查：无 API key、无 cookie、无绝对路径用户名；脱敏清单可见；含启动剖析 + `session-latency` 摘要
+
+### C.8 10-19 追加的 IM 助理视图（代码已提交，建议一并真机看）
+- [ ] 助理视图产物卡片与任务视图一致（一轮不裂、文件 / 富产物都登记）
+- [ ] 深度思考段在助理视图出现（先想后做，与工具行交错）
+- [ ] 发消息走 `/v1/turn`：IM 线程真收到、桌面端实时过程不空白、发送失败撤回不留假消息
+- [ ] 实时过程轮询：`/v1/turn/progress` 增量喂占位助手消息，落盘后真实记录平滑接管（观察期间不被 4s 轮询冲掉）
