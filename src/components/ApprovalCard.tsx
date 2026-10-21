@@ -61,13 +61,27 @@ export function ApprovalCard() {
   );
 }
 
-/** 单条审批请求的卡片内容。状态随 `key={pending.id}` 在换请求时整体重建。 */
-function ApprovalCardBody({
+/**
+ * 单条审批请求的卡片内容。状态随 `key={pending.id}` 在换请求时整体重建。
+ *
+ * ## 两种数据源（任务视图 / IM 会话）
+ *
+ * - 任务视图：`sessionsStore.pendingApprovals`（SSE 推来的），裁决走
+ *   `runtime.respondApproval` → serve 进程的 `POST /v1/tool-approvals/{id}`；
+ * - IM 会话：`channelApprovalsStore`（轮询 gateway 的会话快照），裁决走
+ *   gateway 的 `POST /v1/approvals/resolve`。
+ *
+ * 两条链路的**裁决落点不同**（serve 进程 vs gateway 进程，各有一张
+ * `PENDING_APPROVALS`），因此裁决函数由调用方注入而不是在这里选。
+ * 但**视觉与交互**完全一致——所以共用这一个 Body，不做第二套渲染。
+ */
+export function ApprovalCardBody({
   pending,
   queued,
   resolveApproval,
 }: {
-  pending: PendingApproval;
+  /** 只要 id / tool / args 三个字段：两种数据源的载荷形状不同，取交集即可 */
+  pending: { id: string; tool: string; args: Record<string, unknown> };
   queued: number;
   resolveApproval: (decision: ApprovalDecision, reason?: string) => Promise<void>;
 }) {

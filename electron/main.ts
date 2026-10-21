@@ -28,6 +28,13 @@ import {
 import { createEngineInstaller } from './engineInstall';
 import type { EngineSelfCheckReport } from '../src/types/engine';
 import { normalizeEngineChannelAllowFrom } from './channelAllowFrom';
+import {
+  GATEWAY_HEALTH_HOST,
+  GATEWAY_HEALTH_PORT,
+  buildChannelApprovalResolveRequest,
+  buildChannelApprovalsRequest,
+  decodeChannelApprovals,
+} from './channelApprovals';
 import { disconnectChannelInConfig, resolveWeixinAccountPath, type DisconnectChannelKind } from './channelDisconnect';
 import {
   initTray,
@@ -38,6 +45,10 @@ import {
 } from './tray';
 import { registerHotkey, unregisterAllHotkeys } from './hotkey';
 import type {
+  ChannelApprovalResolveParams,
+  ChannelApprovalResolveResult,
+  ChannelApprovalsParams,
+  ChannelApprovalsResult,
   ChannelSendParams,
   ChannelSendResult,
   ChannelTurnProgress,
@@ -4214,16 +4225,12 @@ ipcMain.handle('nanobot:getChannelSession', async (_e, key: string) => {
   }
 });
 
-/** gateway 出站端点（health server 同端口，仅本地回环监听） */
-const GATEWAY_HEALTH_HOST = '127.0.0.1';
-const GATEWAY_HEALTH_PORT = 18790;
-
 /**
  * 诊断快照关心的三个引擎端口：serve /v1、gateway health、gateway WS 频道。
  *
- * ⚠️ 必须声明在 `GATEWAY_HEALTH_PORT` **之后**：它是模块级 const，声明在前面会踩
- * TDZ（初始化时引用尚未求值的 const → ReferenceError），而 `DEFAULT_GATEWAY_PORT`
- * 与 `GATEWAY_WS_PORT` 都在它前面，正好。
+ * ⚠️ `GATEWAY_HEALTH_PORT` 现在从 `./channelApprovals.ts` import（审批端点与它同源），
+ * import 声明在模块顶部，**没有 TDZ 问题**；而 `DEFAULT_GATEWAY_PORT` 与
+ * `GATEWAY_WS_PORT` 都在前面，正好。
  */
 const DIAGNOSTIC_PORTS = [DEFAULT_GATEWAY_PORT, GATEWAY_HEALTH_PORT, GATEWAY_WS_PORT];
 
@@ -4465,6 +4472,142 @@ function decodeChannelTurnProgress(raw: string): ChannelTurnProgress | null {
 ipcMain.handle(
   'nanobot:getChannelTurnProgress',
   async (_e, params: ChannelTurnProgressParams) => getChannelTurnProgress(params),
+);
+
+/**
+ * 读取某个 IM 会话当前挂着的待裁决审批（gateway health 端口
+ * `GET /v1/approvals?channel=&chat_id=`）。
+ *
+ * 为什么需要独立端点（而不是复用 `/v1/turn/progress`）：
+ * - **轮次登记只覆盖桌面端自己发起的轮次**。`turn_progress.begin()` 只由
+ *   `/v1/turn` 调用，而「用户在飞书里让智能体建文件」这种轮次是渠道入站触发
+ *   的，桌面端是旁观者 → 进度通道里根本没有这一轮。
+ * - **审批的生命周期独立于轮次**。它挂在「某个工具调用正等着裁决」这件事上，
+ *   不是一个事件流里的第 N 条。
+ *
+ * 容错策略与进度端点同款三档（404 → unsupported / 其它非 200 → ok=false 可重试 /
+ * 正常 → 解码 camelCase）。
+ *
+ * ⚠️ 端点构造与解码在 `./channelApprovals.ts`（纯模块，可单测）——「审批必须落在
+ * gateway 进程」这条铁律此前没有任何测试保护，改错端口是**静默失效**。
+ */
+function getChannelApprovals(
+  params: ChannelApprovalsParams,
+): Promise<ChannelApprovalsResult> {
+  const target = buildChannelApprovalsRequest(params.channel, params.chatId);
+
+  return new Promise((resolve) => {
+    const req = httpRequest(
+      {
+        host: target.host,
+        port: target.port,
+        path: target.path,
+        method: target.method,
+        timeout: 3000,
+      },
+      (res) => {
+        let raw = '';
+        res.on('data', (d) => (raw += d.toString()));
+        res.on('end', () => {
+          if (res.statusCode === 404) {
+            resolve({ ok: false, unsupported: true, approvals: [] });
+            return;
+          }
+          if (res.statusCode !== 200) {
+            resolve({
+              ok: false,
+              approvals: [],
+              error: `网关返回 ${res.statusCode}`,
+            });
+            return;
+          }
+          const decoded = decodeChannelApprovals(raw);
+          if (!decoded) {
+            resolve({ ok: false, approvals: [], error: '网关审批响应解析失败' });
+            return;
+          }
+          resolve(decoded);
+        });
+      },
+    );
+    req.on('timeout', () => req.destroy(new Error('网关审批查询超时')));
+    // 网关重启期间连接失败是暂时性的：报 ok=false 让调用方重试，而不是
+    // unsupported（那会让客户端永久放弃轮询，用户再也看不到审批卡）。
+    req.on('error', (err) =>
+      resolve({ ok: false, approvals: [], error: `网关不可达：${err.message}` }),
+    );
+    req.end();
+  });
+}
+
+/**
+ * 裁决一条 IM 会话里的待裁决审批（gateway health 端口
+ * `POST /v1/approvals/resolve`）。
+ *
+ * ⚠️ 必须落在 **gateway 进程**：IM 轮次的审批 future 挂在 gateway 那张
+ * `PENDING_APPROVALS` 上；打到 serve 进程（任务视图那条
+ * `POST /v1/tool-approvals/{id}`）会 409，而用户看到的是「点了允许，什么都没发生」。
+ *
+ * 409 语义是「已被裁决 / 已过期 / 不属于该会话」——这三者在桌面端都表现为
+ * 「这张卡已经不该存在」，所以原样透出 ok=false + 原因，由渲染层收起这张卡。
+ *
+ * 端点构造在 `./channelApprovals.ts`（纯模块，可单测）：端口与路径都在那里，
+ * 「审批 ≠ 任务视图的裁决端点」这条判据由测试钉住。
+ */
+function resolveChannelApproval(
+  params: ChannelApprovalResolveParams,
+): Promise<ChannelApprovalResolveResult> {
+  const target = buildChannelApprovalResolveRequest(params);
+  const body = target.body;
+
+  return new Promise((resolve) => {
+    const req = httpRequest(
+      {
+        host: target.host,
+        port: target.port,
+        path: target.path,
+        method: target.method,
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(body),
+        },
+        timeout: 10000,
+      },
+      (res) => {
+        let raw = '';
+        res.on('data', (d) => (raw += d.toString()));
+        res.on('end', () => {
+          if (res.statusCode === 404) {
+            resolve({ ok: false, unsupported: true, error: '网关不支持审批裁决' });
+            return;
+          }
+          let error = `网关返回 ${res.statusCode}`;
+          try {
+            const parsed = JSON.parse(raw) as { error?: string };
+            if (parsed.error) error = parsed.error;
+          } catch {
+            /* 保留默认错误文案 */
+          }
+          resolve({ ok: res.statusCode === 200, ...(res.statusCode === 200 ? {} : { error }) });
+        });
+      },
+    );
+    req.on('timeout', () => req.destroy(new Error('网关审批裁决超时')));
+    req.on('error', (err) =>
+      resolve({ ok: false, error: `网关不可达：${err.message}` }),
+    );
+    req.end(body);
+  });
+}
+
+ipcMain.handle(
+  'nanobot:getChannelApprovals',
+  async (_e, params: ChannelApprovalsParams) => getChannelApprovals(params),
+);
+
+ipcMain.handle(
+  'nanobot:resolveChannelApproval',
+  async (_e, params: ChannelApprovalResolveParams) => resolveChannelApproval(params),
 );
 
 // ——————————————————————————————————————————————

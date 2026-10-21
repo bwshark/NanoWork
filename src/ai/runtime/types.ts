@@ -29,6 +29,7 @@ import type {
   ToolCallStatus,
   UsageStats,
 } from '@/types';
+import type { ApprovalDecision } from '@/types/permission';
 import type { ExecutionMode, PlanStep } from '@/types/event';
 import type { MemberEventPhase, SubagentEventPhase } from '@/types/process';
 import type { PluginEngineIndex } from '@/types/plugin';
@@ -250,12 +251,11 @@ export interface ApprovalRequestEvent {
 /**
  * 逐条批准的裁决结果。
  *
- * `always` = 「本会话内始终允许这个工具」。它与 `allow` 的差别只在**下次还问
- * 不问**，不改变本次是否放行（两者都会执行）。刻意做成独立取值而不是让前端
- * 自己记账：豁免必须由引擎持有——只有它知道下一轮同一个工具会不会再来，
- * 也只有它能保证「换会话即失效」。
+ * 声明处在 `@/types`（`permission.ts`）——平台层（`src/platform/types.ts`）也
+ * 要用它，而平台层是渲染层与主进程共同的底座，不能反向依赖本契约层。
+ * 这里**只做转出**，既有 `from '@/ai/runtime/types'` 的 import 路径照常可用。
  */
-export type ApprovalDecision = 'allow' | 'deny' | 'always';
+export type { ApprovalDecision } from '@/types/permission';
 
 /**
  * 富产物事件载荷。

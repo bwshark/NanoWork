@@ -366,7 +366,22 @@ B1 ──┬─→ B2 ────────────────┐
 - [ ] 生成反馈包 → 解压自查：无 API key、无 cookie、无绝对路径用户名；脱敏清单可见；含启动剖析 + `session-latency` 摘要
 
 ### C.8 10-19 追加的 IM 助理视图（代码已提交，建议一并真机看）
-- [ ] 助理视图产物卡片与任务视图一致（一轮不裂、文件 / 富产物都登记）
-- [ ] 深度思考段在助理视图出现（先想后做，与工具行交错）
-- [ ] 发消息走 `/v1/turn`：IM 线程真收到、桌面端实时过程不空白、发送失败撤回不留假消息
-- [ ] 实时过程轮询：`/v1/turn/progress` 增量喂占位助手消息，落盘后真实记录平滑接管（观察期间不被 4s 轮询冲掉）
+- [x] 助理视图产物卡片与任务视图一致（一轮不裂、文件 / 富产物都登记）
+- [x] 深度思考段在助理视图出现（先想后做，与工具行交错）
+- [x] 发消息走 `/v1/turn`：IM 线程真收到、桌面端实时过程不空白、发送失败撤回不留假消息
+- [x] 实时过程轮询：`/v1/turn/progress` 增量喂占位助手消息，落盘后真实记录平滑接管（观察期间不被 4s 轮询冲掉）
+
+### C.9 10-20 追加的桌面端 IM 审批卡（2026-10-20 真机验收通过）
+> 场景：飞书发「创建文件」→ 飞书侧收到审批文本卡 → **桌面端助理视图输入框位置同步弹出审批卡** → 点「允许本次」→ 工具真的执行。
+> 判据：引擎 `tests/gateway/test_health_route_contract.py`（12 例）+ `test_approvals_route_e2e.py`（7 例）；
+> 客户端 `tests/channelApprovalCard.test.tsx` + `tests/electron/channelApprovals.test.ts` + `tests/lib/channelSession.test.ts`（44 例）。
+
+- [x] 飞书侧审批文本卡送达（`cardkit:card:write` 只影响流式卡片，审批卡走普通出站文本）
+- [x] 桌面端助理视图弹出审批卡，**贴底**（与任务视图同位置）：`top:726 / bottom:900`；截图 `docs/evidence/approval-card-ui.png`
+- [x] 裁决**进程内直投** gateway 的 `PENDING_APPROVALS`（打 serve 18900 必 409 且零报错）
+- [x] allow 路径：裁决 `{"ok": true, "verdict": "allow"}` → 快照清空 → **文件真的被创建**（`approval-probe.md` 内容 `hello`，探针已清理）
+- [x] deny 路径：裁决 `{"ok": true, "verdict": "deny"}` → **`deny-probe.md` 未创建**（工具正确没执行）
+- [x] 「允许本次」接线参数正确：`{channel:'feishu.feishu', chatId:'ou_144e0eff3357449329c32c3984ce2c1a', requestId:'appr-121517f468a6', decision:'allow'}`
+- [x] 快照按会话隔离（跨会话裁决被拒）· 未知 `request_id` 被拒 · 裁决失败**不退化成放行**
+
+> ⚠️ 本轮修掉的真机 bug：`GET /v1/approvals` 恒 500 —— `async def _handle_approvals` 但路由处**漏 `await`** → 协程对象解包 → `cannot unpack non-iterable coroutine object` → 客户端把它当「网关不支持」静默吞 → **审批卡永远不出现，全程零报错**。已改为同步 `def`（只读注册表快照），AST 判据钉住「await 与否必须与 handler 的 async 性质一致」。

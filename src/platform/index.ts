@@ -375,6 +375,29 @@ export const platform: PlatformAdapter = {
       events: [],
     });
   },
+  getChannelApprovals: (params) => {
+    if (isElectron() && window.electronAPI) {
+      return window.electronAPI.nanobotGetChannelApprovals(params);
+    }
+    // Web 端读不到 gateway 的审批注册表：标记 unsupported 让调用方停止轮询
+    // （否则每 0.6 秒失败一次、刷满控制台）。
+    return Promise.resolve({
+      ok: false,
+      unsupported: true,
+      approvals: [],
+    });
+  },
+  resolveChannelApproval: (params) => {
+    if (isElectron() && window.electronAPI) {
+      return window.electronAPI.nanobotResolveChannelApproval(params);
+    }
+    // Web 端没有 gateway 访问能力：裁决不可用
+    return Promise.resolve({
+      ok: false,
+      unsupported: true,
+      error: 'Web 端不支持审批裁决，请使用桌面端',
+    });
+  },
   channelConnect: (
     action: ChannelConnectAction,
     channel: string,

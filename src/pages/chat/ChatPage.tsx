@@ -19,6 +19,7 @@ import {
   type ComposerSubmitPayload,
 } from "./Composer";
 import { ApprovalCard } from "@/components/ApprovalCard";
+import { ChannelApprovalCard } from "@/components/ChannelApprovalCard";
 import { readDeepLinkPrompt } from "@/types/deepLink";
 import {
   HERO_MODES,
@@ -30,6 +31,7 @@ import {
 import { toast } from "@/components/Toast";
 import { hasConversation } from "@/lib/conversation";
 import { watchChannelTurn } from "@/lib/channelTurnLive";
+import { channelChatId } from "@/lib/channelSession";
 import { platform } from "@/platform";
 import { useSessionsStore } from "@/stores/sessionsStore";
 
@@ -267,8 +269,19 @@ export function ChatPage() {
         {/* 逐条批准卡片：绝对定位覆盖在输入框之上（不是 Modal）。
             挂在 Composer **之后**才有意义——早于它渲染就会被输入框盖住。
             `readonly` 会话永远不会收到审批请求（定时任务留痕），因此与
-            上面的三个分支正交，不必再加判断。 */}
-        <ApprovalCard />
+            上面的三个分支正交，不必再加判断。
+
+            任务视图与助理视图走**两条**审批通道（数据来源与裁决落点都不同，
+            见 ChannelApprovalCard 的头注释），但卡片位置/视觉完全一致。
+            这里刻意**互斥**渲染：两张卡都是 `position: absolute; bottom: 0`，
+            同时挂载会叠在一起（后挂的那张盖住先挂的）。而 IM 会话永远不会
+            收到任务视图那条 SSE 通道的审批请求（那是 `/v1/chat` 的流式响应），
+            所以互斥不会漏掉任何一张该出现的卡。 */}
+        {session?.channel ? (
+          <ChannelApprovalCard sessionId={session.id} channel={session.channel} />
+        ) : (
+          <ApprovalCard />
+        )}
       </Box>
     </Box>
   );
@@ -547,9 +560,7 @@ function ChannelComposer({
   const dropMessage = useSessionsStore((s) => s.dropChannelMessage);
 
   /** 从 `nb:{channel}:{chatId}` 还原出站目标 chatId（chatId 本身可含冒号） */
-  const chatId = sessionId.startsWith("nb:")
-    ? sessionId.slice(3).split(":").slice(1).join(":")
-    : "";
+  const chatId = channelChatId(sessionId);
 
   const handleSubmit = useCallback(
     ({ text, attachmentCount }: ComposerSubmitPayload) => {

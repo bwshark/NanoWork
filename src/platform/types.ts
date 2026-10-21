@@ -1,4 +1,10 @@
-import type { ArtifactIndexEntry, ChannelKind, McpToolInfo, Skill } from '@/types';
+import type {
+  ApprovalDecision,
+  ArtifactIndexEntry,
+  ChannelKind,
+  McpToolInfo,
+  Skill,
+} from '@/types';
 import type {
   MarketGcResult,
   MarketIndex,
@@ -636,6 +642,72 @@ export interface ChannelTurnProgress {
   events: ChannelTurnProgressEvent[];
 }
 
+/**
+ * 一条**待裁决的工具调用**（IM 会话里的审批请求）。
+ *
+ * 与任务视图那条 SSE 事件里的审批请求是**同一个东西**（引擎侧同一份注册表），
+ * 但走的是另一条链路：IM 轮次跑在 gateway 进程，进度与审批都经
+ * `GET /v1/approvals` 按会话查询（无游标、全量语义）。
+ *
+ * `shortCode` 是给用户看的短编号（`requestId` 后 8 位），与 IM 卡片上印的
+ * 那个是同一串——两端显示同一个编号，用户在飞书里念「允许 abc123」和桌面端
+ * 点按钮指的是同一条。
+ */
+export interface ChannelApproval {
+  /** 引擎侧审批请求 id（回传裁决时用它寻址） */
+  id: string;
+  /** 工具名 */
+  tool: string;
+  /** 工具入参（引擎侧已截断，直接喂摘要渲染） */
+  args: Record<string, unknown>;
+  /** 该次工具调用的 call id（与任务视图时间线上的那一行同源） */
+  callId?: string;
+  /** 本次裁决的等待上限（秒）；超时引擎会判为拒绝 */
+  timeoutSeconds: number;
+  /** 短编号（id 后 8 位），与 IM 卡片一致 */
+  shortCode: string;
+}
+
+/** 读取某个 IM 会话待裁决审批的查询参数 */
+export interface ChannelApprovalsParams {
+  /** nanobot 渠道名（session key 冒号前段，如 feishu.feishu） */
+  channel: string;
+  /** IM 会话 id（session key 冒号后段，如飞书 open_id） */
+  chatId: string;
+}
+
+/** 读取待裁决审批的结果 */
+export interface ChannelApprovalsResult {
+  ok: boolean;
+  /** 网关不支持该端点（404 / 路由缺失）：调用方停止轮询 */
+  unsupported?: boolean;
+  /** 失败原因（ok=false 且非 unsupported） */
+  error?: string;
+  /** 该会话当前挂着的待裁决请求（按注册顺序） */
+  approvals: ChannelApproval[];
+}
+
+/** 裁决一条待裁决审批的参数 */
+export interface ChannelApprovalResolveParams {
+  channel: string;
+  chatId: string;
+  /** 要裁决的请求 id（引擎侧完整 id） */
+  requestId: string;
+  /** 裁决：允许一次 / 拒绝 / 本会话始终允许 */
+  decision: ApprovalDecision;
+  /** 拒绝原因（可选，会回灌给模型让它改道） */
+  reason?: string;
+}
+
+/** 裁决结果 */
+export interface ChannelApprovalResolveResult {
+  ok: boolean;
+  /** 网关不支持该端点（404 / 路由缺失） */
+  unsupported?: boolean;
+  /** 失败原因（ok=false 且非 unsupported） */
+  error?: string;
+}
+
 /** 扫码接入动作（网关 settings.channel.connect.{action}） */
 export type ChannelConnectAction = 'start' | 'poll' | 'cancel';
 
@@ -1091,6 +1163,31 @@ export interface PlatformAdapter {
   getChannelTurnProgress(
     params: ChannelTurnProgressParams,
   ): Promise<ChannelTurnProgress>;
+  /**
+   * 读取某个 IM 会话**当前挂起的待裁决审批**（gateway `GET /v1/approvals`）。
+   *
+   * 走独立通道而不是复用 `getChannelTurnProgress`：审批的生命周期独立于轮次
+   * （挂起时引擎还没落盘、会话历史里什么都没有），且「由 IM 用户发起」的那类
+   * 轮次根本没在进度通道登记过——两者共用一条路就会漏掉。
+   * - electron：主进程 HTTP 调 gateway health 端口；
+   * - web：无 gateway 访问能力，返回 `unsupported`（调用方停止轮询）。
+   */
+  getChannelApprovals(
+    params: ChannelApprovalsParams,
+  ): Promise<ChannelApprovalsResult>;
+  /**
+   * 裁决一条 IM 会话里的待裁决审批（gateway `POST /v1/approvals/resolve`）。
+   *
+   * 刻意**不走**任务视图那条 `POST /v1/tool-approvals/{id}`：那条端点只存在于
+   * **serve 进程**，而 IM 轮次跑在 **gateway 进程**，两进程各有一张
+   * `PENDING_APPROVALS` 注册表。打错进程会静默落空（409），用户点了「允许」
+   * 却什么都没发生且全程零报错。
+   * - electron：主进程 HTTP 调 gateway health 端口；
+   * - web：无 gateway 访问能力，返回 `unsupported`。
+   */
+  resolveChannelApproval(
+    params: ChannelApprovalResolveParams,
+  ): Promise<ChannelApprovalResolveResult>;
   /**
    * IM 渠道扫码接入（经主进程认证 WS 桥调网关 settings.channel.connect.*）。
    * - electron：主进程签发 token 并经 webui WebSocket 发 mutation 帧；
@@ -1705,6 +1802,26 @@ export interface ElectronAPI {
   nanobotGetChannelTurnProgress(
     params: ChannelTurnProgressParams,
   ): Promise<ChannelTurnProgress>;
+  /**
+   * 读取某个 IM 会话当前挂起的待裁决审批（gateway health 端口
+   * `GET /v1/approvals?channel=&chat_id=`）。
+   *
+   * wire 字段（`snake_case` / `request_id` 等）在主进程解码，渲染层只拿到
+   * camelCase 的 `ChannelApprovalsResult`。
+   */
+  nanobotGetChannelApprovals(
+    params: ChannelApprovalsParams,
+  ): Promise<ChannelApprovalsResult>;
+  /**
+   * 裁决一条 IM 会话里的待裁决审批（gateway health 端口
+   * `POST /v1/approvals/resolve`）。
+   *
+   * 必须落在 **gateway 进程**——IM 轮次的审批 future 就挂在它那张
+   * `PENDING_APPROVALS` 上，打到 serve 进程会静默 409。
+   */
+  nanobotResolveChannelApproval(
+    params: ChannelApprovalResolveParams,
+  ): Promise<ChannelApprovalResolveResult>;
   /** 扫码接入（网关认证 WS 桥：settings.channel.connect.{start|poll|cancel}） */
   nanobotChannelConnect(
     action: ChannelConnectAction,

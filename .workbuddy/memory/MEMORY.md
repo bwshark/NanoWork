@@ -48,6 +48,17 @@ WorkBuddy 式智能体客户端：React18+TS+Vite 渲染层 + Electron 主进程
 - ⚠️ 模型「默认」两条解析路径：`resolve_preset()`(认 `modelPreset`，运行时用) vs `resolve_default_preset()`(只读 `agents.defaults.model`，隐式 default)。不一致时界面显示与实际行为分叉且零报错。不变量：指针有效⇒defaults 6 字段与之一致(`electron/modelDefaultsConfig.ts` `syncDefaultsToPointer`)。
 - ⚠️ vitest 全量偶发 `EPERM ... node-brokered-fs-shim` → worker 崩 → `ERR_IPC_CHANNEL_CLOSED`。**是沙箱拦读文件，非用例红**；同命令重跑即绿。
 
+## 桌面端 IM 审批卡（2026-10-20 收口，真机 C.8 全链路通过）
+- **三条通道不能混**：任务视图=SSE `approval_request` 事件/serve 进程/`POST /v1/tool-approvals/{id}`；**助理视图（IM 会话）=轮询 gateway `GET /v1/approvals`（会话级快照，无游标）/gateway 进程/`POST /v1/approvals/resolve`**。
+- ⛔ **IM 轮次是渠道入站触发，桌面端是旁观者** → `turn_progress.begin()`（只由 `/v1/turn` 调用）没登记这一轮 → 进度通道里根本没它，4 秒会话刷新也看不到（审批挂起时不落盘）→ **桌面端只能自己轮询**。
+- ⛔ **裁决必须打 gateway 18790，不能打 serve 18900**：两进程各有一张模块级 `PENDING_APPROVALS` → 打错进程 → 409 → **用户点了「允许」什么都没发生，全程零报错**。
+- ⚠️ **session_key 三段必须对齐**（本轮全链路验证）：渠道侧注册 `f"{self.name}:{chat_id}"`（`channels/feishu/runtime.py`）→ 引擎磁盘 key `feishu.feishu:ou_144e...` → 网关查询 `session_key_for_channel()` → `f"{channel}:{chat_id}"` → 桌面端 channel 来自 `toChannelSessionSummary()`（`key.split(':')[0]` = 运行时渠道名 `feishu.feishu`），chatId 来自 `channelChatId()`（**不能用 `split(':')[1]`**，chatId 可含冒号）。
+- ⚠️ **「漏 await」是网关路由层的静默杀手**：`async def _handle_approvals` 但路由处不 await → `status, payload = <coroutine>` → `cannot unpack non-iterable coroutine object` → 端点恒 500 → 客户端把它当「网关不支持」静默吞 → **审批卡永远不出现，全程零报错**。已修为**同步 `def`**（只读注册表快照，无 await 点）。判据见 `nanobot/tests/gateway/test_health_route_contract.py`（AST 静态判据，12 例）。
+- ⚠️ **外部进程改不了进程级 `PENDING_APPROVALS`** → 想在真机触发审批挂起，只能走渠道入站（`POST /v1/turn` 投 inbound 消息，让引擎自己「调工具→需审批→注册→挂起」）。工具见 `tools/inject_pending_approval.py`。
+- 客户端落点：`src/stores/channelApprovalsStore.ts`（1 秒轮询 + 乐观出队 + `MAX_FAILURES=8` + `unsupported` 立即停）+ `src/components/ChannelApprovalCard.tsx`（复用 `ApprovalCardBody`）+ `src/pages/chat/ChatPage.tsx`（`session?.channel` 决定渲染 Channel 还是 Task 审批卡，**互斥**）。
+- ⚠️ **平台层依赖方向铁律**：`electron/main.ts` 也 import `src/platform/types.ts` → 平台层是渲染层与主进程**共同底座**，不能反向依赖上层契约 → `ApprovalDecision` 下沉到 `src/types/permission.ts`，`src/ai/runtime/types.ts` 改为**转出**（`export type {X} from` + **同时** `import type`，否则本文件内用到报 TS2304）。
+- 真机证据：allow 路径文件真创建（`approval-probe.md` 内容 `hello`）+ deny 路径文件真没创建（`deny-probe.md`）；桌面端卡片贴底（`top:726/bottom:900`，= 输入框位置，与任务视图一致）。截图 `docs/evidence/approval-card-ui.png`。
+
 ## 引擎统一配置（2026-10-17 收尾）
 - 用户决策：统一到本仓 study 副本，桌面也跑本仓。覆盖配置 `$APPDATA/nanowork/nanowork.nanobot.json`：现**不写 bin**(回落两层 venv `nanobot/nanobot/.venv`)，显式 `config=D:/Workspace/study/nanowork/nanowork.config.json`(无内联密钥，凭据走 `DASHSCOPE_API_KEY` 环境变量)。
 - ⚠️ venv 真相（2026-10-19 复核）：**代码与网关实际只用一个 —— 两层 `nanobot/nanobot/.venv`**（Python 3.13.12，`python -m venv` 建；`engineInterpreterCandidates`/`fallbackLaunchConfig`/自检全解析它；当前运行中的 gateway `run/gateway.*.json` 也用它的 `Scripts/python.exe -m nanobot`）。一层 `nanobot/.venv` 是历史遗留（uv 建的 3.13.4，prompt=nanobot-ai），**无任何代码引用**，属废弃，可删。
@@ -56,6 +67,11 @@ WorkBuddy 式智能体客户端：React18+TS+Vite 渲染层 + Electron 主进程
 
 ## 真机验证铁律
 1. 布局量几何(`getBoundingClientRect`+`getComputedStyle`)别只看截图 2. Playwright `args:['--no-proxy-server']`(本机 `http_proxy` 劫持 127.0.0.1) 3. dev server 与 `vite build` 不并发 4. 启动 dev 前 `mv node_modules/.vite/deps_temp_* /tmp` 5. 真机切场景每场景 `ctx.newPage()`，桩落 localStorage 且 `Object.assign` 内存对象 6. 判上游真伪 `curl --noproxy '*' -i` + `/openapi.json`。
+7. ⚠️ **Electron 启动两个环境坑（WorkBuddy 宿主下必踩）**：① `ELECTRON_RUN_AS_NODE=1` 被宿主注入 → Electron 以纯 Node 模式跑 → `import_electron3.ipcMain` undefined → 必须 `env -u ELECTRON_RUN_AS_NODE npx electron .`；② 本机 GPU 进程 0xC0000005 → `FATAL: GPU process isn't usable. Goodbye.` → 加 `--disable-gpu --disable-software-rasterizer --no-sandbox --disable-gpu-compositing --enable-unsafe-swiftshader`（`--no-sandbox` 是关键）。
+8. ⚠️ **Playwright 桩五个坑**（验收 UI 时）：① `file://` 文档禁 `replaceState('/chat')` → `SecurityError: history state object with URL 'file:///D:/chat'` → **必须本地 HTTP 服务托管 dist**；② playwright 版本要 chromium-1248，本机只有 1243/1223 → 显式 `executablePath` 指 `chromium-1243/chrome-win64/chrome.exe`；③ 桩缺 preload 任何一个方法 → 渲染层 TypeError 白屏（先栽在 `getPlatform`）→ 补齐显式方法 + Proxy 兜底；④ Proxy 兜底一律返回 `{}` → `t.map is not a function`；且 **Proxy 的 `ownKeys` 陷阱**会让 `Object.keys(undefined)` 抛 "Cannot convert undefined or null to object" → 按方法名正则猜形状返回 `[]`/`{}`，**只写 `get`+`has`，不写 `ownKeys`**；⑤ MUI Tab 是 `button[role=tab]`，按文本找节点点不中 → 用 `querySelectorAll('[role="tab"]')`。
+9. ⚠️ 项目 `package.json` 有 `"type": "module"` → 验收脚本必须 `.cjs` 后缀（否则 `require is not defined in ES module scope`）。
+10. ⚠️ **CI 平台边界检查有注释过滤**：`grep -vE ':[0-9]+:[[:space:]]*(//|\*|/\*)'` → **纯注释里提到 `window.electronAPI` / wire 字段不算越界**。用裸 grep 粗查会误报一堆注释文字；复核必须逐字跑 CI 原命令。
+11. ⚠️ **workspace 隔离**：`session_manager.list_sessions()` 只扫**当前 workspace_id 目录**（`~/.nanobot/sessions/<workspace-id>/`），而 gateway 的会话根由 `get_data_dir()` = config 文件所在目录决定 → 本机落 `D:/Workspace/study/nanowork/sessions/<workspace-id>/`。找真实 IM 会话 key 要去这个目录翻，不能只看默认 `~/.nanobot`。
 
 ## B3/B4 关键 gotcha（看板只记「完成」，这里记「坑」）
 - **B3-03 IM 审批**：裁决走**进程内直投**，`POST /v1/tool-approvals/{id}` 只在 serve 进程，gateway 进程各自 `PENDING_APPROVALS`→HTTP 投过去必落空。飞书 `send` 不渲染 `buttons`→契约以**文本回复**为准(允许/同意/approve/allow；拒绝/不同意/deny/reject)。必须先开 `channels.<name>.tool_approval:"ask"`(默认 auto，IM 走 `default()` 钩子不介入)。群聊同会话任一已配对成员都能拍板(未绑 sender)。测试 41 例；变异：包回 ProgressEvent→1红、去会话校验→1红、`for_turn` 退回 `default()`→2红。
@@ -71,6 +87,9 @@ WorkBuddy 式智能体客户端：React18+TS+Vite 渲染层 + Electron 主进程
 - ⚠️ **`AgentLoop` 可用 mock 真实构造**：`AgentLoop(bus=MagicMock(), provider=MagicMock(), workspace=Path)`（已验证）。想测 `run()` 的顺序类判据时，给 bus 一个「吐一条消息后 `sleep(3600)`」的假 `consume_inbound`，`create_task(run())` 后轮询目标 future 再 `task.cancel()`，即可真实驱动一次迭代——不必重构 loop 抽出接缝。
 - ⚠️ **测子代理/渠道审批必须选非 scoped 渠道**：`scoped_channels={websocket,api}` 会忽略逐渠道 `tool_approval` 映射，要用 feishu/dingtalk 之类才能得到 `ask`（用 api 会静默保持 auto，测试假绿）。
 - 发送控件等无 aria-label 的 MUI 按钮，加 `data-testid` 换可测性是划算的（本轮给 Composer 发送按钮加了 `composer-send`，换来「命中注入仍能发送」这条 DoD 的真门锁）。
+- ⚠️ **AST 判据解析 `if/elif` 路由链有两个陷阱（第一版同时踩了两个，路由表全空）**：① `if/elif` 在 AST 里是**嵌套**的 —— `elif` 落在前一个 `If` 的 `orelse` 里，不是平铺在 `body` 上；② 整条路由链嵌在 `async with connection_slots:` 里，**不是** `handle.body` 的直接子节点。正确解法：遍历用 `[n for n in ast.walk(handle) if isinstance(n, ast.If)]` + 单独函数只取本分支自己 `body` 里的调用（不含 `orelse` 中后续 elif 的）。
+- ⚠️ **`PendingApprovals.register()` 默认用 `asyncio.get_running_loop()`** → 单元测试里必须**显式传 `loop=`**（一次性 `asyncio.new_event_loop()` + `finally: loop.close()`），否则 `RuntimeError: no running event loop`。
+- ⚠️ **pytest on Windows 报 `INTERNALERROR: ValueError: 'D:\...\nanobot' is not in the subpath of 'D:\...\nanobot'`** → 路径大小写导致的 pytest `_bestrelpathcache` 内部错误，与代码无关 → 用 `--rootdir="D:/Workspace/study/nanowork/nanobot"`（forward-slash 绝对路径）。
 
 ## B5 数据驱动决策（2026-10-18，决策记录，无代码交付）
 - **B5-01 关掉 CLI 预热池**：实测 `serve.spawn→listen`=4.4s(暖机)却被 app 启动并行预热覆盖；首字延迟(p50 5s/p95 47s/max 61s，15 真实样本)由远端 LLM 主导，是引擎启动 10 倍以上→预热池收益边际。

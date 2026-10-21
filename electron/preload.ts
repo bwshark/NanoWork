@@ -126,6 +126,12 @@ const api: ElectronAPI = {
     ipcRenderer.invoke('nanobot:runChannelTurn', params),
   nanobotGetChannelTurnProgress: (params) =>
     ipcRenderer.invoke('nanobot:getChannelTurnProgress', params),
+  /** 读取某个 IM 会话当前挂着的待裁决审批（gateway /v1/approvals） */
+  nanobotGetChannelApprovals: (params) =>
+    ipcRenderer.invoke('nanobot:getChannelApprovals', params),
+  /** 裁决一条 IM 会话里的待裁决审批（gateway /v1/approvals/resolve） */
+  nanobotResolveChannelApproval: (params) =>
+    ipcRenderer.invoke('nanobot:resolveChannelApproval', params),
   nanobotChannelConnect: (action: ChannelConnectAction, channel: string, params: Record<string, string>) =>
     ipcRenderer.invoke('nanobot:channelConnect', action, channel, params),
   nanobotRestartGateway: (engineChannel?: string) =>

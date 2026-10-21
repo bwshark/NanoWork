@@ -10,6 +10,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   CHANNEL_SESSION_ID_PREFIX,
+  channelChatId,
   channelGroupKey,
   channelIconKind,
   channelSessionKey,
@@ -49,6 +50,26 @@ describe('channelSessionKey', () => {
     // 合成一类会让调用方的 `if (!key) return` 读起来像「这条不是频道会话」，
     // 而实际是「数据半截」——两者的排查方向完全不同。
     expect(channelSessionKey(CHANNEL_SESSION_ID_PREFIX)).toBe('');
+  });
+});
+
+describe('channelChatId', () => {
+  it('剥掉 nb: 前缀与渠道名段，得到 IM 会话 id', () => {
+    expect(channelChatId('nb:feishu.feishu:oc_v3_abc123')).toBe('oc_v3_abc123');
+  });
+
+  it('⭐ chatId 本身含冒号时**不能截断** —— 用 split(":")[1] 会丢掉后半截', () => {
+    // 截断的后果是**静默**的：查的是另一个会话的审批注册表，界面上看不出异常，
+    // 只是「那张卡永远不出现」。
+    expect(channelChatId('nb:telegram:-100123:456')).toBe('-100123:456');
+    expect(channelChatId('nb:discord:guild:chan')).toBe('guild:chan');
+  });
+
+  it('本地会话 id / 半截数据返回空串（而不是 undefined）', () => {
+    expect(channelChatId('sess-1')).toBe('');
+    expect(channelChatId(CHANNEL_SESSION_ID_PREFIX)).toBe('');
+    // 只有渠道名、没有冒号段
+    expect(channelChatId('nb:feishu.feishu')).toBe('');
   });
 });
 

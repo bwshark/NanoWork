@@ -39,6 +39,24 @@ export function channelSessionKey(sessionId: string): string | null {
 }
 
 /**
+ * 频道会话 id → IM 会话 id（session key 冒号后段）。
+ *
+ * chatId 本身**可以含冒号**（飞书 open_id 一般不含，但别的渠道不一定），所以
+ * 不能用 `split(':')[1]` 取——那会截断。正确做法是切掉首段（渠道名）后
+ * 把剩下的用冒号接回去。
+ *
+ * 单独抽出来是因为「向该会话发言」与「查该会话的待裁决审批」都要用同一个
+ * chatId：两处各写一份时，其中一处写错的后果是**静默**的——发言发去了
+ * 另一个会话，审批查的是另一个会话的注册表，界面上看不出任何异常。
+ */
+export function channelChatId(sessionId: string): string {
+  if (!sessionId.startsWith(CHANNEL_SESSION_ID_PREFIX)) return '';
+  const key = sessionId.slice(CHANNEL_SESSION_ID_PREFIX.length);
+  const sep = key.indexOf(':');
+  return sep < 0 ? '' : key.slice(sep + 1);
+}
+
+/**
  * 渠道**分组键**：owner 限定形态取首段。
  *
  * ⚠️ 分组键刻意用**原始首段字符串**而不是 `ChannelKind`：后者只有 5 个成员，
