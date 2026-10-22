@@ -1516,11 +1516,39 @@ WorkBuddy 的结论值得完整借鉴：**在 Bash / Python / Node 三个运行�
    `.npmrc`」；`credentials.json` 这类常见测试夹具不进名单。安全特性若把  
    正常项目文件一起拦掉，用户第一反应是关掉整个能力。
 
-**待定（需产品决策）**：`file.default_deny_write` 当前默认 `False`（保持引擎  
-上游语义，避免静默改变 `full` 模式行为）。PRD 11.1 决策表第 5 条写的是  
-「路径不在 extraAllowWrite 且为写操作 → **需确认（或 full 模式下 allow）**」，  
-与 11.2「未列出的路径默认禁止写入」在 `full` 模式下互相矛盾。若采纳 11.2 的  
-更严口径，把该开关默认值改为 `True` 即可。
+**已决策（2026-10-21）**：`file.default_deny_write` 的**配置层默认值改为 `True`**
+（不配即从严）。原先默认 `False` 的含义是「没配这个键的机器一律哪里都能写」，
+与 11.2「未列出的路径默认禁止写入」的**白名单制**口径正好相反。
+
+这条决策同时解掉了 11.1 决策表第 5 条与 11.2 的矛盾：第 5 条写的「路径不在
+extraAllowWrite 且为写操作 → 需确认（**或 full 模式下 allow**）」，那个
+「或 full 模式下 allow」正是 `default_deny_write=False` 的产物；默认翻成
+`True` 之后，full 模式不再自动 allow，回到 11.2 的从严口径。
+
+**改动范围**（刻意只动「配置层默认」这一层）：
+
+| 层 | 位置 | 值 | 语义 |
+| -- | ---- | -- | ---- |
+| 配置层默认 | `agent/tools/filesystem.py::FileToolsConfig.default_deny_write` | `False` → **`True`** | 用户没配这个键时引擎怎么办 = **产品策略** |
+| 客户端常量 | `src/lib/constants.ts::DEFAULT_DENY_WRITE` | `false` → **`true`** | 界面显示的默认值，**必须与上面逐字一致** |
+| 工具参数默认 | `agent/tools/filesystem.py::_FsTool.__init__(default_deny_write=…)` | **保持 `False`** | 编程式直接构造工具的兜底（upstream 调用方依赖那个语义） |
+
+⚠️ 后两层**不可互相套用**：配置层是产品策略，参数层是 upstream 兼容边界。
+`resolve_allowed_path()` 的**函数参数**默认同样保持 `False`（它只被显式传值的
+调用点使用）。
+
+**影响面（精确边界，改配置前必读）**：
+
+1. **只在 `full` 模式生效**。裁决处 `workspace_policy.py` 的判据是
+   `allowed_root is None and not files`——只有「没有可写范围」的作用域才落到
+   这个分支。**限定了工作区范围的作用域（restricted）本来就只写工作区，
+   这个开关对它零影响**。
+2. **删除操作同样被拦**。删除复用写解析路径（`filesystem.py` 里
+   `_resolve_write(path, kind="delete")`），而判定用的是 `write` 参数。
+3. **读取不受影响**。读走 `_resolve_read`，`write=False`，不触发该分支。
+4. `pathRules` 是 full 模式下**唯一的放行出口**：规则命中且 `write=allow` /
+   `delete=allow` 时，「具体胜笼统」→ 显式放开压过默认拒绝。但规则**不能放宽
+   边界**（`path_rules.py` 明文），restricted 模式下规则无效。
 
 **验证**：`tests/security/test_workspace_policy.py` 新增 14 例（凭据目录 /  
 凭据文件 / 私钥文件名 / 符号链接逃逸 / allow-list 不可覆盖 / 误伤面回归 /  
@@ -1534,7 +1562,7 @@ WorkBuddy 的结论值得完整借鉴：**在 Bash / Python / Node 三个运行�
 | 面        | 落地形状                                                                                 |
 | -------- | ------------------------------------------------------------------------------------ |
 | 设置分区     | 新增「安全」（`security`），位于「模型 / 插件」与「数据」之间——边界是落点的前置约束          |
-| 写入策略     | `SettingsRow` 一个开关：`tools.file.default_denyWrite`（默认关闭）。草稿 + 保存 + 重启网关    |
+| 写入策略     | `SettingsRow` 一个开关：`tools.file.default_denyWrite`（**默认开启**，2026-10-21 收口，见 11.2.1）。草稿 + 保存 + 重启网关    |
 | 凭据名册     | `no_access` 三条规则的全部条目（8 个凭据目录 / 6 个 `~` 凭据文件 / 4 个私钥文件名）**只读**展示 |
 | 平台能力     | `getNanobotTools` / `syncNanobotTools`（桥：`nanobotGetTools` / `nanobotSyncTools`）      |
 
@@ -3213,8 +3241,14 @@ tools: { cliApps, imageGeneration, mcpServers, restrictToWorkspace, ssrfWhitelis
 - **凭据清单不提供修改入口**：`NO_ACCESS_DIR_NAMES` / `NO_ACCESS_HOME_FILE_NAMES` /
   `NO_ACCESS_FILE_NAMES` 是引擎名单常量。给入口 = 暗示能放行 `~/.ssh`，而提示词注入正靠
   「用户已授权」的错觉成立。界面上逐条列出、注明来源，收尾写明「只展示、不提供修改入口」。
-- **不改默认值到 `True`**：11.2.1 的「待定（需产品决策）」仍未决——改默认会静默改变
-  `full` 模式行为，界面里这个开关默认关着，由用户决定。
+- ~~**不改默认值到 `True`**~~：**已改（2026-10-21）**。原先这条写的是「11.2.1 的
+  「待定（需产品决策）」仍未决——改默认会静默改变 `full` 模式行为，界面里这个
+  开关默认关着，由用户决定」。产品决策已下：**配置层默认改为 `True`**（不配即从严，
+  与 11.2 的白名单制口径一致），详见 11.2.1 的「已决策」段。
+  代价与出口：full 模式（本机 `restrictToWorkspace: false` ⇒ **所有会话**都落
+  full 模式，含未勾「完全访问」的普通会话）在没有 `pathRules` 放行时**写与删
+  全被拒**；出口是「路径规则」分区里给目标目录加一条 `write=allow` /
+  `delete=allow`。
 - **Web 端只展示清单、不给开关**：`syncNanobotTools` 走 `webWriteTextFile('nanowork.tools.json', …)`
   的降级路径只作为能力存在，UI 上不需要为它造一套假设置。
 

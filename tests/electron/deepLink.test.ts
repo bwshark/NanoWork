@@ -10,10 +10,13 @@
  */
 
 import { describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import {
   createDeepLinkRouter,
   findDeepLinkArg,
   parseDeepLink,
+  shouldResetRendererOnNavigation,
 } from '../../electron/deepLink';
 
 describe('parseDeepLink', () => {
@@ -156,5 +159,92 @@ describe('createDeepLinkRouter', () => {
     router.markRendererReady();
 
     expect(sent).toEqual(['2', '3', '4', '5', '6', '7', '8', '9']);
+  });
+});
+
+/**
+ * 就绪态重置的判据（2026-10-21 C.5 真机抓到）。
+ *
+ * 这里的每一条都对应一次**静默失效**：判定放宽 → 深链被排队 → 永不送达 →
+ * 「窗口被唤起、目标会话不打开，且全程零报错」。
+ */
+describe('shouldResetRendererOnNavigation', () => {
+  it('同文档导航（pushState / replaceState）**不**重置', () => {
+    // ⚠️ 这是修复的核心。深链执行器里就有 `navigate(chatRoute)`，
+    // 它走 React Router → `pushState` → 触发 `did-start-loading`。
+    // 若据此重置，ready 永久为 false → 此后所有深链都送不出去。
+    expect(
+      shouldResetRendererOnNavigation({ isSameDocument: true, isMainFrame: true }),
+    ).toBe(false);
+  });
+
+  it('真换文档（整页重载 / HMR / 刷新）必须重置', () => {
+    expect(
+      shouldResetRendererOnNavigation({ isSameDocument: false, isMainFrame: true }),
+    ).toBe(true);
+  });
+
+  it('子框架导航不重置（与主窗口的深链通道无关）', () => {
+    expect(
+      shouldResetRendererOnNavigation({ isSameDocument: false, isMainFrame: false }),
+    ).toBe(false);
+    expect(
+      shouldResetRendererOnNavigation({ isSameDocument: true, isMainFrame: false }),
+    ).toBe(false);
+  });
+
+  it('参数位置接错（拿到废弃的 url 字符串）时**不**重置', () => {
+    // ⚠️ Electron 31 的 `did-start-navigation` 第一个参数就是 details；
+    // 若按「(event, details)」的习惯写，拿到的其实是废弃的 `url: string`，
+    // `isSameDocument` 恒 undefined。此时必须落在「不重置」这一侧——
+    // 宁可漏一次重置，也不能把深链通道永久打死（且不报任何错）。
+    expect(
+      shouldResetRendererOnNavigation({
+        isSameDocument: undefined as unknown as boolean,
+        isMainFrame: true,
+      }),
+    ).toBe(false);
+  });
+});
+
+/**
+ * 静态判据：`electron/main.ts` 的接线不许退回 `did-start-loading`。
+ *
+ * ## 为什么必须有这条
+ *
+ * 上面那三条行为判据钉的是**纯函数**的语义。但真正决定线上行为的是
+ * `main.ts` 里**挂了哪个事件**——把 `did-start-navigation` 换成
+ * `did-start-loading`，纯函数照样全绿，线上却又是「深链全部卡死」。
+ *
+ * 纯函数判据覆盖不到这一层，只能直接读源码。
+ */
+describe('electron/main.ts 的就绪态重置接线（静态判据）', () => {
+  // ⚠️ jsdom 下 `import.meta.url` 是 http(s) 协议，`fileURLToPath` 会抛
+  // 「The URL must be of scheme file」。改用 cwd 拼绝对路径。
+  const repoRoot = process.cwd();
+  const mainSource = readFileSync(join(repoRoot, 'electron', 'main.ts'), 'utf-8');
+
+  it('不许用 did-start-loading 重置就绪态（同文档导航会误触发）', () => {
+    // ⚠️ 只查**订阅形式**（`on('did-start-loading'`），不查裸字符串：
+    // 注释里提到这个事件名是必要的（解释为什么不能用它），按裸字符串查会误报。
+    const subscriptions = mainSource.match(/\.on\(\s*'did-start-loading'/g) ?? [];
+    expect(
+      subscriptions.length,
+      'electron/main.ts 又订阅 did-start-loading 了——它会被 pushState 误触发，' +
+        '导致就绪态永久为 false、所有深链卡在队列里。改用 did-start-navigation + isSameDocument。',
+    ).toBe(0);
+  });
+
+  it('改用 did-start-navigation 并经由 shouldResetRendererOnNavigation 判据', () => {
+    expect(mainSource).toContain("'did-start-navigation'");
+    expect(mainSource).toContain('shouldResetRendererOnNavigation(details)');
+    // 重置必须真的接上（别只 import 不调用）。
+    expect(mainSource).toContain('deepLinkRouter.resetRenderer()');
+  });
+
+  it('渲染层在窗口获得焦点时会重新上报就绪（队列卡死可自愈）', () => {
+    const appSource = readFileSync(join(repoRoot, 'src', 'App.tsx'), 'utf-8');
+    expect(appSource).toContain("window.addEventListener('focus'");
+    expect(appSource).toContain('platform.appRendererReady()');
   });
 });

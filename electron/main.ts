@@ -16,6 +16,7 @@ import {
   createDeepLinkRouter,
   findDeepLinkArg,
   parseDeepLink,
+  shouldResetRendererOnNavigation,
 } from './deepLink';
 import { createUpdateController } from './updater';
 import { autoUpdater } from 'electron-updater';
@@ -148,6 +149,10 @@ import {
   sweepStaleGatewayStates,
   type ProcessSnapshot,
 } from './gatewayRuntimeState';
+import {
+  collectEngineDataStats,
+  type EngineDataSnapshot,
+} from './engineDataFiles';
 // 只取类型（esbuild 会擦掉）：用 `as never` 之类的硬转会在字段改名时静默失守，
 // 而这里的字段名是渲染层与主进程的**线上契约**。
 import type { LogLevel, LogModule } from '../src/observability/logging';
@@ -227,6 +232,22 @@ const startupProfile = createStartupProfiler({
 // 「模块加载」这一段从此刻起算 —— 它是下面所有区间的公共原点。
 startupProfile.begin('app.load→ready');
 
+/**
+ * 两个持久化根的来源：① 用户资产取 home，② 运行时数据取 Electron userData。
+ *
+ * ⚠️ **必须定义在深链区块之前**（FR-13.x 深链日志）：
+ * 深链是「用户从系统唤起应用」的唯一入口，失败时**没有任何可见反馈**
+ * （窗口亮起但什么也没打开）。所以下面每条深链都会落一条日志——
+ * 日志门面必须在那之前就绪。
+ */
+const STORAGE_ROOTS: StorageRoots = {
+  home: app.getPath('home'),
+  electronUserData: app.getPath('userData'),
+};
+
+/** 运行日志门面（主进程侧直接落盘，不经 IPC）。 */
+const userDataLog = createFileLogger(STORAGE_ROOTS.electronUserData);
+
 // —— 深链 nanowork://（B4-02）——
 //
 // 三条入口最终都汇到 `deepLinkRouter`：
@@ -239,12 +260,24 @@ startupProfile.begin('app.load→ready');
 // 等渲染层通过 `app:renderer-ready` 报到后再 flush。
 
 function sendDeepLinkToWindow(action: DeepLinkAction): void {
-  mainWindow?.webContents.send('app:deep-link', action);
+  // ⚠️ 窗口可能还不存在（渲染层已 ready 但窗口刚被关掉又重建的边缘时序）。
+  // 这种情况**静默丢动作**——深链是用户的一次性意图，丢了就再也回不来。
+  // 记一条日志，好让「点了链接什么也没发生」能被事后定位。
+  if (!mainWindow) {
+    userDataLog('app', 'warn', '深链投递时窗口不存在，动作已丢弃', { action });
+    return;
+  }
+  userDataLog('app', 'info', '深链已投递到渲染层', { action });
+  mainWindow.webContents.send('app:deep-link', action);
 }
 
 const deepLinkRouter = createDeepLinkRouter(sendDeepLinkToWindow);
 
 ipcMain.handle('app:renderer-ready', () => {
+  // ⚠️ 路由的 ready 状态是**深链能否送达的唯一开关**，而它只有两个翻转点
+  // （这里 / 文档被替换时）。任一处失手，深链就会被**静默排队**——
+  // 症状是「窗口亮了、目标会话没打开」，且全程零报错。所以两处都要留日志。
+  userDataLog('app', 'info', '深链路由：渲染层已就绪', {});
   deepLinkRouter.markRendererReady();
 });
 
@@ -292,7 +325,12 @@ const singleInstance = acquireSingleInstance(
     // 只唤起窗口、不看 argv，正是这条需求最容易漏掉的一半。
     const raw = findDeepLinkArg(argv);
     const action = raw ? parseDeepLink(raw) : null;
-    if (action) deepLinkRouter.push(action);
+    if (action) {
+      userDataLog('app', 'info', 'second-instance 深链已解析', { action });
+      deepLinkRouter.push(action);
+    } else if (raw) {
+      userDataLog('app', 'warn', 'second-instance 深链无法解析，已忽略', { raw });
+    }
   },
 );
 
@@ -300,7 +338,14 @@ const singleInstance = acquireSingleInstance(
 const initialDeepLink = findDeepLinkArg(process.argv);
 if (initialDeepLink) {
   const action = parseDeepLink(initialDeepLink);
-  if (action) deepLinkRouter.push(action);
+  if (action) {
+    userDataLog('app', 'info', '冷启动深链已解析', { action });
+    deepLinkRouter.push(action);
+  } else {
+    // 解析失败 = 一条坏链接。**静默忽略是对用户的行为，但不该静默**：
+    // 「双击链接应用起来了却什么也没发生」是最难自查的一类问题。
+    userDataLog('app', 'warn', '冷启动深链无法解析，已忽略', { raw: initialDeepLink });
+  }
 }
 
 /** 本进程是否是主实例。第二个实例在上面就已经 exit 了，这里是双保险 */
@@ -333,12 +378,6 @@ const isDev = !app.isPackaged;
  * 取消勾选 Autofill / 表单调试相关实验 → 重启 DevTools（一次性的本机偏好）。
  */
 const autoOpenDevTools = process.env.NANOWORK_DEVTOOLS === '1';
-
-/** 两个持久化根的来源：① 用户资产取 home，② 运行时数据取 Electron userData */
-const STORAGE_ROOTS: StorageRoots = {
-  home: app.getPath('home'),
-  electronUserData: app.getPath('userData'),
-};
 
 /** 设置 store 的持久化 key（与渲染层 STORAGE_KEYS.settings 一致） */
 const SETTINGS_STORE_KEY = 'nanowork.settings';
@@ -777,9 +816,27 @@ async function createWindow(): Promise<void> {
     await mainWindow.loadFile(join(__dirname, '../dist/index.html'));
   }
 
-  // 页面开始重载：深链从此刻起重新排队。否则 HMR / 手动刷新期间到达的链接会被
+  // 页面重载：深链从此刻起重新排队。否则 HMR / 手动刷新期间到达的链接会被
   // 发给即将销毁的旧页面，用户看到的是「窗口闪了一下、什么也没打开」。
-  win.webContents.on('did-start-loading', () => deepLinkRouter.resetRenderer());
+  //
+  // ⚠️ **判据必须是「换了文档」，不能是「开始加载」**（2026-10-21 C.5 真机抓到）。
+  // `did-start-loading` 的语义是「标签页加载转圈」，而**同文档导航
+  // （`history.pushState` / `replaceState`）同样会触发它**。本项目的深链执行器
+  // 里就有 `navigate(chatRoute)`，它走 React Router → `pushState` → 触发
+  // `did-start-loading` → 把 ready 打成 false；但页面**并没有真的重载**，
+  // 渲染层的监听还活着，也就不会再次上报 ready →
+  // **此后所有深链都堆在队列里送不出去**（症状：窗口被唤起、目标会话不打开、
+  // 全程零报错）。`did-start-navigation` 带 `isSameDocument`，能区分这两种情况。
+  // ⚠️ Electron 31 的 `did-start-navigation` **第一个参数就是 details 对象**
+  // （`{ url, isSameDocument, isMainFrame, frame }`），后面几个位置参数全是
+  // 已废弃的老签名。别按「(event, details)」的习惯写——那样拿到的是废弃的
+  // `url: string`，`isSameDocument` 恒为 undefined → 判据永远为 true →
+  // 又退化成「任何导航都重置」，问题原地复发（tsc 会先一步报出来）。
+  win.webContents.on('did-start-navigation', (details) => {
+    if (!shouldResetRendererOnNavigation(details)) return;
+    userDataLog('app', 'info', '深链路由：文档已替换，就绪态已重置', {});
+    deepLinkRouter.resetRenderer();
+  });
 
   // 「首屏已加载」用一个 `once` 收口：`did-finish-load` 每次加载都会发（dev 分支的
   // HMR 重载、切换 devUrl 都会再发），而剖析只关心冷启动那一次。
@@ -1523,6 +1580,27 @@ async function buildProcessSnapshot(): Promise<ProcessSnapshot> {
     gatewayStates,
     listenerSource: source,
   };
+}
+
+/**
+ * 引擎数据目录的体量快照（V1.7 B5-02）。
+ *
+ * 引擎的 `get_data_dir()` = **config 文件所在目录**（`nanobot/config/paths.py`），
+ * 而 config 路径客户端已经知道（`resolveNanobotConfigPath()`）→ 取其 dirname 即可。
+ *
+ * ⚠️ **只读 stat**：不开数据库、不加锁、不写、不 checkpoint。
+ * `llm_usage.sqlite3` 是 WAL 模式，高水位是正常行为（B5-02 已否决跨进程
+ * checkpoint：会与 Python 引擎这个真正的写入者争锁）。
+ */
+async function buildEngineDataSnapshot(): Promise<EngineDataSnapshot> {
+  try {
+    const configPath = await resolveNanobotConfigPath();
+    if (!configPath) return { dataDir: null, files: [] };
+    return await collectEngineDataStats(dirname(configPath));
+  } catch {
+    /* 诊断包不该因为这一步整个导不出来 */
+    return { dataDir: null, files: [] };
+  }
 }
 
 /** 扫码接入统一返回（不抛异常，错误走 ok=false，风格对齐 sendChannelMessage） */
@@ -3599,8 +3677,10 @@ ipcMain.handle('artifactIndex:remove', async (_e, id: string) => {
 // 两条写入通道都用 `ipcMain.on`（不是 `handle`）：渲染层侧是 fire-and-forget，
 // 没有回值可等。主进程侧一律自行吞错——日志 / trace 写不进去是「少一份诊断材料」，
 // 不是「用户的这一轮失败了」。把错误抛回渲染层只会制造一个与真实原因无关的报错。
+//
+// ⚠️ `DIAGNOSTICS_USER_DATA` 与 `userDataLog` 定义在上方（深链区块之前）——
+// 深链日志要用它们，而深链区块在文件更靠前的位置。
 const DIAGNOSTICS_USER_DATA = STORAGE_ROOTS.electronUserData;
-const userDataLog = createFileLogger(DIAGNOSTICS_USER_DATA);
 
 ipcMain.on('log:append', (_e, entry: unknown) => {
   const e = entry as { module?: unknown; level?: unknown; line?: unknown } | null;
@@ -3739,6 +3819,9 @@ ipcMain.handle('diagnostics:export', async () => {
   try {
     const bundle = await buildDiagnosticsBundle({
       userData: DIAGNOSTICS_USER_DATA,
+      // 路径里的用户名替换成 `<user>`（FR-11.9 补漏，2026-10-21 真机验收发现）。
+      // 工具参数与结果里的绝对路径是排障核心（不能删），但带着用户名会把身份发出去。
+      homeDir: app.getPath('home'),
       appInfo: {
         appName: app.getName(),
         version: app.getVersion(),
@@ -3752,6 +3835,9 @@ ipcMain.handle('diagnostics:export', async () => {
       // 进程/端口维度（FR-11.9）：回答「网关起没起来、被谁占、run/ 状态文件是死是活」。
       // 取不到也不该让整个导出失败，所以放在 try 内、失败只影响这一个文件。
       processSnapshot: await buildProcessSnapshot(),
+      // 引擎数据目录的体量（V1.7 B5-02）：回答「引擎的用量库涨到多大了」。
+      // 只读 stat，取不到就留空（诊断包不该因为这一步整个导不出来）。
+      engineData: await buildEngineDataSnapshot(),
     });
     await fs.writeFile(picked.filePath, bundle.bytes);
     return {

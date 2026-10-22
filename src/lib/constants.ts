@@ -63,6 +63,32 @@ export const DEFAULT_GATEWAY_PORT = 18900;
 export const DEFAULT_GATEWAY = `http://127.0.0.1:${DEFAULT_GATEWAY_PORT}/v1`;
 
 /**
+ * FR-8.4「默认拒绝写入」的**引擎侧默认值**。
+ *
+ * 2026-10-21 收口：原先是 `false`，含义是「没配这个键的机器一律哪里都能写」——
+ * 与 PRD §11.2 的「白名单制：未在允许列表中的路径默认禁止写入」口径相反。
+ * 现改为 `true`（**不配即从严**）。
+ *
+ * ## 为什么放在这里（而不是留在 `electron/toolsPolicyConfig.ts`）
+ *
+ * 这个值需要被**两侧**读到：主进程读写 `tools.file.defaultDenyWrite` 要它，
+ * 渲染层 `SecuritySection` 显示开关默认态也要它。而 `src/` **不从 `electron/`
+ * import**（平台层是渲染层与主进程的共同底座），所以常量必须落在 `src/` 侧，
+ * 由 `electron/` 反向 import（既有先例：`electron/storageRoutes.ts`）。
+ *
+ * ## ⚠️ 必须与引擎 schema 逐字一致
+ *
+ * 对应 `nanobot/agent/tools/filesystem.py::FileToolsConfig.default_deny_write`。
+ * 两边不一致时，界面显示的开关状态会与引擎的实际行为分叉——而分叉的表现是
+ * 「界面说开着、引擎却在放行」或反过来，**全程零报错**。
+ *
+ * 注意区分引擎里的**两层默认**（刻意不同）：
+ * - **配置层**默认（这里的 `true`）= 用户没配这个键时引擎怎么办 → 产品策略
+ * - `_FsTool.__init__` 的**参数**默认（`False`）= 编程式直接构造工具的兜底
+ */
+export const DEFAULT_DENY_WRITE = true;
+
+/**
  * 会话（任务）占位标题：首条消息发送前标题为占位值，
  * 发送时由 sessionsStore.send 自动替换为首条消息摘要。
  */

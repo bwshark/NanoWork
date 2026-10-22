@@ -211,11 +211,19 @@ interface SessionsState {
     },
   ) => Session;
   /**
-   * 注入外部来源会话（IM 频道会话）并激活。
+   * 注入外部来源会话（IM 频道会话 / 定时任务会话）。
    * 同 id 已存在时整体替换（刷新消息 / 标题 / 时间）；
    * 频道会话不进入持久化白名单，每次打开从 nanobot 实时拉取。
+   *
+   * @param options.activate 是否把它切为当前激活会话（默认 `true`）。
+   *
+   * ⚠️ **默认 `true` 只对「用户主动打开」成立**（点击侧边栏、定时任务卡片）。
+   * 后台路径必须显式传 `false`：否则**后台同步会抢走用户正在看的会话**——
+   * 症状是「深链打开的会话被顶掉」「定时任务一跑完当前会话就被切走」。
+   * 这类抢占在 2026-10-21 的 C.5 真机验收里被抓到（定时任务「加油提醒」
+   * 在 14:42 触发 → `fetchCronRuns` 同步 → `openExternal` → 顶掉深链选中的会话）。
    */
-  openExternal: (session: Session) => void;
+  openExternal: (session: Session, options?: { activate?: boolean }) => void;
   /**
    * 往 IM 频道会话**乐观**追加一条用户消息，返回其 id（撤回时用）。
    *
@@ -793,7 +801,14 @@ const hydrating = new Map<string, Promise<void>>();
 
 /** 记住「上次打开的会话」，供下次启动恢复；与业务数据无关，故独立于事件流 */
 function rememberActiveSession(id: string | null): void {
-  void platform.storage.set(STORAGE_KEYS.activeSession, id ?? '');
+  // ⚠️ **必须 catch**：这是 fire-and-forget（`void`），失败时不会有任何调用方知道。
+  // 写盘失败的表现是「重启后又回到上一个会话」——看起来像功能没生效，
+  // 实际上只是这一次写丢了。之前这里完全不 catch，写失败连日志都没有。
+  void platform.storage
+    .set(STORAGE_KEYS.activeSession, id ?? '')
+    .catch((e: unknown) => {
+      log.warn('storage', '记住当前会话失败', { id, error: String(e) });
+    });
 }
 
 /**
@@ -1801,7 +1816,15 @@ export const useSessionsStore = create<SessionsState>()(
       persistMetaOf(id);
     },
 
-    openExternal: (session) => {
+    openExternal: (session, options) => {
+      // ⚠️ 默认 `true`（用户主动打开）；后台同步路径传 `activate: false`，
+      // 见接口声明处的说明——后台抢占激活态是真机验收抓到的真实缺陷。
+      const activate = options?.activate ?? true;
+      log.info('app', 'openExternal（导入会话）', {
+        id: session.id,
+        title: session.title,
+        activate,
+      });
       // 导入会话（频道 / 定时任务）没有流式回调，产物登记只有这一个时机：从磁盘
       // JSONL 重放出的已完成写类工具调用推导文件产物（纯计算在 sessionImport，
       // 判据与 handleProcessTool 同一套），再逐条入索引切片——右侧「产物」面板
@@ -1814,7 +1837,8 @@ export const useSessionsStore = create<SessionsState>()(
       const removedIds = imported.removedIds;
       set((s) => ({
         sessions: [session, ...s.sessions.filter((x) => x.id !== session.id)],
-        activeId: session.id,
+        // ⚠️ 不激活时**不能**动 `activeId`：这正是「后台同步抢走当前会话」的现场。
+        activeId: activate ? session.id : s.activeId,
       }));
       if (records.length > 0 || removedIds.length > 0) {
         const artifacts = useArtifactsStore.getState();
@@ -1831,7 +1855,9 @@ export const useSessionsStore = create<SessionsState>()(
         }
         if (removedIds.length > 0) artifacts.removeArtifacts(removedIds);
       }
-      rememberActiveSession(session.id);
+      // 同理：不激活时**不写** active-session——否则「上次打开的会话」会被后台
+      // 同步改写，用户重启后落在一个自己没打开过的会话上。
+      if (activate) rememberActiveSession(session.id);
     },
 
     /**
@@ -2148,6 +2174,7 @@ export const useSessionsStore = create<SessionsState>()(
     },
 
     selectSession: (id) => {
+      log.info('app', 'selectSession', { id });
       set({ activeId: id });
       rememberActiveSession(id);
       // 已水合的会话会走 loadSession 的早退分支（不再预热），所以过期检查单独补一次：

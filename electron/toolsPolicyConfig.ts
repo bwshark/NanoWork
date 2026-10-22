@@ -10,6 +10,7 @@
  */
 
 import type { NanobotFileToolsPolicy, NanobotPathRule } from '../src/platform/types';
+import { DEFAULT_DENY_WRITE } from '../src/lib/constants';
 
 /**
  * 引擎 `FileToolsConfig` 里的字段名。
@@ -25,8 +26,8 @@ export const DENY_WRITE_KEY = 'defaultDenyWrite';
  * `DENY_WRITE_KEY` 的 snake_case 写法。
  *
  * 引擎 `Base` 两种键名都收，所以**读**的时候必须两种都认——否则一份手写成
- * `default_deny_write` 的配置会被读成「这个开关没写」（= 引擎默认 False），
- * 界面于是显示「已关闭」，而磁盘上明明是开着。
+ * `default_deny_write` 的配置会被读成「这个开关没写」（= 引擎默认 True），
+ * 界面于是显示「已开启」，而磁盘上明明是关着。
  * **写**只写 camelCase：现存 config.json 的 tools 段本来就是 camel 那套。
  */
 export const DENY_WRITE_KEY_SNAKE = 'default_deny_write';
@@ -47,8 +48,23 @@ const RULE_VERDICTS = ['allow', 'deny'] as const;
 /** 引擎侧的默认值（`FileToolsConfig.path_rules: list = []`） */
 export const DEFAULT_PATH_RULES: never[] = [];
 
-/** 引擎侧的默认值（`FileToolsConfig.default_deny_write: bool = False`） */
-export const DEFAULT_DENY_WRITE = false;
+/**
+ * 引擎侧的默认值（`FileToolsConfig.default_deny_write: bool = True`）。
+ *
+ * 2026-10-21 收口：原先是 `False`，含义是「没配这个键的机器一律哪里都能写」——
+ * 与 PRD 的「白名单制：未在允许列表中的路径默认禁止写入」口径相反。现改为
+ * **不配即从严**。
+ *
+ * ⚠️ 这个常量必须与引擎 schema 的默认值**逐字一致**（`nanobot/agent/tools/
+ * filesystem.py::FileToolsConfig.default_deny_write`）。两边不一致时，
+ * 界面显示的开关状态会与引擎的实际行为分叉——而分叉的表现是「界面说开着、
+ * 引擎却在放行」或反过来，**全程零报错**。
+ *
+ * **常量的真正定义在 `src/lib/constants.ts`**（渲染层也要读它，而 `src/` 不从
+ * `electron/` import）。这里 re-export 是为了保住本模块既有的导出路径——
+ * 已有测试与调用方都从 `electron/toolsPolicyConfig` 取。
+ */
+export { DEFAULT_DENY_WRITE };
 
 /** 只接受明确的布尔：引擎 `extra` 是 ignore，写错类型会被静默丢掉、开关看起来没生效 */
 function asBoolean(value: unknown): boolean | null {
@@ -102,7 +118,7 @@ export function parsePathRules(value: unknown): NanobotPathRule[] {
  * 从整个 config.json 的 `tools` 段解析写策略。
  *
  * `supported` 判的是「引擎认不认 `tools.file` 这个段」——**段在就认**，哪怕里面
- * 还没有这个键（那种情况就是引擎默认值 False）。真正返回 `null` 的只有
+ * 还没有这个键（那种情况就是引擎默认值 True）。真正返回 `null` 的只有
  * 「段整个不存在」和「段在但这个值不是布尔」：前者说明这份配置里压根没有
  * 文件系统工具的落点，后者说明有人把值写坏了，两者界面都得给另一句话，
  * 不能都显示成「关闭」。
@@ -114,7 +130,7 @@ export function parseFileToolsPolicy(tools: unknown): NanobotFileToolsPolicy | n
   if (!root) return null;
   const file = asObject(root.file);
   if (!file) return null;
-  // 两种键都没写 = 引擎默认值 False；「段在」本身就说明引擎认它
+  // 两种键都没写 = 引擎默认值 True；「段在」本身就说明引擎认它
   if (!(DENY_WRITE_KEY in file) && !(DENY_WRITE_KEY_SNAKE in file)) {
     return {
       defaultDenyWrite: DEFAULT_DENY_WRITE,

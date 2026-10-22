@@ -42,8 +42,31 @@ function sampleConfig(): Record<string, unknown> {
   };
 }
 
+describe('FR-8.4 默认值：必须与引擎 schema 逐字一致', () => {
+  /**
+   * 2026-10-21 收口：引擎 `FileToolsConfig.default_deny_write` 从 `False` 改成
+   * `True`（PRD §11.2「白名单制：不配即从严」）。
+   *
+   * 这个用例存在的理由是：常量在**两侧**各有一份（客户端 `src/lib/constants.ts`
+   * 与引擎 `nanobot/agent/tools/filesystem.py`），两边不一致时界面显示的开关
+   * 状态会与引擎的实际行为分叉——而分叉的表现是「界面说开着、引擎却在放行」，
+   * **全程零报错**，靠任何运行期观察都发现不了。
+   *
+   * 所以这里显式钉住 `true`。改引擎默认值时**必须**同时改这里并同步更新 PRD。
+   */
+  it('DEFAULT_DENY_WRITE 必须是 true（不配即从严）', () => {
+    expect(DEFAULT_DENY_WRITE).toBe(true);
+  });
+
+  it('「键没写」时回落到 true 而不是 false', () => {
+    // 回落成 false 的症状：界面显示「关闭」，而引擎实际在拒绝写入——分叉且零报错
+    const parsed = parseFileToolsPolicy({ file: { enable: true } });
+    expect(parsed?.defaultDenyWrite).toBe(true);
+  });
+});
+
 describe('parseFileToolsPolicy：tools 段 → 写策略', () => {
-  it('段存在但没有这个键 → 引擎默认（关闭）且 supported', () => {
+  it('段存在但没有这个键 → 引擎默认（开启）且 supported', () => {
     expect(parseFileToolsPolicy(sampleConfig().tools)).toEqual({
       defaultDenyWrite: DEFAULT_DENY_WRITE,
       supported: true,
@@ -61,7 +84,7 @@ describe('parseFileToolsPolicy：tools 段 → 写策略', () => {
     }
   });
 
-  it('显式 false 与「键没写」都算 supported（前者是关，后者是引擎默认关）', () => {
+  it('显式 false 与「键没写」都算 supported（前者是关，后者是引擎默认开）', () => {
     expect(parseFileToolsPolicy({ file: { [DENY_WRITE_KEY]: false } })).toEqual({
       defaultDenyWrite: false,
       supported: true,

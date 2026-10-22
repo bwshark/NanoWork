@@ -352,18 +352,89 @@ B1 ──┬─→ B2 ────────────────┐
 - [ ] `GH_TOKEN=... npm run release:electron` 发新版本 → 旧版「检查更新」检测到 → 下载 → 重启后版本号变化
 - [ ] 未签名场景：关于页常驻提示 + 发布页兜底，不谎报「已是最新」
 
-### C.5 B4-02 深链
-- [ ] `nanowork://open-session?id=…` 打开指定会话
-- [ ] `nanowork://new-chat?prompt=…` 预填并新建会话
-- [ ] 应用已运行时双击链接（second-instance 路径）复用窗口、不二次起网关
-- [ ] 非法参数落到首页不崩
+### C.5 B4-02 深链（2026-10-21 真机验收通过）
+> 真机脚本：`node tasks/verify-deeplink.mjs`（6 条断言：冷启动 open-session / 非法参数不崩 / second-instance 送达 / 不二次起实例 / new-chat 标题取前 24 字 / active-session 指向新会话）。
+> 观测锚点用**磁盘状态**而非截图：`active-session.txt`（← `selectSession` 的 `rememberActiveSession`）+ `index/sessions.json`（← `createSession` 落的新条目）——UI 可能因窗口被遮挡而看不到，文件一定写。
+
+- [x] `nanowork://open-session?id=…` 打开指定会话
+- [x] `nanowork://new-chat?prompt=…` 预填并新建会话
+- [x] 应用已运行时双击链接（second-instance 路径）复用窗口、不二次起网关
+- [x] 非法参数落到首页不崩
+
+> ⚠️ **协议唤起的等价做法**：Windows 双击 `nanowork://` 走的是注册表
+> `HKCU\Software\Classes\nanowork\shell\open\command` 那条命令
+> （`"…\electron.exe" "…\nanowork" "%1"`）。本机实测 `cmd /c start "" <url>` 与
+> PowerShell `Start-Process <url>` **都**没能把链接送到运行中的应用（Git Bash 引号层 +
+> `start` 的标题位语义叠加；`Start-Process` 走 shell 关联时 URL 参数被吞），
+> 而**直接执行注册表那条命令 100% 有效**。脚本改为直连
+> `node_modules/electron/dist/electron.exe <应用目录> <url>`（与注册表命令逐字等价）。
+> ⚠️ **不读注册表**：`reg.exe` / 从 Bash 调 `powershell.exe` 都在本机沙箱黑名单里。
+> ⚠️ **不经过 `npx`**：Windows 上 `npx` 是 `.cmd`，必须 `shell: true`，而 URL 里的
+> `?` `&` 会被 cmd 重新解释（`&` 直接断命令）。
+> ⚠️ **必须剥掉 `ELECTRON_RUN_AS_NODE`**：宿主（WorkBuddy/CodeBuddy）会注入它，
+> 而 Electron 见到它就**以纯 Node 模式启动**——不建窗口、不跑 main 逻辑、进程秒退。
+> 症状是「脚本等超时、应用连日志都没有」。用 `env: { ...process.env, ELECTRON_RUN_AS_NODE: undefined }`。
+>
+> **本轮真机抓到并修掉的两个真实产品缺陷**（都不是脚本问题）：
+>
+> **缺陷一：后台定时任务同步抢走用户当前会话。**
+> 冷启动深链后 `active-session.txt` 落的是**另一个会话 id**。根因：
+> `tasksStore.fetchCronRuns`（**后台 15s 轮询**，用户没点它）→ `openExternal` →
+> `set({ activeId })` + `rememberActiveSession` → 把深链刚选中的会话顶掉。
+> 影响面不限于深链：用户正在看某会话写东西，定时任务一跑完当前会话就被切走、草稿位置也变。
+> 修法：`openExternal(session, options?: { activate?: boolean })`，默认 `true`（用户主动打开），
+> 后台同步路径显式传 `{ activate: false }`（进列表但**不动** `activeId`、**不写** `active-session`）。
+> 判据：`tests/openExternalActivation.test.ts`（6 例，含静态判据：`fetchCronRuns` 里每个
+> `openExternal` 都带 `activate: false`——用**括号配对扫描**而非正则，嵌套括号会让正则停在内层）。
+>
+> **缺陷二：就绪态被同文档导航误翻转 → 此后所有深链永久卡死。**
+> 症状：脚本阶段③超时，second-instance 深链**只解析不投递**（「已解析」有、「已投递」无）。
+> 根因：主进程用 `webContents.on('did-start-loading', () => resetRenderer())` 重置就绪态，
+> 但 Electron 对该事件的描述是「对应标签页加载转圈的时点」——**同文档导航
+> （`history.pushState` / `replaceState`）同样会触发它**。而深链执行器里就有
+> `navigate(chatRoute)`（React Router → `pushState`）→ 误把 ready 打成 false；
+> 但页面**并没有真的重载**，渲染层监听还活着、也就不会再次上报 ready →
+> **此后所有深链都堆在队列里送不出去**（症状：窗口被唤起、目标会话不打开，**全程零报错**）。
+> 修法：改用 `did-start-navigation` + `isSameDocument` 判据——只有**真换文档**
+> （整页重载 / HMR / 刷新）才重置；同文档导航不动 ready。
+> 另加第二道保险：渲染层在**窗口获得焦点**时重新上报就绪（深链到达必然 `showMainWindow()`
+> → 窗口获得焦点 → flush 队列），把「等渲染层就绪」变成「等窗口被唤起」，卡死可自愈。
+> 判据：`tests/electron/deepLink.test.ts`（24 例：3 条行为判据 + 3 条 `electron/main.ts`
+> **静态接线判据**——纯函数全绿但接线退回 `did-start-loading` 线上照样全坏）+ 1 条
+> 「参数位置接错时不得重置」）。
+> ⚠️ **Electron 31 的 `did-start-navigation` 第一个参数就是 details 对象**
+> （`{ url, isSameDocument, isMainFrame, frame }`），后面几个位置参数全是废弃的老签名。
+> 按 `(event, details)` 的习惯写 → 拿到的是废弃的 `url: string` → `isSameDocument` 恒 undefined
+> → 判据恒为「要重置」→ **原地复发且不报错**。故判据写成 `isSameDocument === false`（显式判 true）。
+> ⚠️ 本轮同时发现 `tasks/verify-deeplink.mjs` 的**结论逻辑误报**：异常路径下 `results` 为空，
+> `failed.length === 0` 会走「✅ 通过」分支——已改为要求条数达标（6 条）才判通过。
+>
+> **可观测性补强**：深链路径原先**零日志**，失败时典型「静默无反应」。现主进程 4 处
+> （冷启动解析 / 冷启动解析失败 / second-instance 解析 / 投递）+ 渲染层 3 处
+> （深链已执行 / selectSession / openExternal）+ **就绪态两个翻转点**（渲染层已就绪 / 文档已替换），
+> 另补 `rememberActiveSession` 写盘失败的 catch（fire-and-forget，失败时无调用方知道）。
 
 ### C.6 B4-03 运行时自助安装
 - [ ] 干净机器 / 新用户目录首启：引擎未就绪时给「一键修复」引导（venv→`pip install -e`→verify，命令可见、可取消、原始输出透出）
 - [ ] 修复成功后自动重新自检
 
-### C.7 B4-04 反馈包
-- [ ] 生成反馈包 → 解压自查：无 API key、无 cookie、无绝对路径用户名；脱敏清单可见；含启动剖析 + `session-latency` 摘要
+### C.7 B4-04 反馈包（2026-10-21 真机验收通过）
+- [x] 生成反馈包 → 解压自查：无 API key、无 cookie、无绝对路径用户名；脱敏清单可见；含启动剖析 + `session-latency` 摘要
+
+> 真机脚本：`node tasks/verify-feedback-bundle.mjs`（用**真实** userData `C:\Users\xinmi\AppData\Roaming\nanowork` 构建 → 解压 → 7 类模式自查 → 三条判据）。
+> 脚本必须显式传 `homeDir: process.env.USERPROFILE ?? process.env.HOME ?? ''`——**漏传就是真机漏脱敏**（踩过）。
+> 判据③的 `startup-profile.jsonl` 需启动时带 `NANOWORK_STARTUP_PROFILE=1`（或 `'true'`）才有；不加则该文件不存在。
+>
+> **本轮真机发现并修掉的真实缺陷（判据①首跑红）**：
+> 反馈包里出现 `C:\Users\xinmi\NanoWork\ai-short-drama-kit.md`（3 处）——
+> `secretRedaction.ts` 的 `redactSecrets` **只管凭据四类模式，完全不管路径**。
+> 修法：新增 `redactHomePaths(text, home)` 把路径里的**用户名段**换成 `<user>` 占位符
+> （**保留路径结构**——工具参数与结果里的路径是排障核心，PRD §20.4.3 明确「保留并截断到 4000 字符」，不能删）；
+> `diagnostics.ts` 加 `homeDir` 选项并在两处脱敏点接入，`main.ts` 传 `app.getPath('home')`，
+> `meta.redaction` 增 `homePathRedaction` 声明，README 补说明。
+> 判据：`tests/electron/secretRedaction.test.ts`（21 例，含 JSON 转义形态脱敏后 JSON 仍合法、正斜杠形态、主目录外路径不误伤）。
+>
+> ⚠️ 同一主目录在 JSON 里至少**三种形态**（裸 `C:\Users\xinmi` / JSON 转义 `C:\\Users\\xinmi` / 正斜杠 `C:/Users/xinmi`）——只处理一种会漏，真机三种都出现过。
 
 ### C.8 10-19 追加的 IM 助理视图（代码已提交，建议一并真机看）
 - [x] 助理视图产物卡片与任务视图一致（一轮不裂、文件 / 富产物都登记）
@@ -385,3 +456,22 @@ B1 ──┬─→ B2 ────────────────┐
 - [x] 快照按会话隔离（跨会话裁决被拒）· 未知 `request_id` 被拒 · 裁决失败**不退化成放行**
 
 > ⚠️ 本轮修掉的真机 bug：`GET /v1/approvals` 恒 500 —— `async def _handle_approvals` 但路由处**漏 `await`** → 协程对象解包 → `cannot unpack non-iterable coroutine object` → 客户端把它当「网关不支持」静默吞 → **审批卡永远不出现，全程零报错**。已改为同步 `def`（只读注册表快照），AST 判据钉住「await 与否必须与 handler 的 async 性质一致」。
+
+### C.10 10-21 追加的 FR-8.4「默认拒绝写入」默认值收口（代码+判据完成，真机待补）
+> 决策（用户）：PRD §11.2「白名单制=不配即从严」→ `defaultDenyWrite` 默认由 `false` 改 `true`。
+> 判据：引擎 `nanobot/tests/test_file_tool_toggle.py`（新增 2 例）+ `tests/security/` + `tests/tools/test_safe_delete_tool.py`（**292 passed / 2 skipped**）；
+> 客户端 `tests/electron/toolsPolicyConfig.test.ts`（新增 2 例）+ `tests/toolsPolicyStore.test.ts` + `tests/pathRulesEditor.test.tsx` + `tests/settingsDialogSections.test.tsx`（**49 passed**）；全量 **248 files / 3665 tests 全绿**。
+
+- [x] 引擎**配置层**默认 `True`（`FileToolsConfig.default_deny_write`）+ `create()` 的 getattr 兜底改 fail-closed
+- [x] 引擎**参数层**默认保持 `False`（`_FsTool.__init__`）—— upstream 兼容边界，**刻意与配置层相反**
+- [x] 客户端常量下沉到 `src/lib/constants.ts::DEFAULT_DENY_WRITE`（单一事实源）+ `electron/toolsPolicyConfig.ts` 反向 import 并 re-export
+- [x] `SecuritySection.tsx` 兜底改 `?? DEFAULT_DENY_WRITE`；开关 hint 讲清「只影响 full 模式」「删除同样受限」「读不受影响」「pathRules 是唯一放行出口」
+- [x] 本机配置 `nanowork.config.json`：`defaultDenyWrite: true` + `pathRules` 加一条 `C:/Users/xinmi/NanoWork`（read/write/delete 全 allow）
+- [x] PRD 同步：§11.2.1「待定（需产品决策）」→「已决策」+ 三层默认值表；§20.6.6「不改默认值到 True」→ 划掉并说明代价与出口；§11.2.2「默认关闭」→「默认开启」
+- [x] 三套 typecheck 全绿 + CI 平台边界两检查 **0 处** + 重建 `main.cjs`/`preload.cjs`
+- [x] **变异验证**（3 处破坏 → 判据精确变红）：引擎配置层改 False / 客户端常量改 false / 引擎参数层被 sed 误改成 True
+- [ ] **真机**：改默认后，桌面端发一条会写文件的消息 → 文件**真的没被写出来**（full 模式无 pathRules 时应被拒）；在「路径规则」里给目标目录加 `write=allow` → 再发 → 文件**真的被写出来**
+- [ ] **真机**：删除操作同样被拦（FR-8.4 覆盖 delete）
+
+> ⚠️ **本机所有会话都落 full 模式**（`restrictToWorkspace: false` ⇒ 普通会话不下发 `access_mode` ⇒ `default_access_mode(False)`=`"full"`，**含未勾「完全访问」的普通会话**）→ 改默认后没有 `pathRules` 放行时**写与删全被拒**。
+> ⚠️ 引擎全量 `pytest tests/` 有 **93 个既有 F**（与本改动无关，已用「改回 False 跑同命令」对照验证）。

@@ -14,6 +14,7 @@ import { useSessionsStore } from '@/stores/sessionsStore';
 import { useStorageInfoStore } from '@/stores/storageInfoStore';
 import { PromptLibrary } from '@/lib/promptLibrary';
 import { createDeepLinkExecutor } from '@/lib/deepLinkExecutor';
+import { log } from '@/observability/logger';
 import { IdentityService } from '@/lib/identity';
 import { getDeviceId } from '@/lib/deviceId';
 import { disposeSyncRuntime, initSyncRuntime } from '@/sync';
@@ -56,12 +57,44 @@ export function App() {
       navigate,
       chatRoute: ROUTES.chat,
     });
-    const off = platform.onAppDeepLink(execute);
+    // ⚠️ 这里必须**包一层**再记日志，而不是直接把 `execute` 交给监听：
+    // 深链失败是典型的「静默无反应」（窗口亮起、目标会话不打开）。
+    // 渲染层这一条日志是「主进程投递了但没执行」的唯一证据——没有它，
+    // 排查只能靠猜是哪一层断的。
+    const off = platform.onAppDeepLink((action) => {
+      log.info('app', '深链已执行', { action });
+      execute(action);
+    });
     // ⚠️ **先订阅、后报到**：顺序反了，主进程 flush 的那一刻监听还没挂上，
     // 冷启动的深链就被静默丢掉了（窗口亮起、目标会话不打开）。
     void platform.appRendererReady();
     return off;
   }, [navigate]);
+
+  /**
+   * 窗口重新获得焦点时，再报一次「渲染层已就绪」。
+   *
+   * ## 为什么需要这道保险
+   *
+   * 主进程那边「就绪态」只有一个开关，翻转点是**文档被替换**。一旦因为任何
+   * 原因卡在「未就绪」（早期版本用 `did-start-loading` 判定时，
+   * `pushState` 同文档导航就会误触发，见 `electron/deepLink.ts` 的
+   * `shouldResetRendererOnNavigation`），排队的深链就**永远送不出去**——
+   * 症状是「窗口被唤起、目标会话不打开，且全程零报错」。
+   *
+   * 深链到达时主进程一定会 `showMainWindow()` → 窗口获得焦点 → 这里重新上报
+   * → 主进程 flush 队列。**排队从「等渲染层就绪」变成「等窗口被唤起」**，
+   * 这正是用户实际期待的时机。自愈不需要用户做任何额外操作。
+   */
+  useEffect(() => {
+    const reportReady = () => {
+      void platform.appRendererReady();
+    };
+    window.addEventListener('focus', reportReady);
+    return () => {
+      window.removeEventListener('focus', reportReady);
+    };
+  }, []);
 
   useEffect(() => {
     // 会话水合：列表来自事件流索引（不扫 JSONL），当前会话的消息按需加载。

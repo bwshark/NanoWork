@@ -355,10 +355,19 @@ describe('diagnostics：诊断包', () => {
 
     const meta = JSON.parse(text['meta.json']!);
     // B4-04：除命中数外还带 `patterns` 清单——界面要能告诉用户脱敏覆盖了哪几类。
+    //
+    // ⚠️ `homePathRedaction` 是 2026-10-21 真机验收补的（路径里的用户名也要脱敏，
+    // 否则反馈包里会带出 `C:\Users\<真实用户名>`）。它与凭据脱敏是**两回事**：
+    // 命中数不可比、且只有给了 `homeDir` 才会生效，所以单独记一项而不是并进
+    // `patterns`——并进去会让「命中 N 处」这句话含义不清。
     expect(meta.redaction).toEqual({
       applied: true,
       hits: 1,
       patterns: ['credential-kv', 'bearer', 'sk', 'jwt'],
+      homePathRedaction: {
+        applied: false,
+        placeholder: '<user>',
+      },
     });
     expect(text['README.txt']).toContain('命中 1 处');
   });
@@ -379,8 +388,40 @@ describe('diagnostics：诊断包', () => {
     expect(JSON.parse(text['meta.json']!).redaction.hits).toBe(0);
   });
 
-  it('进程/端口快照：给了就进包，且只读不删', async () => {
-    const userData = await seededRoot();
+  /**
+   * 路径里的**用户名**也要脱敏（2026-10-21 C.7 真机抓到）。
+   *
+   * 反馈包里出现 `C:\Users\<真实用户名>\...`——凭据四类模式完全不管路径。
+   * 修法：`redactHomePaths` 把路径里的**用户名段**换成 `<user>`，
+   * **保留路径结构**（工具参数与结果里的路径是排障核心，不能删）。
+   */
+  it('给了 homeDir：路径里的用户名被换成占位符，且路径结构保留', async () => {
+    const userData = caseRoot();
+    const at = Date.now();
+    const home = 'C:\\Users\\tester';
+    await appendLogLine(userData, {
+      at,
+      module: 'chat',
+      level: 'info',
+      message: `读取文件 ${home}\\NanoWork\\ai-short-drama-kit.md`,
+    });
+
+    const bundle = await buildDiagnosticsBundle({ userData, now: Date.now(), homeDir: home });
+    const text = readZipText(bundle.bytes);
+    const logEntry = Object.keys(text).find((n) => n.endsWith('chat.log'))!;
+
+    // 用户名不能出现在包里
+    expect(text[logEntry]).not.toContain('tester');
+    // 但路径结构要留着（排障要靠它定位目录）
+    expect(text[logEntry]).toContain('<user>');
+    expect(text[logEntry]).toContain('NanoWork');
+    expect(text[logEntry]).toContain('ai-short-drama-kit.md');
+
+    const meta = JSON.parse(text['meta.json']!);
+    expect(meta.redaction.homePathRedaction).toEqual({ applied: true, placeholder: '<user>' });
+  });
+
+  it('进程/端口快照：给了就进包，且只读不删', async () => {    const userData = await seededRoot();
     const snapshot = {
       self: { pid: 4242, uptimeSec: 12 },
       listeners: [

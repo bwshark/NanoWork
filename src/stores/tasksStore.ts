@@ -327,6 +327,11 @@ export const useTasksStore = create<TasksState>()(
                   detail.updatedAt,
                   { readonly: false },
                 ),
+                // ⚠️ **不激活**：这是后台轮询（`fetchCronRuns`）自动同步，
+                // 用户并没有点它。激活会把用户正在看的会话抢走——
+                // 2026-10-21 C.5 真机验收实测：定时任务「加油提醒」在 14:42 触发，
+                // 这一行把深链打开的会话顶掉了。
+                { activate: false },
               );
               sessionCreated = true;
             }
@@ -352,6 +357,8 @@ export const useTasksStore = create<TasksState>()(
                 now.toISOString(),
                 { readonly: false },
               ),
+              // ⚠️ 同上：后台兜底路径也不该抢激活态。
+              { activate: false },
             );
           }
         }

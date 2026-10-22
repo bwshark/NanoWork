@@ -4,6 +4,7 @@ import { SettingsCard, SettingsRow } from '@/components/settings/SettingsPrimiti
 import { toast } from '@/components/Toast';
 import { useToolsPolicyStore } from '@/stores/toolsPolicyStore';
 import { PathRulesEditor } from '@/components/settings/sections/PathRulesEditor';
+import { DEFAULT_DENY_WRITE } from '@/lib/constants';
 
 /**
  * 引擎侧的两条硬边界（FR-8.4「默认拒绝写入策略」）。
@@ -15,11 +16,18 @@ import { PathRulesEditor } from '@/components/settings/sections/PathRulesEditor'
  * 模式也不可越过、allow-list 覆盖不了）。分开摆会让用户以为两处的松紧一样，
  * 于是他去开白名单去打「助手说 ~/.ssh 没权限」，而那个开关在引擎里根本不存在。
  *
- * ## 这里不做「白名单编辑器」
+ * ## 作用域白名单不在这一屏
  *
- * 白名单在引擎里是**按作用域**的（`WorkspaceScope.allowed_root`，随每个 Agent /
- * 会话随请求下发），不是配置里的一张扁平表。界面上要是渲染成一个文本框，
+ * 引擎里另有一套**按作用域**的可写范围（`WorkspaceScope.allowed_root`，随每个
+ * Agent / 会话随请求下发），它不是配置里的一张扁平表。界面上要是渲染成一个文本框，
  * 用户填进去的东西引擎根本不认（`extra="ignore"` 会静默丢掉），比不做还糟。
+ * 那一层由「工作区访问模式」控制，不在本分区。
+ *
+ * ## 但「路径规则」在这一屏（FR-8.13）
+ *
+ * 路径规则是**配置层**的扁平表（`tools.file.pathRules`），引擎认，粒度是
+ * 「路径 + 动作（读/写/删）」。它是「默认拒绝写入」在 `full` 模式下的**唯一
+ * 放行出口**——见下面开关的说明。
  *
  * ## 凭据目录为什么只读
  *
@@ -72,7 +80,12 @@ export function SecuritySection() {
 
   // 草稿为 null 时读的就是 store 里的值：分区重进 / 保存后回读都会自动跟上，
   // 不会出现「半截草稿把新读到的配置盖住」
-  const saved = policy?.defaultDenyWrite ?? false;
+  //
+  // ⚠️ 兜底值必须是 `DEFAULT_DENY_WRITE`（= true，引擎 schema 的同名字段）：
+  // 读不到策略（引擎配置里压根没有 `tools.file` 段）时，界面显示的默认态必须与
+  // 引擎的实际默认一致。兜底写成 `false` 时，界面显示「关闭」而引擎其实在
+  // 从严拒绝——分叉且**全程零报错**。
+  const saved = policy?.defaultDenyWrite ?? DEFAULT_DENY_WRITE;
   const value = draft ?? saved;
   const dirty = draft !== null && draft !== saved;
   const supported = policy?.supported === true;
@@ -146,8 +159,11 @@ export function SecuritySection() {
         <SettingsRow
           label="默认拒绝写入"
           hint={
-            '开启后，没有显式指定可写范围的作用域（即“完全访问”模式）一律拒绝写，' +
-            '而不是退化成“哪里都能写”。已列入可写白名单的作用域不受影响；' +
+            '默认已开启（不配即从严）。开启后，**没有可写范围**的作用域（引擎里的 ' +
+            '“完全访问”模式）一律拒绝写与删，而不是退化成“哪里都能写”。' +
+            '影响面：① 只在“完全访问”模式生效——限定了工作区范围的作用域本来就只写工作区，不受影响；' +
+            '② 删除操作同样被拦；③ 读取不受影响。' +
+            '想让某个目录能写，在下面「路径规则」里给它加一条「写 / 删 = 允许」——那是此处唯一的放行出口。' +
             '凭据目录无论开关如何都不可访问（见下）。'
           }
           control={

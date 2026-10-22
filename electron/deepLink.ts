@@ -111,6 +111,51 @@ export interface DeepLinkRouter {
 }
 
 /**
+ * 一次导航事件里，**是否应当重置「渲染层已就绪」状态**。
+ *
+ * ## 为什么必须有这个判据（2026-10-21 C.5 真机抓到）
+ *
+ * 原先的接线是 `win.webContents.on('did-start-loading', () => resetRenderer())`。
+ * 看起来合理——「页面开始加载了，旧监听要作废」——但 **`did-start-loading` 并不
+ * 只在「换文档」时触发**。Electron 文档对它���描述是「对应标签页加载转圈的时点」，
+ * 而 **同文档导航（`history.pushState` / `replaceState`）同样会触发它**。
+ *
+ * 后果是一条**静默失效**的链路：
+ *
+ * 1. 深链执行 → `navigate(chatRoute)` → React Router 调 `pushState`；
+ * 2. `did-start-loading` 触发 → `resetRenderer()` → ready 变 false；
+ * 3. 但页面**并没有真的重载**（同一个 document），渲染层的监听还活着，
+ *    也就**不会**再次调用 `appRendererReady()`；
+ * 4. ready 永久停在 false → 此后**所有**深链都堆在队列里送不出去。
+ *
+ * 症状是「窗口被唤起、目标会话不打开，且全程零报错」——最难自查的一类问题。
+ *
+ * ## 正确判据
+ *
+ * 用 `did-start-navigation` 的 `isSameDocument`：
+ *
+ * - `isSameDocument === false` → 真的换了文档（整页重载 / HMR / 刷新）→
+ *   旧监听即将作废，**必须重置**；
+ * - `isSameDocument === true` → 同文档导航（`pushState` / `replaceState` /
+ *   锚点跳转）→ 监听一直活着，**不能重置**。
+ *
+ * 只重置「真换文档」这一种情况，既保住 HMR 期的安全性，又不误伤 SPA 内部路由。
+ */
+export function shouldResetRendererOnNavigation(details: {
+  isSameDocument: boolean;
+  isMainFrame: boolean;
+}): boolean {
+  // 子框架的导航与主窗口的深链通道无关；主框架才决定「渲染层还是不是原来那个」。
+  if (!details.isMainFrame) return false;
+  // ⚠️ **必须显式判 true**，不能写 `!details.isSameDocument`：
+  // 若调用方把 Electron 回调的**参数位置**搞错（拿到的是废弃的 `url: string`），
+  // `isSameDocument` 会是 undefined → `!undefined === true` → 判据恒为「要重置」
+  // → 退化成修复前的行为，且**不报任何错**。显式判 true 让这种接错用法
+  // 落到「不重置」这一侧（宁可漏重置，也不能把深链永久打死）。
+  return details.isSameDocument === false;
+}
+
+/**
  * 让「导航到哪」与「什么时候能导航」解耦。
  *
  * @param send 真正投递给渲染层的方式（生产环境是 `webContents.send`）

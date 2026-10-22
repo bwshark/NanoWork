@@ -9,6 +9,7 @@
 
 import { promises as fs } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { inflateRawSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
 import {
   SESSION_LATENCY_FILE,
@@ -16,6 +17,37 @@ import {
   buildDiagnosticsBundle,
   summarizeLatencySamples,
 } from '../../electron/diagnostics';
+
+/**
+ * 从 zip 字节里取出某个条目的文本内容。
+ *
+ * 诊断包用 `createZip` 生成（store / deflate 两种方法都可能用），所以这里
+ * 按 local header 逐条走：读到 `PK\x03\x04` → 解析压缩方法与长度 → 解压。
+ * 够用即可：只解析我们自己生成、名字已知的条目。
+ */
+function readZipEntry(zip: Buffer, entryName: string): string | null {
+  const nameBuf = Buffer.from(entryName, 'utf-8');
+  let offset = 0;
+  while (offset + 30 <= zip.length) {
+    if (zip.readUInt32LE(offset) !== 0x04034b50) {
+      offset += 1;
+      continue;
+    }
+    const method = zip.readUInt16LE(offset + 8);
+    const compressedSize = zip.readUInt32LE(offset + 18);
+    const nameLength = zip.readUInt16LE(offset + 26);
+    const extraLength = zip.readUInt16LE(offset + 28);
+    const nameStart = offset + 30;
+    const name = zip.subarray(nameStart, nameStart + nameLength).toString('utf-8');
+    const dataStart = nameStart + nameLength + extraLength;
+    if (name === entryName) {
+      const payload = zip.subarray(dataStart, dataStart + compressedSize);
+      return method === 0 ? payload.toString('utf-8') : inflateRawSync(payload).toString('utf-8');
+    }
+    offset = dataStart + compressedSize;
+  }
+  return null;
+}
 
 async function writeFile(root: string, relative: string, content: string): Promise<void> {
   const target = join(root, ...relative.split('/'));
@@ -125,5 +157,93 @@ describe('buildDiagnosticsBundle', () => {
     expect(bundle.entries).toEqual(['README.txt', 'meta.json']);
     expect(bundle.redactionHits).toBe(0);
     expect(bundle.bytes.length).toBeGreaterThan(0);
+  });
+});
+
+describe('诊断包里的引擎数据目录体量（V1.7 B5-02）', () => {
+  it('meta.json 带 engineData 段：逐文件字节数 + 合计', async () => {
+    const root = await fs.mkdtemp(join(process.env.TEMP ?? '/tmp', 'nw-diag-engdata-'));
+    const engineDir = await fs.mkdtemp(join(process.env.TEMP ?? '/tmp', 'nw-engine-'));
+    await fs.writeFile(join(engineDir, 'llm_usage.sqlite3'), 'x'.repeat(4096));
+    await fs.writeFile(join(engineDir, 'llm_usage.sqlite3-wal'), 'x'.repeat(1024));
+
+    const bundle = await buildDiagnosticsBundle({
+      userData: root,
+      now: 1_700_000_000_000,
+      engineData: {
+        dataDir: engineDir,
+        files: [
+          { file: 'llm_usage.sqlite3', bytes: 4096, modifiedAt: '2026-10-21T00:00:00.000Z' },
+          { file: 'llm_usage.sqlite3-wal', bytes: 1024, modifiedAt: '2026-10-21T00:00:00.000Z' },
+        ],
+      },
+    });
+
+    const metaText = readZipEntry(bundle.bytes, 'meta.json');
+    expect(metaText).not.toBeNull();
+    const meta = JSON.parse(metaText as string) as {
+      engineData: {
+        included: boolean;
+        totalKnownBytes: number;
+        files: Array<{ file: string; bytes: number | null }>;
+      };
+    };
+
+    expect(meta.engineData.included).toBe(true);
+    expect(meta.engineData.totalKnownBytes).toBe(5120);
+    expect(meta.engineData.files.map((f) => f.file)).toEqual([
+      'llm_usage.sqlite3',
+      'llm_usage.sqlite3-wal',
+    ]);
+  });
+
+  it('meta.json 不带引擎数据的绝对路径（只给目录名）', async () => {
+    const root = await fs.mkdtemp(join(process.env.TEMP ?? '/tmp', 'nw-diag-engdata2-'));
+
+    const bundle = await buildDiagnosticsBundle({
+      userData: root,
+      now: 1_700_000_000_000,
+      engineData: {
+        dataDir: '/home/someuser/.nanobot/instance-abc',
+        files: [{ file: 'llm_usage.sqlite3', bytes: 10, modifiedAt: null }],
+      },
+    });
+
+    const metaText = readZipEntry(bundle.bytes, 'meta.json') as string;
+    // ⚠️ 诊断包是要发出去的：绝对路径含用户名，不能出现在 meta.json 里。
+    expect(metaText).not.toContain('someuser');
+    expect(metaText).not.toContain('/home/');
+    // 但要知道是哪个实例目录。
+    expect(metaText).toContain('instance-abc');
+  });
+
+  it('没给 engineData 时明确标 included=false（不留空段让人猜）', async () => {
+    const root = await fs.mkdtemp(join(process.env.TEMP ?? '/tmp', 'nw-diag-engdata3-'));
+
+    const bundle = await buildDiagnosticsBundle({ userData: root, now: 1_700_000_000_000 });
+
+    const meta = JSON.parse(readZipEntry(bundle.bytes, 'meta.json') as string) as {
+      engineData: { included: boolean };
+    };
+    expect(meta.engineData.included).toBe(false);
+  });
+
+  it('README 说明这一段是只读 stat，且提示 WAL 会被低估', async () => {
+    const root = await fs.mkdtemp(join(process.env.TEMP ?? '/tmp', 'nw-diag-engdata4-'));
+
+    const bundle = await buildDiagnosticsBundle({
+      userData: root,
+      now: 1_700_000_000_000,
+      engineData: {
+        dataDir: '/tmp/instance-x',
+        files: [{ file: 'llm_usage.sqlite3', bytes: 10, modifiedAt: null }],
+      },
+    });
+
+    const readme = readZipEntry(bundle.bytes, 'README.txt') as string;
+    expect(readme).toContain('engineData');
+    // 关键提醒：不能让人以为高水位 = 泄漏，更不能让人以为这里会做 checkpoint。
+    expect(readme).toContain('WAL');
+    expect(readme).toContain('只读');
   });
 });

@@ -10,7 +10,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { redactSecrets, redactSecretsIn } from '../../electron/secretRedaction';
+import { redactSecrets, redactSecretsIn, redactHomePaths } from '../../electron/secretRedaction';
 
 describe('redactSecrets：该脱的', () => {
   it('键值对保留键名与分隔符，只打值', () => {
@@ -101,5 +101,73 @@ describe('redactSecretsIn', () => {
     expect(r.hits).toBe(2);
     expect(r.texts[0]).not.toContain('abcdefghijklmn');
     expect(r.texts[1]).toBe('nothing here');
+  });
+});
+
+/**
+ * 路径里的**用户身份**脱敏（FR-11.9 补漏，2026-10-21 真机验收发现）。
+ *
+ * 背景：真机跑 `tasks/verify-feedback-bundle.mjs` 时，诊断包解压后
+ * `traces/53568/trace_*.json` 里出现 `C:/Users/xinmi/NanoWork/ai-short-drama-kit.md`
+ * —— 凭据脱敏（`redactSecrets`）只管「长得像凭据」的值，**完全不管路径**。
+ * 而验收清单 C.7 明确要求「解压自查：无绝对路径用户名」。
+ *
+ * 关键取舍：路径**不能删**（工具参数与结果里的路径是排障的核心价值，PRD §20.4.3
+ * 明确说「保留并截断到 4000 字符」），只能**把用户名换掉**。
+ */
+describe('redactHomePaths：该换的', () => {
+  const HOME = 'C://Users//testuser';
+
+  it('裸路径（Windows 反斜杠）里的用户名被换成 <user>', () => {
+    const r = redactHomePaths('wrote to C://Users//testuser//NanoWork//a.md', HOME);
+    expect(r.text).toContain('C://Users//<user>//NanoWork//a.md');
+    expect(r.text).not.toContain('testuser');
+    expect(r.hits).toBeGreaterThan(0);
+  });
+
+  it('JSON 转义形态（反斜杠写成 \\\\）同样能抓到', () => {
+    // 真机泄漏样本就是这个形态：JSON 里的 "C://Users//xinmi//NanoWork//x.md"
+    const json = JSON.stringify({ path: 'C://Users//testuser//NanoWork//x.md' });
+    const r = redactHomePaths(json, HOME);
+    expect(r.text).not.toContain('testuser');
+    // 替换后 JSON 依然合法（这是脱敏的硬要求：拿到包的人要能 jq）
+    expect(() => JSON.parse(r.text)).not.toThrow();
+  });
+
+  it('正斜杠形态（URL / POSIX 风格）同样能抓到', () => {
+    const r = redactHomePaths('file:///C:/Users/testuser/NanoWork/x.md', HOME);
+    expect(r.text).not.toContain('testuser');
+  });
+
+  it('home 不在 Users 下时也按最后一段兜底（Linux /home/<user>）', () => {
+    const r = redactHomePaths('read /home/testuser/notes.md', '/home/testuser');
+    expect(r.text).not.toContain('testuser');
+  });
+
+  it('主目录之外的路径原样保留（含排障价值）', () => {
+    const src = 'wrote to D://projects//app//dist//bundle.js';
+    expect(redactHomePaths(src, HOME).text).toBe(src);
+  });
+});
+
+describe('redactHomePaths：不该换的', () => {
+  const HOME = 'C://Users//testuser';
+
+  it('没有 home 参数时原样返回（调用方没给就不做）', () => {
+    const src = 'C://Users//someone//a.md';
+    const r = redactHomePaths(src, '');
+    expect(r.text).toBe(src);
+    expect(r.hits).toBe(0);
+  });
+
+  it('不含用户名的文本 hits 为 0（如实记录「没改过」）', () => {
+    const r = redactHomePaths('plain log line', HOME);
+    expect(r.hits).toBe(0);
+    expect(r.text).toBe('plain log line');
+  });
+
+  it('别的用户名的路径不该被误伤（只换主目录那一个用户名）', () => {
+    const src = 'C://Users//otheruser//a.md';
+    expect(redactHomePaths(src, HOME).text).toBe(src);
   });
 });

@@ -34,14 +34,15 @@
  */
 
 import { promises as fs } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { DEFAULT_LOG_KEEP_DAYS, LOG_DIR_NAME } from '../src/observability/logging';
 import { DEFAULT_TRACE_KEEP_DAYS, TRACE_DIR_NAME } from '../src/observability/trace';
 import { listLogFiles, type DiagnosticFileStat } from './logStore';
 import { listTraceFiles } from './traceStore';
 import { createZip, type ZipEntryInput } from './zipWriter';
-import { redactSecrets } from './secretRedaction';
+import { redactSecrets, redactHomePaths } from './secretRedaction';
 import type { ProcessSnapshot } from './gatewayRuntimeState';
+import { totalKnownBytes, type EngineDataSnapshot } from './engineDataFiles';
 
 /** 诊断包体积上限（解压前）；超出的按 mtime 从旧到新丢弃 */
 export const DIAGNOSTICS_MAX_BYTES = 25 * 1024 * 1024;
@@ -200,6 +201,20 @@ export interface BuildDiagnosticsOptions {
   appInfo?: DiagnosticsAppInfo;
   /** 进程/端口快照（FR-11.9）；不给就不生成 processes.json */
   processSnapshot?: ProcessSnapshot;
+  /**
+   * 引擎数据目录的体量快照（V1.7 B5-02）；不给就不报这一段。
+   *
+   * ⚠️ 里面的 `dataDir` 是**绝对路径**（含用户名），进包前会被出口脱敏处理。
+   */
+  engineData?: EngineDataSnapshot;
+  /**
+   * 用户主目录（FR-11.9 补漏，2026-10-21）。
+   *
+   * 给了才会把路径里的**用户名**换成 `<user>` 占位符——工具参数与结果里的
+   * 绝对路径是排障的核心价值（不能删），但带着用户名会把用户身份一起发出去。
+   * 不给则**不做**路径脱敏（只做凭据脱敏）。
+   */
+  homeDir?: string;
   now?: number;
   maxBytes?: number;
   maxTraces?: number;
@@ -229,6 +244,8 @@ function readmeText(counts: {
   hasProcesses: boolean;
   hasStartupProfile: boolean;
   hasLatencySummary: boolean;
+  hasEngineData: boolean;
+  engineDataTotalBytes: number | null;
   redactedHits: number;
 }): string {
   return [
@@ -261,6 +278,15 @@ function readmeText(counts: {
           '  gatewayStates 回答「run/ 里每份状态文件是活的还是僵尸（verdict 字段）」。',
         ]
       : []),
+    ...(counts.hasEngineData
+      ? [
+          '  meta.json 的 engineData 回答「引擎的用量库涨到多大了」——逐个文件的字节数与修改时间；',
+          `  已知文件合计 ${counts.engineDataTotalBytes ?? 0} 字节。`,
+          '  ⚠️ 这是**只读 stat**的结果，不做任何 checkpoint、不动数据库：',
+          '  llm_usage.sqlite3 是 WAL 模式，-wal 旁文件常常比主库还大，只看主库会低估；',
+          '  高水位本身是正常现象，不代表有泄漏。',
+        ]
+      : []),
     '',
     '脱敏说明：',
     `  日志、trace 与启动剖析进包前已做凭据脱敏（本次命中 ${counts.redactedHits} 处，形如 ab12...wxyz）。`,
@@ -268,6 +294,8 @@ function readmeText(counts: {
     '  credential / authorization）、Authorization: Bearer、sk-…、三段式 JWT。',
     '  脱敏是模式匹配，覆盖不了长得不像凭据的凭据；真正的保证是含凭据的配置文件',
     '  （nanowork.config.json / channels.json / connectors/）根本不进这个包。',
+    '  另：绝对路径里的**用户名**已替换为 <user>（路径结构保留——「写到工作区还是写到',
+    '  临时目录」是排障线索，整段抹掉会把诊断能力一起毁掉）。',
     '',
     '⚠️ 隐私提示：',
     '  本包含有工具调用的参数与结果，可能涉及文件路径、代码片段与命令输出；',
@@ -306,9 +334,13 @@ export async function buildDiagnosticsBundle(
     try {
       const raw = await fs.readFile(join(options.userData, ...f.relativePath.split('/')));
       // 出口脱敏（FR-11.9）：只有进包的这份被改，磁盘上的原文不动。
-      const { text, hits } = redactSecrets(raw.toString('utf-8'));
-      redactedHits += hits;
-      const data = Buffer.from(text, 'utf-8');
+      // 两层：**凭据**（`redactSecrets`）+ **路径里的用户名**（`redactHomePaths`）。
+      // 后者是 2026-10-21 真机验收补的——工具参数与结果里的绝对路径是排障核心
+      // （不能删），但带着用户名会把用户身份一起发出去。
+      const cred = redactSecrets(raw.toString('utf-8'));
+      const path = redactHomePaths(cred.text, options.homeDir ?? '');
+      redactedHits += cred.hits + path.hits;
+      const data = Buffer.from(path.text, 'utf-8');
       if (f.relativePath.startsWith(`${LOG_DIR_NAME}/`)) logBytes += data.length;
       else traceBytes += data.length;
       fileEntries.push({ name: f.relativePath, data, mtimeMs: f.mtimeMs });
@@ -328,8 +360,10 @@ export async function buildDiagnosticsBundle(
       await fs.readFile(join(options.userData, STARTUP_PROFILE_FILE), 'utf-8'),
       MAX_EXTRA_READ_BYTES,
     );
-    const { text, hits } = redactSecrets(raw);
-    redactedHits += hits;
+    const cred = redactSecrets(raw);
+    const path = redactHomePaths(cred.text, options.homeDir ?? '');
+    redactedHits += cred.hits + path.hits;
+    const text = path.text;
     if (text.trim()) {
       extraEntries.push({ name: STARTUP_PROFILE_FILE, data: text });
       hasStartupProfile = true;
@@ -373,7 +407,15 @@ export async function buildDiagnosticsBundle(
     redaction: {
       applied: true,
       hits: redactedHits,
+      // **凭据**四类模式
       patterns: ['credential-kv', 'bearer', 'sk', 'jwt'],
+      // **路径里的用户名**（2026-10-21 真机验收补）：单独记一项，因为它的
+      // 「命中数」与凭据不是一回事，且只有给了 `homeDir` 才会做。
+      homePathRedaction: {
+        applied: Boolean(options.homeDir),
+        // 占位符是什么——让拿到包的人知道路径是被换过的，不是原样
+        placeholder: '<user>',
+      },
     },
     // 额外产物的「有没有」只记事实，不重复正文（同一事实一个落点）。
     artifacts: {
@@ -385,6 +427,27 @@ export async function buildDiagnosticsBundle(
     ...(options.processSnapshot
       ? { processSnapshotIncluded: true, listenerSource: options.processSnapshot.listenerSource }
       : { processSnapshotIncluded: false }),
+    // 引擎数据目录的体量（V1.7 B5-02）。
+    //
+    // ⚠️ **只报尺寸，不动数据库**：`llm_usage.sqlite3` 是 WAL 模式，
+    // 高水位是正常行为（B5-02 已否决跨进程 checkpoint：会与写入者争锁）。
+    // 这里只 stat，不开连接、不加锁、不写。
+    ...(options.engineData
+      ? {
+          engineData: {
+            included: true,
+            // 目录名不含用户名的形态（完整绝对路径在 processes.json 同级段里，
+            // 已随包脱敏）。只给 basename，避免 meta.json 变成路径泄露源。
+            dataDirName: basename(options.engineData.dataDir ?? ''),
+            totalKnownBytes: totalKnownBytes(options.engineData).bytes,
+            files: options.engineData.files.map((f) => ({
+              file: f.file,
+              bytes: f.bytes,
+              modifiedAt: f.modifiedAt,
+            })),
+          },
+        }
+      : { engineData: { included: false } }),
   };
 
   const readme = readmeText({
@@ -394,6 +457,10 @@ export async function buildDiagnosticsBundle(
     hasProcesses: Boolean(options.processSnapshot),
     hasStartupProfile,
     hasLatencySummary,
+    hasEngineData: Boolean(options.engineData),
+    engineDataTotalBytes: options.engineData
+      ? totalKnownBytes(options.engineData).bytes
+      : null,
     redactedHits,
   });
 
