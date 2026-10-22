@@ -167,6 +167,9 @@ export function derivePluginViews(
       intended,
       drift: derivePluginDrift(intended, activation),
       engineIncompatible,
+      // 引擎没报 / 没连上 → 全 0，**不按「磁盘上有 hooks 文件」推断**：
+      // 猜出来的「已生效」比不显示更糟（用户会据此认为插件在管着他）。
+      hooks: engineEntry?.hooks ?? { active: 0, events: {}, dropped: 0 },
       source: derivePluginSource(engineEntry?.market ?? null, engineEntry?.version ?? null, plugin),
     };
   });

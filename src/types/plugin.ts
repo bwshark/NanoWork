@@ -147,6 +147,23 @@ export interface PluginSource {
   version: string | null;
 }
 
+/**
+ * 引擎侧报上来的**生命周期钩子生效情况**（FR-3.6）。
+ *
+ * 为什么界面必须有这一项：插件页原本只能数出包目录里 `hooks/` 有几个文件，
+ * 那是**文件事实**；而「引擎认不认、跑不跑」是另一回事（写错 event 名、
+ * JSON 坏了、清单没声明、超预算被丢）。两者不一致时，只显示文件数的界面
+ * 会让用户以为钩子在跑 —— 这正是本需求之前的状态：装了等于没装，零报错。
+ */
+export interface PluginHookStats {
+  /** 本轮真正生效的钩子条数（0 = 没启用 / 没声明 / 全被丢弃） */
+  active: number;
+  /** 按事件分布，键为 `session_start` / `before_tool` / `after_tool` / `session_end` */
+  events: Record<string, number>;
+  /** 被丢弃的声明条数（写错事件名 / JSON 坏 / 注入超预算等） */
+  dropped: number;
+}
+
 /** 引擎上报的一条插件 */
 export interface PluginEngineEntry {
   name: string;
@@ -160,6 +177,8 @@ export interface PluginEngineEntry {
   market: string | null;
   /** 该副本的版本（null = 说不上来，不要猜） */
   version: string | null;
+  /** 生命周期钩子的生效情况（引擎没报时全 0，不猜） */
+  hooks: PluginHookStats;
 }
 
 /** 引擎侧插件索引：一次 `GET /v1/plugins` 的结果 */
@@ -186,6 +205,13 @@ export interface PluginView {
   drift: PluginDrift;
   /** 声明的引擎兼容区间不满足当前客户端版本（`false` = 未声明或满足） */
   engineIncompatible: boolean;
+  /**
+   * 生命周期钩子的生效情况（引擎权威；引擎不可达时全 0）。
+   *
+   * 与 `plugin.resources` 里的 `hooks` 分组**不是一回事**：那个数是磁盘上几个文件，
+   * 这个是引擎真的跑起来的几条。卡片上分开显示，正是因为两者会不一致。
+   */
+  hooks: PluginHookStats;
   /**
    * 生效副本的来源与版本。
    *

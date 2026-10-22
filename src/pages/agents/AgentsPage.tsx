@@ -26,6 +26,8 @@ import AddIcon from "@mui/icons-material/Add";
 import SearchIcon from "@mui/icons-material/Search";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import EditIcon from "@mui/icons-material/Edit";
+import FileDownloadOutlinedIcon from "@mui/icons-material/FileDownloadOutlined";
+import FileUploadOutlinedIcon from "@mui/icons-material/FileUploadOutlined";
 import GroupsIcon from "@mui/icons-material/Groups";
 import PersonIcon from "@mui/icons-material/Person";
 import { useAgentsStore } from "@/stores/agentsStore";
@@ -35,6 +37,8 @@ import { useSessionsStore } from "@/stores/sessionsStore";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { SummonSlot } from "@/components/agents/SummonSlot";
 import { AgentFormDialog } from "@/components/agents/AgentFormDialog";
+import { ExpertPackageImportDialog } from "@/components/agents/ExpertPackageImportDialog";
+import { useExpertPackageExport } from "@/components/agents/useExpertPackageExport";
 import { PLATFORM_LABEL } from "@/lib/imPlatform";
 import { ROUTES } from "@/lib/constants";
 import {
@@ -101,6 +105,9 @@ export function AgentsPage() {
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Agent | null>(null);
   const [toDelete, setToDelete] = useState<string | null>(null);
+  /** 导入专家包对话框（FR-3.3）。打开即由组件自己去弹系统选文件框 */
+  const [importOpen, setImportOpen] = useState(false);
+  const { exportAgent } = useExpertPackageExport();
 
   const [groupOpen, setGroupOpen] = useState(false);
   const [editingGroup, setEditingGroup] = useState<ExpertGroup | null>(null);
@@ -232,6 +239,14 @@ export function AgentsPage() {
         />
         <Button
           variant="outlined"
+          startIcon={<FileUploadOutlinedIcon sx={{ fontSize: 18 }} />}
+          onClick={() => setImportOpen(true)}
+          sx={{ textTransform: "none" }}
+        >
+          导入专家包
+        </Button>
+        <Button
+          variant="outlined"
           onClick={() => navigate(ROUTES.myAgents)}
           sx={{ textTransform: "none" }}
         >
@@ -282,6 +297,7 @@ export function AgentsPage() {
                   onEdit={() => openEdit(a)}
                   onDelete={() => setToDelete(a.id)}
                   onToggle={() => toggleAgent(a.id)}
+                  onExport={() => void exportAgent(a)}
                   deleteDisabled={isBuiltinAgentId(a.id)}
                   onSummon={() => summonAgent(a)}
                   summonDisabled={!a.enabled}
@@ -326,6 +342,12 @@ export function AgentsPage() {
         editing={editing}
         onClose={() => setOpen(false)}
         onSave={saveAgent}
+      />
+
+      {/** 导入专家包（FR-3.3）：与「我的专家」页共用同一个对话框 */}
+      <ExpertPackageImportDialog
+        open={importOpen}
+        onClose={() => setImportOpen(false)}
       />
 
       {/** 专家团创建/编辑弹窗 */}
@@ -561,6 +583,7 @@ function AgentCard({
   onEdit,
   onDelete,
   onToggle,
+  onExport,
   deleteDisabled,
   onSummon,
   summonDisabled,
@@ -571,6 +594,8 @@ function AgentCard({
   onEdit: () => void;
   onDelete: () => void;
   onToggle: () => void;
+  /** 导出专家包（FR-3.3）。内置专家同样可导出——它的提示词可能被用户改过 */
+  onExport: () => void;
   deleteDisabled: boolean;
   onSummon: () => void;
   summonDisabled: boolean;
@@ -690,6 +715,16 @@ function AgentCard({
             }
           />
           <Box sx={{ flex: 1 }} />
+          <Tooltip title="导出专家包">
+            <IconButton
+              size="small"
+              aria-label={`导出 ${agent.name}`}
+              onClick={onExport}
+              sx={cardGhostActionSx}
+            >
+              <FileDownloadOutlinedIcon sx={{ fontSize: 16 }} />
+            </IconButton>
+          </Tooltip>
           <Tooltip title="编辑">
             <IconButton
               size="small"

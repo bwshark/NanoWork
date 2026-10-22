@@ -23,6 +23,9 @@ WorkBuddy 式智能体客户端：React18+TS+Vite 渲染层 + Electron 主进程
 - 端口职责：`serve` 才提供 `/v1/*` REST(`/v1/models`、`/v1/dream/*`)；`gateway` 只有 channel + `/health` + `/v1/turn` + `/v1/send` + `/v1/turn/progress` + `/v1/cron/reload` + `/v1/approvals` + `/v1/approvals/resolve`；其余 `/v1/*` 一律 404。两进程两端口。
 - ⚠️ 引擎把思考写进 assistant 记录的 **`reasoning_content`**（纯文本；兼容 blocks 数组 / `{text}` 对象），客户端映射层必须读它，否则助理/定时任务视图**有工具行但无「深度思考」**。见 `recordReasoning`；思考段与工具行**按到达顺序交错**，连续 reasoning 累积成一段，空思考不建段。
 - ⚠️ `list_webui_sessions` 除 `sessions_dir` 外还扫**全局** webui transcript 目录 → 依赖行数的断言在开发机上必红。`RecoveryCoordinator._recovery_candidates` 包 `except Exception` → 桩缺 `locked_session_files`/`sessions_dir` **不报错**，只留 traceback + 恢复发现静默降级。
+- ⚠️ **`hook_manifest` 之前没有消费者**：`plugins.py` 只把清单 `hooks:` 收成路径元组，`grep` 全仓无读取方 → 「装了带钩子的插件」= 卡片有 hooks、什么都没发生、零报错。FR-3.6（2026-10-23）补上：`agent/hooks/plugin_lifecycle.py` 是唯一执行方，**两条发现路径**（清单声明 + 约定位置 `<包根>/hooks/hooks.json`），挂 `turn_hooks` **基线链**（ephemeral 绕不过），`subagent.py` 另显式挂一次（否则 `spawn` 是插件 deny 的旁路，与 FR-2.2 同一个坑）。刻意**不执行外部命令**：钩子不经审批门也不进工具网关审计。
+- ⚠️ **改引擎代码不用另同步副本**（实测勘误）：两层 venv 的 `nanobot.__file__` = `<repo>/nanobot/nanobot/__init__.py`，仓库里的 `nanobot/` 就是运行时副本。
+- ⚠️ 引擎测试两条**预存**红（与本轮改动无关）：`tests/agent/test_agent_plugins.py::test_plugin_state_symlink_cannot_escape_config_root`、`tests/agent/test_skill_creator_scripts.py::test_package_skill_rejects_symlink` —— 本机允许建 symlink，于是用例走到「断言应抛 RuntimeError」而没抛。
 
 ## 产物登记的两条路径（2026-10-19）
 - 任务会话：`handleProcessTool`(phase=end)→`deriveFileArtifacts`→`handleArtifact`；富产物是流结束后 `extractArtifacts(全文)` 跑一次。
@@ -58,6 +61,22 @@ WorkBuddy 式智能体客户端：React18+TS+Vite 渲染层 + Electron 主进程
   ⛔ **`sed` 批量替换会把配置层与参数层一起改**（本轮真踩到）→ 判据 `test_fs_tool_parameter_default_stays_false` 钉住「两层必须相反」。
 - **影响面精确边界**：**只在 full 模式生效**（判据 `allowed_root is None and not files`）——restricted 模式**零影响**；**删除同样被拦**（走写解析路径）；**读不受影响**；`pathRules` 是 full 模式**唯一放行出口**（具体胜笼统），但规则**不能放宽边界** → restricted 下无效。
 - ⚠️ **本机所有会话都落 full 模式**（`restrictToWorkspace: false` ⇒ 普通会话不下发 `access_mode` → `default_access_mode(False)`=`"full"`，**含未勾「完全访问」的普通会话**）→ 改默认后无 `pathRules` 时**写与删全被拒**。已加 `C:/Users/xinmi/NanoWork` 放行规则。引擎读的是**仓库内** `nanowork.config.json`（被 `.gitignore:36` 忽略）。
+
+## FR-3.3 专家包（2026-10-22 落地，纯渲染层）
+- **格式是单文件 JSON 不是 zip / 不是 plugin 包**：schema `nanowork.expert/v1`，`expertType:'agent'`；清单字段名与 `plugin.json` 同构（`name`/`version`/`description`/`expertType`）以便将来升级成真包只多一层文件布局。`expertType:'team'` **明确拒导**（要成员互相引用，本期未定义），不按个体硬导。
+- **技能只带 `{id,name}` 引用、不带实现**：带实现=要求导入方信任一段会跑在它机器上的代码，技能分发走自己的通道。
+- ⚠️ **三条归一语义反直觉**：缺技能**不阻塞**（如实报缺失）；缺模型预设**丢弃**（失效预设会让引擎每轮报错）；`toolAllow: []` **原样保留**（空数组=一个工具都不许，用 `?? undefined` 会把最严的配置变成最松的）。
+- ⚠️ `presetIds` **省略或空集 = 目录还没加载 → 按有效放行**（与 `lib/agentBinding.ts` 同一条教训；当「全都失效」会让冷启动第一轮静默丢配置）。
+- ⚠️ **`agentsStore.createAgent` 是白名单式构造**，漏 `avatar` 会「包预览有头像、落库退回首字占位」且零报错。`model` 与 `avatar` 都踩过这条。
+- IO 复用既有 `platform.writeTextFile` / `platform.pickFile`（Electron 落 `~/.nanowork/`、Web 降级浏览器下载，与「导出账户归档」同一通道）→ **未新增平台能力、不碰 `electron/`、不必重建 `main.cjs`**。
+
+## 真机验收（2026-10-23，B3 两条通过）
+- **当前默认模型是 `agnes-3.0-flash`**（`providers.agnes` → `https://apihub.agnes-ai.com/v1`，key 内联在 `nanowork.config.json`）。DashScope 欠费不再是阻塞。⚠️ **免费档会周期性限流**（`You've reached the API rate limit for free users`）；限流时 `/dream` 的 LLM 调用直接失败 → 候选丢弃、游标不前进（素材不丢），**验收脚本必须先把「额度不够」和「闸门不工作」区分开**。
+- ⛔ **从 WorkBuddy 宿主里起引擎必须带 `CODEBUDDY_SAFE_DELETE_ENABLED=0`**。否则 `filelock` 释放锁时的 `Path.unlink` 被安全删除垫片拦 → 垫片 `SystemExit(1)` → **serve 进程直接退出**。症状：跑一阵突然 `HTTP 502`，日志尾部是一段 `_try_trash` / `_check_bulk_delete_guard` 栈。此坑与「跑测试要带这个变量」同源，但**服务进程比测试更容易被误判成「引擎崩了」**。
+- ⚠️ **`tool_deny` 是按工具名，不是按能力**。父 deny `write_file` 后，子代理会**改用 `apply_patch`/`exec` 把文件写出来**（这两个工具父本来也允许 → 子集仍 ⊆ 父集，「权限单调递减」没破）。想真禁写必须把所有写通道一起 deny 或用 `access_mode` 收紧。判据写法也随之受限：不能拿「文件不存在」或「没调 write_file」当 oracle。
+- ⚠️ **Dream 的输入只有 `memory/history.jsonl`，而它由「会话归档（上下文压缩）」写入**——不是每轮对话都写。所以「发几条消息再 `/dream`」通常得到 `nothing to process`。造素材要用引擎自己的 `MemoryStore.append_history()`（含游标分配 + `strip_think`），别手改 JSONL。
+- ⚠️ `/dream` 是**后台任务**（立刻回 `Dreaming...`），候选要几十秒后才落盘 → 判据必须轮询 `GET /v1/dream/review`。`POST /v1/dream/accept` 的 `updated` 是 **int 计数**（不是列表）；review 的键是 `pending`（不是 `has_candidate`）。
+- 落点：验收脚本 `tasks/verify-b3-real.py`（`c1`/`c2`/`c2-rollback`），证据 `tasks/evidence/b3-*.json`。⚠️ `/tasks/` 被 `.gitignore` 整目录忽略，要提交得 `git add -f`。
 
 ## 引擎统一配置（2026-10-17 收尾）
 - 覆盖配置 `$APPDATA/nanowork/nanowork.nanobot.json`：现**不写 bin**（回落两层 venv），显式 `config=D:/Workspace/study/nanowork/nanowork.config.json`（无内联密钥，凭据走 `DASHSCOPE_API_KEY` 环境变量）。

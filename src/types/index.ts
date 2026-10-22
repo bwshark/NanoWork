@@ -2,6 +2,7 @@
 export * from './settings';
 export * from './agent';
 export * from './expertGroup';
+export * from './expertPackage';
 export * from './message';
 export * from './process';
 export * from './toolcall';

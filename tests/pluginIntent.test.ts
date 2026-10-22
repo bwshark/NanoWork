@@ -61,6 +61,7 @@ function engineIndex(...names: Array<[string, boolean]>): PluginEngineIndex {
       category: '',
       enabled,
       mcpServers: [],
+      hooks: { active: 0, events: {}, dropped: 0 },
       // 默认「说不上来源」：单测要显式指定从哪个市场装的，不该在这里猜
       market: null,
       version: null,
@@ -265,6 +266,7 @@ describe('derivePluginViews', () => {
             category: '',
             enabled: false,
             mcpServers: [],
+            hooks: { active: 0, events: {}, dropped: 0 },
             market: 'official',
             version: '2.0.0',
           },
@@ -289,6 +291,7 @@ describe('derivePluginViews', () => {
             category: '',
             enabled: false,
             mcpServers: [],
+            hooks: { active: 0, events: {}, dropped: 0 },
             market: null,
             version: '0.9.0',
           },

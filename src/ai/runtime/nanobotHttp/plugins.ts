@@ -22,7 +22,7 @@
  * 整体崩掉，而用户其实只是想看一眼装了什么。
  */
 
-import type { PluginEngineEntry, PluginEngineIndex } from '@/types/plugin';
+import type { PluginEngineEntry, PluginEngineIndex, PluginHookStats } from '@/types/plugin';
 import { isAbortError } from './httpError';
 
 /** 单次插件请求的连接参数（由 transport 层解析后传入） */
@@ -40,6 +40,36 @@ const DEFAULT_PLUGIN_TIMEOUT_MS = 6000;
 /** 把未知值收敛成字符串字段（引擎漏字段时不至于渲染出 `undefined`） */
 function text(value: unknown): string {
   return typeof value === 'string' ? value : '';
+}
+
+/** 非负整数；`NaN` / 负数 / 小数 / 字符串一律归 0（计数类字段不接受猜测） */
+function count(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : 0;
+}
+
+/**
+ * 解析引擎报的生命周期钩子生效情况（FR-3.6）。
+ *
+ * 缺字段一律归 0，**不从「磁盘上有 hooks 文件」推断**：引擎说不上来时，
+ * 界面就该显示「未生效」，而不是替它猜一个「已生效」。
+ */
+function hookStats(value: unknown): PluginHookStats {
+  const raw =
+    value && typeof value === 'object' && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : {};
+  const events: Record<string, number> = {};
+  const rawEvents =
+    raw.events && typeof raw.events === 'object' && !Array.isArray(raw.events)
+      ? (raw.events as Record<string, unknown>)
+      : {};
+  for (const [event, n] of Object.entries(rawEvents)) {
+    const parsed = count(n);
+    if (parsed > 0) events[event] = parsed;
+  }
+  return { active: count(raw.active), events, dropped: count(raw.dropped) };
 }
 
 /**
@@ -73,6 +103,7 @@ export function parsePluginIndex(payload: unknown): PluginEngineEntry[] {
       // 而不是渲染一个空 market 后缀
       market: text(item.market) || null,
       version: text(item.version) || null,
+      hooks: hookStats(item.hooks),
     }))
     .filter((entry) => entry.name !== '');
 }

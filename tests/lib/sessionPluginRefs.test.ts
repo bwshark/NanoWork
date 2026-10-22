@@ -48,6 +48,7 @@ function view(overrides: {
     intended: overrides.intended ?? true,
     drift: 'both-off',
     engineIncompatible: false,
+    hooks: { active: 0, events: {}, dropped: 0 },
     source: {
       market: overrides.market === undefined ? 'local-market' : overrides.market,
       version: overrides.version === undefined ? '1.0.0' : overrides.version,

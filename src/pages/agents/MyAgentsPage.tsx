@@ -27,6 +27,8 @@ import SearchIcon from "@mui/icons-material/Search";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import EditIcon from "@mui/icons-material/Edit";
 import ChevronLeftIcon from "@mui/icons-material/ChevronLeft";
+import FileDownloadOutlinedIcon from "@mui/icons-material/FileDownloadOutlined";
+import FileUploadOutlinedIcon from "@mui/icons-material/FileUploadOutlined";
 import GroupsIcon from "@mui/icons-material/Groups";
 import PersonIcon from "@mui/icons-material/Person";
 import { useAgentsStore } from "@/stores/agentsStore";
@@ -36,6 +38,8 @@ import { useSessionsStore } from "@/stores/sessionsStore";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { SummonSlot } from "@/components/agents/SummonSlot";
 import { AgentFormDialog } from "@/components/agents/AgentFormDialog";
+import { ExpertPackageImportDialog } from "@/components/agents/ExpertPackageImportDialog";
+import { useExpertPackageExport } from "@/components/agents/useExpertPackageExport";
 import { PLATFORM_LABEL } from "@/lib/imPlatform";
 import { ROUTES } from "@/lib/constants";
 import {
@@ -102,6 +106,9 @@ export function MyAgentsPage() {
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Agent | null>(null);
   const [toDelete, setToDelete] = useState<string | null>(null);
+  /** 导入专家包对话框（FR-3.3）。打开即由组件自己去弹系统选文件框 */
+  const [importOpen, setImportOpen] = useState(false);
+  const { exportAgent } = useExpertPackageExport();
 
   const [groupOpen, setGroupOpen] = useState(false);
   const [editingGroup, setEditingGroup] = useState<ExpertGroup | null>(null);
@@ -208,7 +215,12 @@ export function MyAgentsPage() {
     onMouseLeave: () => setHoverId((v) => (v === id ? null : v)),
   });
 
-  /** 卡片底部：启用开关（常驻可点）+ 编辑 / 删除（半透明，hover 回到全亮）。 */
+  /**
+   * 卡片底部：启用开关（常驻可点）+ 导出 / 编辑 / 删除（半透明，hover 回到全亮）。
+   *
+   * `onExport` 可选：专家团**不支持**导出（`expertType: 'team'` 需要带成员互相引用，
+   * 本期包格式只定义了个体）。少一个入参比渲染一个点了会报错的按钮好。
+   */
   const renderFooter = (
     enabled: boolean,
     onToggle: () => void,
@@ -216,6 +228,7 @@ export function MyAgentsPage() {
     onDelete: () => void,
     deleteDisabled: boolean,
     label: string,
+    onExport?: () => void,
   ) => (
     <Box sx={{ mt: 1.5, display: "flex", alignItems: "center", gap: 0.5 }}>
       <FormControlLabel
@@ -228,6 +241,20 @@ export function MyAgentsPage() {
         }
       />
       <Box sx={{ flex: 1 }} />
+      {onExport && (
+        <Tooltip title="导出专家包">
+          <span>
+            <IconButton
+              size="small"
+              aria-label={`导出 ${label}`}
+              onClick={onExport}
+              sx={cardGhostActionSx}
+            >
+              <FileDownloadOutlinedIcon sx={{ fontSize: 16 }} />
+            </IconButton>
+          </span>
+        </Tooltip>
+      )}
       <Tooltip title="编辑">
         <IconButton
           size="small"
@@ -390,6 +417,7 @@ export function MyAgentsPage() {
             () => setToDelete(a.id),
             isBuiltin,
             a.name,
+            () => void exportAgent(a),
           )}
         </CardContent>
       </Card>
@@ -533,6 +561,15 @@ export function MyAgentsPage() {
           </Typography>
         </Box>
         <Box sx={{ flex: 1 }} />
+        <Button
+          size="small"
+          variant="outlined"
+          startIcon={<FileUploadOutlinedIcon sx={{ fontSize: 18 }} />}
+          onClick={() => setImportOpen(true)}
+          sx={{ textTransform: "none" }}
+        >
+          导入专家包
+        </Button>
         <TextField
           size="small"
           placeholder={tab === "agents" ? "检索专家" : "检索专家团"}
@@ -637,6 +674,12 @@ export function MyAgentsPage() {
         editing={editing}
         onClose={() => setOpen(false)}
         onSave={saveAgent}
+      />
+
+      {/** 导入专家包（FR-3.3）：打开即弹系统选文件框，选完在本框里预览对账结果 */}
+      <ExpertPackageImportDialog
+        open={importOpen}
+        onClose={() => setImportOpen(false)}
       />
 
       <Dialog

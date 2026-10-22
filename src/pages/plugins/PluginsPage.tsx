@@ -23,6 +23,10 @@ import { useAgentsStore } from "@/stores/agentsStore";
 import { collectMissingSessionPluginRefs } from "@/lib/sessionPluginRefs";
 import { SessionPluginRefNotice } from "./SessionPluginRefNotice";
 import { computePluginToolGaps } from "@/lib/pluginToolGaps";
+import {
+  describePluginHookTooltip,
+  pluginHookChip,
+} from "@/lib/pluginHooks";
 import { platform } from "@/platform";
 import { toast } from "@/components/Toast";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
@@ -298,6 +302,9 @@ export function PluginsPage({ embedded = false }: { embedded?: boolean }) {
           const totalResources = view.plugin.resources.filter(
             (g) => g.count > 0,
           );
+          // FR-3.6：钩子的**生效**情况（引擎权威），与上面 `resources` 里的
+          // `hooks` 分组（磁盘上有几个文件）刻意分开显示 —— 两者不一致才是要说的信息。
+          const hookChip = pluginHookChip(view.hooks);
 
           return (
             <Box
@@ -416,6 +423,35 @@ export function PluginsPage({ embedded = false }: { embedded?: boolean }) {
                     }
                     sx={cardStatusChipSx}
                   />
+                )}
+                {hookChip && (
+                  <Tooltip
+                    title={
+                      <Box sx={{ maxWidth: 320 }}>
+                        {describePluginHookTooltip(view.hooks).map((line, index) => (
+                          <Typography
+                            key={line}
+                            variant="caption"
+                            component="div"
+                            sx={{
+                              fontWeight: index === 0 ? 600 : 400,
+                              mt: index === 0 ? 0 : 0.25,
+                            }}
+                          >
+                            {line}
+                          </Typography>
+                        ))}
+                      </Box>
+                    }
+                  >
+                    <Chip
+                      size="small"
+                      color={hookChip.tone === "warn" ? "warning" : "success"}
+                      variant="outlined"
+                      label={hookChip.label}
+                      sx={cardStatusChipSx}
+                    />
+                  </Tooltip>
                 )}
                 {toolGaps.length > 0 && (
                   <Tooltip

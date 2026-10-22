@@ -104,6 +104,7 @@ describe('parsePluginIndex', () => {
         mcpServers: ['demo--fs'],
         market: null,
         version: null,
+        hooks: { active: 0, events: {}, dropped: 0 },
       },
       // displayName 回落 name，其余降级成空串 / false / 空数组
       {
@@ -115,6 +116,7 @@ describe('parsePluginIndex', () => {
         mcpServers: [],
         market: null,
         version: null,
+        hooks: { active: 0, events: {}, dropped: 0 },
       },
     ]);
   });
@@ -132,6 +134,40 @@ describe('parsePluginIndex', () => {
   it('mcpServers 里的非字符串元素被过滤', () => {
     const entries = parsePluginIndex({ data: [{ name: 'p', mcpServers: ['a', 1, null] }] });
     expect(entries[0]?.mcpServers).toEqual(['a']);
+  });
+
+  // FR-3.6：钩子生效情况。**缺字段一律归 0，不从「磁盘上有 hooks 文件」推断** ——
+  // 猜一个「已生效」比不显示更糟：用户会据此以为插件在管着他。
+  it('hooks 缺失 → 全 0（不猜「已生效」）', () => {
+    const entries = parsePluginIndex({ data: [{ name: 'p' }] });
+    expect(entries[0]?.hooks).toEqual({ active: 0, events: {}, dropped: 0 });
+  });
+
+  it('hooks 按事件分布解析，非法计数归 0 且不保留空项', () => {
+    const entries = parsePluginIndex({
+      data: [
+        {
+          name: 'p',
+          hooks: {
+            active: 2,
+            events: { before_tool: 1, session_start: 1, after_tool: 0, junk: 'x' },
+            dropped: -3,
+          },
+        },
+      ],
+    });
+    expect(entries[0]?.hooks).toEqual({
+      active: 2,
+      events: { before_tool: 1, session_start: 1 },
+      dropped: 0,
+    });
+  });
+
+  it('hooks 形状不对（数组 / 字符串）→ 全 0，不抛异常', () => {
+    for (const hooks of [[], 'nope', 42]) {
+      const entries = parsePluginIndex({ data: [{ name: 'p', hooks }] });
+      expect(entries[0]?.hooks).toEqual({ active: 0, events: {}, dropped: 0 });
+    }
   });
 });
 

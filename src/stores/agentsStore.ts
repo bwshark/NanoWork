@@ -22,6 +22,14 @@ interface AgentsState {
   /** 重新合并内置 Agent 与持久化数据（启动时调用，保证内置恒在） */
   refresh: () => void;
   createAgent: (partial?: Partial<Agent>) => Agent;
+  /**
+   * 导入专家包落地（FR-3.3）。
+   *
+   * 与 `createAgent` 的唯一差别是**不动 `activeAgentId`**：导入是「收下一个别人
+   * 给我的专家」，不是「现在就换我去用他」。用 `createAgent` 会导致导入完当前
+   * 激活专家被静默改掉，而用户下一步已经在打字的会话里就换了人设。
+   */
+  importAgent: (partial?: Partial<Agent>) => Agent;
   updateAgent: (id: string, patch: Partial<Agent>) => void;
   removeAgent: (id: string) => void;
   toggleAgent: (id: string) => void;
@@ -87,6 +95,47 @@ function mergeAgents(stored: Agent[]): Agent[] {
   return [...builtins, ...userAgents];
 }
 
+/**
+ * 白名单式构造一条用户 Agent。
+ *
+ * 白名单而不是展开 `partial`：`Agent` 上有 `id` / `createdAt` / `source` 与同步
+ * 元数据，让调用方（表单、导入）决定这些等于把不变量交出去。
+ *
+ * ⚠️ 新增与「专家是什么」相关的字段必须加进这里，否则「新建/导入时设了，保存
+ * 瞬间消失」，而编辑已有条目走 `updateAgent` 的展开赋值不会有此问题——两条路径
+ * 行为不一致，只有新建会遇到这个坑，也最难被注意到（`model` 与 `avatar` 都踩过）。
+ */
+function buildAgent(partial?: Partial<Agent>): Agent {
+  return {
+    id: genId(),
+    name: partial?.name ?? '新 Agent',
+    systemPrompt: partial?.systemPrompt ?? '',
+    skillIds: partial?.skillIds ?? [],
+    // FR-2.2：工具策略。刻意用 `?? undefined` 而不是 `?? []`——
+    // 空数组是「一个工具都不许」，不能拿来充当「用户还没设置」。
+    toolAllow: partial?.toolAllow,
+    toolDeny: partial?.toolDeny,
+    // design §13.1：Agent 级领域 / 风格覆盖。同上，省略 = 跟随全局设置。
+    // 必须在创建时一并落库：这是白名单式构造，漏掉就等于「新建时选的覆盖
+    // 在保存瞬间消失」。
+    promptDomain: partial?.promptDomain,
+    promptStyle: partial?.promptStyle,
+    // FR-2.3 模型绑定。⚠️ 这个字段**必须**在白名单里：本函数是白名单式构造，
+    // 漏掉就等于「新建 Agent 时选的模型在保存瞬间消失」，而编辑已有 Agent 走
+    // `updateAgent` 的展开赋值不会有此问题——两条路径行为不一致的话，
+    // 只有「新建」会遇到这个坑，而它又最难被注意到。
+    model: partial?.model,
+    // FR-3.3：头像随专家包分发。漏掉这一行，导入带 emoji 头像的包会静默丢掉头像
+    // ——包解析、预览都显示有头像，落库后却退回首字占位。
+    avatar: partial?.avatar,
+    imBinding: partial?.imBinding ?? null,
+    enabled: partial?.enabled ?? true,
+    createdAt: nowIso(),
+    ...metaForNew(),
+    source: 'user',
+  };
+}
+
 export const useAgentsStore = create<AgentsState>()(
   persist(
     (set, get) => ({
@@ -99,38 +148,23 @@ export const useAgentsStore = create<AgentsState>()(
       },
 
       createAgent: (partial) => {
-        const agent: Agent = {
-          id: genId(),
-          name: partial?.name ?? '新 Agent',
-          systemPrompt: partial?.systemPrompt ?? '',
-          skillIds: partial?.skillIds ?? [],
-          // FR-2.2：工具策略。刻意用 `?? undefined` 而不是 `?? []`——
-          // 空数组是「一个工具都不许」，不能拿来充当「用户还没设置」。
-          toolAllow: partial?.toolAllow,
-          toolDeny: partial?.toolDeny,
-          // design §13.1：Agent 级领域 / 风格覆盖。同上，省略 = 跟随全局设置。
-          // 必须在创建时一并落库：这是白名单式构造，漏掉就等于「新建时选的覆盖
-          // 在保存瞬间消失」，而编辑已有 Agent 走的是 updateAgent 的展开赋值，
-          // 两条路径行为不一致的话，只有新建会遇到这个坑。
-          promptDomain: partial?.promptDomain,
-          promptStyle: partial?.promptStyle,
-          // FR-2.3 模型绑定。⚠️ 这个字段**必须**在白名单里：本函数是白名单式构造，
-          // 漏掉就等于「新建 Agent 时选的模型在保存瞬间消失」，而编辑已有 Agent 走
-          // `updateAgent` 的展开赋值不会有此问题——两条路径行为不一致的话，
-          // 只有「新建」会遇到这个坑，而它又最难被注意到。
-          model: partial?.model,
-          imBinding: partial?.imBinding ?? null,
-          enabled: partial?.enabled ?? true,
-          createdAt: nowIso(),
-          ...metaForNew(),
-          source: 'user',
-        };
+        const agent = buildAgent(partial);
         set((s) => ({
           agents: [...s.agents, agent],
           // 同 id 重新出现 = 「删除后又建回来」：必须清掉旧墓碑，否则同步会把这个
           // 刚建好的条目按「已删除」推出去，而本机看起来一切正常
           tombstones: withoutTombstone(s.tombstones, agent.id),
           activeAgentId: agent.id,
+        }));
+        return agent;
+      },
+
+      importAgent: (partial) => {
+        const agent = buildAgent(partial);
+        set((s) => ({
+          agents: [...s.agents, agent],
+          tombstones: withoutTombstone(s.tombstones, agent.id),
+          // 刻意不动 activeAgentId：见接口注释
         }));
         return agent;
       },

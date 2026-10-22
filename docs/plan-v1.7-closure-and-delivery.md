@@ -31,7 +31,7 @@ V1.6 把「运行期工程」补齐了，但 **V1 本身仍未整体收口**（`
 | **B1 判据与文档收口** | ✅ **已完成（7/7）** | 2026-10-17 | **B1-01**：v2 §6 的 P1 基线表整块重写为「复核后真正剩余的 P1 共 4 条」并逐条给阻塞点与落点；`docs/README.md` §九 看板新增 **#35**（与 #34 同源的状态滞后，第二次发生）。**B1-02**：`FR-4.4` ⬜→🟡，写明「个人 / 项目两级已由记忆 v2 落地（`memoryPaths.ts` 两类根 + `workspaceIdFor` / `scopeIdFor`），只剩组织级 → V3」，**本轮零代码改动**。**B1-03**：`FR-8.6` 拆三件（彻底删除 ✅ / 检索前过滤被知识库阻塞 / 注入检测待做）并注明「不再计为整条欠账」。**B1-04**：`FR-3.9` 收窄为两块并给 ② 的降级口径。**B1-05**：**19 条 FR**（R13 全量 6 + R3 5 + R8 4 + R11 4）并入 v2 第 3 章，**新开 R13 域**并进域总览表；顺带校准「原文称 24 条 / 实为 19 条」的计数口径（v1.6 §〇 加勘误行）。**B1-06**：`OVERVIEW.md` 全篇重写（V1 收口口径、V1.6/V1.7 进度、已实现能力按域、遗留风险 10 条）。**B1-07**：本文件已登记进 `docs/README.md` §三。**门禁实测（零代码改动，用于确认基线）**：三套 `tsc` 均 0 错误；`CODEBUDDY_SAFE_DELETE_ENABLED=0 npm run build` **退出码 0**（24.43s）；首屏 `modulepreload` 0.61 MB / 合计 1.16 MB（两条预算内）；`vitest` **226 文件 3409 用例**中 **2 个红均已定位为夹具/环境类**（同步集成用例并发下健康检查超时、`fileBackup` 用例断言与 `list()` 契约冲突的确定性 flaky），证据见 `OVERVIEW.md` §2.1 —— **两条噪声建议在 B2 一并修掉** |
 | **B2 客户端补完** | ✅ **已完成（3/3 + 2 处门禁噪声）** | 2026-10-17 | **B2-01**：会话版本引用集进同步负载——`Session.pluginVersions` / `SessionMeta.pluginVersions` 声明字段 + `src/lib/sessionPluginRefs.ts`（快照 / 解析 / GC 保护集，纯函数）+ 白名单 `pluginVersions`（**对象按内容比**，否则每轮发送都涨 `rev`）+ `toMeta` / `toMetaFromEntity` / `metaToSession` / `deriveMetaFromEvents` 往返 + `collectCache` 的引用集改为 **本机生效副本 ∪ 会话引用集**（换机 GC 不再删掉别的设备正在用的那一版）。**B2-02**：`src/lib/promptInjection.ts` 四类规则（指令覆盖 / 角色劫持 / 外泄诱导 / 编码混淆）+ `components/composer/InjectionNotice.tsx`，`Composer` 上方常驻提示、**只提示不拦截**；规则按「动作 + 对象」收紧，6 条「正常提问不误报」用例钉住误报率。**B2-03**：占位本就确定（`hashHue`），本轮补 `helperText` 写明「云端头像未接入」+ 9 条用例**锁定确定性**（同名同色同字；URL 头像退回名称首字），**不新增任何网络请求**。**门禁噪声（2 处，均非回归）**：① `fileBackupStore` 的 `BackupEntry` 加单调 `seq`，`list()` 改「`at` 倒序 → `seq` 倒序」的**全序**（同毫秒也确定），用例改为按契约断言「最新在前」；② 两个同步集成用例的健康检查与 `beforeAll` 超时 20s → 90s（全量并发下 uvicorn 首次 import 可被拖过 20s，单跑只要 2.9s）。**门禁**：三套 `tsc` 0 错误；全量 `vitest --maxWorkers=3` **229 文件 / 3454 用例 exit=0**（此前的两处红全消）；`CODEBUDDY_SAFE_DELETE_ENABLED=0 npm run build` exit=0；`electron/main.cjs` / `preload.cjs` 已重建（`indexFile.ts` 被主进程打包，改它必须重建）。**变异验证 3 项**：白名单去掉 `pluginVersions` → 4 条红；去掉 `seq` 兜底 → 2 条红；去掉中文指令覆盖规则 → 1 条红 |
 | **引擎统一收尾** | ✅ **已完成** | 2026-10-17 | 用户决策「统一到本仓 study 副本，桌面也跑本仓」。`$APPDATA/nanowork/nanowork.nanobot.json` 由坏掉的 `{}`（带 BOM→`JSON.parse` 抛错→fallback 到本仓 exe）改为显式 `{bin: study exe, host:127.0.0.1, port:8900}`（无 BOM）。study 引擎已自洽：`gitstore.py` 含 FileLock、`nanobot.exe` 启动器指向本仓 venv（`nanobot_ai 0.3.0` 已装）、`nanobot --version`→v0.3.0。凭据走环境变量 `DASHSCOPE_API_KEY`（两份 `nanowork.config.json` 均无内联密钥）→ 统一不丢凭据。本机无 codes 应用 userData（codes 副本未被使用），备份在 `codes/nanobot/.local-backup-eng-20261017_204905/`。B3 引擎改动落 study 即可，不再强制双副本同步 |
-| B3 引擎侧三件 | 🟡 代码全落、待真机（B3-01 ②③④；B3-02 ①②③④；B3-03 ①②③） | 2026-10-18 | 三件均已实现并有用例；剩余 B3-01 ①（子代理真机一轮）与三件的飞书真机闭环。B3-03 新增 `security/im_approval.py` + `tests/security/test_im_approval.py`(36) |
+| B3 引擎侧三件 | 🟡 **B3-01 / B3-02 已于 2026-10-23 真机验收通过**；B3-03 待飞书凭据 | 2026-10-23 | 三件代码均已落并有用例。**本轮真机（agnes-3.0-flash 通道）**：B3-01 子代理委派 6 条判据全过（结果回注 391、SSE `started→done`、三条权限单调递减含对照）；B3-02 Dream 闸门 11 条全过（采纳只写变化项 / 丢弃逐字节不变 / 三件套基线不被提前改动）+ 回退开关 2 条（关闸门后无候选且文件被直落改写）。脚本 `tasks/verify-b3-real.py`，证据 `tasks/evidence/b3-*.json`。**仍缺**：B3-03 需飞书应用凭据（本机配置无 appId/appSecret） |
 | B4 交付闭环 | ✅ 全部完成（B4-01 自动更新 / B4-02 深链 / B4-03 运行时自助安装 / B4-04 反馈包） | 2026-10-18 | B4-01 发布源 GitHub Releases（真机发版需 `GH_TOKEN`），B4-04 诊断含启动剖析+延迟摘要+脱敏清单可见，B4-03 一键修复状态机已落（仅当解释器/导入失败时出按钮） |
 | B5 数据驱动决策 | ✅ 已完成（4 项决策记录，均带数字） | 2026-10-18 | B5-01 关掉 CLI 预热池（首字延迟 p50 5s/p95 47s 由远端 LLM 主导，引擎启动 4.4s 已被 app 启动并行预热覆盖）；B5-02 采纳只读 sqlite 尺寸监控、拒绝跨进程 checkpoint（引擎确有 `llm_usage.sqlite3` 180KB）；B5-03 维持自助安装（本机自检 3/3 通过，未触发 <70% 阈值）；B5-04 续挂口袋清单（现有 `taskkill /T` 回收有效、无真实诉求） |
 
@@ -302,20 +302,37 @@ B1 ──┬─→ B2 ────────────────┐
 > 代码层行为已被单测锁死（见各批变异验证），本清单只验「端到端在真实环境跑通」，不重复单测判据。
 
 ### C.0 前置（每次真机前）
-- [ ] DashScope 密钥有额度（普通聊天能拿到模型回复；之前报 `out of quota or arrears`）
+- [x] 模型通道有额度 —— **2026-10-23 起改用 `agnes-3.0-flash`（`providers.agnes`，`https://apihub.agnes-ai.com/v1`），直连探测 2.2s 出字；DashScope 欠费不再是阻塞**
+  - ⚠️ 免费档会**周期性限流**（`You've reached the API rate limit for free users`）。限流期间 `/dream` 的 LLM 调用直接失败 → 候选被丢弃、游标不前进（素材不丢），但脚本会把「额度不够」误判成「闸门不工作」→ 验收脚本必须先 `wait_for_quota()` 探测到能出字再开始判据。
+  - ⚠️ **从 WorkBuddy 宿主里起引擎必须带 `CODEBUDDY_SAFE_DELETE_ENABLED=0`**。否则 `filelock` 释放锁时的 `unlink` 被安全删除垫片拦截 → 垫片 `SystemExit(1)` → **serve 进程直接退出**（症状：跑着跑着 `HTTP 502`，日志尾部是一段 `_try_trash` 栈）。
 - [ ] 重启桌面应用，确认网关由两层 venv 拉起（`run/gateway.*.json` 引用 `nanobot/nanobot/.venv`）
 - [ ] 连接横幅地址与实际监听端口一致（复用场景 `running=false` 但 `port` 有值也要同步，见 MEMORY `nextGatewayEndpoint` 只看 port）
 
-### C.1 B3-01 子代理委派（FR-2.5）
-- [ ] 任务会话让主 Agent 派生子代理：子代理回答回到最终答案
-- [ ] ProcessView 出现「子代理」分组行（`SubagentGroupView`），含 `started→tool→done` 序列
-- [ ] 权限单调递减：父 `tool_deny` 生效于子代理（子不得更宽）
+### C.1 B3-01 子代理委派（FR-2.5）—— **2026-10-23 真机通过（6/6）**
+> 脚本 `python tasks/verify-b3-real.py c1`，证据 `tasks/evidence/b3-c1-*.json`。
+- [x] 任务会话让主 Agent 派生子代理：子代理回答回到最终答案（问 17×23，最终答案出现 `391`，且主 Agent 未自行心算）
+- [x] SSE 出现 `kind:"subagent"` 且 `subagent_event` 序列为 `started→tool→done`（客户端 `SubagentGroupView` 的分组依据同源）
+- [x] 权限单调递减（三条，缺一条都可能假绿）：
+  - 父 `tool_deny=["write_file"]` → 子代理的 `write_file` 被拒并把拒绝原因回注（原文「`write_file` 被拒，错误原文…」）
+  - 父窄白名单（只 `read_file/list_dir/find_files/spawn`）→ 子代理 `write_file/apply_patch/edit_file/exec/run_cli_app` **全部被拒、文件未创建**
+  - 对照：父不限制 → 同一动作成功创建文件（证明上面两条不是假绿）
 
-### C.2 B3-02 Dream 审查闸门（FR-4.6）
-- [ ] 跑一轮 `/dream` 产生候选 → 记忆页「待审查」区出现 new/modified/deleted 三类 diff
-- [ ] 点「采纳」→ 仅变化项写回正式 `MEMORY.md`（逐字节比对，未变化项不重写）
-- [ ] 点「丢弃」→ 正式文件逐字节不变、候选区清空
-- [ ] 回退开关：关 `defaults.dream.require_review` 回到直落旧行为
+> ⚠️ **真机抓到的语义边界（不是缺陷，但会被误读成缺陷）**：`tool_deny` 是**按工具名**而不是按能力。deny 掉 `write_file` 后，子代理会**改用 `apply_patch` / `exec` 把文件写出来**——因为这两个工具父代理本来也允许，子集仍 ⊆ 父集，**单调递减没有被破坏**。
+>  这条踩过两次「判据取错口径」：第一次用「文件不存在」当 oracle（结果 deny 生效也红），第二次用「子代理没调 `write_file`」当 oracle（模型会先试再改道，也红）。最终判据改为「拒绝原因被回注」+「窄白名单下真写不出来」+「对照能写」。
+>  ⇒ 用户想「禁止写文件」，只 deny `write_file` 是不够的，必须把 `apply_patch`/`exec`（及其它写通道）一起 deny，或用 `access_mode` 收紧。这条应写进产品文案，否则用户会以为拒绝生效了。
+
+### C.2 B3-02 Dream 审查闸门（FR-4.6）—— **2026-10-23 真机通过（11/11 + 回退 2/2）**
+> 脚本 `python tasks/verify-b3-real.py c2`（与 `c2-rollback`），证据 `tasks/evidence/b3-c2-*.json`。
+- [x] 跑一轮 `/dream` 产生候选：`GET /v1/dream/review` 返回 `pending=true` + `diff` 只含 `new/modified/deleted`
+- [x] **候选存在期间三件套（`SOUL.md` / `USER.md` / `memory/MEMORY.md`）sha 全部不变**（闸门核心不变量）
+- [x] 采纳 → 返回 `updated` 计数 ≥1（⚠️ 是 **int 计数**不是列表），变化文件内容**逐字等于候选 `new`**
+- [x] 未变化项（未被 Dream 提议的文件）sha 不变 —— 「只写变化项」成立
+- [x] 丢弃 → 正式文件 sha 逐字节不变、候选清空
+- [x] 回退开关：`requireReview=false` + 重启 serve → `/dream` 不再产生候选，正式文件被**直落改写**（回到旧行为）；验完已恢复 `true`
+  - ⚠️ 改配置必须重启 serve 才生效（`DreamConfig` 在启动装配时读入），脚本分 `--apply` / `--restore` 两步，配置备份为 `nanowork.config.json.bak-b3`
+
+> ⚠️ **Dream 的输入只有 `memory/history.jsonl`，而它由「会话归档（上下文压缩）」写入**，不是每轮对话都写。所以「发几条消息再 `/dream`」通常得到 `nothing to process`（本轮实测：300s 无候选、日志停在同一行）。验收脚本用引擎自己的 `MemoryStore.append_history()` 造素材（含游标分配与 `strip_think`，**不是手改 JSONL**），素材之后仍走真实链路。
+>  ⇒ 产品含义：全新机器/新工作区、还没发生过会话归档时，Dream 会一直「无内容可整理」。这不是 bug，但界面上应说清「还没攒够会话」而不是让用户以为功能坏了。
 
 ### C.3 B3-03 IM 内审批（FR-6.5）
 - [ ] 微信 / 飞书渠道 `tool_approval:"ask"` 已配、且重启不被启动同步抹掉（已修 `CARRIED_OVER_ENGINE_KEYS` + feishu 段级唯一权威 `SECTION_ONLY_KEYS`）

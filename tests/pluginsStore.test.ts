@@ -61,6 +61,7 @@ function engineIndex(...names: Array<[string, boolean]>): PluginEngineIndex {
       category: '',
       enabled,
       mcpServers: [],
+      hooks: { active: 0, events: {}, dropped: 0 },
       market: null,
       version: null,
     })),
