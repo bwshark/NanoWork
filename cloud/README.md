@@ -170,6 +170,81 @@ POST /api/kbs/{kbId}/documents/file
 **未做**：`.xlsx` / `.pptx`、OCR、图片内文字、`.doc`（二进制格式）；PDF 只取文本层，
 不保留版面与表格结构。
 
+## 部门与「按部门收窄」的知识库（FR-12.2 / FR-4.7）
+
+部门树用来把知识库的可见范围收窄到「某几条线的人」。规则只有一条，写在
+`app/kb/visibility.py::allows()`：
+
+```
+admin / owner  → 一律可见（管理豁免）
+member         → 角色 ∈ allowed_roles  AND  ( 不按部门收窄 OR 我直属的部门 ∈ 允许集合的子树 )
+```
+
+四条容易搞反的地方：
+
+1. **部门是收窄，不是放行**。反过来（部门作为一条放行通道）会让「只给人事部看」失效：
+   任何 member 都能靠角色那一路进来。
+2. **子树方向只有一个**：把「允许的部门」往下展开，再和「我直属的部门」求交。反着算
+   （把我的部门往下展开）会漏掉「人在子部门、库共享给父部门」——那是共享语义的一半。
+3. **管理豁免**：admin/owner 始终可见可改。少了它会出现死锁——一个只给「人事部」看的库，
+   管理员不在人事部时既看不到也改不了范围，而改范围只有管理员能做。
+4. **两个入口同一条规则**：列表、直连（`_kb_or_404`）、检索预过滤都走 `allows()`。
+   分开写就会长出「列表看不到、按 id 却读得到」这种组合漏洞。
+
+接口：
+
+```http
+GET    /api/orgs/{orgId}/departments            # 父在子前的扁平列表（客户端按 parentId 缩进）
+POST   /api/orgs/{orgId}/departments            # {name, parentId?}  admin
+PATCH  /api/departments/{id}                    # {name}            admin
+DELETE /api/departments/{id}                    # admin；有子部门/成员/被库引用 → 409
+GET    /api/departments/{id}/members
+POST   /api/departments/{id}/members            # {email}  要求已是组织成员
+DELETE /api/departments/{id}/members/{userId}
+```
+
+建库时带 `allowedDepartments: ["<deptId>"]` 即收窄；`[]` = 不按部门收窄。
+
+**未做**：换父节点（移动部门）、部门级角色（现在部门只有归属）、界面上改库范围的入口。
+
+## 文档生命周期：判重 / 删除 / 改名 / 写入权限
+
+```http
+GET    /api/kbs/{kbId}/documents                # 列表：kind + 每篇已建向量条数
+POST   /api/kbs/{kbId}/documents                # 粘贴入库（判重 → 重复返回 409）
+POST   /api/kbs/{kbId}/documents/file           # 文件入库（解析后同样判重）
+PATCH  /api/kbs/{kbId}/documents/{docId}        # 改名（内容不动）
+DELETE /api/kbs/{kbId}/documents/{docId}        # 删除（连同块与向量）
+```
+
+四条口径：
+
+1. **读写分权**：`allowed_roles` 只控制**读**；入库 / 上传 / 改名 / 删除要求 **admin**。
+   否则「全员可见的制度库」上任何成员都能删别人的资料。这是写侧加门槛、读侧不动。
+2. **判重按内容、作用域是本库**：摘要按**切好的块**算（`app/kb/digest.py`），所以换行/缩进
+   差异骗不过去；跨库同内容是正常用法，不拦。重复返回 **409** 并点名「已在库里的是《X》」。
+3. **删除要删三张表**：`kb_vectors` → `kb_chunks` → `kb_documents`。只删文档行会留下
+   **孤儿块**——它们带着 kb_id，照样被检索命中，于是「列表里没有它、结果里有它」。
+4. **判重不会把人锁在门外**：删掉之后同内容可以重新入库（有用例钉住）。
+
+成员/只读身份调写接口一律 403；跨库拿别人的 `kbId` 删文档一律 404（`doc.kb_id != kb.id`）。
+
+## 加字段：先改模型，再登记迁移
+
+`create_all()` **不会**给已存在的表加列。所以新增字段要动两处：
+
+1. `app/kb/models.py`（或对应模块）里加字段；
+2. `app/migrations.py` 的 `ADDED_COLUMNS` 登记一行 `(表, 列, DDL)`，**必须带 `DEFAULT`**
+   （已有行要能立刻取到值）；需要索引的再往 `ADDED_INDEXES` 加一行。
+
+启动时 `create_db_and_tables()` 会先 `create_all`（建缺失的表）再 `ensure_columns`
+（给老库补列/索引），幂等，改动会打 warning 日志。
+
+三条限制是刻意的：**只加、不改、不删**。`DROP COLUMN` 在旧 SQLite 上不支持，而「悄悄
+删列」在存档型数据上不会报错、只会让用户的数据静默消失。要改语义就加新列 + 回填。
+
+判据：`tests/test_migrations.py`（老形状表 → 跑迁移 → 列出现 / 老行拿到默认值 / 第二次是空操作）。
+
 ## 两条服务端不变量（改这块前必读）
 
 1. **`updated_at` 取服务端接收时间**（§5.3）：客户端上报的时间只存进

@@ -168,6 +168,52 @@ describe('syncAccount：refresh 轮换', () => {
     await expect(account.refresh()).resolves.toBe(false);
     expect(calls).toHaveLength(0);
   });
+
+  /**
+   * 并发刷新必须**单飞**。
+   *
+   * 服务端的 `/api/auth/refresh` 是轮换 + 重用检测制：旧票换掉后标记 revoked 并指向
+   * 新票，同一张旧票**再用第二次即判定为重放、整条链吊销**。所以这里不是「省一次
+   * 请求」的性能优化，而是「点开知识库会不会被退出登录」的正确性问题 —— 知识库页
+   * 首屏就是 3~4 个并发请求，过期时它们会一起回 401。
+   */
+  it('并发 refresh 合并成一次请求（第二次用旧票会被服务端判成重放）', async () => {
+    let resolveRefresh: ((value: Response) => void) | null = null;
+    const { impl, calls } = makeFetch((_url, _init, call) => {
+      if (call === 0) return jsonResponse(pair('a1', 'r1'));
+      // 挂住刷新响应，保证三个调用者都落在同一个在途请求上
+      return new Promise<Response>((resolve) => {
+        resolveRefresh = resolve;
+      });
+    });
+    const account = createMemorySyncAccount({ baseUrl: 'http://x', fetchImpl: impl });
+    await account.login('u@example.com', 'pw');
+
+    const first = account.refresh();
+    const second = account.refresh();
+    const third = account.refresh();
+    await vi.waitFor(() => expect(resolveRefresh).not.toBeNull());
+    resolveRefresh!(jsonResponse(pair('a2', 'r2')));
+
+    await expect(Promise.all([first, second, third])).resolves.toEqual([true, true, true]);
+    // 登录 1 次 + 刷新 1 次：三次调用只打了一次 /api/auth/refresh
+    expect(calls.filter((call) => call.url === 'http://x/api/auth/refresh')).toHaveLength(1);
+    expect(account.getAccessToken()).toBe('a2');
+  });
+
+  it('刷新失败之后再刷新会重新发请求（闸门不能永久焊死）', async () => {
+    const { impl, calls } = makeFetch((_url, _init, call) => {
+      if (call === 0) return jsonResponse(pair('a1', 'r1'));
+      if (call === 1) return jsonResponse({ detail: '网络抖动' }, 500);
+      return jsonResponse(pair('a2', 'r2'));
+    });
+    const account = createMemorySyncAccount({ baseUrl: 'http://x', fetchImpl: impl });
+    await account.login('u@example.com', 'pw');
+
+    await expect(account.refresh()).resolves.toBe(false);
+    await expect(account.refresh()).resolves.toBe(true);
+    expect(calls.filter((call) => call.url === 'http://x/api/auth/refresh')).toHaveLength(2);
+  });
 });
 
 describe('syncAccount：登出', () => {

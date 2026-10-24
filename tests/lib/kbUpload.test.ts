@@ -8,9 +8,11 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  KB_KIND_LABELS,
   KB_MAX_UPLOAD_BYTES,
   KB_UPLOAD_ACCEPT,
   formatBytesLabel,
+  kindLabel,
   precheckUpload,
 } from '@/lib/kbUpload';
 
@@ -59,5 +61,22 @@ describe('precheckUpload', () => {
     for (const ext of KB_UPLOAD_ACCEPT.split(',')) {
       expect(precheckUpload({ name: `x${ext}`, size: 10 })).toBeNull();
     }
+  });
+});
+
+describe('来源格式的中文名', () => {
+  it('三种已知格式都有中文名（缺一个界面上就是裸英文）', () => {
+    expect(Object.keys(KB_KIND_LABELS).sort()).toEqual(['docx', 'pdf', 'text']);
+    expect(kindLabel('pdf')).toBe('PDF');
+    expect(kindLabel('docx')).toBe('Word');
+  });
+
+  it('缺省当纯文本：老接口没回 kind 时列表不该出现 undefined', () => {
+    expect(kindLabel(undefined)).toBe('纯文本');
+    expect(kindLabel('')).toBe('纯文本');
+  });
+
+  it('未知格式原样返回（后端将来加了 xlsx，显示 xlsx 也比空白强）', () => {
+    expect(kindLabel('xlsx')).toBe('xlsx');
   });
 });

@@ -41,10 +41,20 @@ function makeGateway(overrides: Partial<KbGateway> = {}): KbGateway {
     listDocuments: vi.fn().mockResolvedValue({ ok: true, data: [] }),
     uploadDocument: vi.fn(),
     uploadFile: vi.fn(),
+    renameDocument: vi.fn(),
+    deleteDocument: vi.fn(),
     search: vi.fn(),
     // 选择器本身不用这两个（它们是知识库页的能力），但网关类型要求齐全
     retrievalInfo: vi.fn(),
     reindex: vi.fn(),
+    // 部门相关是知识库页的能力，选择器不用；但网关类型要求齐全
+    listDepartments: vi.fn(),
+    createDepartment: vi.fn(),
+    renameDepartment: vi.fn(),
+    deleteDepartment: vi.fn(),
+    listDepartmentMembers: vi.fn(),
+    addDepartmentMember: vi.fn(),
+    removeDepartmentMember: vi.fn(),
     ...overrides,
   };
 }

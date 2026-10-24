@@ -43,7 +43,12 @@ export interface SyncAccount {
   login(email: string, password: string): Promise<AccountSession>;
   /** 邮箱 + 密码注册；成功后写入会话 */
   register(email: string, password: string): Promise<AccountSession>;
-  /** 用 refresh token 轮换出新的 access / refresh；成功返回 true（失败**不清会话**） */
+  /**
+   * 用 refresh token 轮换出新的 access / refresh；成功返回 true（失败**不清会话**）。
+   *
+   * **并发调用会合并在途请求**（同一时刻只发一次）：服务端把「旧票用第二次」当重放，
+   * 见实现处的说明。调用方可以放心并发调用。
+   */
   refresh(): Promise<boolean>;
   /** 登出：尽力通知服务端，随后清空本地会话（网络失败也清） */
   logout(): Promise<void>;
@@ -208,6 +213,41 @@ function createSyncAccount(
     refresh: pair.refresh,
   });
 
+  const refreshOnce = async (): Promise<boolean> => {
+    if (session === null) return false;
+    try {
+      const pair = await postJson<TokenPairBody>('/api/auth/refresh', {
+        refresh: session.refresh,
+      });
+      // 轮换成功：用新对覆盖，但**不清会话**（userId / email 不变）
+      await apply(toSession(pair));
+      return true;
+    } catch {
+      // 轮换失败（401 / 网络）：**不清会话**——UI 据此提示「重新登录」，
+      // 而不是把用户踢回未登录、丢掉本地状态
+      return false;
+    }
+  };
+
+  /*
+   * 刷新**必须单飞**：服务端的 `/api/auth/refresh` 是轮换 + 重用检测制 —— 旧 refresh
+   * 被换掉后标记 revoked 并指向新票，同一张旧票**再用第二次即判定为重放**，整条轮换链
+   * 一起吊销（用户被迫重新登录）。
+   *
+   * 并发来源是真实存在的：进入知识库页会同时发 3~4 个请求（组织 / 库 / 文档 / 检索），
+   * 过期时它们会一起回 401；`SyncClient` 的多条同步路径同理。没有这道闸门，第二个
+   * 调用者就会拿已被消耗的票去换，症状是「点开知识库 = 被退出登录」。
+   */
+  let refreshInFlight: Promise<boolean> | null = null;
+  const refreshSession = (): Promise<boolean> => {
+    if (refreshInFlight) return refreshInFlight;
+    refreshInFlight = refreshOnce().finally(() => {
+      // 落定后立刻放开：下一次过期（30 分钟后）还得能再换一次
+      refreshInFlight = null;
+    });
+    return refreshInFlight;
+  };
+
   return {
     isAuthenticated: () => session !== null && session.access.trim() !== '',
     getAccessToken: () =>
@@ -241,21 +281,7 @@ function createSyncAccount(
       return next;
     },
 
-    async refresh(): Promise<boolean> {
-      if (session === null) return false;
-      try {
-        const pair = await postJson<TokenPairBody>('/api/auth/refresh', {
-          refresh: session.refresh,
-        });
-        // 轮换成功：用新对覆盖，但**不清会话**（userId / email 不变）
-        await apply(toSession(pair));
-        return true;
-      } catch {
-        // 轮换失败（401 / 网络）：**不清会话**——批次 4 的 UI 据此提示「重新登录」，
-        // 而不是把用户踢回未登录、丢掉本地状态
-        return false;
-      }
-    },
+    refresh: refreshSession,
 
     async logout(): Promise<void> {
       const access = session?.access;

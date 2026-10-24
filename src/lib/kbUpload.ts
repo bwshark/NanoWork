@@ -24,6 +24,19 @@ export function formatBytesLabel(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+/** 来源格式的中文名。列表里显示「PDF / Word」比显示 `pdf / docx` 更省一次翻译。 */
+export const KB_KIND_LABELS: Record<string, string> = {
+  text: '纯文本',
+  docx: 'Word',
+  pdf: 'PDF',
+};
+
+/** 未知格式原样返回：后端将来加了 `.xlsx` 时，界面显示 `xlsx` 也比显示空白强。 */
+export function kindLabel(kind: string | undefined): string {
+  if (!kind) return KB_KIND_LABELS.text;
+  return KB_KIND_LABELS[kind] ?? kind;
+}
+
 /**
  * 上传前预检；返回错误文案，`null` = 通过。
  *

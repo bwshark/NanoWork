@@ -22,6 +22,7 @@ from app.account import routes as account_routes
 from app.auth import routes as auth_routes
 from app.db import create_db_and_tables
 from app.kb import routes as kb_routes
+from app.orgs import department_routes
 from app.orgs import routes as org_routes
 from app.sync import routes as sync_routes
 
@@ -63,6 +64,7 @@ app.add_middleware(
 app.include_router(auth_routes.router)
 app.include_router(sync_routes.router)
 app.include_router(org_routes.router)
+app.include_router(department_routes.router)
 app.include_router(kb_routes.router)
 app.include_router(account_routes.router)
 

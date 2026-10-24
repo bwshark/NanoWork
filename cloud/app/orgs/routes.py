@@ -15,6 +15,8 @@ from app.auth.deps import current_user, user_by_email
 from app.auth.models import User
 from app.auth.security import new_user_id
 from app.db import get_session
+from app.orgs.guards import membership_or_404 as _membership_or_404
+from app.orgs.guards import require_role as _require_role
 from app.orgs.models import Organization, OrgMember
 from app.orgs.roles import (
     ROLE_ADMIN,
@@ -22,7 +24,6 @@ from app.orgs.roles import (
     ROLE_OWNER,
     can_grant,
     is_valid_role,
-    role_at_least,
 )
 from app.timeutil import iso_z
 
@@ -55,19 +56,6 @@ class AddMemberRequest(BaseModel):
 
 class UpdateRoleRequest(BaseModel):
     role: str
-
-
-def _membership_or_404(session: Session, org_id: str, user: User) -> OrgMember:
-    """取调用者在该组织里的成员记录；不是成员一律 404（不回 403，见模块注释）。"""
-    member = session.get(OrgMember, (org_id, user.id))
-    if member is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="组织不存在")
-    return member
-
-
-def _require_role(member: OrgMember, minimum: str) -> None:
-    if not role_at_least(member.role, minimum):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="权限不足")
 
 
 def _owner_count(session: Session, org_id: str) -> int:

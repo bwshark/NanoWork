@@ -15,3 +15,4 @@ export * from './SyncEngine';
 export * from './runtime';
 export * from './useSyncRuntime';
 export * from './useSyncStatus';
+export * from './kbGateway';

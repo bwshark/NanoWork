@@ -6,6 +6,11 @@
 **查询的一部分**，否则就成了「先全量取出来再在内存里筛」，也就是 PRD 明确反对的
 「检索后过滤」。
 
+⚠️ 给本模块的表加字段时：`create_all` 不会 ALTER 已存在的表，所以**必须同时**在
+`app/migrations.py` 的 `ADDED_COLUMNS` 里登记一行（带 `DEFAULT`），否则老库上这一列
+永远不存在，而测试库每次重建、看不出来。有了 `ensure_columns` 之后，
+「为了加一个字段去建旁表」就不再必要 —— 旁表只应因为建模需要而存在。
+
 `allowed_roles` 存 JSON 文本（`["member","admin"]`）而不是建关联表：
 它是**一个库的三个枚举值**，不是可扩展的权限矩阵；建表会让「加一个角色」
 变成一次迁移。代价是 SQL 里不能直接按角色过滤——所以过滤写成
@@ -70,6 +75,12 @@ class KbDocument(SQLModel, table=True):
     #: 两处都存就必然出现「改了一处忘了另一处」，而检索只认块。
     chars: int = 0
     chunk_count: int = 0
+    #: 内容摘要（按**切好的块**算，见 `kb/digest.py`）。用于「同一篇重复入库」判重。
+    #: 空串 = 这一行产生于该字段存在之前（`migrations.ADDED_COLUMNS` 的默认值），
+    #: 读的时候要按「没有摘要」处理，写入时由 `routes._backfill_hashes` 懒回填。
+    content_hash: str = Field(default="", index=True)
+    #: 来源格式：text（粘贴 / 纯文本）/ docx / pdf。列表要显示，用户才知道那篇是 PDF。
+    kind: str = "text"
     created_by: str = Field(index=True)
     created_at: datetime = Field(default_factory=utc_now)
 
@@ -115,3 +126,25 @@ class KbVector(SQLModel, table=True):
     #: `array('f')` 打包后的小端 float32 字节
     vector: bytes = b""
     created_at: datetime = Field(default_factory=utc_now)
+
+
+class KnowledgeBaseDepartment(SQLModel, table=True):
+    """知识库的「部门可见范围」（2026-10-24）。
+
+    ## 为什么是独立表，而不是给 `knowledge_bases` 加一列 JSON
+
+    同 `KbVector` 的理由：`create_all` 不会 ALTER 已存在的表。本机 `cloud.db` 里
+    `knowledge_bases` 早就有了，加列在启动时**静默不生效**，随后查询直接炸；
+    而测试库每次重建，永远看不出来。独立表则一定被建出来。
+
+    附带好处：`department_id` 上有索引，「某部门能看到哪些库」可以走 SQL，
+    不必把整张知识库表拉到内存里解析 JSON。
+
+    ⚠️ 语义是**收窄**不是放行：`allowed_roles` 说「哪些角色能看」，
+    这张表说「还必须属于这些部门」。表里没有行 = 不按部门收窄（向后兼容）。
+    """
+
+    __tablename__ = "kb_departments"  # type: ignore[assignment]
+
+    kb_id: str = Field(primary_key=True, foreign_key="knowledge_bases.id")
+    department_id: str = Field(primary_key=True, index=True, foreign_key="departments.id")

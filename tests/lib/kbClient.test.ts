@@ -5,10 +5,14 @@ import {
   createOrg,
   listKbs,
   listMyOrgs,
+  deleteKbDocument,
+  KB_DUPLICATE_STATUS,
   reindexKb,
+  renameKbDocument,
   retrievalInfo,
   searchOrgKbs,
   uploadDocument,
+  uploadKbFile,
 } from '@/lib/kbClient';
 
 /**
@@ -194,5 +198,43 @@ describe('向量检索的两个端点', () => {
     expect(calls[0].url).toBe('https://cloud.example.com/api/kbs/k1/reindex');
     expect(calls[0].init.method).toBe('POST');
     expect(result.ok && result.data.indexed).toBe(3);
+  });
+});
+
+describe('文档改名 / 删除', () => {
+  it('改名走 PATCH 同一路径，body 只带 title（内容不重传，也就不会重复切块）', async () => {
+    const { fetchImpl, calls } = stubFetch(() => ({ status: 200, body: { id: 'd1', title: '新标题' } }));
+    await renameKbDocument({ baseUrl: BASE, token: 'tk', fetchImpl }, 'k1', 'd 1', '新标题');
+
+    expect(calls[0].url).toBe('https://cloud.example.com/api/kbs/k1/documents/d%201');
+    expect(calls[0].init.method).toBe('PATCH');
+    expect(JSON.parse(String(calls[0].init.body))).toEqual({ title: '新标题' });
+  });
+
+  it('删除走 DELETE 且不解析响应体（204 没有 body，解析会变成「响应格式异常」）', async () => {
+    const { fetchImpl, calls } = stubFetch(() => ({ status: 204 }));
+    const result = await deleteKbDocument({ baseUrl: BASE, token: 'tk', fetchImpl }, 'k1', 'd1');
+
+    expect(calls[0].init.method).toBe('DELETE');
+    expect(result.ok).toBe(true);
+  });
+
+  it('判重（409）保留服务端原话：界面靠这句话说清「已在库里的是哪一篇」', async () => {
+    const { fetchImpl } = stubFetch(() => ({
+      status: 409,
+      body: { detail: '这篇内容已经在库里了（《差旅制度》），没有重复入库。' },
+    }));
+    const result = await uploadKbFile(
+      { baseUrl: BASE, token: 'tk', fetchImpl },
+      'k1',
+      { filename: 'a.docx', contentBase64: 'YQ==' },
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      status: KB_DUPLICATE_STATUS,
+      message: '这篇内容已经在库里了（《差旅制度》），没有重复入库。',
+      unauthorized: false,
+    });
   });
 });

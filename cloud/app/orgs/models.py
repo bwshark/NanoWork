@@ -1,4 +1,4 @@
-"""组织与成员（FR-12.2 的最小骨架：部门树先不做，角色先做四级里的三级）。
+"""组织、成员与部门树（FR-12.2；部门于 2026-10-24 补上）。
 
 为什么先做这一层：M7 知识库的核心验收标准是「按部门/角色设访问范围；**检索前过滤而非
 检索后过滤**」——没有「组织 + 成员 + 角色」就没有可过滤的维度。先上知识库再补组织，
@@ -8,8 +8,18 @@
 那是**跨租户**的运维角色（FR-12.1 多租户 / FR-12.8 多形态部署），没有租户概念之前
 引入它只会在每个判断里多一个永远为假的分支。
 
-两张表、无软删除：组织成员是「当下的关系」，删了就是删了；审计侧由 Cloud 的
+无软删除：组织成员是「当下的关系」，删了就是删了；审计侧由 Cloud 的
 应用日志承担（FR-12.4 尚未做，见文档）。
+
+## 部门的两个设计点
+
+1. **`parent_id` 用空串表示「根」，不用 NULL**：SQLite / PostgreSQL 的唯一索引都把
+   NULL 视作互不相等，用 NULL 做根的话「同一个组织下不能有两个同名根部门」这条
+   约束会静默失效，症状是列表里出现两条一模一样的部门。
+2. **成员关系单独一张表**（`department_members`），不给 `OrgMember` 加 `department_id` 列：
+   `create_all` **不会 ALTER 已存在的表**——本机 `cloud.db` 里 `org_members` 早就有了，
+   加列在启动时静默不生效，随后任何 `SELECT department_id` 都会在真机炸，而测试库
+   每次重建，永远看不出来。另一个好处是一个人可以在多个部门（矩阵组织）里。
 """
 
 from __future__ import annotations
@@ -43,4 +53,32 @@ class OrgMember(SQLModel, table=True):
     org_id: str = Field(primary_key=True, foreign_key="organizations.id")
     user_id: str = Field(primary_key=True, index=True)
     role: str = Field(index=True)
+    joined_at: datetime = Field(default_factory=utc_now)
+
+
+class Department(SQLModel, table=True):
+    """部门（组织内的树）。`parent_id` 为空串 = 根，见模块注释第 1 条。"""
+
+    __tablename__ = "departments"  # type: ignore[assignment]
+
+    id: str = Field(primary_key=True)
+    org_id: str = Field(index=True, foreign_key="organizations.id")
+    #: 父部门 id；空串 = 根
+    parent_id: str = Field(default="", index=True)
+    name: str = Field(index=True)
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class DepartmentMember(SQLModel, table=True):
+    """(department_id, user_id) 复合主键：同一人在同一部门只能有一条。
+
+    `org_id` 冗余存一份：按组织统计/清理时不必回表 join，而它的值只可能来自
+    部门的 `org_id`（写入时校验），因此没有"两处不一致"的风险。
+    """
+
+    __tablename__ = "department_members"  # type: ignore[assignment]
+
+    department_id: str = Field(primary_key=True, foreign_key="departments.id")
+    user_id: str = Field(primary_key=True, index=True)
+    org_id: str = Field(index=True)
     joined_at: datetime = Field(default_factory=utc_now)

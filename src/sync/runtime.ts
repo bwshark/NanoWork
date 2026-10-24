@@ -202,6 +202,14 @@ export function createSyncRuntime(opts: SyncRuntimeOptions = {}): SyncRuntime {
     const gateway = createKbGateway({
       baseUrl: (opts.baseUrl ?? resolveSyncBaseUrl()).replace(/\/+$/, ''),
       token,
+      /*
+       * 检索发生在**轮次之间**，而 access token 30 分钟就过期：只带一份快照，过期后
+       * 每一轮都会静默变成「本轮没资料」（引擎侧只看到一条 401）。所以这里给实时取票
+       * + 换票，让检索链路自己自愈 —— `account.refresh()` 是单飞的，并发轮次不会
+       * 把同一张 refresh 用两次。
+       */
+      getToken: () => account.getAccessToken(),
+      refreshToken: () => account.refresh(),
       fetchImpl: opts.fetchImpl,
     });
     return gateway.search(orgId, {

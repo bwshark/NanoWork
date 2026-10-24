@@ -20,8 +20,26 @@
 export interface KbClientConfig {
   /** 云端根地址（`resolveSyncBaseUrl()` 的产物），尾部斜杠会被去掉 */
   baseUrl: string;
-  /** 当前 access token；`null` 表示未登录（调用方应先拦掉） */
+  /** 当前 access token 的**静态快照**；`null` 表示未登录。有 `getToken` 时以它为准 */
   token: string | null;
+  /**
+   * 实时取 access token（优先于 `token`）。
+   *
+   * 为什么需要它：配置对象是**页面挂载时建一次**的，而 access token 只有 30 分钟寿命
+   * （`cloud/app/auth/security.py` 的 `ACCESS_TTL`）。把票拷进配置，就等于把
+   * 「半小时后必然 401」写死进页面 —— 之后即使同步引擎已经换过新票，这里仍是旧的。
+   */
+  getToken?: () => string | null;
+  /**
+   * 收到 401 时换一张新票；返回 `true` = 已拿到新票，可以重放一次原请求。
+   *
+   * ⚠️ 实现方**必须自己单飞**：服务端的 `/api/auth/refresh` 是**轮换 + 重用检测**
+   * 制 —— 旧 refresh 换掉后会被标记 revoked 并指向新票，同一张旧票再用第二次会被
+   * 判定为重放，**整条轮换链一起吊销**（用户被迫重新登录）。而页面首屏就是 3~4 个
+   * 并发请求，遇到过期会同时回 401。生产实现传的是 `syncAccount.refresh()`，
+   * 它自带在途合并。
+   */
+  refreshToken?: () => Promise<boolean>;
   /** 注入 fetch（用例用桩；运行时不传即全局 fetch） */
   fetchImpl?: typeof fetch;
 }
@@ -46,8 +64,33 @@ export interface KbSummary {
   description: string;
   /** 可见角色；界面据此解释「为什么同事看不到这个库」 */
   allowedRoles: string[];
+  /**
+   * 部门范围（**收窄**）：空 = 不按部门收窄。
+   *
+   * 非空时只有「属于这些部门（含子部门）的成员」能看到——普通成员要同时满足
+   * 角色与部门；管理员豁免（否则会出现「建完就看不见、也改不了范围」的死锁）。
+   */
+  allowedDepartments: string[];
   documentCount: number;
   createdAt: string;
+}
+
+/** 组织内的一个部门（树用一个扁平列表表示，`parentId` 为空串即根）。 */
+export interface KbDepartment {
+  id: string;
+  orgId: string;
+  parentId: string;
+  name: string;
+  memberCount: number;
+  createdAt: string;
+}
+
+export interface KbDepartmentMember {
+  userId: string;
+  email: string;
+  /** 该用户在**组织**里的角色（部门本身没有角色，只有归属） */
+  role: string;
+  joinedAt: string;
 }
 
 export interface KbDocument {
@@ -110,8 +153,26 @@ export const KB_ROLE_LABELS: Record<string, string> = {
   member: '成员',
 };
 
+/**
+ * 入库被判重（HTTP 409）。
+ *
+ * 单独导出一个判据而不是让调用方写 `status === 409`：重复入库**不是错误**，
+ * 是「这篇已经在库里了」。界面上它该是一条提示，而不是一条红色报错 ——
+ * 这两者混起来，用户会去查「为什么上传失败了」。
+ */
+export const KB_DUPLICATE_STATUS = 409;
+
 /** 未登录时的统一文案：调用方不必各自编一句。 */
 export const KB_LOGIN_REQUIRED = '知识库在云端，需要先登录账户';
+
+/**
+ * 「已登录，但这张票不能用了」的文案（401 且刷新也失败）。
+ *
+ * 必须与 `KB_LOGIN_REQUIRED` 分开：两者在用户眼里是**相反**的事实。access token
+ * 只有 30 分钟寿命，过期是常态；页面上却写着「需要先登录账户」，而侧边栏同一时刻
+ * 显示着登录邮箱 —— 用户看到的就是一句自相矛盾的话。
+ */
+export const KB_SESSION_EXPIRED = '登录状态已过期，需要重新登录';
 
 /**
  * 连不上云端时**补一句怎么把它拉起来**。
@@ -127,23 +188,53 @@ function normalizeBaseUrl(baseUrl: string): string {
   return baseUrl.replace(/\/+$/, '');
 }
 
+/**
+ * 取这次请求该用的票。
+ *
+ * `getToken` 存在时**只信它**（哪怕它回 `null`）：`token` 是快照，快照过期后继续拿它
+ * 去请求，就会得到一串「明知道会 401 的请求」。
+ */
+function currentToken(config: KbClientConfig): string | null {
+  if (config.getToken) return config.getToken();
+  return config.token;
+}
+
 async function request<T>(
   config: KbClientConfig,
   path: string,
   init: { method?: string; body?: unknown } = {},
 ): Promise<KbApiResult<T>> {
   const fetchImpl = config.fetchImpl ?? fetch;
-  const headers: Record<string, string> = {};
-  if (config.token) headers.Authorization = `Bearer ${config.token}`;
-  if (init.body !== undefined) headers['Content-Type'] = 'application/json';
+  const baseHeaders: Record<string, string> = {};
+  if (init.body !== undefined) baseHeaders['Content-Type'] = 'application/json';
+  const url = `${normalizeBaseUrl(config.baseUrl)}${path}`;
+
+  const send = (token: string | null): Promise<Response> =>
+    fetchImpl(url, {
+      method: init.method ?? 'GET',
+      headers: token ? { ...baseHeaders, Authorization: `Bearer ${token}` } : baseHeaders,
+      body: init.body === undefined ? undefined : JSON.stringify(init.body),
+    });
 
   let response: Response;
   try {
-    response = await fetchImpl(`${normalizeBaseUrl(config.baseUrl)}${path}`, {
-      method: init.method ?? 'GET',
-      headers,
-      body: init.body === undefined ? undefined : JSON.stringify(init.body),
-    });
+    response = await send(currentToken(config));
+    /*
+     * 401 → 刷新一次 → 重放一次（与 `SyncClient.request` 同一套语义，只重试一次）。
+     *
+     * 重放前必须**重新取票**：刷新成功后新票在 account 里，config 上的快照还是旧的。
+     * 刷新后仍 401 说明不是「access 过期」而是「凭据整体失效」（refresh 被吊销 /
+     * 账户已删），此时继续重试只会把无效凭据反复打上去。
+     *
+     * 并发安全由 `refreshToken` 的实现方负责（`syncAccount.refresh()` 是单飞的）：
+     * 本层的 3~4 个并发请求会**等同一个**刷新结果，不会把同一张 refresh 用两次。
+     */
+    if (response.status === 401 && config.refreshToken) {
+      // 刷新抛错与返回 false 等价（都是「拿不到新票」）：不能让它落进下面的 catch，
+      // 那会把「票过期」误报成「无法连接云端服务」
+      const refreshed = await config.refreshToken().catch(() => false);
+      if (refreshed) response = await send(currentToken(config));
+    }
   } catch {
     // 网络层失败（断网 / 服务未起）：不给 status，让界面说「连不上」而不是「500」。
     // 文案带上**实际请求的地址**：同一个界面可能连本机 / 联调 / 正式三台，
@@ -195,8 +286,26 @@ export interface KbGateway {
   listKbs(orgId: string): Promise<KbApiResult<KbSummary[]>>;
   createKb(
     orgId: string,
-    input: { name: string; description?: string; allowedRoles?: string[] },
+    input: {
+      name: string;
+      description?: string;
+      allowedRoles?: string[];
+      allowedDepartments?: string[];
+    },
   ): Promise<KbApiResult<KbSummary>>;
+  listDepartments(orgId: string): Promise<KbApiResult<KbDepartment[]>>;
+  createDepartment(
+    orgId: string,
+    input: { name: string; parentId?: string },
+  ): Promise<KbApiResult<KbDepartment>>;
+  renameDepartment(departmentId: string, name: string): Promise<KbApiResult<KbDepartment>>;
+  deleteDepartment(departmentId: string): Promise<KbApiResult<undefined>>;
+  listDepartmentMembers(departmentId: string): Promise<KbApiResult<KbDepartmentMember[]>>;
+  addDepartmentMember(
+    departmentId: string,
+    email: string,
+  ): Promise<KbApiResult<KbDepartmentMember>>;
+  removeDepartmentMember(departmentId: string, userId: string): Promise<KbApiResult<undefined>>;
   listDocuments(kbId: string): Promise<KbApiResult<KbDocument[]>>;
   uploadDocument(
     kbId: string,
@@ -207,6 +316,10 @@ export interface KbGateway {
     kbId: string,
     input: { filename: string; contentBase64: string; title?: string },
   ): Promise<KbApiResult<KbDocument>>;
+  /** 改标题（内容与块都不动）；需要管理员 */
+  renameDocument(kbId: string, docId: string, title: string): Promise<KbApiResult<KbDocument>>;
+  /** 删文档（连同块与向量）；需要管理员 */
+  deleteDocument(kbId: string, docId: string): Promise<KbApiResult<undefined>>;
   search(
     orgId: string,
     input: { query: string; kbId?: string; kbIds?: string[]; topK?: number },
@@ -227,9 +340,20 @@ export function createKbGateway(config: KbClientConfig): KbGateway {
     listDocuments: (kbId) => listDocuments(config, kbId),
     uploadDocument: (kbId, input) => uploadDocument(config, kbId, input),
     uploadFile: (kbId, input) => uploadKbFile(config, kbId, input),
+    renameDocument: (kbId, docId, title) => renameKbDocument(config, kbId, docId, title),
+    deleteDocument: (kbId, docId) => deleteKbDocument(config, kbId, docId),
     search: (orgId, input) => searchOrgKbs(config, orgId, input),
     retrievalInfo: (kbId) => retrievalInfo(config, kbId),
     reindex: (kbId) => reindexKb(config, kbId),
+    listDepartments: (orgId) => listDepartments(config, orgId),
+    createDepartment: (orgId, input) => createDepartment(config, orgId, input),
+    renameDepartment: (departmentId, name) => renameDepartment(config, departmentId, name),
+    deleteDepartment: (departmentId) => deleteDepartment(config, departmentId),
+    listDepartmentMembers: (departmentId) => listDepartmentMembers(config, departmentId),
+    addDepartmentMember: (departmentId, email) =>
+      addDepartmentMember(config, departmentId, email),
+    removeDepartmentMember: (departmentId, userId) =>
+      removeDepartmentMember(config, departmentId, userId),
   };
 }
 
@@ -251,7 +375,12 @@ export function listKbs(config: KbClientConfig, orgId: string): Promise<KbApiRes
 export function createKb(
   config: KbClientConfig,
   orgId: string,
-  input: { name: string; description?: string; allowedRoles?: string[] },
+  input: {
+    name: string;
+    description?: string;
+    allowedRoles?: string[];
+    allowedDepartments?: string[];
+  },
 ): Promise<KbApiResult<KbSummary>> {
   return request<KbSummary>(config, `/api/orgs/${encodeURIComponent(orgId)}/kbs`, {
     method: 'POST',
@@ -315,6 +444,36 @@ export function searchOrgKbs(
   });
 }
 
+/** 改标题。内容不动，所以不重新切块、也不动向量（改错标题不该丢索引）。 */
+export function renameKbDocument(
+  config: KbClientConfig,
+  kbId: string,
+  docId: string,
+  title: string,
+): Promise<KbApiResult<KbDocument>> {
+  return request<KbDocument>(
+    config,
+    `/api/kbs/${encodeURIComponent(kbId)}/documents/${encodeURIComponent(docId)}`,
+    { method: 'PATCH', body: { title } },
+  );
+}
+
+/**
+ * 删文档。服务端会连同**块与向量**一起删（否则会留下检索得到、列表里却没有的
+ * 幽灵数据）。客户端不做任何本地清理：删完重新拉列表，界面上就是服务端的样子。
+ */
+export function deleteKbDocument(
+  config: KbClientConfig,
+  kbId: string,
+  docId: string,
+): Promise<KbApiResult<undefined>> {
+  return request<undefined>(
+    config,
+    `/api/kbs/${encodeURIComponent(kbId)}/documents/${encodeURIComponent(docId)}`,
+    { method: 'DELETE' },
+  );
+}
+
 /** 当前检索能力 + 索引覆盖率。`kbId` 缺省 = 全站口径。 */
 export function retrievalInfo(
   config: KbClientConfig,
@@ -332,4 +491,80 @@ export function reindexKb(
   return request<KbReindexResult>(config, `/api/kbs/${encodeURIComponent(kbId)}/reindex`, {
     method: 'POST',
   });
+}
+
+/** 组织里的部门树（**父在子前**的扁平顺序，按 parentId 缩进即可）。 */
+export function listDepartments(
+  config: KbClientConfig,
+  orgId: string,
+): Promise<KbApiResult<KbDepartment[]>> {
+  return request<KbDepartment[]>(config, `/api/orgs/${encodeURIComponent(orgId)}/departments`);
+}
+
+/** 建部门（要 admin）。`parentId` 省略 = 根。 */
+export function createDepartment(
+  config: KbClientConfig,
+  orgId: string,
+  input: { name: string; parentId?: string },
+): Promise<KbApiResult<KbDepartment>> {
+  return request<KbDepartment>(config, `/api/orgs/${encodeURIComponent(orgId)}/departments`, {
+    method: 'POST',
+    body: input,
+  });
+}
+
+export function renameDepartment(
+  config: KbClientConfig,
+  departmentId: string,
+  name: string,
+): Promise<KbApiResult<KbDepartment>> {
+  return request<KbDepartment>(config, `/api/departments/${encodeURIComponent(departmentId)}`, {
+    method: 'PATCH',
+    body: { name },
+  });
+}
+
+/** 删部门（要 admin；有子部门 / 有成员 / 被知识库引用时服务端会 409 并说明原因）。 */
+export function deleteDepartment(
+  config: KbClientConfig,
+  departmentId: string,
+): Promise<KbApiResult<undefined>> {
+  return request<undefined>(config, `/api/departments/${encodeURIComponent(departmentId)}`, {
+    method: 'DELETE',
+  });
+}
+
+export function listDepartmentMembers(
+  config: KbClientConfig,
+  departmentId: string,
+): Promise<KbApiResult<KbDepartmentMember[]>> {
+  return request<KbDepartmentMember[]>(
+    config,
+    `/api/departments/${encodeURIComponent(departmentId)}/members`,
+  );
+}
+
+/** 加人：要求对方**已经是组织成员**（部门不是邀请入口）。 */
+export function addDepartmentMember(
+  config: KbClientConfig,
+  departmentId: string,
+  email: string,
+): Promise<KbApiResult<KbDepartmentMember>> {
+  return request<KbDepartmentMember>(
+    config,
+    `/api/departments/${encodeURIComponent(departmentId)}/members`,
+    { method: 'POST', body: { email } },
+  );
+}
+
+export function removeDepartmentMember(
+  config: KbClientConfig,
+  departmentId: string,
+  userId: string,
+): Promise<KbApiResult<undefined>> {
+  return request<undefined>(
+    config,
+    `/api/departments/${encodeURIComponent(departmentId)}/members/${encodeURIComponent(userId)}`,
+    { method: 'DELETE' },
+  );
 }

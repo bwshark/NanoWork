@@ -5,10 +5,16 @@
 
 为什么不用 Alembic：MVP 只有三张表、字段随批次演进，`create_all()` 足够；
 等 schema 稳定（服务端开始长期存用户数据）再引入迁移工具。
+
+⚠️ 但 `create_all()` **不会给已存在的表加列** —— 这条限制已经逼着本项目绕了三次路
+（为加一个字段去建旁表）。所以这里补了一步 `migrations.ensure_columns()`：
+声明式 `ALTER TABLE … ADD COLUMN`，只加不改不删、幂等。仍然不是 Alembic
+（没有版本链 / 回滚 / 迁移脚本目录），但「加一列」不再需要设计一个替代方案。
 """
 
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import Iterator
 from pathlib import Path
@@ -44,10 +50,17 @@ def create_db_and_tables() -> None:
     # 这里显式 import：main.py 即便只 import db 也不会漏掉表。
     from app.auth import models as _auth_models  # noqa: F401
     from app.kb import models as _kb_models  # noqa: F401
+    from app.migrations import ensure_columns
     from app.orgs import models as _org_models  # noqa: F401
     from app.sync import models as _sync_models  # noqa: F401
 
     SQLModel.metadata.create_all(engine)
+    # 顺序不能反：create_all 先把缺失的表建出来，ensure_columns 只处理
+    # 「表已存在但列不全」的老库（新建库在这里是空操作）。
+    applied = ensure_columns(engine)
+    if applied:
+        # 打个日志而不是静默：出问题时运维要能知道「这次启动动过 schema」
+        logging.getLogger(__name__).warning("schema 迁移已执行 %d 条", len(applied))
 
 
 def get_session() -> Iterator[Session]:

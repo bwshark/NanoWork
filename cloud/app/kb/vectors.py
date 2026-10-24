@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from array import array
 
+from sqlalchemy import func
 from sqlmodel import Session, select
 
 from app.kb.models import KbChunk, KbVector
@@ -115,11 +116,31 @@ def load_vectors(
 
 
 def delete_vectors_for_doc(session: Session, *, doc_id: str) -> int:
-    """删掉一篇文档的全部向量（换模型重建前、或将来接删除文档时用）。"""
+    """删掉一篇文档的全部向量（**所有模型**）。
+
+    不按模型删：文档没了，它在任何模型下的向量都是垃圾。留着只会在
+    「换过 embedder」的库里悄悄占空间，并让覆盖率统计看起来比真实的多。
+    """
     rows = session.exec(select(KbVector).where(KbVector.doc_id == doc_id)).all()
     for row in rows:
         session.delete(row)
     return len(rows)
+
+
+def count_vectors_by_doc(session: Session, *, kb_id: str, model: str) -> dict[str, int]:
+    """每个文档已建好向量的块数（`doc_id → 条数`）。
+
+    一次 `GROUP BY` 而不是逐篇查：文档列表一次就是几十上百篇，
+    每篇一次往返会让「打开知识库」变成几十个串行请求。
+    """
+    if not model:
+        return {}
+    rows = session.exec(
+        select(KbVector.doc_id, func.count())
+        .where(KbVector.kb_id == kb_id, KbVector.model == model)
+        .group_by(KbVector.doc_id)
+    ).all()
+    return {doc_id: int(count) for doc_id, count in rows}
 
 
 def vector_coverage(session: Session, *, model: str, kb_id: str | None = None) -> tuple[int, int]:

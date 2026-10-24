@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Box,
   Button,
@@ -13,14 +13,14 @@ import {
 import {
   KB_LOGIN_REQUIRED,
   KB_OFFLINE_HINT,
-  createKbGateway,
+  KB_SESSION_EXPIRED,
   type KbApiResult,
   type KbGateway,
   type KbOrg,
   type KbSummary,
 } from '@/lib/kbClient';
-import { resolveSyncBaseUrl } from '@/sync/baseUrl';
-import { getSyncRuntime } from '@/sync/runtime';
+import { createRuntimeKbGateway } from '@/sync/kbGateway';
+import { useSyncRuntime } from '@/sync/useSyncRuntime';
 import type { AgentKnowledgeBinding } from '@/types';
 
 /**
@@ -55,8 +55,22 @@ export interface AgentKnowledgePickerProps {
 type Scope = 'all' | 'picked';
 
 export function AgentKnowledgePicker({ value, onChange, gateway }: AgentKnowledgePickerProps) {
-  const [client, setClient] = useState<KbGateway | null>(gateway ?? null);
-  const [needLogin, setNeedLogin] = useState(gateway === null);
+  /*
+   * 登录态订阅而非读一次：`initSyncRuntime()` 是异步的，本组件可能先于它挂载。
+   * 网关本身长期可用（票实时取、401 自动换票），故只在运行时变化时重建。
+   */
+  const runtime = useSyncRuntime();
+  const client = useMemo<KbGateway | null>(
+    () => (gateway !== undefined ? gateway : createRuntimeKbGateway()),
+    [gateway, runtime],
+  );
+  /** 401 且刷新失败（`kbClient` 已先试过换票）——与「未登录」是两回事 */
+  const [sessionExpired, setSessionExpired] = useState(false);
+  useEffect(() => {
+    setSessionExpired(false);
+  }, [client]);
+  // 没有网关 = 未登录；有网关但票废了 = 登录已过期。两者都要拦住本组件的正常渲染
+  const needLogin = client === null || sessionExpired;
   const [orgs, setOrgs] = useState<KbOrg[]>([]);
   const [kbs, setKbs] = useState<KbSummary[]>([]);
   const [loading, setLoading] = useState(false);
@@ -64,29 +78,12 @@ export function AgentKnowledgePicker({ value, onChange, gateway }: AgentKnowledg
   /** status=0（没连上）与 403/404（业务语义）要分开：后者贴「请启动服务」只会误导 */
   const [offline, setOffline] = useState(false);
 
-  /** 首次进入：有注入网关就用它，否则从同步运行时取（token 只在这一跳里出现）。 */
-  useEffect(() => {
-    if (gateway !== undefined) {
-      setClient(gateway);
-      setNeedLogin(gateway === null);
-      return;
-    }
-    const runtime = getSyncRuntime();
-    const token = runtime?.account.getAccessToken() ?? null;
-    if (!runtime || !token) {
-      setNeedLogin(true);
-      setClient(null);
-      return;
-    }
-    setClient(createKbGateway({ baseUrl: resolveSyncBaseUrl(), token }));
-  }, [gateway]);
-
   const applyResult = useCallback(<T,>(result: KbApiResult<T>): T | null => {
     if (result.ok) {
       setOffline(false);
       return result.data;
     }
-    if (result.unauthorized) setNeedLogin(true);
+    if (result.unauthorized) setSessionExpired(true);
     setOffline(result.status === 0);
     setError(result.message);
     return null;
@@ -159,7 +156,18 @@ export function AgentKnowledgePicker({ value, onChange, gateway }: AgentKnowledg
         <Typography sx={{ fontSize: 13, fontWeight: 600, mb: 0.5 }}>
           知识库（FR-2.3）
         </Typography>
-        <Typography sx={{ fontSize: 12, color: 'text.secondary' }}>{KB_LOGIN_REQUIRED}</Typography>
+        <Typography sx={{ fontSize: 12, color: 'text.secondary' }}>
+          {sessionExpired ? KB_SESSION_EXPIRED : KB_LOGIN_REQUIRED}
+        </Typography>
+        {sessionExpired && (
+          <Button
+            size="small"
+            sx={{ mt: 0.5 }}
+            onClick={() => client && void loadOrgs(client)}
+          >
+            重试
+          </Button>
+        )}
       </Box>
     );
   }

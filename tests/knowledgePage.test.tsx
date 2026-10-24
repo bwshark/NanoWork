@@ -14,7 +14,15 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { KnowledgePage } from '@/pages/knowledge/KnowledgePage';
 import { toast } from '@/components/Toast';
 import type { KbGateway } from '@/lib/kbClient';
-import { buttonByText, click, flush, mount, setInputValue, unmount } from './helpers/reactMount';
+import {
+  buttonByText,
+  click,
+  dialogRoot,
+  flush,
+  mount,
+  setInputValue,
+  unmount,
+} from './helpers/reactMount';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -31,7 +39,17 @@ const KB = {
   name: '制度库',
   description: '',
   allowedRoles: ['member', 'admin', 'owner'],
+  allowedDepartments: [],
   documentCount: 1,
+  createdAt: 'x',
+};
+
+const DEPT = {
+  id: 'd1',
+  orgId: 'o1',
+  parentId: '',
+  name: '技术部',
+  memberCount: 2,
   createdAt: 'x',
 };
 const DOC = { id: 'd1', kbId: 'k1', title: '差旅制度', chars: 42, chunkCount: 2, createdAt: 'x' };
@@ -62,12 +80,21 @@ function makeGateway(overrides: Partial<KbGateway> = {}): KbGateway {
     reindex: vi
       .fn()
       .mockResolvedValue({ ok: true, data: { indexed: 2, total: 2, model: 'hash:64', error: '' } }),
+    listDepartments: vi.fn().mockResolvedValue({ ok: true, data: [DEPT] }),
+    createDepartment: vi.fn(),
+    renameDepartment: vi.fn(),
+    deleteDepartment: vi.fn(),
+    listDepartmentMembers: vi.fn().mockResolvedValue({ ok: true, data: [] }),
+    addDepartmentMember: vi.fn(),
+    removeDepartmentMember: vi.fn(),
     createOrg: vi.fn().mockResolvedValue({ ok: true, data: ORG }),
     listKbs: vi.fn().mockResolvedValue({ ok: true, data: [KB] }),
     createKb: vi.fn().mockResolvedValue({ ok: true, data: KB }),
     listDocuments: vi.fn().mockResolvedValue({ ok: true, data: [DOC] }),
     uploadDocument: vi.fn().mockResolvedValue({ ok: true, data: DOC }),
     uploadFile: vi.fn().mockResolvedValue({ ok: true, data: { ...DOC, kind: 'docx' } }),
+    renameDocument: vi.fn(),
+    deleteDocument: vi.fn(),
     search: vi.fn().mockResolvedValue({ ok: true, data: [HIT] }),
     ...overrides,
   };
@@ -106,6 +133,55 @@ describe('未登录 / 空组织', () => {
 
     expect(host.textContent).toContain('还没有加入任何组织');
     expect(host.querySelector('[data-testid="new-org-name"]')).toBeTruthy();
+  });
+});
+
+/**
+ * 「未登录」与「登录已过期」是**相反的两句话**，不能混成一句。
+ *
+ * access token 只有 30 分钟寿命，过期是常态：此时侧边栏仍显示登录邮箱（本地会话
+ * 还在），页面却说「需要先登录账户」——用户看到的就是自相矛盾。过期该说的是
+ * 「这张票不能用了」并给重试。
+ */
+describe('登录态：未登录 vs 已过期', () => {
+  it('401（换票也失败）说「登录状态已过期」，并给重试', async () => {
+    const gateway = makeGateway({
+      listOrgs: vi.fn().mockResolvedValue({
+        ok: false,
+        status: 401,
+        message: 'access token 无效或已过期',
+        unauthorized: true,
+      }),
+    });
+    const host = render(gateway);
+    await flush();
+
+    expect(host.textContent).toContain('登录状态已过期');
+    // 不能同时说「需要先登录账户」——那是另一个事实
+    expect(host.textContent).not.toContain('需要先登录账户');
+    expect(host.querySelector('[data-testid="kb-auth-retry"]')).toBeTruthy();
+  });
+
+  it('过期后重试成功就正常渲染（不必真的去重新登录）', async () => {
+    const listOrgs = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 401,
+        message: 'access token 无效或已过期',
+        unauthorized: true,
+      })
+      .mockResolvedValue({ ok: true, data: [ORG] });
+    const host = render(makeGateway({ listOrgs }));
+    await flush();
+
+    await act(async () => {
+      click(buttonByText(host, '重试'));
+      await flush();
+    });
+
+    expect(host.textContent).toContain('Acme');
+    expect(host.textContent).not.toContain('登录状态已过期');
   });
 });
 
@@ -231,6 +307,76 @@ describe('上传文件（FR-4.7 解析）', () => {
   });
 });
 
+describe('部门范围（FR-4.7「按部门/角色」）', () => {
+  it('列表把部门范围说成人话（而不是只显示角色）', async () => {
+    const listKbs = vi
+      .fn()
+      .mockResolvedValue({ ok: true, data: [{ ...KB, allowedDepartments: ['d1'] }] });
+    const host = render(makeGateway({ listKbs }));
+    await flush();
+
+    expect(host.textContent).toContain('仅 技术部');
+  });
+
+  it('组织有部门时才出现「仅限部门」（没部门时不留一个空控件）', async () => {
+    const withDept = render(makeGateway());
+    await flush();
+    expect(withDept.querySelector('[data-testid="new-kb-dept-d1"]')).toBeTruthy();
+
+    await flush();
+    unmount();
+
+    const noDept = render(
+      makeGateway({ listDepartments: vi.fn().mockResolvedValue({ ok: true, data: [] }) }),
+    );
+    await flush();
+    expect(noDept.querySelector('[data-testid="new-kb-dept-d1"]')).toBeNull();
+    expect(noDept.textContent).not.toContain('仅限部门');
+  });
+
+  it('点选部门后建库会把它随请求下发；不点则完全不下发该字段', async () => {
+    const createKb = vi.fn().mockResolvedValue({ ok: true, data: KB });
+    const host = render(makeGateway({ createKb }));
+    await flush();
+
+    setInputValue(
+      host.querySelector('[data-testid="new-kb-name"]') as HTMLInputElement,
+      '研发制度',
+    );
+    await act(async () => {
+      click(host.querySelector('[data-testid="new-kb-dept-d1"]'));
+      await flush();
+    });
+    await act(async () => {
+      click(buttonByText(host, '建'));
+      await flush();
+    });
+
+    expect(createKb).toHaveBeenCalledWith(
+      'o1',
+      expect.objectContaining({ name: '研发制度', allowedDepartments: ['d1'] }),
+    );
+  });
+
+  it('不选部门时请求里不出现 allowedDepartments（「没选」不等于「刻意收窄」）', async () => {
+    const createKb = vi.fn().mockResolvedValue({ ok: true, data: KB });
+    const host = render(makeGateway({ createKb }));
+    await flush();
+
+    setInputValue(
+      host.querySelector('[data-testid="new-kb-name"]') as HTMLInputElement,
+      '公开制度',
+    );
+    await act(async () => {
+      click(buttonByText(host, '建'));
+      await flush();
+    });
+
+    const [, payload] = createKb.mock.calls[0];
+    expect('allowedDepartments' in payload).toBe(false);
+  });
+});
+
 describe('检索能力说明（FR-4.7 向量检索）', () => {
   it('默认（词法）：明说未启用向量检索，且不给「重建索引」按钮', async () => {
     const host = render(makeGateway());
@@ -296,6 +442,125 @@ describe('检索能力说明（FR-4.7 向量检索）', () => {
     expect(caption).toContain('检索配置有误');
     expect(caption).toContain('退回词法检索');
     expect(host.querySelector('[data-testid="kb-reindex"]')).toBeNull();
+  });
+});
+
+describe('文档生命周期（删除 / 改名 / 判重）', () => {
+  it('列表说清格式，并在缺索引时挂一个警示（没索引 = 搜不到，界面上却长得一样）', async () => {
+    const retrievalInfo = vi.fn().mockResolvedValue({
+      ok: true,
+      data: { ...RETRIEVAL_OFF, mode: 'hybrid', embedder: 'hash', model: 'hash:64', dim: 64 },
+    });
+    const listDocuments = vi
+      .fn()
+      .mockResolvedValue({ ok: true, data: [{ ...DOC, kind: 'pdf', embedded: 0 }] });
+    const host = render(makeGateway({ retrievalInfo, listDocuments }));
+    await flush();
+
+    expect(host.textContent).toContain('PDF · 42 字 · 2 块');
+    expect(host.querySelector('[data-testid="kb-doc-index-d1"]')?.textContent).toBe('未建索引');
+  });
+
+  it('embedder 关着时不挂索引提示（那时「没索引」是正常状态，提示只会误导）', async () => {
+    const listDocuments = vi
+      .fn()
+      .mockResolvedValue({ ok: true, data: [{ ...DOC, kind: 'text', embedded: 0 }] });
+    const host = render(makeGateway({ listDocuments }));
+    await flush();
+
+    expect(host.textContent).toContain('纯文本 · 42 字 · 2 块');
+    expect(host.querySelector('[data-testid="kb-doc-index-d1"]')).toBeNull();
+  });
+
+  it('删除必须二次确认：弹窗里写清会连块一起删，确认后才发请求', async () => {
+    const deleteDocument = vi.fn().mockResolvedValue({ ok: true, data: undefined });
+    const listDocuments = vi.fn().mockResolvedValue({ ok: true, data: [DOC] });
+    const host = render(makeGateway({ deleteDocument, listDocuments }));
+    await flush();
+    const before = listDocuments.mock.calls.length;
+
+    await act(async () => {
+      click(host.querySelector('[data-testid="kb-doc-delete-d1"]'));
+      await flush();
+    });
+    // 文案要说清后果，而不是只问「确定吗」
+    expect(dialogRoot().textContent).toContain('2 个分块会被一并删除');
+    expect(deleteDocument).not.toHaveBeenCalled();
+
+    await act(async () => {
+      click(dialogRoot().querySelector('[data-testid="kb-delete-confirm"]'));
+      await flush();
+    });
+
+    expect(deleteDocument).toHaveBeenCalledWith('k1', 'd1');
+    // 删完必须重新拉列表：本地摘掉一行看起来一样，但服务端可能删了别的
+    expect(listDocuments.mock.calls.length).toBeGreaterThan(before);
+  });
+
+  it('取消删除不发请求（销毁性操作不能靠「点错了再传一遍」兜底）', async () => {
+    const deleteDocument = vi.fn();
+    const host = render(makeGateway({ deleteDocument }));
+    await flush();
+
+    await act(async () => {
+      click(host.querySelector('[data-testid="kb-doc-delete-d1"]'));
+      await flush();
+    });
+    await act(async () => {
+      click(buttonByText(dialogRoot(), '取消'));
+      await flush();
+    });
+
+    expect(deleteDocument).not.toHaveBeenCalled();
+  });
+
+  it('重命名把新标题发出去，标题没改就不发请求', async () => {
+    const renameDocument = vi.fn().mockResolvedValue({ ok: true, data: DOC });
+    const host = render(makeGateway({ renameDocument }));
+    await flush();
+
+    await act(async () => {
+      click(host.querySelector('[data-testid="kb-doc-rename-d1"]'));
+      await flush();
+    });
+    const input = dialogRoot().querySelector('[data-testid="kb-rename-input"]') as HTMLInputElement;
+    // 打开时预填当前标题：让人在原文上改，而不是从空白开始重打
+    expect(input.value).toBe('差旅制度');
+
+    await act(async () => {
+      setInputValue(input, '差旅制度（2026 版）');
+      await flush();
+    });
+    await act(async () => {
+      click(dialogRoot().querySelector('[data-testid="kb-rename-confirm"]'));
+      await flush();
+    });
+
+    expect(renameDocument).toHaveBeenCalledWith('k1', 'd1', '差旅制度（2026 版）');
+  });
+
+  it('重复上传（409）走提示而不是报错：「已经在库里了」不是失败', async () => {
+    const uploadFile = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 409,
+      message: '这篇内容已经在库里了（《差旅制度》），没有重复入库。要替换请先删掉那一篇',
+      unauthorized: false,
+    });
+    const host = render(makeGateway({ uploadFile }));
+    await flush();
+
+    const input = host.querySelector('[data-testid="kb-file-input"]') as HTMLInputElement;
+    Object.defineProperty(input, 'files', {
+      value: [new File([new Uint8Array([1])], '差旅制度.docx')],
+      configurable: true,
+    });
+    await act(async () => {
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      await flush();
+    });
+
+    expect(toast.warning).toHaveBeenCalledWith(expect.stringContaining('已经在库里了'));
+    expect(toast.error).not.toHaveBeenCalledWith(expect.stringContaining('已经在库里了'));
   });
 });
 

@@ -7,11 +7,18 @@ import {
   Checkbox,
   Chip,
   CircularProgress,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogContentText,
+  DialogTitle,
   Divider,
   FormControl,
   FormControlLabel,
+  IconButton,
   InputLabel,
   List,
+  ListItem,
   ListItemButton,
   ListItemText,
   MenuItem,
@@ -22,29 +29,33 @@ import {
   Typography,
 } from "@mui/material";
 import RefreshIcon from "@mui/icons-material/Refresh";
+import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
+import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 import SearchIcon from "@mui/icons-material/Search";
 import AddIcon from "@mui/icons-material/Add";
 import { ROUTES } from "@/lib/constants";
 import { toast } from "@/components/Toast";
 import {
+  KB_DUPLICATE_STATUS,
   KB_LOGIN_REQUIRED,
   KB_OFFLINE_HINT,
   KB_ROLE_LABELS,
-  createKbGateway,
+  KB_SESSION_EXPIRED,
   type KbApiResult,
-  type KbClientConfig,
   type KbDocument,
   type KbGateway,
   type KbOrg,
+  type KbDepartment,
   type KbRetrievalInfo,
   type KbSearchHit,
   type KbSummary,
 } from "@/lib/kbClient";
 import { describeRetrieval } from "@/lib/kbRetrievalCaption";
-import { KB_UPLOAD_ACCEPT, precheckUpload } from "@/lib/kbUpload";
+import { DepartmentDialog } from "@/components/knowledge/DepartmentDialog";
+import { KB_UPLOAD_ACCEPT, kindLabel, precheckUpload } from "@/lib/kbUpload";
 import { readFileAsBase64 } from "@/lib/fileBase64";
-import { resolveSyncBaseUrl } from "@/sync/baseUrl";
-import { getSyncRuntime } from "@/sync/runtime";
+import { createRuntimeKbGateway } from "@/sync/kbGateway";
+import { useSyncRuntime } from "@/sync/useSyncRuntime";
 
 /**
  * 知识库（M7 客户端）：组织 → 知识库 → 文档 / 检索。
@@ -60,13 +71,14 @@ import { getSyncRuntime } from "@/sync/runtime";
 
 const ALL_ROLES = ["member", "admin", "owner"] as const;
 
-export function createRuntimeGateway(): KbGateway | null {
-  const runtime = getSyncRuntime();
-  const token = runtime?.account.getAccessToken() ?? null;
-  if (!runtime || !token) return null;
-  const config: KbClientConfig = { baseUrl: resolveSyncBaseUrl(), token };
-  return createKbGateway(config);
-}
+/**
+ * 登录态问题的三种结论。
+ *
+ * `anonymous` 与 `expired` 必须分开：前者是「还没有账户」，后者是「有账户，但这张
+ * access token 不能用了」。access token 只有 30 分钟寿命，过期是**常态**；一律说
+ * 「需要先登录账户」，就会出现「侧边栏明明显示着登录邮箱」的自相矛盾。
+ */
+type AuthIssue = "none" | "anonymous" | "expired";
 
 function roleLabels(roles: readonly string[]): string {
   return roles.map((role) => KB_ROLE_LABELS[role] ?? role).join(" / ");
@@ -76,11 +88,45 @@ function errorText<T>(result: KbApiResult<T>): string {
   return result.ok ? "" : result.message;
 }
 
+/**
+ * 入库失败的分级：**判重（409）不是错误**。
+ *
+ * 重复上传同一份资料，用户想确认的是「进去了吗」，而不是看见一条红色报错再猜
+ * 「是不是坏了」。服务端的文案已经写清「已在库里，那篇叫《X》」，原样提示即可。
+ */
+function toastIngestFailure<T>(result: KbApiResult<T>): void {
+  if (result.ok) return;
+  if (result.status === KB_DUPLICATE_STATUS) toast.warning(result.message);
+  else toast.error(result.message);
+}
+
 export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
   const navigate = useNavigate();
+  /*
+   * 登录态**必须订阅**，不能只在挂载时读一次：`initSyncRuntime()` 是异步的
+   * （App 启动块要等设备号与会话列表就位），而路由可能先落到本页——读一次就永远
+   * 停在「去登录」，即使运行时随后就到了。`AccountEntry` 解的是同一个问题。
+   */
+  const runtime = useSyncRuntime();
+  /*
+   * 网关只建一次（`useMemo`）：它现在是**长期可用**的——票由 `getToken` 实时取、
+   * 401 由 `kbClient` 自己刷新重放，所以不必随 token 变化重建，否则每次刷新都会
+   * 把三份列表重新拉一遍。
+   */
+  const client = useMemo<KbGateway | null>(
+    () => (gateway !== undefined ? gateway : createRuntimeKbGateway()),
+    [gateway, runtime],
+  );
+  /** 401 且刷新失败才会置真（`kbClient` 已经先尝试过换票） */
+  const [sessionExpired, setSessionExpired] = useState(false);
 
-  const [client, setClient] = useState<KbGateway | null>(gateway ?? null);
-  const [needLogin, setNeedLogin] = useState(false);
+  // 网关换了（重新登录 / 运行时到位）：上一次的「过期」结论作废
+  useEffect(() => {
+    setSessionExpired(false);
+  }, [client]);
+
+  const authIssue: AuthIssue =
+    client === null ? "anonymous" : sessionExpired ? "expired" : "none";
 
   const [orgs, setOrgs] = useState<KbOrg[]>([]);
   const [activeOrgId, setActiveOrgId] = useState<string>("");
@@ -97,6 +143,10 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
   const [retrieval, setRetrieval] = useState<KbRetrievalInfo | null>(null);
   const [reindexing, setReindexing] = useState(false);
   const [uploading, setUploading] = useState(false);
+  // 部门树：既用于「仅限部门」的选项，也用于列表里把范围显示成人话
+  const [departments, setDepartments] = useState<KbDepartment[]>([]);
+  const [newKbDeptIds, setNewKbDeptIds] = useState<string[]>([]);
+  const [deptOpen, setDeptOpen] = useState(false);
   const [kbsError, setKbsError] = useState("");
   const [kbsLoading, setKbsLoading] = useState(false);
   const [newKbName, setNewKbName] = useState("");
@@ -107,6 +157,13 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
   const [docsLoading, setDocsLoading] = useState(false);
   const [docTitle, setDocTitle] = useState("");
   const [docContent, setDocContent] = useState("");
+  // 改名 / 删除都要先确认：目标文档 + 改名时正在编辑的标题。
+  // 用两个独立状态而不是一个 `{ doc, mode }`：两个弹窗的打开条件互斥，
+  // 合成一个对象会让「关掉其中一个」把另一个也顺手关掉。
+  const [renameTarget, setRenameTarget] = useState<KbDocument | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [deleteTarget, setDeleteTarget] = useState<KbDocument | null>(null);
+  const [rowBusy, setRowBusy] = useState(false);
 
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState<KbSearchHit[] | null>(null);
@@ -116,20 +173,6 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
   const activeOrg = useMemo(() => orgs.find((org) => org.id === activeOrgId) ?? null, [orgs, activeOrgId]);
   const activeKb = useMemo(() => kbs.find((kb) => kb.id === activeKbId) ?? null, [kbs, activeKbId]);
 
-  /** 首次进入：有注入网关就用它，否则从同步运行时取 token。 */
-  useEffect(() => {
-    if (gateway) {
-      setClient(gateway);
-      return;
-    }
-    const resolved = createRuntimeGateway();
-    if (!resolved) {
-      setNeedLogin(true);
-      return;
-    }
-    setClient(resolved);
-  }, [gateway]);
-
   const loadOrgs = useCallback(
     async (target: KbGateway) => {
       setOrgsLoading(true);
@@ -138,12 +181,16 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
       const result = await target.listOrgs();
       setOrgsLoading(false);
       if (!result.ok) {
-        if (result.unauthorized) setNeedLogin(true);
+        // 走到这里说明 `kbClient` 已经试过刷新：仍 401 = 凭据整体失效（refresh 被吊销 /
+        // 账户被删），只能请用户重新登录。这不是「没登录」。
+        if (result.unauthorized) setSessionExpired(true);
         setOrgsOffline(result.status === 0);
         setOrgsError(result.message);
         return;
       }
       setOrgs(result.data);
+      // 这一次成功了：之前的「过期」结论作废（重试 / 引擎刚换过票都会走到这里）
+      setSessionExpired(false);
       // 只在「当前选择失效」时改选中项：否则每次刷新都会把用户踢回第一个组织
       setActiveOrgId((prev) =>
         result.data.some((org) => org.id === prev) ? prev : result.data[0]?.id ?? "",
@@ -206,6 +253,23 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
    * 读检索状态。**失败不报错、只保留上一次**：它是说明文字的数据源，
    * 拿不到时就退回「不猜引擎」的中性文案，不该因为一个附加信息把整页打成错误态。
    */
+  /**
+   * 读部门树。失败**不 toast**：它是「可见范围」的附加信息，云端连不上时
+   * 知识库页该说的第一句话是「连不上」，不是弹一排部门加载失败。
+   */
+  const loadDepartments = useCallback(async (target: KbGateway, orgId: string) => {
+    if (!orgId) {
+      setDepartments([]);
+      return;
+    }
+    const result = await target.listDepartments(orgId);
+    setDepartments(result.ok ? result.data : []);
+  }, []);
+
+  useEffect(() => {
+    if (client) void loadDepartments(client, activeOrgId);
+  }, [client, activeOrgId, loadDepartments]);
+
   const loadRetrieval = useCallback(async (target: KbGateway, kbId: string) => {
     const result = await target.retrievalInfo(kbId || undefined);
     if (result.ok) setRetrieval(result.data);
@@ -214,6 +278,45 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
   useEffect(() => {
     if (client) void loadRetrieval(client, activeKbId);
   }, [client, activeKbId, loadRetrieval]);
+
+  /**
+   * 库的可见范围人话：`N 篇 · 角色可见 · 仅 部门A、部门B`。
+   *
+   * 部门名字查不到时退回 id —— 比显示空白强：空白会让用户以为「没设范围」，
+   * 而实际情况是"设了但部门已被删"（这种情况删部门时会被服务端拦住，理论上不该出现）。
+   */
+  const kbSecondary = (kb: KbSummary): string => {
+    const parts = [`${kb.documentCount} 篇`, `${roleLabels(kb.allowedRoles)}可见`];
+    const ids = kb.allowedDepartments ?? [];
+    if (ids.length > 0) {
+      const names = ids.map((id) => departments.find((item) => item.id === id)?.name ?? id);
+      parts.push(`仅 ${names.join("、")}`);
+    }
+    return parts.join(" · ");
+  };
+
+  /**
+   * 文档副标题：`PDF · 1234 字 · 5 块`。
+   *
+   * 格式显示出来是有用的：同一份资料传成 .docx 还是粘贴纯文本，出问题时的排查
+   * 路径完全不同（前者可能丢表格结构，后者可能是复制时带了奇怪换行）。
+   */
+  const docSecondary = (doc: KbDocument): string =>
+    `${kindLabel(doc.kind)} · ${doc.chars} 字 · ${doc.chunkCount} 块`;
+
+  /**
+   * 「这篇有没有建索引」只在**缺**的时候说。
+   *
+   * 没索引的文档搜不到，而它在列表里和正常文档长得一样 —— 那正是
+   * 「我明明传了，它就是搜不到」最常见的来源。反过来，正常文档不必挂个「已索引」，
+   * 那只是噪音。
+   */
+  const docIndexHint = (doc: KbDocument): string => {
+    if (retrieval === null || retrieval.embedder === "off") return "";
+    const indexed = doc.embedded ?? 0;
+    if (doc.chunkCount === 0 || indexed >= doc.chunkCount) return "";
+    return indexed === 0 ? "未建索引" : `索引 ${indexed}/${doc.chunkCount}`;
+  };
 
   const handleCreateOrg = async () => {
     if (!client || !newOrgName.trim()) return;
@@ -236,6 +339,9 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
     const result = await client.createKb(activeOrgId, {
       name: newKbName.trim(),
       allowedRoles: newKbRoles,
+      // 空数组与"不传"在服务端语义不同：不传 = 不动；建库时两者等价，
+      // 但显式只在非空时下发，避免把「没选」写成一个刻意的收窄
+      ...(newKbDeptIds.length > 0 ? { allowedDepartments: newKbDeptIds } : {}),
     });
     if (!result.ok) {
       toast.error(errorText(result));
@@ -243,6 +349,7 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
     }
     setNewKbName("");
     setNewKbRoles([...ALL_ROLES]);
+    setNewKbDeptIds([]);
     toast.success(`已创建知识库「${result.data.name}」`);
     await loadKbs(client, activeOrgId);
   };
@@ -254,7 +361,7 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
       content: docContent,
     });
     if (!result.ok) {
-      toast.error(errorText(result));
+      toastIngestFailure(result);
       return;
     }
     setDocTitle("");
@@ -288,7 +395,7 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
         contentBase64,
       });
       if (!result.ok) {
-        toast.error(result.message);
+        toastIngestFailure(result);
         return;
       }
       const { title, kind, chunkCount, warnings } = result.data;
@@ -301,6 +408,48 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
     } finally {
       setUploading(false);
     }
+  };
+
+  const openRename = (doc: KbDocument) => {
+    setRenameValue(doc.title);
+    setRenameTarget(doc);
+  };
+
+  const handleRename = async () => {
+    if (!client || !activeKbId || !renameTarget) return;
+    const title = renameValue.trim();
+    if (title === "" || title === renameTarget.title) {
+      setRenameTarget(null);
+      return;
+    }
+    setRowBusy(true);
+    const result = await client.renameDocument(activeKbId, renameTarget.id, title);
+    setRowBusy(false);
+    if (!result.ok) {
+      // 不关弹窗：改失败时用户还在里面，关掉等于让他重新找一遍
+      toast.error(result.message);
+      return;
+    }
+    setRenameTarget(null);
+    toast.success("标题已更新");
+    await loadDocs(client, activeKbId);
+  };
+
+  const handleDeleteDoc = async () => {
+    if (!client || !activeKbId || !deleteTarget) return;
+    setRowBusy(true);
+    const result = await client.deleteDocument(activeKbId, deleteTarget.id);
+    setRowBusy(false);
+    setDeleteTarget(null);
+    if (!result.ok) {
+      toast.error(result.message);
+      return;
+    }
+    toast.success(`已删除「${deleteTarget.title}」`);
+    // 三样都变了：文档列表、库上的文档数、索引覆盖率（块少了一批）
+    await loadDocs(client, activeKbId);
+    await loadKbs(client, activeOrgId);
+    await loadRetrieval(client, activeKbId);
   };
 
   const handleReindex = async () => {
@@ -341,11 +490,34 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
   const canReindex =
     retrieval !== null && retrieval.embedder !== "off" && retrieval.stale && activeKbId !== "";
 
-  if (needLogin) {
+  if (authIssue !== "none") {
+    const expired = authIssue === "expired";
     return (
       <Box sx={{ p: 2.5 }}>
-        <Alert severity="info" action={<Button onClick={() => navigate(ROUTES.auth)}>去登录</Button>}>
-          {KB_LOGIN_REQUIRED}。知识库是云端资源：资料的存取与可见范围都在服务端判定。
+        <Alert
+          severity={expired ? "warning" : "info"}
+          data-testid="kb-auth-issue"
+          action={
+            <Stack direction="row" spacing={1}>
+              {/* 过期多半是「这张票废了」，但换票也可能只是刚才网络抖了一下 —— 给条退路 */}
+              {expired && (
+                <Button
+                  size="small"
+                  data-testid="kb-auth-retry"
+                  onClick={() => client && void loadOrgs(client)}
+                >
+                  重试
+                </Button>
+              )}
+              <Button size="small" onClick={() => navigate(ROUTES.auth)}>
+                去登录
+              </Button>
+            </Stack>
+          }
+        >
+          {expired
+            ? `${KB_SESSION_EXPIRED}。access token 有效期 30 分钟，过期不会把你登出，但界面手上这张票已经不能用了。`
+            : `${KB_LOGIN_REQUIRED}。知识库是云端资源：资料的存取与可见范围都在服务端判定。`}
         </Alert>
       </Box>
     );
@@ -401,6 +573,14 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
               </Select>
             </FormControl>
           )}
+          <Button
+            size="small"
+            data-testid="kb-open-departments"
+            disabled={!client || !activeOrgId}
+            onClick={() => setDeptOpen(true)}
+          >
+            部门
+          </Button>
           <Button
             size="small"
             startIcon={<RefreshIcon />}
@@ -515,6 +695,49 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
                   />
                 ))}
               </Stack>
+              {/* 部门范围（FR-4.7「按部门/角色设访问范围」的后半句）。
+                  用可点选的 Chip 而不是下拉框：部门通常只有几个，点两下比
+                  「打开菜单 → 勾选 → 关闭」快，也不用处理多选下拉的交互细节。
+                  只有组织建过部门才出现——没部门时给一个空控件只会让人困惑。 */}
+              {departments.length > 0 && (
+                <Stack
+                  direction="row"
+                  spacing={0.75}
+                  alignItems="center"
+                  flexWrap="wrap"
+                  useFlexGap
+                  sx={{ mt: 1 }}
+                >
+                  <Typography sx={{ fontSize: 12, color: "text.secondary" }}>
+                    仅限部门
+                  </Typography>
+                  {departments.map((item) => {
+                    const selected = newKbDeptIds.includes(item.id);
+                    return (
+                      <Chip
+                        key={item.id}
+                        size="small"
+                        label={item.name}
+                        data-testid={`new-kb-dept-${item.id}`}
+                        color={selected ? "primary" : "default"}
+                        variant={selected ? "filled" : "outlined"}
+                        onClick={() =>
+                          setNewKbDeptIds((previous) =>
+                            previous.includes(item.id)
+                              ? previous.filter((id) => id !== item.id)
+                              : [...previous, item.id],
+                          )
+                        }
+                      />
+                    );
+                  })}
+                  <Typography sx={{ fontSize: 11.5, color: "text.secondary" }}>
+                    {newKbDeptIds.length === 0
+                      ? "不选 = 角色能看就能看"
+                      : "普通成员还需属于这些部门（含子部门）"}
+                  </Typography>
+                </Stack>
+              )}
             </Box>
             <Divider />
             {kbsError && (
@@ -535,7 +758,7 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
                 >
                   <ListItemText
                     primary={kb.name}
-                    secondary={`${kb.documentCount} 篇 · ${roleLabels(kb.allowedRoles)}可见`}
+                    secondary={kbSecondary(kb)}
                     primaryTypographyProps={{ fontSize: 13.5 }}
                   />
                 </ListItemButton>
@@ -667,6 +890,7 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
               <Typography variant="caption" color="text.secondary">
                 正文会被切成若干块入库，只有块参与检索。也可以直接上传 .docx / .pdf ——
                 服务端会先解析成文本再切块；解析失败会说明原因（旧版 .doc 需要另存为新格式）。
+                同一个库里重复入库相同内容会被拦下（提示已在库里的那一篇）。
               </Typography>
             </Paper>
 
@@ -677,15 +901,57 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
                 </Alert>
               )}
               <List dense>
-                {docs.map((doc) => (
-                  <ListItemButton key={doc.id} disabled>
-                    <ListItemText
-                      primary={doc.title}
-                      secondary={`${doc.chars} 字 · ${doc.chunkCount} 块`}
-                      primaryTypographyProps={{ fontSize: 13 }}
-                    />
-                  </ListItemButton>
-                ))}
+                {docs.map((doc) => {
+                  const hint = docIndexHint(doc);
+                  return (
+                    <ListItem
+                      key={doc.id}
+                      divider
+                      secondaryAction={
+                        <Stack direction="row" spacing={0.25}>
+                          <IconButton
+                            size="small"
+                            aria-label={`重命名 ${doc.title}`}
+                            data-testid={`kb-doc-rename-${doc.id}`}
+                            onClick={() => openRename(doc)}
+                          >
+                            <EditOutlinedIcon fontSize="small" />
+                          </IconButton>
+                          <IconButton
+                            size="small"
+                            edge="end"
+                            aria-label={`删除 ${doc.title}`}
+                            data-testid={`kb-doc-delete-${doc.id}`}
+                            onClick={() => setDeleteTarget(doc)}
+                          >
+                            <DeleteOutlineIcon fontSize="small" />
+                          </IconButton>
+                        </Stack>
+                      }
+                    >
+                      <ListItemText
+                        primary={doc.title}
+                        secondary={
+                          <Stack direction="row" spacing={1} alignItems="center">
+                            <span>{docSecondary(doc)}</span>
+                            {hint !== "" && (
+                              <Chip
+                                size="small"
+                                color="warning"
+                                variant="outlined"
+                                label={hint}
+                                data-testid={`kb-doc-index-${doc.id}`}
+                                sx={{ height: 18, fontSize: 11 }}
+                              />
+                            )}
+                          </Stack>
+                        }
+                        primaryTypographyProps={{ fontSize: 13 }}
+                        secondaryTypographyProps={{ component: "div" }}
+                      />
+                    </ListItem>
+                  );
+                })}
                 {!docsLoading && docs.length === 0 && !docsError && (
                   <Typography sx={{ fontSize: 12, color: "text.secondary", p: 2 }}>
                     {activeKbId ? "这个知识库还没有文档。" : "先在左侧选一个知识库。"}
@@ -696,6 +962,80 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
           </Box>
         </Stack>
       )}
+
+      {/* 改名：内容不动，所以这里只开一个输入框。判重会让「换个标题重传」变成 409，
+          所以标题必须能单独改 —— 否则改错标题只能删了重传。 */}
+      <Dialog open={renameTarget !== null} onClose={() => setRenameTarget(null)} fullWidth maxWidth="xs">
+        <DialogTitle sx={{ fontSize: 16 }}>重命名文档</DialogTitle>
+        <DialogContent>
+          <TextField
+            autoFocus
+            fullWidth
+            size="small"
+            label="标题"
+            value={renameValue}
+            onChange={(event) => setRenameValue(event.target.value)}
+            inputProps={{ "data-testid": "kb-rename-input" }}
+            sx={{ mt: 1 }}
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button size="small" onClick={() => setRenameTarget(null)}>
+            取消
+          </Button>
+          <Button
+            size="small"
+            variant="contained"
+            disabled={rowBusy || renameValue.trim() === ""}
+            data-testid="kb-rename-confirm"
+            onClick={() => void handleRename()}
+          >
+            保存
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* 删除：**必须确认**。它连带块与向量一起消失，且退不回来（
+          重建索引救不了，只能重新上传）。确认文案里写清这一点，而不是只问「确定吗」。 */}
+      <Dialog
+        open={deleteTarget !== null}
+        onClose={() => setDeleteTarget(null)}
+        fullWidth
+        maxWidth="xs"
+      >
+        <DialogTitle sx={{ fontSize: 16 }}>删除「{deleteTarget?.title}」？</DialogTitle>
+        <DialogContent>
+          <DialogContentText sx={{ fontSize: 13 }}>
+            这篇文档的 {deleteTarget?.chunkCount ?? 0} 个分块会被一并删除，检索将立刻搜不到它。
+            此操作不可撤销，需要重新上传才能恢复。
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button size="small" onClick={() => setDeleteTarget(null)}>
+            取消
+          </Button>
+          <Button
+            size="small"
+            color="error"
+            variant="contained"
+            disabled={rowBusy}
+            data-testid="kb-delete-confirm"
+            onClick={() => void handleDeleteDoc()}
+          >
+            删除
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <DepartmentDialog
+        open={deptOpen}
+        orgId={activeOrgId}
+        gateway={client}
+        onClose={() => setDeptOpen(false)}
+        onChanged={() => {
+          if (client) void loadDepartments(client, activeOrgId);
+        }}
+      />
     </Box>
   );
 }

@@ -3,7 +3,7 @@
 ## 这个文件唯一需要看懂的地方：过滤发生在取候选之前
 
 `search_org_kbs` 的顺序是
-1. 用**成员角色**算出可见库 id 集合（纯函数 `visible_kb_ids`）；
+1. 用**成员角色 + 部门**算出可见库 id 集合（`visibility.visible_kb_ids`，唯一实现）；
 2. `WHERE kb_id IN (…)` 取候选块；
 3. 才对候选块打分。
 
@@ -26,19 +26,28 @@ from app.auth.models import User
 from app.auth.security import new_user_id
 from app.db import get_session
 from app.kb.chunking import chunk_text
+from app.kb.digest import digest_of
 from app.kb.embedding import resolve_embedder
 from app.kb.models import (
     DEFAULT_ALLOWED_ROLES,
     KbChunk,
     KbDocument,
     KnowledgeBase,
+    KnowledgeBaseDepartment,
     roles_from_json,
     roles_to_json,
 )
 from app.kb.parsing import ParseError, decode_base64, default_title, parse_document
 from app.kb.retrieval import ScoredChunk, hybrid_rank, rank_by_vectors, rank_chunks
-from app.kb.vectors import load_vectors, save_vectors, vector_coverage
-from app.orgs.models import OrgMember
+from app.kb.vectors import (
+    count_vectors_by_doc,
+    delete_vectors_for_doc,
+    load_vectors,
+    save_vectors,
+    vector_coverage,
+)
+from app.kb.visibility import kb_department_ids, member_can_read_kb, visible_kb_ids
+from app.orgs.models import Department, OrgMember
 from app.orgs.roles import ROLE_ADMIN, role_at_least
 from app.timeutil import iso_z
 
@@ -59,6 +68,8 @@ class CreateKbRequest(BaseModel):
     name: str = Field(min_length=1, max_length=64)
     description: str = Field(default="", max_length=500)
     allowedRoles: list[str] | None = None
+    #: 部门范围（**收窄**）：非空时只有属于这些部门（含子部门）的成员能看
+    allowedDepartments: list[str] | None = None
 
 
 class KbView(BaseModel):
@@ -67,6 +78,8 @@ class KbView(BaseModel):
     name: str
     description: str
     allowedRoles: list[str]
+    #: 部门范围；空 = 不按部门收窄（角色能看就能看）
+    allowedDepartments: list[str]
     documentCount: int
     createdAt: str
 
@@ -82,6 +95,12 @@ class UploadFileRequest(BaseModel):
     filename: str = Field(min_length=1, max_length=255)
     contentBase64: str = Field(min_length=1)
     title: str | None = Field(default=None, max_length=200)
+
+
+class RenameDocumentRequest(BaseModel):
+    """改标题。上限 200 与服务端截断一致，超了不报错而是截断（标题不是数据）。"""
+
+    title: str = Field(min_length=1, max_length=255)
 
 
 class DocumentView(BaseModel):
@@ -130,16 +149,6 @@ def _require_org_member(session: Session, org_id: str, user: User) -> OrgMember:
     return member
 
 
-def visible_kb_ids(session: Session, org_id: str, role: str) -> list[str]:
-    """**预过滤的唯一实现**：按角色算出该组织里我能看到的库 id。
-
-    只认 `allowed_roles`，不看 `created_by`：创建者若被降级，也不该继续看管理员库
-    （否则「降级」就只是个显示变化）。
-    """
-    rows = session.exec(select(KnowledgeBase).where(KnowledgeBase.org_id == org_id)).all()
-    return [kb.id for kb in rows if role in roles_from_json(kb.allowed_roles)]
-
-
 def _kb_or_404(session: Session, kb_id: str, user: User) -> tuple[KnowledgeBase, OrgMember]:
     kb = session.get(KnowledgeBase, kb_id)
     if kb is None:
@@ -148,7 +157,9 @@ def _kb_or_404(session: Session, kb_id: str, user: User) -> tuple[KnowledgeBase,
     if member is None:
         # 不是组织成员 → 404（不泄露库/组织是否存在）
         raise HTTPException(status_code=404, detail="知识库不存在")
-    if member.role not in roles_from_json(kb.allowed_roles):
+    # 角色 ∧ 部门都走 `visibility.member_can_read_kb`：两处判断分开写就会出现
+    # 「列表里看不到、直接按 id 却读得到」的组合漏洞
+    if not member_can_read_kb(session, kb, member):
         raise HTTPException(status_code=403, detail="当前角色无权访问该知识库")
     return kb, member
 
@@ -161,6 +172,7 @@ def _kb_view(session: Session, kb: KnowledgeBase) -> KbView:
         name=kb.name,
         description=kb.description,
         allowedRoles=roles_from_json(kb.allowed_roles),
+        allowedDepartments=kb_department_ids(session, kb.id),
         documentCount=len(docs),
         createdAt=iso_z(kb.created_at),
     )
@@ -197,6 +209,36 @@ def _embed_chunks(session: Session, embedder: object, chunks: list[KbChunk]) -> 
     return written, ""
 
 
+def _set_departments(session: Session, kb: KnowledgeBase, department_ids: list[str] | None) -> None:
+    """**覆盖式**写入部门范围（`None` = 不动；`[]` = 清空 → 不按部门收窄）。
+
+    校验两件事，都是"不查就会留下看不懂的死数据"的那种：
+    1. 部门必须属于**本组织**（跨组织 id 在这里没有意义，只会让范围看起来设置了却没人命中）；
+    2. 重复 id 去重 —— 交给主键冲突报错的话，用户看到的是数据库层的话。
+    """
+    if department_ids is None:
+        return
+    unique = list(dict.fromkeys(item for item in department_ids if item))
+    if unique:
+        rows = session.exec(
+            select(Department).where(Department.org_id == kb.org_id, Department.id.in_(unique))
+        ).all()
+        found = {row.id for row in rows}
+        missing = [item for item in unique if item not in found]
+        if missing:
+            raise HTTPException(
+                status_code=422, detail=f"部门不存在或不属于本组织：{'、'.join(missing[:3])}"
+            )
+
+    existing = session.exec(
+        select(KnowledgeBaseDepartment).where(KnowledgeBaseDepartment.kb_id == kb.id)
+    ).all()
+    for row in existing:
+        session.delete(row)
+    for department_id in unique:
+        session.add(KnowledgeBaseDepartment(kb_id=kb.id, department_id=department_id))
+
+
 @router.post("/orgs/{org_id}/kbs", response_model=KbView, status_code=status.HTTP_201_CREATED)
 def create_kb(
     org_id: str,
@@ -218,6 +260,8 @@ def create_kb(
     session.add(kb)
     session.commit()
     session.refresh(kb)
+    _set_departments(session, kb, payload.allowedDepartments)
+    session.commit()
     return _kb_view(session, kb)
 
 
@@ -229,22 +273,89 @@ def list_kbs(
 ) -> list[KbView]:
     """只返回**我能看到的**库（与检索用的是同一个纯函数，不另写一套判断）。"""
     member = _require_org_member(session, org_id, user)
-    ids = set(visible_kb_ids(session, org_id, member.role))
+    ids = set(visible_kb_ids(session, org_id, member))
     rows = session.exec(select(KnowledgeBase).where(KnowledgeBase.org_id == org_id)).all()
     return [_kb_view(session, kb) for kb in rows if kb.id in ids]
 
 
+def _writable_kb_or_404(
+    session: Session, kb_id: str, user: User
+) -> tuple[KnowledgeBase, OrgMember]:
+    """**写操作**（入库 / 上传 / 改名 / 删除）的守卫：在可读之上再要求 admin。
+
+    ## 为什么读和写必须是两个判定
+
+    `allowed_roles` 控制的是**读**。如果写沿用它，那么「对一个全员可见的制度库」，
+    任何一个成员都能往里塞内容、并且（本轮加了删除之后）删掉别人的资料 ——
+    而知识库在这套产品里是**权威参考资料**，不是论坛。
+
+    只在写这边加门槛（不动读）的额外好处：不需要用户理解两套可见性，
+    也不会让「只读成员」看到任何差异。
+    """
+    kb, member = _kb_or_404(session, kb_id, user)
+    if not role_at_least(member.role, ROLE_ADMIN):
+        raise HTTPException(status_code=403, detail="只有管理员可以修改知识库内容")
+    return kb, member
+
+
+def _backfill_hashes(session: Session, kb_id: str) -> int:
+    """给「摘要字段存在之前入库」的文档补算 `content_hash`，返回补了几篇。
+
+    为什么是懒回填而不是启动时全量扫：这段代码只需要在**判重之前**正确，
+    而判重只发生在入库时。启动时扫全库会让每一次重启都变慢，换来的只是
+    「大概率用不到的提前量」。
+
+    为什么能补：正文本身不入库，但**块一直存着**，而摘要按块算
+    （见 `kb/digest.py` 第 2 条理由）。
+    """
+    legacy = session.exec(
+        select(KbDocument).where(KbDocument.kb_id == kb_id, KbDocument.content_hash == "")
+    ).all()
+    if not legacy:
+        return 0
+    for doc in legacy:
+        chunks = session.exec(
+            select(KbChunk).where(KbChunk.doc_id == doc.id).order_by(KbChunk.ordinal)
+        ).all()
+        doc.content_hash = digest_of([chunk.text for chunk in chunks])
+        session.add(doc)
+    session.commit()
+    return len(legacy)
+
+
 def _insert_document(
-    session: Session, kb: KnowledgeBase, user: User, *, title: str, content: str
+    session: Session, kb: KnowledgeBase, user: User, *, title: str, content: str, kind: str
 ) -> tuple[KbDocument, int]:
     """文本入库的唯一实现（粘贴正文与上传文件两条入口共用）。
 
-    返回 `(文档行, 实际写入的向量条数)`。**切块 → 落库 → 建索引**的顺序不能换：
-    向量行以 `chunk_id` 为外键，块没落库就没有可挂的东西。
+    返回 `(文档行, 实际写入的向量条数)`。**切块 → 判重 → 落库 → 建索引**的顺序不能换：
+    判重必须在落库前（否则先写进去再删，等于自己制造了一次写放大），
+    建索引必须在落库后（向量行以 `chunk_id` 为外键）。
+
+    ## 判重为什么是 409 而不是「静默跳过」
+
+    静默跳过会让「这篇到底进没进去」变成需要去文档列表里数的事。409 把
+    「已经在库里，那篇叫《X》，要替换请先删掉它」一次说清。作用域是**本库**
+    （跨库同内容是正常的，见 `kb/digest.py`）。
     """
     chunks = chunk_text(content)
     if not chunks:
         raise HTTPException(status_code=422, detail="文档内容为空")
+
+    digest = digest_of(chunks)
+    _backfill_hashes(session, kb.id)
+    if digest:
+        duplicate = session.exec(
+            select(KbDocument).where(KbDocument.kb_id == kb.id, KbDocument.content_hash == digest)
+        ).first()
+        if duplicate is not None:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"这篇内容已经在库里了（《{duplicate.title}》），没有重复入库。"
+                    "要替换请先删掉那一篇"
+                ),
+            )
 
     doc = KbDocument(
         id=new_user_id(),
@@ -252,6 +363,8 @@ def _insert_document(
         title=title,
         chars=len(content),
         chunk_count=len(chunks),
+        content_hash=digest,
+        kind=kind,
         created_by=user.id,
     )
     session.add(doc)
@@ -272,8 +385,13 @@ def _insert_document(
 
 
 def _document_view(
-    doc: KbDocument, *, embedded: int, kind: str, warnings: list[str]
+    doc: KbDocument, *, embedded: int, warnings: list[str] | None = None
 ) -> DocumentView:
+    """`kind` 从行上读（入库时写进去了），所以列表与入库的响应形状天然一致。
+
+    之前这里是「调用方传 kind」，而列表接口没传 → 列表里永远显示 `text`。
+    同一份数据在两条路径上有两个来源，就是这类「只有一处会说真话」的根因。
+    """
     return DocumentView(
         id=doc.id,
         kbId=doc.kb_id,
@@ -282,8 +400,8 @@ def _document_view(
         chunkCount=doc.chunk_count,
         createdAt=iso_z(doc.created_at),
         embedded=embedded,
-        kind=kind,
-        warnings=warnings,
+        kind=doc.kind,
+        warnings=list(warnings or []),
     )
 
 
@@ -295,12 +413,14 @@ def create_document(
     session: Session = Depends(get_session),
 ) -> DocumentView:
     """入库：切块后**只有块进库**（文档行只存元数据），见 `models.py` 的说明。"""
-    kb, _member = _kb_or_404(session, kb_id, user)
+    kb, _member = _writable_kb_or_404(session, kb_id, user)
     title = payload.title.strip()
     if title == "":
         raise HTTPException(status_code=422, detail="标题不能为空")
-    doc, embedded = _insert_document(session, kb, user, title=title, content=payload.content)
-    return _document_view(doc, embedded=embedded, kind="text", warnings=[])
+    doc, embedded = _insert_document(
+        session, kb, user, title=title, content=payload.content, kind="text"
+    )
+    return _document_view(doc, embedded=embedded)
 
 
 @router.post("/kbs/{kb_id}/documents/file", response_model=DocumentView, status_code=201)
@@ -316,7 +436,7 @@ def upload_document(
     客户端也不必处理表单边界（`FileReader` 读成 dataURL 就够）。代价是体积膨胀 1/3，
     对知识库文档（通常几百 KB）无所谓。
     """
-    kb, _member = _kb_or_404(session, kb_id, user)
+    kb, _member = _writable_kb_or_404(session, kb_id, user)
     try:
         data = decode_base64(payload.contentBase64)
         parsed = parse_document(payload.filename, data)
@@ -336,8 +456,10 @@ def upload_document(
 
     raw_title = (payload.title or "").strip() or default_title(payload.filename)
     title = raw_title[:200] or "未命名文档"
-    doc, embedded = _insert_document(session, kb, user, title=title, content=parsed.text)
-    return _document_view(doc, embedded=embedded, kind=parsed.kind, warnings=list(parsed.warnings))
+    doc, embedded = _insert_document(
+        session, kb, user, title=title, content=parsed.text, kind=parsed.kind
+    )
+    return _document_view(doc, embedded=embedded, warnings=parsed.warnings)
 
 
 @router.get("/kbs/{kb_id}/documents", response_model=list[DocumentView])
@@ -348,17 +470,79 @@ def list_documents(
 ) -> list[DocumentView]:
     kb, _member = _kb_or_404(session, kb_id, user)
     rows = session.exec(select(KbDocument).where(KbDocument.kb_id == kb.id)).all()
+    # 「这篇有没有建索引」是列表最该回答的问题之一：一篇没索引的文档搜不到，
+    # 而界面上它和正常文档长得一模一样 —— 那是「我明明传了，它就是搜不到」的根。
+    # 一次 GROUP BY 拿到全部文档的向量条数，不逐篇查（见 vectors.count_vectors_by_doc）。
+    resolution = resolve_embedder()
+    by_doc = (
+        count_vectors_by_doc(session, kb_id=kb.id, model=resolution.model)
+        if resolution.embedder is not None
+        else {}
+    )
     return [
-        DocumentView(
-            id=doc.id,
-            kbId=doc.kb_id,
-            title=doc.title,
-            chars=doc.chars,
-            chunkCount=doc.chunk_count,
-            createdAt=iso_z(doc.created_at),
-        )
+        _document_view(doc, embedded=by_doc.get(doc.id, 0))
         for doc in sorted(rows, key=lambda item: (item.created_at, item.id))
     ]
+
+
+@router.patch("/kbs/{kb_id}/documents/{doc_id}", response_model=DocumentView)
+def rename_document(
+    kb_id: str,
+    doc_id: str,
+    payload: RenameDocumentRequest,
+    user: User = Depends(current_user),
+    session: Session = Depends(get_session),
+) -> DocumentView:
+    """改标题（内容不动）。要 admin —— 与入库同一个门槛。
+
+    独立于「删除 + 重传」的意义：判重会让「同内容换个标题重传」变成 409，
+    所以标题必须能单独改，否则改错标题就只能删了再传（还会丢掉原来的创建时间）。
+    """
+    kb, _member = _writable_kb_or_404(session, kb_id, user)
+    doc = session.get(KbDocument, doc_id)
+    if doc is None or doc.kb_id != kb.id:
+        raise HTTPException(status_code=404, detail="文档不存在")
+    title = payload.title.strip()
+    if title == "":
+        raise HTTPException(status_code=422, detail="标题不能为空")
+    doc.title = title[:200]
+    session.add(doc)
+    session.commit()
+    session.refresh(doc)
+    resolution = resolve_embedder()
+    embedded = 0
+    if resolution.embedder is not None:
+        embedded = count_vectors_by_doc(session, kb_id=kb.id, model=resolution.model).get(doc.id, 0)
+    return _document_view(doc, embedded=embedded)
+
+
+@router.delete("/kbs/{kb_id}/documents/{doc_id}", status_code=204)
+def delete_document(
+    kb_id: str,
+    doc_id: str,
+    user: User = Depends(current_user),
+    session: Session = Depends(get_session),
+) -> None:
+    """删一篇文档：连同它的**块、向量**一起删干净。
+
+    ## 三张表都要动，且顺序有意义
+
+    `kb_vectors` → `kb_chunks` → `kb_documents`。SQLite 默认不强制外键，
+    所以顺序不是「不这样就报错」，而是「不这样就会留下孤儿行」：孤儿块会被
+    检索命中（它们还带着 kb_id），于是用户看到一份**已经删掉的**文档出现在结果里，
+    而列表里找不到它 —— 那种「幽灵数据」比直接报错难排查得多。
+    """
+    kb, _member = _writable_kb_or_404(session, kb_id, user)
+    doc = session.get(KbDocument, doc_id)
+    if doc is None or doc.kb_id != kb.id:
+        # `doc.kb_id != kb.id` 这条不能省：否则可以拿 A 库的 kb_id 去删 B 库的文档
+        raise HTTPException(status_code=404, detail="文档不存在")
+
+    delete_vectors_for_doc(session, doc_id=doc.id)
+    for chunk in session.exec(select(KbChunk).where(KbChunk.doc_id == doc.id)).all():
+        session.delete(chunk)
+    session.delete(doc)
+    session.commit()
 
 
 def _rank_candidates(
@@ -411,7 +595,7 @@ def search_org_kbs(
     免得「指定范围检索」成为绕过可见性的侧门。
     """
     member = _require_org_member(session, org_id, user)
-    allowed = visible_kb_ids(session, org_id, member.role)
+    allowed = visible_kb_ids(session, org_id, member)
 
     # ⚠️ 越权判定必须排在「没有可见库就返回空」**之前**：否则一个只有管理员库的
     # 组织里，member 指定 kbId 搜那个库会拿到 200 + 空结果——看起来像「库里没资料」，
@@ -481,6 +665,7 @@ def update_kb_visibility(
             raise HTTPException(status_code=422, detail="可见范围不能为空")
         kb.allowed_roles = roles_to_json(payload.allowedRoles)
     session.add(kb)
+    _set_departments(session, kb, payload.allowedDepartments)
     session.commit()
     session.refresh(kb)
     return _kb_view(session, kb)

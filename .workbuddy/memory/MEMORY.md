@@ -11,7 +11,7 @@ WorkBuddy 式智能体客户端：React18+TS+Vite 渲染层 + Electron 主进程
 - 判超时只看 `err.name==='AbortError'`（跨 realm `instanceof Error` 恒 false）。
 - 门禁三套 tsc 一起跑（`typecheck`/`typecheck:electron`/`typecheck:tests`，tests 不在 build 内）。
 - 改 `electron/**.ts` 必须重建 `main.cjs`+`preload.cjs`（esbuild，external:electron）。
-- 门禁 `--maxWorkers=3`；全量带 `CODEBUDDY_SAFE_DELETE_ENABLED=0`，**永远看退出码**。
+- 门禁 `--maxWorkers=3`；全量带 `CODEBUDDY_SAFE_DELETE_ENABLED=0`，**永远看退出码**。⚠️ `pytest -q` 在 Windows 上**不打汇总行**（`grep passed` 抓不到会被误判失败）→ 云端全量用不带 `-q`。
 - `tests/` 被 `.gitignore` 整目录忽略 → 新测试要 `git add -f`；`tasks/` 同理。
 - 写 `platform.storage.set` 新 key 要登记 `STORAGE_KEYS` 与 `electron/storageRoutes.ts` 的 `RUNTIME_FILES`；裸字符串别落 json 路由（主进程 `JSON.parse` 必崩）。
 - 引擎 `Base` `extra="ignore"`：未声明键静默丢弃 → 新增声明式字段先改 `schema.py` + 加往返用例。
@@ -34,8 +34,10 @@ WorkBuddy 式智能体客户端：React18+TS+Vite 渲染层 + Electron 主进程
 - ⛔ 消息渲染**不分会话类型**：任务/助理/定时任务同一套组件；差异在数据侧。
 - ⛔ 副作用别挂可选 UI 组件（网关地址对齐已下沉 `connectionManager.probeOnce()`）。
 - ⚠️ 网关地址同步判据 `nextGatewayEndpoint` **只看 `port`**（`running=false` 但有 port 正是最需对齐的场景），别加回 `running`。
+- ⛔ 云端 **access token TTL 只有 30 分钟**（`cloud/app/auth/security.py::ACCESS_TTL`）→ 任何云端调用方都要「实时取票（`getToken`）+ 401 换票重放一次」，**不要把 token 拷进配置快照**（配置只建一次 ⇒ 半小时后必然 401）。知识库页曾因此把「票过期」报成「未登录」，与侧栏的登录邮箱自相矛盾。装配处唯一：`src/sync/kbGateway.ts::createRuntimeKbGateway`。
+- ⛔ **refresh 必须单飞，且实现只在 `syncAccount.refresh()`**（不要在调用方各写一份）：服务端 `/api/auth/refresh` 是轮换 + 重用检测，旧票用第二次即判重放 → **整条链吊销 → 用户被登出**。知识库首屏 3~4 个并发请求会一起 401，这是正确性问题不是性能问题。
 - ⚠️ `nanowork.config.json` 是 camelCase（`modelPresets`/`fallbackModels`/`providerRetryMode`）。
-- ⚠️ vitest 全量偶发 `EPERM ... node-brokered-fs-shim` → worker 崩；同命令重跑即绿。
+- ⚠️ vitest 全量偶发 `EPERM ... node-brokered-fs-shim` → worker 崩；同命令重跑即绿。另一种同症状的崩法是**输出量**：不加 `--silent` 时 MUI 的 act 告警能把日志刷到 13 万行，worker 以 `ERR_IPC_CHANNEL_CLOSED` 死掉、**拿不到汇总行**（别误判成用例失败）→ 全量用 `npx vitest run --maxWorkers=3 --silent`。
 - ⚠️ `npm run build` 偶发 vite panic / `ENOENT \.\pipe\workbuddy-pac-*`；改单跑 `npx vite build` 并重定向日志更稳。
 
 ## 桌面端 IM 审批卡（真机已通过）
@@ -68,8 +70,25 @@ WorkBuddy 式智能体客户端：React18+TS+Vite 渲染层 + Electron 主进程
 - 上传走 **base64 JSON**（不引 `python-multipart`）；顺序必须「先解析后落库」，失败不留半篇。
 - 上限 8MB / 单篇 20 万字 → **报错不截断**；扫描件 PDF 直接 422 + 提示 OCR（空文档会占块数却永不出现在结果里）；降级信息走响应 `warnings` 由客户端逐条弹。
 
+## 加列迁移（2026-10-24，卸掉了「create_all 不能 ALTER」这个老约束）
+- `cloud/app/migrations.py`：`APPEND` 到 `ADDED_COLUMNS`（表, 列, DDL **必须带 DEFAULT**）+ 可选 `ADDED_INDEXES`；`create_db_and_tables()` 在 `create_all` 之后调 `ensure_columns()`。
+- ⛔ 只加不改不删（DROP COLUMN 老 SQLite 不支持，且静默删列不报错）。**加字段现在不需要再建旁表**。
+- ⚠️ 判据必须在**自建 engine** 上跑（`tests/test_migrations.py`）：conftest 每例重建库，迁移分支永远走不到。
+
+## 文档生命周期（FR-4.7，2026-10-24）
+- 读写分权：`_writable_kb_or_404` 要 admin（`allowed_roles` 只管读）。成员写一律 403。
+- 判重：`kb/digest.py::digest_of(chunks)` 按**切好的块**算 sha256，作用域**本库**；重复 409 点名已有标题；`_backfill_hashes` 给老文档从块补摘要。
+- 删除：`kb_vectors → kb_chunks → kb_documents` 三张表都要删（只删文档行会留**孤儿块**，检索照样命中）；并校验 `doc.kb_id == kb.id`。
+- `_document_view` 的 `kind` **从行上读**（原先由调用方传，列表接口没传 → 列表永远显示 text）。
+
+## 部门与知识库可见性（FR-12.2 / FR-4.7，2026-10-24）
+- 规则只有一条：`cloud/app/kb/visibility.py::allows()`。**列表 / 直连 `_kb_or_404` / 检索预过滤都走它**。
+- 公式：admin|owner 豁免 → member 需 `角色 ∈ allowed_roles` ∧（不按部门收窄 ∨ 我直属部门 ∈ **允许集合的子树**）。方向反了会漏「人在子部门、库共享给父部门」。
+- 部门表 `parent_id` 用**空串**表根（NULL 在唯一索引里互不相等 → 同名根去重失效）；成员关系独立表，不给 `org_members` 加列。
+
 ## 变异验证铁律（踩过：变异没还原就收尾）
 - 变异脚本必须用**绝对路径**，还原用**无条件 `cp` 备份**（不要 `eval "cd x && ..."`，它会改 shell cwd 让 `cp` 静默失败），并用 `cmp` 校验还原成功。
+- ⚠️ 变异**绿了不一定是用例弱**：先找「同一规则是否有第二份实现」（2026-10-24 可见性规则写了两遍，变异只杀掉一份 → 收敛成 `allows()` 后才红）。
 - 跑完变异**必须 `git diff` 复查**，且同一轮内**再跑一次全量**——否则「测试红」与「工作区被污染」分不清（上一轮真把 `scope_ids = allowed` 留在仓库里过夜）。
 
 ## 默认拒绝写入（FR-8.4，用户决策：默认 true）
