@@ -41,6 +41,9 @@ function makeGateway(overrides: Partial<KbGateway> = {}): KbGateway {
     listDocuments: vi.fn().mockResolvedValue({ ok: true, data: [] }),
     uploadDocument: vi.fn(),
     search: vi.fn(),
+    // 选择器本身不用这两个（它们是知识库页的能力），但网关类型要求齐全
+    retrievalInfo: vi.fn(),
+    reindex: vi.fn(),
     ...overrides,
   };
 }

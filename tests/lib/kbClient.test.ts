@@ -5,6 +5,8 @@ import {
   createOrg,
   listKbs,
   listMyOrgs,
+  reindexKb,
+  retrievalInfo,
   searchOrgKbs,
   uploadDocument,
 } from '@/lib/kbClient';
@@ -169,5 +171,28 @@ describe('网关装配', () => {
 
   it('角色标签覆盖服务端三种角色（缺一种界面上就是裸英文）', () => {
     expect(Object.keys(KB_ROLE_LABELS).sort()).toEqual(['admin', 'member', 'owner']);
+  });
+});
+
+describe('向量检索的两个端点', () => {
+  it('retrievalInfo 不带 kbId 时走全站口径，带 kbId 时做 URL 编码', async () => {
+    const { fetchImpl, calls } = stubFetch(() => ({ status: 200, body: {} }));
+    await retrievalInfo({ baseUrl: BASE, token: 'tk', fetchImpl });
+    await retrievalInfo({ baseUrl: BASE, token: 'tk', fetchImpl }, 'kb/1 2');
+
+    expect(calls[0].url).toBe('https://cloud.example.com/api/kb/retrieval');
+    expect(calls[1].url).toBe('https://cloud.example.com/api/kb/retrieval?kbId=kb%2F1%202');
+  });
+
+  it('reindex 用 POST 打库级端点（GET 会 405，而 405 很容易被当成「没实现」）', async () => {
+    const { fetchImpl, calls } = stubFetch(() => ({
+      status: 200,
+      body: { indexed: 3, total: 3, model: 'hash:64', error: '' },
+    }));
+    const result = await reindexKb({ baseUrl: BASE, token: 'tk', fetchImpl }, 'k1');
+
+    expect(calls[0].url).toBe('https://cloud.example.com/api/kbs/k1/reindex');
+    expect(calls[0].init.method).toBe('POST');
+    expect(result.ok && result.data.indexed).toBe(3);
   });
 });

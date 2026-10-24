@@ -55,6 +55,17 @@ WorkBuddy 式智能体客户端：React18+TS+Vite 渲染层 + Electron 主进程
 - ⛔ **Agent 上新字段必须改三处**：`types/agent.ts` + `agentsStore.buildAgent`（白名单构造）+ `mergeAgents`（内置专家逐字段手抄覆盖）。漏第三处不报错，症状是「给内置专家设的值重启后消失」。
 - `vite build` 清 `dist/` 会撞安全删除垫片批量阈值 → 必须 `CODEBUDDY_SAFE_DELETE_ENABLED=0`。
 
+## 知识库向量检索（FR-4.7，2026-10-24）
+- 三档：`off`（**默认**，排序与纯词法逐条一致）/ `hash`（词袋随机投影，**非语义**）/ `openai`（任何 OpenAI 兼容 `/embeddings`）。换档只改 env，不改检索代码。
+- ⛔ 向量表 `kb_vectors` **独立建表**，不给 `kb_chunks` 加列：`create_all` 不 ALTER 老表 → 老库静默少列，而测试库每次重建看不出来。
+- ⛔ `load_vectors` 按 **kb_id** 取，不按 chunk_id 列表（后者会撞 SQLite 变量上限）。
+- 排序是**混合**（词法 + 余弦走 RRF，k=60）；词法零命中而向量命中时返回纯向量结果。无向量的块**不参与**向量排序（不是 0 分参与）。
+- `hash` 的碰撞噪声随桶数下降：dim=64 时无关文档余弦可到 0.16（会真进结果），dim=256 归零 → 默认 256，别往下调。
+
+## 变异验证铁律（踩过：变异没还原就收尾）
+- 变异脚本必须用**绝对路径**，还原用**无条件 `cp` 备份**（不要 `eval "cd x && ..."`，它会改 shell cwd 让 `cp` 静默失败），并用 `cmp` 校验还原成功。
+- 跑完变异**必须 `git diff` 复查**，且同一轮内**再跑一次全量**——否则「测试红」与「工作区被污染」分不清（上一轮真把 `scope_ids = allowed` 留在仓库里过夜）。
+
 ## 默认拒绝写入（FR-8.4，用户决策：默认 true）
 - ⚠️ **三层默认刻意不同**：引擎配置 `FileToolsConfig.default_deny_write=True`；客户端 `DEFAULT_DENY_WRITE=true`（必须与引擎逐字一致，否则界面说开着引擎在放行）；`_FsTool.__init__` 与 `resolve_allowed_path(deny_write_by_default=)` 参数默认 **False**（upstream 兼容，`memory.py` 依赖）。⛔ `sed` 批量替换会把两层一起改 → 有用例钉住「两层必须相反」。
 - 只在 **full 模式**生效；删除同样被拦；读不受影响；`pathRules` 是 full 模式唯一放行出口但**不能放宽边界**（restricted 下无效）。

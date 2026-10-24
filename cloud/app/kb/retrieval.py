@@ -17,6 +17,7 @@ PRD 的 FR-4.7 写的是「解析 → 向量检索」。本期先做**词法检�
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 #: 拉丁词/数字：连续字母数字算一个词；长度 < 2 的丢弃（"a"、"的" 之外全是噪声）
@@ -82,3 +83,66 @@ def rank_chunks(
     # 才不会依赖「输入顺序恰好就是这样」。
     hits.sort(key=lambda item: (-item.score, item.index))
     return hits[: max(0, top_k)]
+
+
+# —— 向量检索（FR-4.7，2026-10-24）——
+#
+# 与上面的词法`rank_chunks` 并列，**不替换**它：词法始终是兜底（没有 embedder、
+# 向量还没建、或云端向量服务挂了，检索必须还能用）。两者的输出形状刻意一致
+# （`ScoredChunk.index` 都是「候选列表里的下标」），所以调用方只在一处决定用哪个。
+
+
+def rank_by_vectors(
+    query_vector: Sequence[float],
+    chunk_ids: list[str],
+    vectors: dict[str, list[float]],
+    *,
+    top_k: int = 8,
+) -> list[ScoredChunk]:
+    """余弦排序。**没有向量的块不参与**（不是按 0 分参与）。
+
+    这个区别很实际：新入库但还没建索引的块、换了 embedder 之后没重建的块，
+    如果按 0 分参与排序，它们会在「所有分数都很低」的查询里挤掉真正的命中
+    ——用户看到的是「刚传的文档搜不到旧文档也变差了」。
+    """
+    # 函数内导入：`embedding` 反过来 import 本模块的 `tokenize`，模块级导入会成环
+    from app.kb.embedding import cosine
+
+    scored: list[ScoredChunk] = []
+    for index, chunk_id in enumerate(chunk_ids):
+        vector = vectors.get(chunk_id)
+        if not vector:
+            continue
+        score = cosine(query_vector, vector)
+        if score > 0:
+            scored.append(ScoredChunk(index=index, score=score))
+    scored.sort(key=lambda item: (-item.score, item.index))
+    return scored[: max(0, top_k)]
+
+
+def hybrid_rank(
+    lexical: list[ScoredChunk],
+    semantic: list[ScoredChunk],
+    *,
+    top_k: int = 8,
+    rrf_k: int = 60,
+) -> list[ScoredChunk]:
+    """RRF（Reciprocal Rank Fusion）合并两路结果。
+
+    为什么用 RRF 而不是「加权求和」：两份分数**不同量纲**（词法是「词频/√长度」，
+    余弦是 [-1,1]），加权需要按语料调参，调出来的权重换个库就不成立。RRF 只用
+    名次（`1/(k+rank)`），没有可调量，也不会被某一路的离群高分带偏。
+
+    `rrf_k=60` 是原论文的经验值：它把「第 1 名与第 2 名」的差距压得比原始分小，
+    因此**两路都排前面的**结果稳定胜出，而不是一路的第一名通吃。
+
+    只在一路出现的块仍然保留（这正是混合检索的价值：词法抓精确词、向量抓近似表达），
+    只是分数天然低一档。
+    """
+    scores: dict[int, float] = {}
+    for ranked in (lexical, semantic):
+        for rank, item in enumerate(ranked, start=1):
+            scores[item.index] = scores.get(item.index, 0.0) + 1.0 / (rrf_k + rank)
+    merged = [ScoredChunk(index=index, score=score) for index, score in scores.items()]
+    merged.sort(key=lambda item: (-item.score, item.index))
+    return merged[: max(0, top_k)]

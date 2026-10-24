@@ -68,6 +68,35 @@ export interface KbSearchHit {
   snippet: string;
 }
 
+/**
+ * 检索能力与索引覆盖率（`GET /api/kb/retrieval`）。
+ *
+ * `mode` 是**能力口径**（这台服务能不能做向量检索），不是单次查询实际走的那条路
+ * ——某次查询的候选一个向量都没有时仍会退回词法。界面文案必须按这个字段写，
+ * 否则「说在做向量检索、其实走的是词法」就成了没法解释的现象。
+ */
+export interface KbRetrievalInfo {
+  mode: 'lexical' | 'hybrid';
+  /** `off` / `hash` / `openai`（后端可能新增，按字符串收） */
+  embedder: string;
+  model: string;
+  dim: number;
+  chunks: number;
+  indexed: number;
+  /** 有块没建索引（新文档 / 换了 embedder 还没重建） */
+  stale: boolean;
+  /** 配置错误（选了远程 embedder 但缺地址等），此时检索会退回词法 */
+  error: string;
+}
+
+/** 重建索引的结果。`indexed < total` 说明中途失败（`error` 里有原因）。 */
+export interface KbReindexResult {
+  indexed: number;
+  total: number;
+  model: string;
+  error: string;
+}
+
 /** 角色中文名（界面与提示共用）。 */
 export const KB_ROLE_LABELS: Record<string, string> = {
   owner: '所有者',
@@ -171,6 +200,10 @@ export interface KbGateway {
     orgId: string,
     input: { query: string; kbId?: string; kbIds?: string[]; topK?: number },
   ): Promise<KbApiResult<KbSearchHit[]>>;
+  /** 当前检索能力与索引覆盖率（页面的说明文字按它渲染，不写死） */
+  retrievalInfo(kbId?: string): Promise<KbApiResult<KbRetrievalInfo>>;
+  /** 给一个库重建向量索引（补老文档 / 换 embedder 之后） */
+  reindex(kbId: string): Promise<KbApiResult<KbReindexResult>>;
 }
 
 /** 用一份配置装配网关（页面在拿到 token 后调用一次）。 */
@@ -183,6 +216,8 @@ export function createKbGateway(config: KbClientConfig): KbGateway {
     listDocuments: (kbId) => listDocuments(config, kbId),
     uploadDocument: (kbId, input) => uploadDocument(config, kbId, input),
     search: (orgId, input) => searchOrgKbs(config, orgId, input),
+    retrievalInfo: (kbId) => retrievalInfo(config, kbId),
+    reindex: (kbId) => reindexKb(config, kbId),
   };
 }
 
@@ -248,5 +283,24 @@ export function searchOrgKbs(
   return request<KbSearchHit[]>(config, `/api/orgs/${encodeURIComponent(orgId)}/search`, {
     method: 'POST',
     body: input,
+  });
+}
+
+/** 当前检索能力 + 索引覆盖率。`kbId` 缺省 = 全站口径。 */
+export function retrievalInfo(
+  config: KbClientConfig,
+  kbId?: string,
+): Promise<KbApiResult<KbRetrievalInfo>> {
+  const query = kbId ? `?kbId=${encodeURIComponent(kbId)}` : '';
+  return request<KbRetrievalInfo>(config, `/api/kb/retrieval${query}`);
+}
+
+/** 重建一个库的向量索引（幂等，分批；中途失败会在 `error` 里说明）。 */
+export function reindexKb(
+  config: KbClientConfig,
+  kbId: string,
+): Promise<KbApiResult<KbReindexResult>> {
+  return request<KbReindexResult>(config, `/api/kbs/${encodeURIComponent(kbId)}/reindex`, {
+    method: 'POST',
   });
 }

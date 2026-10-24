@@ -43,9 +43,24 @@ const HIT = {
   snippet: '报销流程：走财务邮箱。',
 };
 
+const RETRIEVAL_OFF = {
+  mode: 'lexical' as const,
+  embedder: 'off',
+  model: '',
+  dim: 0,
+  chunks: 0,
+  indexed: 0,
+  stale: false,
+  error: '',
+};
+
 function makeGateway(overrides: Partial<KbGateway> = {}): KbGateway {
   return {
     listOrgs: vi.fn().mockResolvedValue({ ok: true, data: [ORG] }),
+    retrievalInfo: vi.fn().mockResolvedValue({ ok: true, data: RETRIEVAL_OFF }),
+    reindex: vi
+      .fn()
+      .mockResolvedValue({ ok: true, data: { indexed: 2, total: 2, model: 'hash:64', error: '' } }),
     createOrg: vi.fn().mockResolvedValue({ ok: true, data: ORG }),
     listKbs: vi.fn().mockResolvedValue({ ok: true, data: [KB] }),
     createKb: vi.fn().mockResolvedValue({ ok: true, data: KB }),
@@ -145,6 +160,74 @@ describe('组织 → 知识库 → 文档', () => {
     expect(host.textContent).toContain('当前角色无权访问该知识库');
     // 不能同时又渲染一个「没有命中」——那是另一种结论
     expect(host.textContent).not.toContain('没有命中');
+  });
+});
+
+describe('检索能力说明（FR-4.7 向量检索）', () => {
+  it('默认（词法）：明说未启用向量检索，且不给「重建索引」按钮', async () => {
+    const host = render(makeGateway());
+    await flush();
+
+    const caption = host.querySelector('[data-testid="kb-caption"]')?.textContent ?? '';
+    expect(caption).toContain('当前词法检索，向量检索未启用');
+    expect(host.querySelector('[data-testid="kb-reindex"]')).toBeNull();
+  });
+
+  it('哈希向量 + 有块没索引：说明里写清「非语义」与待建块数，并给重建入口', async () => {
+    const retrievalInfo = vi.fn().mockResolvedValue({
+      ok: true,
+      data: {
+        mode: 'hybrid',
+        embedder: 'hash',
+        model: 'hash:64',
+        dim: 64,
+        chunks: 5,
+        indexed: 3,
+        stale: true,
+        error: '',
+      },
+    });
+    const reindex = vi
+      .fn()
+      .mockResolvedValue({ ok: true, data: { indexed: 5, total: 5, model: 'hash:64', error: '' } });
+    const host = render(makeGateway({ retrievalInfo, reindex }));
+    await flush();
+
+    const caption = host.querySelector('[data-testid="kb-caption"]')?.textContent ?? '';
+    // 「非语义」必须写出来：哈希向量只认字面重合，不写会被当成语义检索用
+    expect(caption).toContain('本地哈希向量（非语义');
+    expect(caption).toContain('有 2 块待建索引');
+
+    await act(async () => {
+      click(host.querySelector('[data-testid="kb-reindex"]'));
+      await flush();
+    });
+    expect(reindex).toHaveBeenCalledWith('k1');
+    // 重建后重读了状态（否则按钮会一直挂着「待建索引」）
+    expect(retrievalInfo.mock.calls.length).toBeGreaterThan(1);
+  });
+
+  it('配置有误：说明改成警示句，并且不显示重建按钮（点了也建不成）', async () => {
+    const retrievalInfo = vi.fn().mockResolvedValue({
+      ok: true,
+      data: {
+        mode: 'lexical',
+        embedder: 'openai',
+        model: '',
+        dim: 0,
+        chunks: 4,
+        indexed: 0,
+        stale: false,
+        error: 'NANOWORK_KB_EMBED_BASE_URL / NANOWORK_KB_EMBED_MODEL 至少要给一个',
+      },
+    });
+    const host = render(makeGateway({ retrievalInfo }));
+    await flush();
+
+    const caption = host.querySelector('[data-testid="kb-caption"]')?.textContent ?? '';
+    expect(caption).toContain('检索配置有误');
+    expect(caption).toContain('退回词法检索');
+    expect(host.querySelector('[data-testid="kb-reindex"]')).toBeNull();
   });
 });
 

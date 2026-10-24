@@ -94,6 +94,46 @@ curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:8910/health
 | `NANOWORK_CLOUD_SECRET` | 开发用固定值 | **生产必须设置**：否则重启即换密钥，所有 token 失效（表现为「用户随机掉线」） |
 | `NANOWORK_CLOUD_ENV` | —— | 设为 `production` 时，缺 `NANOWORK_CLOUD_SECRET` 直接启动失败（fail-fast） |
 | `NANOWORK_CLOUD_ORIGINS` | 本地 dev server 列表 | CORS origins；带凭据时**不能用 `*`** |
+| `NANOWORK_KB_EMBEDDER` | `off` | 知识库向量检索：`off` / `hash` / `openai`（见下节） |
+| `NANOWORK_KB_EMBED_DIM` | `256` | 仅 `hash`：哈希桶数。**调小会增加碰撞噪声**（无关文档也会得到正余弦），别低于 256 |
+| `NANOWORK_KB_EMBED_BASE_URL` | —— | 仅 `openai`：如 `https://dashscope.aliyuncs.com/compatible-mode/v1` |
+| `NANOWORK_KB_EMBED_MODEL` | —— | 仅 `openai`：如 `text-embedding-v3` |
+| `NANOWORK_KB_EMBED_API_KEY` | —— | 仅 `openai` |
+
+## 知识库向量检索（可选，FR-4.7）
+
+**默认 `off`：检索排序与之前逐条一致。** 打开会改变结果的先后顺序，所以不做成
+默认值——升级不该悄悄改变用户看到的东西。
+
+```bash
+# 本地验证链路（无依赖、离线、确定性）
+NANOWORK_KB_EMBEDDER=hash .venv/Scripts/python.exe -m uvicorn app.main:app --port 8910
+
+# 真语义（任何 OpenAI 兼容的 /embeddings）
+NANOWORK_KB_EMBEDDER=openai \
+NANOWORK_KB_EMBED_BASE_URL="https://dashscope.aliyuncs.com/compatible-mode/v1" \
+NANOWORK_KB_EMBED_MODEL="text-embedding-v3" \
+NANOWORK_KB_EMBED_API_KEY="sk-..." \
+  .venv/Scripts/python.exe -m uvicorn app.main:app --port 8910
+```
+
+| 档位 | 是不是语义 | 说明 |
+|---|---|---|
+| `hash` | **不是** | 词袋的随机投影（中文双字 + 拉丁词）。只认字面重合，同义词搜不到；用它是为了验证整条链路与索引覆盖率 |
+| `openai` | 是 | 真正的 embedding；向量存 `kb_vectors`（`(chunk_id, model)` 主键，换模型不互相污染） |
+
+三条行为约定：
+
+1. **排序是混合的**（词法 + 余弦经 RRF 合并）。词法抓精确词/编号，向量抓近似表达；
+   只有一路命中时也会出现（词法空、向量中 → 纯向量结果）。
+2. **可见性不受影响**：候选仍然先按角色 + `kbIds` 收窄（SQL `IN`），向量只参与排序。
+3. **索引缺失不是错误**：老文档没建索引时它们不参与向量排序（不是按 0 分参与），
+   检索照常可用。补索引用 `POST /api/kbs/{kbId}/reindex`（幂等、分批、中途失败
+   会回报已写入多少）；当前覆盖率看 `GET /api/kb/retrieval`，知识库页会把它显示成
+   一句人话（并给出「重建索引」按钮）。
+
+**未做（别当成已有）**：没有 ANN 索引（候选全取进内存算余弦，适合单库几百到几千块）；
+没有 Office/PDF 解析（只收纯文本）；向量与正文没有版本绑定（换 embedder 必须重建）。
 
 ## 两条服务端不变量（改这块前必读）
 

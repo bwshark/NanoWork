@@ -36,9 +36,11 @@ import {
   type KbDocument,
   type KbGateway,
   type KbOrg,
+  type KbRetrievalInfo,
   type KbSearchHit,
   type KbSummary,
 } from "@/lib/kbClient";
+import { describeRetrieval } from "@/lib/kbRetrievalCaption";
 import { resolveSyncBaseUrl } from "@/sync/baseUrl";
 import { getSyncRuntime } from "@/sync/runtime";
 
@@ -89,6 +91,9 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
 
   const [kbs, setKbs] = useState<KbSummary[]>([]);
   const [activeKbId, setActiveKbId] = useState<string>("");
+  // 检索能力 + 索引覆盖率：说明文字按它渲染（原来写死「词法检索」，开了向量就说谎）
+  const [retrieval, setRetrieval] = useState<KbRetrievalInfo | null>(null);
+  const [reindexing, setReindexing] = useState(false);
   const [kbsError, setKbsError] = useState("");
   const [kbsLoading, setKbsLoading] = useState(false);
   const [newKbName, setNewKbName] = useState("");
@@ -194,6 +199,19 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
     if (client) void loadDocs(client, activeKbId);
   }, [client, activeKbId, loadDocs]);
 
+  /**
+   * 读检索状态。**失败不报错、只保留上一次**：它是说明文字的数据源，
+   * 拿不到时就退回「不猜引擎」的中性文案，不该因为一个附加信息把整页打成错误态。
+   */
+  const loadRetrieval = useCallback(async (target: KbGateway, kbId: string) => {
+    const result = await target.retrievalInfo(kbId || undefined);
+    if (result.ok) setRetrieval(result.data);
+  }, []);
+
+  useEffect(() => {
+    if (client) void loadRetrieval(client, activeKbId);
+  }, [client, activeKbId, loadRetrieval]);
+
   const handleCreateOrg = async () => {
     if (!client || !newOrgName.trim()) return;
     const result = await client.createOrg(newOrgName.trim());
@@ -243,6 +261,23 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
     await loadKbs(client, activeOrgId);
   };
 
+  const handleReindex = async () => {
+    if (!client || !activeKbId) return;
+    setReindexing(true);
+    const result = await client.reindex(activeKbId);
+    setReindexing(false);
+    if (!result.ok) {
+      toast.error(result.message);
+      return;
+    }
+    const { indexed, total, error } = result.data;
+    // 分批建的：中途失败要如实说「做到哪了」，否则用户点完看到「成功」但还搜不到
+    if (error !== "") toast.warning(`索引未全部完成（${indexed}/${total}）：${error}`);
+    else toast.success(`已为 ${indexed} 块建立索引`);
+    await loadRetrieval(client, activeKbId);
+    await loadDocs(client, activeKbId);
+  };
+
   const handleSearch = async () => {
     if (!client || !activeOrgId || !query.trim()) return;
     setSearching(true);
@@ -259,6 +294,10 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
     }
     setHits(result.data);
   };
+
+  const caption = describeRetrieval(retrieval);
+  const canReindex =
+    retrieval !== null && retrieval.embedder !== "off" && retrieval.stale && activeKbId !== "";
 
   if (needLogin) {
     return (
@@ -278,9 +317,26 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
           <Typography variant="h6" sx={{ fontWeight: 700 }}>
             知识库
           </Typography>
-          <Typography variant="caption" color="text.secondary">
-            团队共享资料 · 按角色可见 · 检索在服务端先过滤再打分（当前为词法检索，向量检索未接入）
-          </Typography>
+          <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+            <Typography
+              variant="caption"
+              color={caption.warning ? "warning.main" : "text.secondary"}
+              data-testid="kb-caption"
+            >
+              {caption.text}
+            </Typography>
+            {/* 只在「引擎开着但还有块没索引」时出现：其余时候这个按钮点了也没意义 */}
+            {canReindex && (
+              <Button
+                size="small"
+                data-testid="kb-reindex"
+                disabled={reindexing}
+                onClick={() => void handleReindex()}
+              >
+                {reindexing ? "重建中…" : "重建索引"}
+              </Button>
+            )}
+          </Stack>
         </Box>
         <Stack direction="row" spacing={1} alignItems="center">
           {orgs.length > 0 && (

@@ -1,6 +1,7 @@
 """知识库表（FR-4.7 的 V1.5 服务端 MVP）。
 
-三张表：库 → 文档 → 分块。分块单独成表而不是塞进文档的 JSON 字段，是为了让
+四张表：库 → 文档 → 分块 → 分块向量（`KbVector`，见文件末尾）。
+分块单独成表而不是塞进文档的 JSON 字段，是为了让
 「检索前过滤」能落在 SQL 的 WHERE 上（见 `routes.search_kb`）：过滤条件必须是
 **查询的一部分**，否则就成了「先全量取出来再在内存里筛」，也就是 PRD 明确反对的
 「检索后过滤」。
@@ -81,3 +82,36 @@ class KbChunk(SQLModel, table=True):
     doc_id: str = Field(index=True, foreign_key="kb_documents.id")
     ordinal: int = 0
     text: str = ""
+
+
+class KbVector(SQLModel, table=True):
+    """分块向量（FR-4.7 的向量检索，2026-10-24）。
+
+    ## 为什么单独一张表，而不是给 `KbChunk` 加一列
+
+    两个理由，都是「不加就会真出事」的那种：
+
+    1. **`create_all` 不会 ALTER 已存在的表**。`cloud.db` 里已经有 `kb_chunks` 了，
+       给它新增列在启动时**静默不生效**（`create_all` 只建缺失的表），随后任何
+       `SELECT vector` 都会在真机上炸，而测试库每次重建，永远看不出来。
+       新表则一定被建出来。
+    2. **同一块可能有多份向量**：换了 embedder（本地哈希 ↔ 远程模型）之后，旧向量
+       仍然有效可回滚。以 `(chunk_id, model)` 为键就能让两套并存，检索时按
+       「当前模型」取，不必先删库。
+
+    向量存 BLOB（`array('f')` 的字节）而不是 JSON：维度 256 时 JSON 约 3KB / 块，
+    BLOB 是 1KB。真正的规模化（HNSW / pgvector）不在这里做，见 `vectors.py` 的边界说明。
+    """
+
+    __tablename__ = "kb_vectors"  # type: ignore[assignment]
+
+    #: 复合主键的一半由 `model` 承担 → 主键写成 `chunk_id` + `model` 的组合
+    chunk_id: str = Field(primary_key=True, foreign_key="kb_chunks.id")
+    #: 同一个块可能被多个模型各算一份
+    model: str = Field(primary_key=True)
+    kb_id: str = Field(index=True, foreign_key="knowledge_bases.id")
+    doc_id: str = Field(index=True, foreign_key="kb_documents.id")
+    dim: int = 0
+    #: `array('f')` 打包后的小端 float32 字节
+    vector: bytes = b""
+    created_at: datetime = Field(default_factory=utc_now)
