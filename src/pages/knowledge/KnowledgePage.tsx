@@ -41,6 +41,8 @@ import {
   type KbSummary,
 } from "@/lib/kbClient";
 import { describeRetrieval } from "@/lib/kbRetrievalCaption";
+import { KB_UPLOAD_ACCEPT, precheckUpload } from "@/lib/kbUpload";
+import { readFileAsBase64 } from "@/lib/fileBase64";
 import { resolveSyncBaseUrl } from "@/sync/baseUrl";
 import { getSyncRuntime } from "@/sync/runtime";
 
@@ -94,6 +96,7 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
   // 检索能力 + 索引覆盖率：说明文字按它渲染（原来写死「词法检索」，开了向量就说谎）
   const [retrieval, setRetrieval] = useState<KbRetrievalInfo | null>(null);
   const [reindexing, setReindexing] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const [kbsError, setKbsError] = useState("");
   const [kbsLoading, setKbsLoading] = useState(false);
   const [newKbName, setNewKbName] = useState("");
@@ -259,6 +262,45 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
     toast.success(`已入库：${result.data.chunkCount} 块`);
     await loadDocs(client, activeKbId);
     await loadKbs(client, activeOrgId);
+  };
+
+  /**
+   * 上传文件：客户端预检 → 读 base64 → 服务端解析入库。
+   *
+   * 三个必须做对的细节：
+   * 1. 预检失败**不读文件**（8MB 的文件读成 base64 本身就慢）；
+   * 2. 解析警告（PDF 某几页没文本层 / docx 表格被摊平）要逐条 toast —— 这类信息
+   *    不告诉用户，就会变成「我明明传了那份资料，它就是搜不到」；
+   * 3. `<input>` 的 value 要清空，否则**同一个文件再选一次不触发 onChange**。
+   */
+  const handleFileUpload = async (file: File) => {
+    if (!client || !activeKbId) return;
+    const problem = precheckUpload(file);
+    if (problem) {
+      toast.error(problem);
+      return;
+    }
+    setUploading(true);
+    try {
+      const contentBase64 = await readFileAsBase64(file);
+      const result = await client.uploadFile(activeKbId, {
+        filename: file.name,
+        contentBase64,
+      });
+      if (!result.ok) {
+        toast.error(result.message);
+        return;
+      }
+      const { title, kind, chunkCount, warnings } = result.data;
+      toast.success(`已入库《${title}》（${kind ?? "文件"}，${chunkCount} 块）`);
+      for (const warning of warnings ?? []) toast.warning(warning);
+      await loadDocs(client, activeKbId);
+      await loadRetrieval(client, activeKbId);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "读取文件失败");
+    } finally {
+      setUploading(false);
+    }
   };
 
   const handleReindex = async () => {
@@ -584,6 +626,34 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
                   入库
                 </Button>
               </Stack>
+              {/* 文件上传：改成「选文件」而不是「粘贴」是这一步的实际价值——
+                  真实资料都在 .docx / .pdf 里，要求用户先复制成纯文本等于没这个功能。 */}
+              <Stack direction="row" spacing={1} alignItems="center">
+                <Button
+                  component="label"
+                  size="small"
+                  variant="outlined"
+                  disabled={!activeKbId || uploading}
+                  data-testid="kb-upload-file"
+                >
+                  {uploading ? "上传中…" : "上传文件"}
+                  <input
+                    type="file"
+                    hidden
+                    accept={KB_UPLOAD_ACCEPT}
+                    data-testid="kb-file-input"
+                    onChange={(event) => {
+                      const file = event.target.files?.[0];
+                      // 清空：否则再选同一个文件不会触发 onChange（浏览器认为值没变）
+                      event.target.value = "";
+                      if (file) void handleFileUpload(file);
+                    }}
+                  />
+                </Button>
+                <Typography variant="caption" color="text.secondary">
+                  支持 {KB_UPLOAD_ACCEPT.split(",").join(" / ")}（单文件 8MB；PDF 需服务端装 pypdf）
+                </Typography>
+              </Stack>
               <TextField
                 size="small"
                 label="正文（纯文本，按空行分段；单篇上限 20 万字符）"
@@ -595,7 +665,8 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
                 maxRows={6}
               />
               <Typography variant="caption" color="text.secondary">
-                正文会被切成若干块入库，只有块参与检索；Office / PDF 解析尚未接入。
+                正文会被切成若干块入库，只有块参与检索。也可以直接上传 .docx / .pdf ——
+                服务端会先解析成文本再切块；解析失败会说明原因（旧版 .doc 需要另存为新格式）。
               </Typography>
             </Paper>
 

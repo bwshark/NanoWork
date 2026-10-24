@@ -12,6 +12,7 @@ import { act } from 'react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { KnowledgePage } from '@/pages/knowledge/KnowledgePage';
+import { toast } from '@/components/Toast';
 import type { KbGateway } from '@/lib/kbClient';
 import { buttonByText, click, flush, mount, setInputValue, unmount } from './helpers/reactMount';
 
@@ -66,6 +67,7 @@ function makeGateway(overrides: Partial<KbGateway> = {}): KbGateway {
     createKb: vi.fn().mockResolvedValue({ ok: true, data: KB }),
     listDocuments: vi.fn().mockResolvedValue({ ok: true, data: [DOC] }),
     uploadDocument: vi.fn().mockResolvedValue({ ok: true, data: DOC }),
+    uploadFile: vi.fn().mockResolvedValue({ ok: true, data: { ...DOC, kind: 'docx' } }),
     search: vi.fn().mockResolvedValue({ ok: true, data: [HIT] }),
     ...overrides,
   };
@@ -160,6 +162,72 @@ describe('组织 → 知识库 → 文档', () => {
     expect(host.textContent).toContain('当前角色无权访问该知识库');
     // 不能同时又渲染一个「没有命中」——那是另一种结论
     expect(host.textContent).not.toContain('没有命中');
+  });
+});
+
+describe('上传文件（FR-4.7 解析）', () => {
+  /** 触发一次「选文件」：jsdom 没有 DataTransfer，直接给 input.files 塞值 */
+  async function selectFile(host: ParentNode, file: File) {
+    const input = host.querySelector('[data-testid="kb-file-input"]') as HTMLInputElement | null;
+    expect(input).toBeTruthy();
+    Object.defineProperty(input, 'files', { value: [file], configurable: true });
+    await act(async () => {
+      input!.dispatchEvent(new Event('change', { bubbles: true }));
+      await flush();
+    });
+  }
+
+  it('选中的文件以 base64 上传，并把解析警告逐条提示出来', async () => {
+    const uploadFile = vi.fn().mockResolvedValue({
+      ok: true,
+      data: {
+        ...DOC,
+        kind: 'pdf',
+        chunkCount: 3,
+        warnings: ['2 页没有文本层（可能是图片页），这部分内容不会被检索到'],
+      },
+    });
+    const host = render(makeGateway({ uploadFile }));
+    await flush();
+
+    await selectFile(host, new File([new Uint8Array([0x25, 0x50])], '制度.pdf'));
+
+    expect(uploadFile).toHaveBeenCalledTimes(1);
+    const [kbId, payload] = uploadFile.mock.calls[0];
+    expect(kbId).toBe('k1');
+    expect(payload.filename).toBe('制度.pdf');
+    // 必须是不带 data: 前缀的 base64（带了服务端会说「不是合法 base64」）
+    expect(payload.contentBase64).toBe(btoa('\x25\x50'));
+    // 警告必须弹给用户：不弹就变成「我传了这份资料，它怎么搜不到」
+    expect(toast.warning).toHaveBeenCalledWith(expect.stringContaining('没有文本层'));
+  });
+
+  it('不支持的后缀在本地就拦掉，不发请求', async () => {
+    const uploadFile = vi.fn();
+    const host = render(makeGateway({ uploadFile }));
+    await flush();
+
+    await selectFile(host, new File([new Uint8Array([0x89, 0x50])], '截图.png'));
+
+    expect(uploadFile).not.toHaveBeenCalled();
+    expect(toast.error).toHaveBeenCalledWith(expect.stringContaining('.png'));
+  });
+
+  it('服务端解析失败的原因原样提示，不压成「上传失败」', async () => {
+    const uploadFile = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 422,
+      message: '不是有效的 .docx（zip 结构损坏）',
+      unauthorized: false,
+    });
+    const host = render(makeGateway({ uploadFile }));
+    await flush();
+
+    // 后缀能过前端预检、内容被服务端判定损坏 —— 这正是「只有服务端知道」的那类失败
+    await selectFile(host, new File([new Uint8Array([1])], '坏.docx'));
+
+    expect(uploadFile).toHaveBeenCalledTimes(1);
+    expect(toast.error).toHaveBeenCalledWith(expect.stringContaining('zip'));
   });
 });
 

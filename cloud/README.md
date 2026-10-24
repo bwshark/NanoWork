@@ -135,6 +135,41 @@ NANOWORK_KB_EMBED_API_KEY="sk-..." \
 **未做（别当成已有）**：没有 ANN 索引（候选全取进内存算余弦，适合单库几百到几千块）；
 没有 Office/PDF 解析（只收纯文本）；向量与正文没有版本绑定（换 embedder 必须重建）。
 
+## 知识库文档解析（可选，FR-4.7）
+
+上传文件时服务端**先解析成纯文本再切块**，解析失败不会留下半篇文档。
+
+| 格式 | 实现 | 依赖 |
+|---|---|---|
+| `.txt` / `.md` / `.csv` | UTF-8 → GB18030 依次尝试 | 标准库 |
+| `.docx` | 读 zip 里的 `word/document.xml` 抽段落（表格按段落展开） | 标准库 |
+| `.pdf` | 抽文本层 | **可选**：`pip install -i https://pypi.org/simple pypdf` |
+| 旧版 `.doc/.xls/.ppt`、图片、扫描件 PDF | 明确回 422 并说清该换什么格式 | —— |
+
+```bash
+# 装可选依赖（国内镜像可能没有这个包，加 -i 走官方源）
+.venv/Scripts/python.exe -m pip install -e ".[parse]" -i https://pypi.org/simple
+```
+
+接口（base64 JSON，不引入 `python-multipart`）：
+
+```http
+POST /api/kbs/{kbId}/documents/file
+{ "filename": "差旅制度.docx", "contentBase64": "...", "title": "可选" }
+```
+
+三条口径：
+
+1. **上限**：单文件 8MB（`parsing.MAX_UPLOAD_BYTES`）、单篇正文 20 万字（超过要求拆分，**不截断**
+   ——静默截断等于丢资料）。前端也会预检一次，避免传完 11MB 才看到 422。
+2. **降级必须说出来**：PDF 有页面没文本层、docx 里的表格被摊平，都会进响应的 `warnings`，
+   客户端逐条弹出。**不弹**的后果是"我明明传了那份资料，它就是搜不到"。
+3. **扫描件不假装成功**：没有文本层的 PDF 直接 422 并提示先 OCR，不入库空文档
+   （空文档会占块数、永不出现在结果里）。
+
+**未做**：`.xlsx` / `.pptx`、OCR、图片内文字、`.doc`（二进制格式）；PDF 只取文本层，
+不保留版面与表格结构。
+
 ## 两条服务端不变量（改这块前必读）
 
 1. **`updated_at` 取服务端接收时间**（§5.3）：客户端上报的时间只存进

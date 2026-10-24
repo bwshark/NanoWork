@@ -57,6 +57,12 @@ export interface KbDocument {
   chars: number;
   chunkCount: number;
   createdAt: string;
+  /** 实际写入的向量条数（0 = 没建索引） */
+  embedded?: number;
+  /** 来源格式：text / docx / pdf */
+  kind?: string;
+  /** 解析降级说明（如「2 页没有文本层」）——必须展示，否则用户不知道为什么搜不全 */
+  warnings?: string[];
 }
 
 export interface KbSearchHit {
@@ -196,6 +202,11 @@ export interface KbGateway {
     kbId: string,
     input: { title: string; content: string },
   ): Promise<KbApiResult<KbDocument>>;
+  /** 上传文件（服务端解析成文本再切块入库）；`title` 缺省用文件名 */
+  uploadFile(
+    kbId: string,
+    input: { filename: string; contentBase64: string; title?: string },
+  ): Promise<KbApiResult<KbDocument>>;
   search(
     orgId: string,
     input: { query: string; kbId?: string; kbIds?: string[]; topK?: number },
@@ -215,6 +226,7 @@ export function createKbGateway(config: KbClientConfig): KbGateway {
     createKb: (orgId, input) => createKb(config, orgId, input),
     listDocuments: (kbId) => listDocuments(config, kbId),
     uploadDocument: (kbId, input) => uploadDocument(config, kbId, input),
+    uploadFile: (kbId, input) => uploadKbFile(config, kbId, input),
     search: (orgId, input) => searchOrgKbs(config, orgId, input),
     retrievalInfo: (kbId) => retrievalInfo(config, kbId),
     reindex: (kbId) => reindexKb(config, kbId),
@@ -260,6 +272,23 @@ export function uploadDocument(
   input: { title: string; content: string },
 ): Promise<KbApiResult<KbDocument>> {
   return request<KbDocument>(config, `/api/kbs/${encodeURIComponent(kbId)}/documents`, {
+    method: 'POST',
+    body: input,
+  });
+}
+
+/**
+ * 上传文件入库（FR-4.7 解析）。
+ *
+ * 走 JSON + base64 而不是 multipart：服务端不必为此引入 `python-multipart`，
+ * 客户端也不必拼表单边界。代价是体积 +1/3，对知识库文档（几百 KB）无所谓。
+ */
+export function uploadKbFile(
+  config: KbClientConfig,
+  kbId: string,
+  input: { filename: string; contentBase64: string; title?: string },
+): Promise<KbApiResult<KbDocument>> {
+  return request<KbDocument>(config, `/api/kbs/${encodeURIComponent(kbId)}/documents/file`, {
     method: 'POST',
     body: input,
   });

@@ -22,6 +22,11 @@ dev = [
     "httpx>=0.26",
     "ruff>=0.4",
 ]
+# 知识库文档解析的**可选**依赖：`pip install -e ".[parse]"`。
+# 不装也能跑——`.docx` / `.txt` / `.md` 走标准库；只有 PDF 上传会回 422 并提示安装命令。
+# 刻意不做成硬依赖：PDF 文本层提取自己写不出来（字体编码 / CID / 对象流），
+# 但也不该让"只用纯文本知识库"的部署被迫多装一个包。
+parse = ["pypdf>=4"]
 
 [build-system]
 requires = ["setuptools>=68"]

@@ -35,6 +35,7 @@ from app.kb.models import (
     roles_from_json,
     roles_to_json,
 )
+from app.kb.parsing import ParseError, decode_base64, default_title, parse_document
 from app.kb.retrieval import ScoredChunk, hybrid_rank, rank_by_vectors, rank_chunks
 from app.kb.vectors import load_vectors, save_vectors, vector_coverage
 from app.orgs.models import OrgMember
@@ -75,6 +76,14 @@ class CreateDocumentRequest(BaseModel):
     content: str = Field(min_length=1, max_length=MAX_DOCUMENT_CHARS)
 
 
+class UploadFileRequest(BaseModel):
+    """上传文件（base64）。`title` 缺省用文件名去扩展名。"""
+
+    filename: str = Field(min_length=1, max_length=255)
+    contentBase64: str = Field(min_length=1)
+    title: str | None = Field(default=None, max_length=200)
+
+
 class DocumentView(BaseModel):
     id: str
     kbId: str
@@ -86,6 +95,11 @@ class DocumentView(BaseModel):
     #: 单列一个字段是为了让「入库成功但没索引」这件事**看得见**——否则用户只会觉得
     #: 「新传的文档搜不到」，而界面一切正常。
     embedded: int = 0
+    #: 来源格式：text（粘贴/纯文本）/ docx / pdf
+    kind: str = "text"
+    #: 解析过程中的降级说明（"PDF 有 2 页没有文本层"之类）。**必须回给用户**：
+    #: 静默丢内容会变成"我明明传了那份资料，它就是搜不到"。
+    warnings: list[str] = []
 
 
 class SearchRequest(BaseModel):
@@ -220,24 +234,23 @@ def list_kbs(
     return [_kb_view(session, kb) for kb in rows if kb.id in ids]
 
 
-@router.post("/kbs/{kb_id}/documents", response_model=DocumentView, status_code=201)
-def create_document(
-    kb_id: str,
-    payload: CreateDocumentRequest,
-    user: User = Depends(current_user),
-    session: Session = Depends(get_session),
-) -> DocumentView:
-    """入库：切块后**只有块进库**（文档行只存元数据），见 `models.py` 的说明。"""
-    kb, _member = _kb_or_404(session, kb_id, user)
-    chunks = chunk_text(payload.content)
+def _insert_document(
+    session: Session, kb: KnowledgeBase, user: User, *, title: str, content: str
+) -> tuple[KbDocument, int]:
+    """文本入库的唯一实现（粘贴正文与上传文件两条入口共用）。
+
+    返回 `(文档行, 实际写入的向量条数)`。**切块 → 落库 → 建索引**的顺序不能换：
+    向量行以 `chunk_id` 为外键，块没落库就没有可挂的东西。
+    """
+    chunks = chunk_text(content)
     if not chunks:
         raise HTTPException(status_code=422, detail="文档内容为空")
 
     doc = KbDocument(
         id=new_user_id(),
         kb_id=kb.id,
-        title=payload.title.strip(),
-        chars=len(payload.content),
+        title=title,
+        chars=len(content),
         chunk_count=len(chunks),
         created_by=user.id,
     )
@@ -251,12 +264,16 @@ def create_document(
     session.refresh(doc)
 
     # 建索引（FR-4.7 向量检索）：embedder 关着就跳过，失败也只是「这篇先只有词法能搜到」。
-    # ⚠️ 必须在 commit 之后：块要真的落库了，向量行才有可挂的 chunk_id（外键）。
     embedded = 0
     resolution = resolve_embedder()
     if resolution.embedder is not None:
         embedded, _error = _embed_chunks(session, resolution.embedder, chunk_rows)
+    return doc, embedded
 
+
+def _document_view(
+    doc: KbDocument, *, embedded: int, kind: str, warnings: list[str]
+) -> DocumentView:
     return DocumentView(
         id=doc.id,
         kbId=doc.kb_id,
@@ -265,7 +282,62 @@ def create_document(
         chunkCount=doc.chunk_count,
         createdAt=iso_z(doc.created_at),
         embedded=embedded,
+        kind=kind,
+        warnings=warnings,
     )
+
+
+@router.post("/kbs/{kb_id}/documents", response_model=DocumentView, status_code=201)
+def create_document(
+    kb_id: str,
+    payload: CreateDocumentRequest,
+    user: User = Depends(current_user),
+    session: Session = Depends(get_session),
+) -> DocumentView:
+    """入库：切块后**只有块进库**（文档行只存元数据），见 `models.py` 的说明。"""
+    kb, _member = _kb_or_404(session, kb_id, user)
+    title = payload.title.strip()
+    if title == "":
+        raise HTTPException(status_code=422, detail="标题不能为空")
+    doc, embedded = _insert_document(session, kb, user, title=title, content=payload.content)
+    return _document_view(doc, embedded=embedded, kind="text", warnings=[])
+
+
+@router.post("/kbs/{kb_id}/documents/file", response_model=DocumentView, status_code=201)
+def upload_document(
+    kb_id: str,
+    payload: UploadFileRequest,
+    user: User = Depends(current_user),
+    session: Session = Depends(get_session),
+) -> DocumentView:
+    """上传文件入库：**先解析、再落库**（解析失败不留半篇文档）。
+
+    走 base64 JSON 而不是 multipart：服务端不必为这一个接口引入 `python-multipart`，
+    客户端也不必处理表单边界（`FileReader` 读成 dataURL 就够）。代价是体积膨胀 1/3，
+    对知识库文档（通常几百 KB）无所谓。
+    """
+    kb, _member = _kb_or_404(session, kb_id, user)
+    try:
+        data = decode_base64(payload.contentBase64)
+        parsed = parse_document(payload.filename, data)
+    except ParseError as error:
+        # 解析失败的原因（缺 pypdf / 扫描件 / 旧版 Office）**原样说给用户**，
+        # 压成「上传失败」等于让人去猜该换什么格式
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+    if len(parsed.text) > MAX_DOCUMENT_CHARS:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"正文 {len(parsed.text)} 字，超过单篇 {MAX_DOCUMENT_CHARS} 字上限；"
+                "请拆分后分多次上传"
+            ),
+        )
+
+    raw_title = (payload.title or "").strip() or default_title(payload.filename)
+    title = raw_title[:200] or "未命名文档"
+    doc, embedded = _insert_document(session, kb, user, title=title, content=parsed.text)
+    return _document_view(doc, embedded=embedded, kind=parsed.kind, warnings=list(parsed.warnings))
 
 
 @router.get("/kbs/{kb_id}/documents", response_model=list[DocumentView])
