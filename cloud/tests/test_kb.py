@@ -196,6 +196,77 @@ def test_search_returns_nothing_for_unrelated_query(client: TestClient) -> None:
     assert _search(client, owner_token, org["id"], "量子纠缠退相干").json() == []
 
 
+# —— 多库绑定（`kbIds`）：专家/会话把检索范围收窄到「绑定过的这几本」——
+
+
+def test_binding_scopes_search_to_listed_kbs(client: TestClient) -> None:
+    """绑了两本只搜一本：另一本的资料**不出现**（不是排在后面）。
+
+    关键点是这条收窄必须发生在 SQL 里（`kb_id IN (…)`）。若实现成「取全组织再
+    筛 kbId」，越权/未绑定的块会先占掉 topK 名额，表现为「绑定的库里明明有，却搜不到」。
+    """
+    owner_token, _, org = _org_with_members(client)
+    bound = _create_kb(client, owner_token, org["id"], "产品手册")
+    other = _create_kb(client, owner_token, org["id"], "行政通知")
+    _add_doc(client, owner_token, bound["id"], "手册正文", f"{KEYWORD}：走产品线。")
+    # 未绑定的这本**写得更相关**（同一不变量：先取再筛的实现会返回它或返回空）
+    _add_doc(
+        client,
+        owner_token,
+        other["id"],
+        "通知正文",
+        f"{KEYWORD} {KEYWORD} {KEYWORD}：走行政线。",
+    )
+
+    hits = _search(client, owner_token, org["id"], KEYWORD, kbIds=[bound["id"]], topK=1).json()
+    assert [hit["docTitle"] for hit in hits] == ["手册正文"]
+
+    both = _search(
+        client, owner_token, org["id"], KEYWORD, kbIds=[bound["id"], other["id"]], topK=50
+    ).json()
+    assert {hit["docTitle"] for hit in both} == {"手册正文", "通知正文"}
+
+
+def test_binding_to_invisible_kb_is_forbidden(client: TestClient) -> None:
+    """绑到了自己看不见的库 → **403**，不是「悄悄跳过这一本」。
+
+    悄悄跳过看起来更"友好"，实际是把「专家过期绑定 / 角色被降级」伪装成
+    「绑定的库里没资料」——用户会去补资料，而真正该做的是重新绑定。
+    """
+    owner_token, member_token, org = _org_with_members(client)
+    public_kb = _create_kb(client, owner_token, org["id"], "公开")
+    secret_kb = _create_kb(client, owner_token, org["id"], "管理层", roles=["admin", "owner"])
+    _add_doc(client, owner_token, public_kb["id"], "员工版", f"{KEYWORD}：走财务邮箱。")
+
+    resp = _search(
+        client, member_token, org["id"], KEYWORD, kbIds=[public_kb["id"], secret_kb["id"]]
+    )
+    assert resp.status_code == 403
+
+
+def test_empty_kb_ids_is_rejected(client: TestClient) -> None:
+    """空数组 ≠ 不限定范围。
+
+    `[]` 最可能的来源是「绑定的库全被删了」或调用方漏填；把它当「整组织可见库」
+    会让一次本该无结果的检索返回无关资料，而没人会察觉范围被放宽了。
+    """
+    owner_token, _, org = _org_with_members(client)
+    kb = _create_kb(client, owner_token, org["id"], "制度")
+    _add_doc(client, owner_token, kb["id"], "差旅", f"{KEYWORD}：走财务邮箱。")
+
+    assert _search(client, owner_token, org["id"], KEYWORD, kbIds=[]).status_code == 422
+
+
+def test_binding_duplicate_ids_do_not_duplicate_hits(client: TestClient) -> None:
+    """同一个 id 传两次：块只算一份（否则打分时同一段被计两次、结果里出现两遍）。"""
+    owner_token, _, org = _org_with_members(client)
+    kb = _create_kb(client, owner_token, org["id"], "制度")
+    _add_doc(client, owner_token, kb["id"], "差旅", f"{KEYWORD}：走财务邮箱。")
+
+    hits = _search(client, owner_token, org["id"], KEYWORD, kbIds=[kb["id"], kb["id"]]).json()
+    assert [hit["docTitle"] for hit in hits] == ["差旅"]
+
+
 # —— 纯函数：切块与打分（不经过 HTTP，失败时定位更快）——
 
 

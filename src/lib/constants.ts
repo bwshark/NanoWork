@@ -262,6 +262,10 @@ export const TONE_STYLE_TAG_OPEN = '<tone_and_style>';
 export const TONE_STYLE_TAG_CLOSE = '</tone_and_style>';
 export const USER_INSTRUCTIONS_TAG_OPEN = '<user_custom_instructions>';
 export const USER_INSTRUCTIONS_TAG_CLOSE = '</user_custom_instructions>';
+// 知识库检索结果（FR-2.3 / FR-4.7）。标签与正文都由 `lib/agentKnowledge.ts` 产出，
+// 放在这里只是为了与其余注入标签同一处可查——不要在这个文件里拼正文。
+export const KNOWLEDGE_TAG_OPEN = '<knowledge_context>';
+export const KNOWLEDGE_TAG_CLOSE = '</knowledge_context>';
 
 /**
  * 用户级长期记忆（L2）的存储 key：路由到 `~/.nanowork/MEMORY.md`（跨项目生效）。

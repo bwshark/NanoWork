@@ -83,3 +83,50 @@ describe('mergeAgents：内置条目的模型覆盖', () => {
     expect(merged?.model).toBe('');
   });
 });
+
+/**
+ * 知识库绑定走的是同一组不对称（FR-2.3 第四条 / M7）。
+ *
+ * 三个字段点都要覆盖，任何一个漏了症状都一样：**保存后看起来正常，重启就没了**。
+ * `- 内置条目那一段**最容易漏**，因为它是逐字段手抄的。
+ */
+describe('知识库绑定：三条写路径都要带上 knowledge', () => {
+  const BINDING = { orgId: 'o1', kbIds: ['k1'] };
+
+  it('createAgent（白名单构造）会落库', () => {
+    const created = useAgentsStore.getState().createAgent({
+      name: '随身制度顾问',
+      systemPrompt: '按制度回答',
+      knowledge: BINDING,
+    });
+    const stored = useAgentsStore.getState().agents.find((a) => a.id === created.id);
+    expect(stored?.knowledge).toEqual(BINDING);
+  });
+
+  it('createAgent 不传时是 undefined（不是空绑定）', () => {
+    const created = useAgentsStore.getState().createAgent({ name: 'x', systemPrompt: 'y' });
+    expect(created.knowledge).toBeUndefined();
+  });
+
+  it('updateAgent 能改也能清（清 = 回 undefined，而不是留着旧组织）', () => {
+    const a = useAgentsStore.getState().createAgent({ name: 'x', systemPrompt: 'y' });
+    useAgentsStore.getState().updateAgent(a.id, { knowledge: BINDING });
+    expect(
+      useAgentsStore.getState().agents.find((x) => x.id === a.id)?.knowledge,
+    ).toEqual(BINDING);
+
+    useAgentsStore.getState().updateAgent(a.id, { knowledge: undefined });
+    expect(
+      useAgentsStore.getState().agents.find((x) => x.id === a.id)?.knowledge,
+    ).toBeUndefined();
+  });
+
+  it('mergeAgents 保留内置专家身上的知识库绑定（漏这个字段 = 重启后静默消失）', () => {
+    const doc = BUILTIN_AGENTS.find((a) => a.id === 'builtin:doc')!;
+    useAgentsStore.setState({ agents: [{ ...doc, knowledge: BINDING }], tombstones: {} });
+    useAgentsStore.getState().refresh();
+
+    const merged = useAgentsStore.getState().agents.find((a) => a.id === 'builtin:doc');
+    expect(merged?.knowledge).toEqual(BINDING);
+  });
+});

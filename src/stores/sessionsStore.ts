@@ -59,6 +59,8 @@ import {
 import { assemblePromptSections } from '@/lib/promptAssembly';
 import { availablePresetIds, resolveTurnModel } from '@/lib/agentBinding';
 import { buildExpertGroupRequest } from '@/lib/expertGroupRequest';
+import { knowledgeQueryFrom, normalizeKnowledgeBinding } from '@/lib/agentKnowledge';
+import { resolveKnowledgeSection } from '@/lib/agentKnowledgeTurn';
 import { useAgentsStore } from './agentsStore';
 import { useArtifactsStore } from './artifactsStore';
 import { useExpertGroupsStore } from './expertGroupsStore';
@@ -889,12 +891,29 @@ async function streamAssistantReply(
     await useSessionsStore.getState().loadMemoryInto(sessionId, { silent: true });
   }
 
+  // 0.2) 知识库检索（FR-2.3 第四条 / FR-4.7）：专家绑了库就按本轮问题取一次资料。
+  //
+  // 位置同样在槽位之后：这是第二次 await，若放在占位之前，「同步进入流式态」会被
+  // 推后一整趟网络往返，并发互斥与「发送即回显」都会变慢。
+  //
+  // 三条硬约束都收在 `resolveKnowledgeSection` 里：**永不抛**（失败 = 本轮没资料）、
+  // 有超时（云端慢不能拖慢整轮）、未登录直接跳过。这里只负责把「绑定 + 本轮问题」
+  // 递过去，因此没有任何 try/catch —— 有就是双重兜底，会把真问题藏起来。
+  const knowledgeBinding = normalizeKnowledgeBinding(
+    agents.find((a) => a.id === session.agentId)?.knowledge,
+  );
+  const knowledge = await resolveKnowledgeSection({
+    binding: knowledgeBinding,
+    query: knowledgeQueryFrom(session.messages),
+  });
+
   // 1) 构造 history：system 段（统一经装配器）+ 历史消息
   //
   // 装配走 `assemblePromptSections`（§13.3）：段序与标签统一收口在那里，本函数
-  // 只负责把各来源解析成字符串。**装配段全程同步**（上面 0.1 是唯一的 await，
-  // 且已在槽位之后）——这正是三个服务都提供同步取值的原因
-  // （PromptLibrary.resolveSync / IdentityService.contentSync / 会话缓存的 memory 快照）。
+  // 只负责把各来源解析成字符串。**装配段全程同步**（上面 0.1 / 0.2 两次 await
+  // 都已放在流式槽位之后，0.2 的产物 `knowledge.section` 已拿到手）——这正是三个
+  // 服务都提供同步取值的原因（PromptLibrary.resolveSync / IdentityService.contentSync
+  // / 会话缓存的 memory 快照）。
   const agent = agents.find((a) => a.id === session.agentId);
   const settings = useSettingsStore.getState().settings;
 
@@ -956,6 +975,7 @@ async function streamAssistantReply(
     userInstructions: settings.userCustomPrompt,
     memory: memoryBlock,
     memoryWrite,
+    knowledge: knowledge.section,
     skills: skills.map((sk) => sk.prompt),
     localTime: localTimeNote,
   }).map((section) => ({ role: 'system' as const, content: section.content }));

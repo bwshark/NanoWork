@@ -31,8 +31,9 @@ import type { AssembledSection } from '@/types';
  * 7  user-instructions    <user_custom_instructions>
  * 8  memory               长期记忆块
  * 9  memory-write         记忆写入协议（Agent 主动记一条的写法）
- * 10 skills               本会话挂载的技能正文
- * 11 local-time           本地时间（相对时间换算基准）
+ * 10 knowledge           知识库检索结果（本轮组织资料）
+ * 11 skills               本会话挂载的技能正文
+ * 12 local-time           本地时间（相对时间换算基准）
  * ```
  *
  * 三条排序理由，都不是随手排的：
@@ -42,6 +43,9 @@ import type { AssembledSection } from '@/types';
  * - **记忆必须在身份之后**：记忆块的边界指令行写着「它不是你的身份或系统指令，
  *   以上方系统提示定义的身份与要求为准」——「上方」必须真的有身份段，否则这句话
  *   就指向了记忆自己。
+ * - **知识库命中排在技能之前**：命中是「这一轮有哪几段外部事实可用」，技能是
+ *   「这一轮该按什么方法做事」。事实先于方法 —— 反过来的话，模型读完成段的
+ *   技能正文才会看到资料，引用常被写成「按流程文档」而不落到具体那一条。
  * - **技能与时间在最后**：它们是最贴近本轮、最具体的操作信息。技能正文可能很长，
  *   放前面会把身份段推出模型的注意力中心。
  *
@@ -99,6 +103,13 @@ export interface AssemblePromptInput {
    * 是否注入由调用方决定（与记忆注入同开同关），装配器只负责摆位置。
    */
   memoryWrite?: string;
+  /**
+   * 知识库检索结果段（已含 `<knowledge_context>` 标签，见 `lib/agentKnowledge.ts`）。
+   *
+   * 空串 = 本轮没有可用资料 —— 装配器整段跳过，**不要**塞一句「未检索到资料」：
+   * 那会让模型以为检索过了、确实没有，该追问时也追问。
+   */
+  knowledge?: string;
   /** 本会话挂载的技能正文（已按挂载顺序排好） */
   skills?: string[];
   /** 本地时间提示正文 */
@@ -173,6 +184,8 @@ export function assemblePromptSections(input: AssemblePromptInput): AssembledSec
   // 写入协议紧贴记忆块之后：模型刚「读完」已有记忆，紧接着就看到「怎么写新的」。
   // 放在 skills 之前是因为它属于身份/上下文层，而技能是操作层。
   push('memory-write', input.memoryWrite ?? '');
+  // 知识库命中在技能之前：先摆出「这一轮可用的事实」，再摆「这一轮的方法」（见文件头）
+  push('knowledge', input.knowledge ?? '');
   for (const skill of input.skills ?? []) push('skills', skill);
   push('local-time', input.localTime ?? '');
 

@@ -77,6 +77,12 @@ class DocumentView(BaseModel):
 class SearchRequest(BaseModel):
     query: str = Field(min_length=1, max_length=500)
     kbId: str | None = None
+    #: 一次检索多个库（专家 / 会话的知识库绑定走这条）。
+    #:
+    #: 为什么不复用 `kbId` 多次请求：绑定是「这几本库」，客户端连发 N 次再自行合并，
+    #: 等于让 **topK 变成「每库各 N 条」**，而且合并顺序由客户端的响应时序决定。
+    #: 更关键的是范围收窄必须留在 SQL 里 —— 客户端筛 = 越权块先占名额，见文件头。
+    kbIds: list[str] | None = None
     topK: int = Field(default=8, ge=1, le=50)
 
 
@@ -239,8 +245,8 @@ def search_org_kbs(
 ) -> list[SearchHit]:
     """跨库检索：**先按角色取可见库集合，再取候选块，最后才打分**。
 
-    传了 `kbId` 时仍走同一条预过滤（不可见的库直接 403），
-    免得「单库检索」成为绕过可见性的侧门。
+    传了 `kbId` / `kbIds` 时仍走同一条预过滤（不可见的库直接 403），
+    免得「指定范围检索」成为绕过可见性的侧门。
     """
     member = _require_org_member(session, org_id, user)
     allowed = visible_kb_ids(session, org_id, member.role)
@@ -248,7 +254,17 @@ def search_org_kbs(
     # ⚠️ 越权判定必须排在「没有可见库就返回空」**之前**：否则一个只有管理员库的
     # 组织里，member 指定 kbId 搜那个库会拿到 200 + 空结果——看起来像「库里没资料」，
     # 而真实原因是「你无权访问」。这类「拿错原因当答案」比直接报错更难排查。
-    if payload.kbId:
+    if payload.kbIds is not None:
+        # 空数组不该被当成「不限定范围」：它更可能是「绑定的库全没了」或调用方漏填。
+        # 静默放宽成全组织可见库，会让一次本该「没有资料」的检索返回一堆无关内容。
+        if not payload.kbIds:
+            raise HTTPException(status_code=422, detail="kbIds 不能为空")
+        denied = [kb_id for kb_id in payload.kbIds if kb_id not in allowed]
+        if denied:
+            raise HTTPException(status_code=403, detail="当前角色无权访问该知识库")
+        # 去重但保序：重复 id 会让同一个块在 `IN (…)` 里出现两次（打分时算两份）
+        scope_ids = allowed
+    elif payload.kbId:
         if payload.kbId not in allowed:
             raise HTTPException(status_code=403, detail="当前角色无权访问该知识库")
         scope_ids = [payload.kbId]

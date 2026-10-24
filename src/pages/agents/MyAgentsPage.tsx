@@ -38,6 +38,7 @@ import { useSessionsStore } from "@/stores/sessionsStore";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { SummonSlot } from "@/components/agents/SummonSlot";
 import { AgentFormDialog } from "@/components/agents/AgentFormDialog";
+import { AgentKnowledgeChip } from "@/components/agents/AgentKnowledgeChip";
 import { ExpertPackageImportDialog } from "@/components/agents/ExpertPackageImportDialog";
 import { useExpertPackageExport } from "@/components/agents/useExpertPackageExport";
 import { PLATFORM_LABEL } from "@/lib/imPlatform";
@@ -375,6 +376,9 @@ export function MyAgentsPage() {
                 sx={cardChipSx}
               />
             )}
+            {/* 知识库绑定（FR-2.3 第四条）：绑了才出现。它只影响「回答里会不会引用
+                组织资料」，不显示的话绑错了只能去翻编辑表单。 */}
+            <AgentKnowledgeChip knowledge={a.knowledge} />
             {/* 工具权限（FR-2.2）：只在真的声明了策略时才出现。
                 「未声明」与「声明为空白名单」在卡片上必须一眼可分——
                 后者会让这个 Agent 什么都做不了，属于需要立刻看见的状态。 */}

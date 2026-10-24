@@ -29,6 +29,19 @@ export interface IMBinding {
  */
 export type AgentSource = 'builtin' | 'user';
 
+/**
+ * 专家的知识库绑定（FR-2.3 / FR-4.7）。
+ *
+ * `kbIds` 为空数组 = **该组织里我可见的全部库**，不是「一个库都不许」。
+ * 这与 `toolAllow: []`（一个工具都不许）方向相反：工具是权限收窄，知识库是范围收窄。
+ */
+export interface AgentKnowledgeBinding {
+  /** 组织 id：云端检索按组织分域 */
+  orgId: string;
+  /** 绑定到哪几本库；空 = 该组织下我可见的全部 */
+  kbIds: string[];
+}
+
 export interface Agent extends SyncMetaFields {
   id: string;
   name: string;
@@ -69,6 +82,17 @@ export interface Agent extends SyncMetaFields {
    * 不拦的话，「删掉一个预设」会变成「所有绑过它的专家每一轮都发不出消息」。
    */
   model?: string;
+  /**
+   * 知识库绑定（FR-2.3 第四条，M7）。
+   *
+   * 省略 = 不绑定（这个专家不查组织资料）。绑定后**每轮自动检索一次**，命中的
+   * 段落以 `<knowledge_context>` 注入本轮 system 段（见 `lib/agentKnowledgeTurn.ts`）。
+   *
+   * ⚠️ 存的是**云端 id**（组织 + 库），换账号 / 换部署后可能指不到东西：
+   * 那时云端回 403/404，客户端按「本轮没有资料」降级并在控制台留一行，
+   * 不会把整轮发送打断。UI 必须让用户能重新选，而不是只显示一个 id。
+   */
+  knowledge?: AgentKnowledgeBinding;
   /** IM 远程控制绑定（FR-010）；null 表示未绑定 */
   imBinding: IMBinding | null;
   /** 是否启用 */

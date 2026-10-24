@@ -35,6 +35,9 @@ import { useChannelsStore } from '@/stores/channelsStore';
 import { useSkillsStore } from '@/stores/skillsStore';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { APP_AUDIT_LOCAL_ACTOR, setAppAuditActorProvider } from '@/lib/appAudit';
+import { setKnowledgeSearchProvider } from '@/lib/agentKnowledgeTurn';
+import { createKbGateway } from '@/lib/kbClient';
+import { resolveSyncBaseUrl } from './baseUrl';
 import { useSessionsStore } from '@/stores/sessionsStore';
 import { useArtifactsStore } from '@/stores/artifactsStore';
 import { SyncClient } from './SyncClient';
@@ -177,6 +180,37 @@ export function createSyncRuntime(opts: SyncRuntimeOptions = {}): SyncRuntime {
    */
   setAppAuditActorProvider(() => account.getSession()?.userId ?? APP_AUDIT_LOCAL_ACTOR);
 
+  /*
+   * 把「知识库检索」注入会话链路（FR-2.3 第四条 / FR-4.7）。
+   *
+   * 为什么必须在这里注入：只有本模块同时知道**云端地址**与**当前 token**；而
+   * `lib/agentKnowledgeTurn.ts` 被 `sessionsStore` 使用，反过来 import 本模块就会
+   * 成环（本模块订阅了 sessionsStore）。与上面审计的注入是同一个手法。
+   *
+   * 三条口径：
+   * 1. 每次调用读**实时** token —— 换号 / 重新登录后不需要再注册一次；
+   * 2. 未登录直接回 401，而不是拿空 token 去请求（那会被云端当成匿名，回一个
+   *    看起来像「库里没资料」的 401，排查时极易误判）；
+   * 3. `kbIds` 为空**整个字段不下发**：空数组在云端是 422（不是「不限范围」），
+   *    「绑定整个组织」必须表达成「不限定范围」。
+   */
+  setKnowledgeSearchProvider(async ({ orgId, kbIds, query, topK }) => {
+    const token = account.getAccessToken();
+    if (!token) {
+      return { ok: false, status: 401, message: '未登录账户', unauthorized: true };
+    }
+    const gateway = createKbGateway({
+      baseUrl: (opts.baseUrl ?? resolveSyncBaseUrl()).replace(/\/+$/, ''),
+      token,
+      fetchImpl: opts.fetchImpl,
+    });
+    return gateway.search(orgId, {
+      query,
+      topK,
+      ...(kbIds.length > 0 ? { kbIds } : {}),
+    });
+  });
+
   return {
     account,
     client,
@@ -195,6 +229,8 @@ export function createSyncRuntime(opts: SyncRuntimeOptions = {}): SyncRuntime {
     dispose(): void {
       // 释放时摘掉注入：否则用例之间会残留上一个 runtime 的账户，audit 记录串号
       setAppAuditActorProvider(null);
+      // 知识库检索同理：留着 provider 会让下一个用例用上一个 runtime 的 token 去请求
+      setKnowledgeSearchProvider(null);
       unsubAccount();
       for (const unsubscribe of unsubscribers) unsubscribe();
       engine.stop();

@@ -37,6 +37,7 @@ import { useSessionsStore } from "@/stores/sessionsStore";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { SummonSlot } from "@/components/agents/SummonSlot";
 import { AgentFormDialog } from "@/components/agents/AgentFormDialog";
+import { AgentKnowledgeChip } from "@/components/agents/AgentKnowledgeChip";
 import { ExpertPackageImportDialog } from "@/components/agents/ExpertPackageImportDialog";
 import { useExpertPackageExport } from "@/components/agents/useExpertPackageExport";
 import { PLATFORM_LABEL } from "@/lib/imPlatform";
@@ -696,6 +697,8 @@ function AgentCard({
               sx={cardChipSx}
             />
           )}
+          {/* 知识库绑定（FR-2.3 第四条）：绑了才出现 */}
+          <AgentKnowledgeChip knowledge={agent.knowledge} />
         </Box>
 
         <Box sx={{ mt: 1.5, display: "flex", alignItems: "center", gap: 0.5 }}>

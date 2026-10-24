@@ -152,7 +152,7 @@ export interface KbGateway {
   ): Promise<KbApiResult<KbDocument>>;
   search(
     orgId: string,
-    input: { query: string; kbId?: string; topK?: number },
+    input: { query: string; kbId?: string; kbIds?: string[]; topK?: number },
   ): Promise<KbApiResult<KbSearchHit[]>>;
 }
 
@@ -214,16 +214,19 @@ export function uploadDocument(
 }
 
 /**
- * 检索（跨库或指定库）。
+ * 检索（跨库 / 指定一本 / 指定一组）。
  *
  * ⚠️ 客户端**不再做可见性判断**：服务端已按角色过滤（且是检索前过滤）。
  * 在这里再筛一次只会掩盖服务端的 bug —— 而这条不变量正是要靠
  * 「服务端漏过滤时客户端原样显示越权结果」被测试发现。
+ *
+ * `kbIds` 是**范围收窄**（专家绑定的那几本），不是权限：越权的 id 由服务端回 403，
+ * 客户端不预先过滤 —— 同上，静默跳过会把"绑定过期"伪装成"库里没资料"。
  */
 export function searchOrgKbs(
   config: KbClientConfig,
   orgId: string,
-  input: { query: string; kbId?: string; topK?: number },
+  input: { query: string; kbId?: string; kbIds?: string[]; topK?: number },
 ): Promise<KbApiResult<KbSearchHit[]>> {
   return request<KbSearchHit[]>(config, `/api/orgs/${encodeURIComponent(orgId)}/search`, {
     method: 'POST',

@@ -17,6 +17,7 @@ import {
   Typography,
 } from '@mui/material';
 import { AgentModelPicker } from '@/components/models/AgentModelPicker';
+import { AgentKnowledgePicker } from '@/components/agents/AgentKnowledgePicker';
 import { PromptProfileFields } from '@/components/prompts/PromptProfileFields';
 import { AGENT_TOOL_CATALOG, AGENT_TOOL_LABELS } from '@/lib/constants';
 import { PLATFORM_LABEL } from '@/lib/imPlatform';
@@ -279,6 +280,15 @@ export function AgentFormDialog({
         <AgentModelPicker
           value={form.model}
           onChange={(v) => setForm({ ...form, model: v })}
+        />
+
+        {/* 知识库绑定（FR-2.3 第四条 / FR-4.7）：绑定后每轮自动检索组织资料。
+            组件自己订阅/解析登录态（未登录时说「需要登录」而不是显示空组织列表），
+            因此这里只当受控字段用。 */}
+        <Divider sx={{ my: 2 }} />
+        <AgentKnowledgePicker
+          value={form.knowledge}
+          onChange={(next) => setForm({ ...form, knowledge: next })}
         />
 
         <Divider sx={{ my: 1.5 }} />

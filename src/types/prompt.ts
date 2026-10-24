@@ -77,6 +77,7 @@ export interface AssembledSection {
     | 'user-instructions'
     | 'memory'
     | 'memory-write'
+    | 'knowledge'
     | 'skills'
     | 'local-time';
   content: string;

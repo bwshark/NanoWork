@@ -31,6 +31,8 @@ import {
 import type { Agent, Skill } from '@/types';
 import type { ChatHandle, ChatRequest, StreamHandlers } from '@/ai/runtime/types';
 import { DEFAULT_MEMORY_POLICY } from '@/types';
+import { setKnowledgeSearchProvider } from '@/lib/agentKnowledgeTurn';
+import { KNOWLEDGE_TAG_OPEN } from '@/lib/constants';
 
 let captured: ChatRequest[] = [];
 
@@ -458,5 +460,88 @@ describe('会话装配：记忆快照失效（2026-09-17 修复）', () => {
     await waitForMemoryLoaded(session.id);
     // 预热后没有任何写入 → 快照即最新
     expect(useSessionsStore.getState().isMemorySnapshotStale(session.id)).toBe(false);
+  });
+});
+
+/**
+ * 知识库检索的接线（FR-2.3 第四条 / FR-4.7）。
+ *
+ * 单测 `agentKnowledgeTurn` 只能证明「有命中就渲染成段」，证明不了
+ * `streamAssistantReply` 真的把它塞进了本轮 system 段——本项目在 `session_mode`
+ * 上就踩过「函数对了但没接线」。另外两条同样重要：
+ * 未绑定 / 检索失败时**本轮照常发出**（云端是可选能力，不能拖垮聊天）。
+ */
+describe('会话装配：知识库（FR-2.3 / FR-4.7）', () => {
+  const HIT = {
+    chunkId: 'c1',
+    docId: 'd1',
+    docTitle: '差旅制度',
+    kbId: 'k1',
+    score: 0.5,
+    snippet: '报销流程：走财务邮箱。',
+  };
+
+  function bindKnowledge(kbIds: string[] = []) {
+    const bound = agent({ knowledge: { orgId: 'o1', kbIds } });
+    useAgentsStore.setState({ agents: [bound], activeAgentId: bound.id });
+  }
+
+  afterEach(() => {
+    setKnowledgeSearchProvider(null);
+  });
+
+  it('绑了库且有命中：<knowledge_context> 进本轮 system 段，且在时间提示之前', async () => {
+    const search = vi.fn().mockResolvedValue({ ok: true, data: [HIT] });
+    setKnowledgeSearchProvider(search);
+    bindKnowledge(['k1']);
+
+    await sendOnce('出差报销走哪个邮箱？');
+
+    expect(search).toHaveBeenCalledWith(
+      expect.objectContaining({ orgId: 'o1', kbIds: ['k1'], query: '出差报销走哪个邮箱？' }),
+    );
+    const text = joinedSystem();
+    expect(text).toContain(KNOWLEDGE_TAG_OPEN);
+    expect(text).toContain('差旅制度');
+    expect(text.indexOf(KNOWLEDGE_TAG_OPEN)).toBeLessThan(text.indexOf('当前本地时间'));
+  });
+
+  it('没绑库：一次请求都不发（绑定才是开关，不靠"有没有登录"猜意图）', async () => {
+    const search = vi.fn().mockResolvedValue({ ok: true, data: [HIT] });
+    setKnowledgeSearchProvider(search);
+
+    await sendOnce();
+
+    expect(search).not.toHaveBeenCalled();
+    expect(joinedSystem()).not.toContain(KNOWLEDGE_TAG_OPEN);
+  });
+
+  it('检索失败：本轮照常发出，只是没有资料段', async () => {
+    setKnowledgeSearchProvider(
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 403,
+        message: '当前角色无权访问该知识库',
+        unauthorized: false,
+      }),
+    );
+    bindKnowledge(['k1']);
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await sendOnce('报销流程是什么？');
+
+    expect(captured).toHaveLength(1);
+    expect(joinedSystem()).not.toContain(KNOWLEDGE_TAG_OPEN);
+    const last = useSessionsStore.getState().sessions[0]?.messages.at(-1);
+    expect(last?.content).toContain('好。');
+  });
+
+  it('未登录（没有注入 provider）：跳过检索，消息照常发出', async () => {
+    bindKnowledge([]);
+
+    await sendOnce('报销流程是什么？');
+
+    expect(captured).toHaveLength(1);
+    expect(joinedSystem()).not.toContain(KNOWLEDGE_TAG_OPEN);
   });
 });

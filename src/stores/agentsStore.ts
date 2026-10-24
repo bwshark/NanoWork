@@ -74,6 +74,10 @@ function mergeAgents(stored: Agent[]): Agent[] {
       // `'' ?? b.model` 求值为 `''` —— 即「清掉就真的清掉」；传 undefined 则会
       // 回落到内置绑定。所以两条路径的取值约定必须一致，别一处清成空串、一处删字段。
       model: over.model ?? b.model,
+      // FR-2.3 知识库绑定：同样是逐字段列出的用户覆盖，**漏掉这一行就等于**
+      // 「给内置专家绑的库，下次启动重建内置目录时静默消失」。
+      // 解绑时 UI 传 undefined（删字段）→ 回落到内置值（内置模板都没有绑定）。
+      knowledge: over.knowledge ?? b.knowledge,
       // 头像：内置 Agent 不接受用户上传，因此不取 over.avatar；
       // 派生占位（名称首字符 + hashColor）由 UI 层做
       // 同步元数据随用户覆盖一起保留：内置条目的真源是代码，`rev` 只有在用户
@@ -126,6 +130,9 @@ function buildAgent(partial?: Partial<Agent>): Agent {
     // `updateAgent` 的展开赋值不会有此问题——两条路径行为不一致的话，
     // 只有「新建」会遇到这个坑，而它又最难被注意到。
     model: partial?.model,
+    // FR-2.3 知识库绑定（M7）。同样必须在白名单里：漏掉的话「新建时选了知识库」
+    // 在保存瞬间消失，而编辑已有条目走展开赋值不会有此问题——同一个坑的第四个字段。
+    knowledge: partial?.knowledge,
     // FR-3.3：头像随专家包分发。漏掉这一行，导入带 emoji 头像的包会静默丢掉头像
     // ——包解析、预览都显示有头像，落库后却退回首字占位。
     avatar: partial?.avatar,

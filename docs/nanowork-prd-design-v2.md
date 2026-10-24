@@ -215,7 +215,7 @@
 | ------ | -------------- | ------ | -- | ---- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | FR-2.1 | Agent CRUD 与启停 | P0     | ✅  | both | 完整 CRUD + 持久化；可作为会话目标                                                                                                                                                                                                            |
 | FR-2.2 | Agent 工具白名单    | **P0** | ✅  | both | 每个 Agent 可声明允许/禁止的工具集；默认最小权限；越权调用被工具网关拦截（不依赖提示词）。引擎侧：`WorkspaceScope.tool_allow/tool_deny` + 纯函数 `agent_blocks_tool` + `AgentToolPolicyHook`（挂在**基线**钩子链上，ephemeral turn 同样绕不过）；客户端：`Agent.toolAllow/toolDeny` + 编辑 UI + 随每轮请求下发 |
-| FR-2.3 | 专家（Expert）     | P0     | 🟡 | both | 专家 = 系统提示词 + 知识库绑定 + 工具白名单 + 模型绑定；内置招聘 / 法务 / 投研 / 财务 / 写作等模板。**2026-10-05 核实**：四类绑定里**三类已生效**（提示词走 agent-persona 段、工具白名单逐轮下发 `tool_allow`/`tool_deny`、领域/风格覆盖），本轮补上**模型绑定**（`Agent.model`，预设名与 `Session.model` 同域；优先级 会话 > 专家；下发前拦已失效的预设）；内置模板补齐到 8 条（写作由「文档写作专家」承担），法务/投研的能力边界写进 systemPrompt。**知识库绑定属 M7（V2）**（V1 全仓无知识库/RAG 概念）——因此保持 🟡。详见 §20.9 |
+| FR-2.3 | 专家（Expert）     | P0     | ✅ | both | 专家 = 系统提示词 + 知识库绑定 + 工具白名单 + 模型绑定；内置招聘 / 法务 / 投研 / 财务 / 写作等模板。**2026-10-05 核实**：四类绑定里**三类已生效**（提示词走 agent-persona 段、工具白名单逐轮下发 `tool_allow`/`tool_deny`、领域/风格覆盖），本轮补上**模型绑定**（`Agent.model`，预设名与 `Session.model` 同域；优先级 会话 > 专家；下发前拦已失效的预设）；内置模板补齐到 8 条（写作由「文档写作专家」承担），法务/投研的能力边界写进 systemPrompt。**知识库绑定 2026-10-24 落地（M7）**：专家 `knowledge: { orgId, kbIds }` → 每轮按**本轮用户发言**检索一次云端组织资料，命中渲染成 `<knowledge_context>` 注入本轮 system 段（段位在 `memory-write` 之后、`skills` 之前——事实先于方法）。`kbIds: []` = **该组织里我可见的全部库**（与 `toolAllow: []` 方向相反，所以两处不共用归一函数）；范围收窄在**服务端**完成（`POST /api/orgs/{id}/search` 新增 `kbIds`，越权 id 回 403 而不是静默跳过，空数组回 422）。超时 2.5s、失败一律降级为「本轮没资料」并留一行 warn（静默降级不能连日志都静默）。**刻意不做引擎侧检索工具**：token 不出渲染层、权限规则只解释一次，代价是不能多轮追问检索（写进 FR-4.7 的未做）。四类绑定至此全部生效。详见 §20.9.9 |
 | FR-2.4 | 专家团编排          | P0     | ✅  | both | `sequential` / `parallel` / `coordinator` 三模式**真实执行**；编排过程在 ProcessView 中可见（按成员分组）。**2026-10-06 落地**：走方案里的路径 2（**引擎侧编排**，而非客户端编排）。引擎侧新增 `agent/expert_group.py`（`parse_expert_group` 严格校验、**形状非法一律 400 不静默降级**；`ExpertGroupOrchestrator` 按 mode 调度、按 `aggregate` 收口；`run_member` 依赖注入 → 调度语义不依赖模型即可单测），`loop.py` 命中即接管本轮、正常 agent loop 完全不跑；客户端 `lib/expertGroupRequest.ts` 下发 `expert_group`（camelCase→snake_case 在 `expertGroupWire`），`sessionsStore` 由 `session.groupId` 解析团。**落库形态定死**：成员输出不是消息、只随进度事件出站，**只有最终汇总落成一条 assistant 消息**（否则会话历史 N 倍膨胀并污染下一轮）。成员的三项绑定（人设 / 工具策略 / 模型）均已接线并配生产接线测试（13 例 + 4 条变异验证），工具白名单取**交集**、黑名单取**并集**（权限单调递减，FR-2.5 依赖同一约束）。**2026-10-07 真机已验证**：起真实网关打两成员请求，日志可见成员被真实派发与 lead 收口。**未做**：成员 token 用量未汇总进 `_last_usage`（用量页看不到这 N 倍成本）、客户端未暴露 `lead`/`aggregate`/`maxConcurrent` 三个旋钮、带真实 LLM 输出的整轮跑通待 provider 配额恢复。详见 `docs/design-fr-2-4-expert-orchestration.md` |
 | FR-2.5 | 子 Agent 委派     | P1     | ✅  | both | 主 Agent 可委派子任务（nanobot `spawn` 工具）；子 Agent 的工具权限不得超过父级（权限单调递减）。**已落地（V1.7 B3-01，2026-10-18 代码 + 2026-10-23 真机 6/6）**：① `/v1` 链路改走 `run_inline`（`agent/tools/spawn.py` 在 `channel=="api"` 时强制 `wait=True`，否则 `serve` 拓扑下结果必丢）；② 权限单调递减由 `bind_workspace_scope(parent_scope)` + `AgentToolPolicyHook` 继承父 `tool_allow/tool_deny`，三组用例锁死「父空→子按声明 / 父窄→子不得更宽 / 父 None→子按声明」；③ 客户端按子代理分组（`agent/subagent_progress.py` → SSE `kind:subagent` → `sessionsStore.handleProcessSubagent` → `ProcessView.SubagentGroupView`）。真机判据 6 条全过（结果回注 `391`、SSE `started→done`、三条权限含对照）。⚠️ 语义边界：`tool_deny` 按**工具名**不按能力，父 deny `write_file` 后子代理仍可用 `apply_patch`/`exec` 写文件（父也允许 → 子集仍 ⊆ 父集，不算越权）
 | FR-2.6 | 组织级资产发布        | P2     | ⬜  | both | 管理员把个人 Skill / 专家 / 提示词模板发布为组织资产，全员可见（V2）                                                                                                                                                                                        |
@@ -250,7 +250,7 @@
 | FR-4.4 | 记忆分级与命名空间 | P1 | 🟡 | both | 三级：个人 / 项目 / 组织，命名空间按「租户 + 用户 + 工作区」隔离。**2026-10-17 复核改判（V1.7 B1-02）**：**个人 / 项目两级已由记忆 v2 落地**——`src/lib/memoryPaths.ts` 定义两类存储根（用户级 `~/.nanowork/user-memory/u_<hash>/`、工作区级 `<wd>/.nanowork/memory/`），隔离键分别是 `scopeIdFor()` 与 `workspaceIdFor()`；canonical JSON 内另存 `userScope` 做归属校验（路径负责正常路由、marker 负责发现错误复制）。**只剩「组织级」**——它必须有租户 / 组织模型（FR-12.1 / 12.2）→ 归 V3。故 **V1 范围视为已完成**，本轮只改判、不写代码 |
 | FR-4.5 | 记忆可见可删      | **P0** | ✅  | both     | 记忆页可查看 / 编辑 / 删除 / 导出；删除为真实删除（合规要求，见 FR-8.6）。**已落地**：两层（用户级 / 工作区级）各有独立的查看 / 编辑 / 清空 / 导出，导出文件名按作用域区分（两层默认同名 `MEMORY.md`，不带 key 会在下载目录互相覆盖）                                                                                                                                                                                                                               |
 | FR-4.6 | Dream 双阶段记忆 | P1     | ✅  | electron | 接入 nanobot Dream（短期→长期合并）；合并产物需用户可审查后才生效。**已落地（V1.7 B3-02，2026-10-18 代码 + 2026-10-23 真机 11/11 + 回退 2/2）**：`MemoryStore` 新增 `dream_candidate_dir` 与 `prepare_dream_candidate`/`has_dream_candidate`/`compute_dream_candidate_diff`/`accept_dream_candidate`(逐字节比对，仅变化才写回)/`reject_dream_candidate`(永不碰正式文件)；`build_dream_tools(require_review=True)` 把写工具指向候选副本，手动 `/dream` 与 cron 两条路径都接闸门；REST `GET /v1/dream/review`、`POST /v1/dream/accept`、`POST /v1/dream/reject`；客户端 `DreamReviewPanel` 接进记忆页（工作区作用域）。回退开关 `DreamConfig.require_review`（默认 **True**，关掉即回到「直落」旧行为）。真机判据含「候选存在期间三件套 sha 不变」「采纳只写变化项」「丢弃逐字节不变」。⚠️ Dream 的输入只有 `memory/history.jsonl`，而它由**会话归档**写入——发几条消息再 `/dream` 通常得到 `nothing to process`
-| FR-4.7 | 组织知识库       | P2     | 🟡  | both     | 文档上传 → 解析 → 检索；按部门/角色设访问范围；**检索前过滤而非检索后过滤**。**2026-10-24 服务端 MVP 已落**（`cloud/app/orgs` + `cloud/app/kb`）：组织/成员/三级角色（owner-admin-member）、知识库（`allowedRoles` 可见范围）、文档入库（按空行分段装箱切块，超长段硬切 + 重叠）、`POST /api/orgs/{id}/search`（**先按角色算可见库集合 → SQL `kb_id IN (…)` 取候选 → 才打分**，词法打分：拉丁词 + 中文双字，词频 / √长度归一）。判据：`cloud/tests/test_kb.py`(15) + `test_orgs.py`(10)，其中 `test_member_never_sees_admin_only_kb` 用「越权文档写得更相关 + topK=1」钉住「先过滤后打分」——变异成「先取全部再过滤」会精确变红。**未做（本期的边界，别当成完成）**：① Office/PDF/图片解析（只收纯文本）；② **向量检索**——`rank_chunks` 留了接口但未接 embedder/向量库；③ 客户端 UI（上传/搜索）与 `FR-2.3` 的知识库绑定；④ 部门树（现在只有组织 + 角色）
+| FR-4.7 | 组织知识库       | P2     | 🟡  | both     | 文档上传 → 解析 → 检索；按部门/角色设访问范围；**检索前过滤而非检索后过滤**。**2026-10-24 服务端 MVP 已落**（`cloud/app/orgs` + `cloud/app/kb`）：组织/成员/三级角色（owner-admin-member）、知识库（`allowedRoles` 可见范围）、文档入库（按空行分段装箱切块，超长段硬切 + 重叠）、`POST /api/orgs/{id}/search`（**先按角色算可见库集合 → SQL `kb_id IN (…)` 取候选 → 才打分**，词法打分：拉丁词 + 中文双字，词频 / √长度归一）。判据：`cloud/tests/test_kb.py`(19) + `test_orgs.py`(10)，其中 `test_member_never_sees_admin_only_kb` 用「越权文档写得更相关 + topK=1」钉住「先过滤后打分」——变异成「先取全部再过滤」会精确变红。**2026-10-24 客户端补齐**：③ 已落 —— `pages/knowledge/KnowledgePage.tsx`（组织 → 知识库 → 文档 / 检索，未登录明说需要登录、403 原样报出）+ `FR-2.3` 的知识库绑定（专家表单 `AgentKnowledgePicker` 选组织与范围 → 每轮检索一次 → `<knowledge_context>` 注入，见 §20.9.9）。**仍未做（本期的边界，别当成完成）**：① Office/PDF/图片解析（只收纯文本）；② **向量检索**——`rank_chunks` 留了接口但未接 embedder/向量库；④ 部门树（现在只有组织 + 角色）
 
 ## R5 自动化与触发器
 
@@ -296,7 +296,7 @@
 | FR-8.3 | **运行时硬兜底**       | **P0** | ✅  | both     | 删除类操作改道系统回收站而非真删；回收站失败时 **fail-closed**（报错而非降级为真删）；临时目录例外。**归属由 electron 修正为引擎**：删除发生在引擎进程内（`shell.py` 的 `rm` / `apply_patch` 的写入），Electron 主进程拦不住。落地：`security/trash.py`（回收站纯逻辑 + 批量阈值 + 留痕）+ `delete_file` 工具（唯一删除入口）+ `shell.py::_guard_command` 收口（裸 `rm`/`del`/`Remove-Item`/`unlink` 一律拦下并指回 `delete_file`，临时目录例外）。浏览器端因此**无需**降级——强制点在引擎，Web 与 Electron 同强度                            |
 | FR-8.4 | **默认拒绝写入策略**     | **P0** | ✅ | both     | 白名单制：未在允许列表中的路径默认禁止写入；`.ssh` / `.gnupg` 等凭据目录为 `no_access`（连读也禁止）。**已落地（引擎侧）**：凭据 `no_access` 为**无条件**守卫（读+写、`full` 模式亦不可越过、allow-list 无法覆盖）；写默认拒绝以 `file.default_deny_write` 开关承载。**归属由 electron 修正为引擎**：客户端拦不住工具在引擎进程内的实际读写。**客户端补齐（2026-10-04）**：设置 →「安全」分区可读可写 `tools.file.default_deny_write`（开关 + 草稿保存 + 重启网关），并以**只读清单**展示 `no_access` 凭据名册；详见 §20.6                                                                                                                                                                 |
 | FR-8.5 | 沙箱执行             | P1     | 🟡 | electron | 执行类任务在受限上下文中运行。**2026-10-23 按 V1 口径收口（§11.3.1）**：`agent/tools/sandbox.py` **存在但只有 bwrap 一个后端、仅 Linux、默认关闭**（Windows 无后端，配了只警告 + 裸跑）、「网络出口白名单」**未实现**（只有 SSRF 防护）；真正生效的是五层策略边界——渲染层外壳（`sandbox:true`/`contextIsolation`）、工具网关三档、文件系统（限定模式锁工作区 + full 模式默认拒绝写删 + 凭据目录无条件不可访问 + 回收站）、网络（SSRF）、以及**本机不可用**的操作系统级隔离（Linux bwrap 默认关闭 + Windows 无后端；Job Object 只回收进程树）。本期落地=**边界声明**：`src/lib/sandboxBoundary.ts`（唯一事实来源）+ 设置「安全」分区只读卡片（逐条给「已生效/部分生效/没有」与缺口；**刻意不给开关**，引擎侧没有可开关的 native 沙箱）+ 用例 11 例 + 3 项变异。**剩下的部分改判 V3**（独立用户 + 目录 ACL → V2；gVisor/Firecracker 一次性容器 + 租户网络策略 → V3），本期明确不做 native 沙箱（B5 决策：没有真实诉求就不为对齐而做）
-| FR-8.6 | 数据防泄漏 | P1 | 🟡 | both | **2026-10-17 复核拆三件（V1.7 B1-03），三件状态各不相同**：① **记忆可彻底删除** → ✅ 已随 FR-4.5 落地（记忆页可查看 / 编辑 / 删除 / 导出，删除为真实删除）；② **检索前按权限过滤** → ⬜ 但**被知识库阻塞**（V1 全仓无知识库 / RAG 概念，无检索即无「检索前」），随 FR-4.7 进 V2；③ **提示词注入检测** → ✅ **已落地（2026-10-17，V1.7 B2-02）**：`src/lib/promptInjection.ts` 四类本地规则（指令覆盖 / 角色劫持 / 外泄诱导 / 编码混淆），`Composer` 上方常驻一行提示、**只提示不拦截**（拦错了比不拦更糟），15 条用例（含 6 条「正常提问不误报」）。因此本条**不再计为「V1 整条欠账」**，只剩 ② 随知识库进 V2 |
+| FR-8.6 | 数据防泄漏 | P1 | ✅ | both | **2026-10-17 复核拆三件（V1.7 B1-03），三件状态各不相同**：① **记忆可彻底删除** → ✅ 已随 FR-4.5 落地（记忆页可查看 / 编辑 / 删除 / 导出，删除为真实删除）；② **检索前按权限过滤** → ✅ **2026-10-24 随 FR-4.7 落地**：`cloud/app/kb/routes.py::visible_kb_ids()` 先按成员角色算出可见库集合，再 `WHERE kb_id IN (…)` 取候选，**最后**才打分；判据 `test_member_never_sees_admin_only_kb` 用「越权文档写得更相关 + topK=1」，换成「先取全部再过滤」会精确变红。专家绑定走同一函数收窄范围（`kbIds`），越权 id 回 403 而不是静默跳过；③ **提示词注入检测** → ✅ **已落地（2026-10-17，V1.7 B2-02）**：`src/lib/promptInjection.ts` 四类本地规则（指令覆盖 / 角色劫持 / 外泄诱导 / 编码混淆），`Composer` 上方常驻一行提示、**只提示不拦截**（拦错了比不拦更糟），15 条用例（含 6 条「正常提问不误报」）。因此本条**不再计为「V1 整条欠账」**；三件至此全部 ✅（② 随 FR-4.7 落地） |
 | FR-8.7 | 敏感操作审批           | P2     | ⬜  | both     | 外发邮件/消息、删除文件、访问敏感目录、超额 API 调用 → 人审批后执行（V3）                                                                                                                                                                                                                                                                                                                                                    |
 | FR-8.8 | 内容审计             | P2     | ⬜  | both     | 输入输出敏感词/合规扫描，支持自定义规则（V3）                                                                                                                                                                                                                                                                                                                                                                      |
 | FR-8.9 | 审计日志             | P1     | 🟡 | both     | 全量操作留痕（谁/何时/对哪个 Agent/什么指令/什么工具/触达什么数据）；append-only；含命令哈希（对齐 WorkBuddy `audit-log/*.jsonl`）。**已落地（引擎侧）**：`security/audit.py` 在工具执行的唯一收口点写 `audit/tool-gateway.ndjson`，逐行 append-only，含 `timestamp / tool / tier / outcome / approved_by / args / args_digest(sha256) / session_key / channel / approval_mode / agent_id / reason`；写失败静默吞掉（审计不得反向影响执行）。**已落地（客户端，commit `39847f9`）**：`lib/auditLog.ts`（NDJSON 解析/筛选/CSV 导出）、`pages/audit/AuditPage.tsx`（检索窗 + 档位/结果/来源筛选 + CSV 导出）、`platform.auditRead()`（electron 读盘 / web 降级 `exists:false`）、侧边栏「审计」入口与路由；测试 `tests/lib/auditLog.test.ts` 已覆盖。**未做**：非工具类操作（技能启停、配置变更）的留痕——引擎侧目前只审计工具网关这一收口点，需引擎新增 emit 才能闭环「全量」。**2026-10-23 补第二条来源（客户端）**：`src/lib/appAudit.ts`（动作闭集 28 条 + 脱敏 `sanitizeAuditDetail` + 解析/筛选/排序/CSV）+ 平台能力 `auditAppendApp` / `auditReadApp`（Electron 落 `<userData>/audit/app-operations.ndjson`，Web 明确回 `ok:false` 而不是静默）+ 审计页第二档「应用操作」（与工具网关同页两档，各自列与筛选项）。接入的 8 个落点：专家 CRUD/启停、技能安装/卸载/改档、插件装卸/启停/市场安装、连接器 CRUD/启停/凭据写入（只记字段名）、渠道保存/删除/启停、定时任务增删改启停、会话删除、安全策略（默认拒绝写入 / 路径规则）。三条纪律：**只记用户发起的动作**（同步落地走 `setState`，不经 store 动作 → 不会被记成「本机改的」）、**引擎镜像建的任务不记成用户新建**、**写盘失败一律吞**（审计是旁路）。判据 `tests/lib/appAudit.test.ts`（22 例）+ `tests/appAuditWiring.test.ts`（8 例，钉住「动作 → 具体 action id」）+ 3 项变异逐条变红。**2026-10-24 补第三条：引擎侧应用操作**（`nanobot/security/audit.py` 的 `record_app_operation`）。落点 `<data_dir>/audit/app-operations.ndjson`，**与本机那份同一套行格式**（键名 camelCase，`actor` 恒为 `engine`），由引擎在三处写入：`POST /v1/dream/accept|reject`（含 `updated` 计数）、`POST /v1/config/reload`（成功记模型数、失败记原因）、`CronService.reload_jobs()`（记重载后的 job 数——任务被清空时正是最该留痕的场景）。客户端 `auditReadAppEngine()` 读回后与本体记录**合并成一条时间轴**，表里用「来源」列区分本机/引擎；两份文件不合并写入（两个进程各写各的，混写迟早写花），`NANOBOT_APP_AUDIT_LOG` 可重定向、空串即关闭。判据：引擎 `tests/security/test_app_audit.py`(9) + `tests/api/test_app_audit_wiring.py`(3) + `tests/cron/test_cron_reload_audit.py`(2)，客户端 `tests/auditPageAppSources.test.tsx`(2) + `tests/lib/appAudit.test.ts` 的来源/合并三例；4 项变异逐条变红（采纳不记账 / 脱敏失效 / cron 重载不记账 / 页面忽略引擎那份）。**仍未做**：插件启停（引擎侧 `POST /v1/plugins/{name}`）刻意不在引擎重复记——客户端已记一条，两处都记会让一次点击变成两条账 |
@@ -3565,8 +3565,9 @@ severity 由 `warning` 降为 `info`）：三模式真的由引擎在服务端�
 
 ### 20.9.7 明确未做
 
-- **知识库绑定**：V1 无知识库/RAG 概念，属 M7（V2）。FR-2.3 因此**保持 🟡**——
-  四类绑定里这类没落，标 ✅ 会让人以为 V1 范围内全做完了。
+- ~~**知识库绑定**：V1 无知识库/RAG 概念，属 M7（V2）。FR-2.3 因此保持 🟡。~~
+  **2026-10-24 已落地（M7 客户端 + 每轮检索）**：见 §20.9.9。四类绑定（提示词 / 工具 / 模型 / 知识库）
+  至此全部生效，FR-2.3 转 ✅。
 - **FR-2.4 三模式真实执行**：见 §20.9.6（该结论写于 2026-10-05，**已被推翻**）。**2026-10-06 已落地**：引擎侧编排调度（`agent/expert_group.py` + `loop.py` 接管分支 + `api/server.py` 接收 JSON/multipart）+ **客户端接线**（`lib/expertGroupRequest.ts` → `ChatRequest.expertGroup` → wire `expert_group`）+ **成员归属可见**（第 3 步：`kind: "member"` SSE → `expert-group-member` 事件 → ProcessView 按成员分组）。只剩成员用量汇总与「成员内部工具调用不上报」（后者是引擎侧无回传通道的现状），见 design §7。
 - **`imBinding` / `avatar` 的消费**：仍是只持久化未消费（`imBinding` 的 UI 自己也写了
   「真实绑定推送依赖 nanobot 运行时」）。
@@ -3587,6 +3588,51 @@ severity 由 `warning` 降为 `info`）：三模式真的由引擎在服务端�
   `tasks/agent-model-1-default.png`、`agent-model-2-persist.png`、`agent-model-3-group-mode.png`、
   `tasks/agent-form-1-admin.png`、`agent-form-2-mine.png`。
 
+### 20.9.9 知识库绑定：每轮预取而不是引擎工具（2026-10-24）
+
+四类绑定里最后落下的一条。落地形态与「给引擎加一个 kb_search 工具」不同，理由写在
+`src/lib/agentKnowledgeTurn.ts` 文件头，这里只记结论与边界。
+
+**为什么预取（渲染层）而不是工具（引擎侧）**
+
+1. **凭据不出渲染层**：检索要带账户 access token。做成引擎工具就得把 token 写进引擎配置文件
+   （长期存活 + 引擎进程还跑用户自己的代码），收益远小于风险。
+2. **权限规则只解释一次**：「谁能看哪本库」由云端按角色判定，客户端与引擎都不复刻。引擎里没有
+   账户概念，实现工具形态就等于在引擎里再造一套身份映射。
+3. **接受代价**：模型不能「换个关键词再搜一次」。这条写进 FR-4.7 的未做，不假装已有。
+
+**四条语义（每条都有用例钉住）**
+
+- `kbIds: []` = 该组织可见的全部库。**与 `toolAllow: []`（一个都不许）方向相反**——所以
+  `normalizeKnowledgeBinding` 不能与工具那套归一函数合并，否则「没选库」会被读成「锁死」。
+- **检索不到就什么都不注入**：不写「未找到相关资料」这类占位。占位会让模型以为检索过了、确实没有，
+  该追问时也不再追问。
+- **失败是这轮没资料，不是这轮发不出去**：超时 2.5s / 4xx / 5xx / 网络断一律返回空段，
+  但必须 `console.warn` 一行（带 reason 与 status）——「专家绑了库却从不引用」是这类静默降级的
+  典型症状，连日志都静默就只能靠猜。
+- **越权 id 由服务端 403**，客户端不预先过滤：静默跳过会把「专家绑定过期 / 角色被降级」伪装成
+  「绑定的库里没资料」，用户会去补资料而真正该做的是重新绑定。
+
+**段位**：`agent-persona → identity → product-identity → tone-style → mode → domain →
+user-instructions → memory → memory-write → **knowledge** → skills → local-time`。
+命中是「这一轮有哪几段外部事实可用」，技能是「这一轮该按什么方法做事」——事实先于方法；
+放在技能之后时，模型读完成段的技能正文才看到资料，引用常被写成「按流程文档」而不落到具体那一条。
+
+**未做（本期边界）**：① 导出专家包不带 `knowledge`（云端 id 到别人机器上必然失效，
+`lib/expertPackage.ts` 是白名单构造，天然不带）；② 检索结果不参与产物/引用登记；
+③ 不能在会话里对命中的文档「追问」（无工具形态）。
+
+**门禁**：`tests/lib/agentKnowledge.test.ts`（15）+ `tests/lib/agentKnowledgeTurn.test.ts`（12）
++ `tests/agentKnowledgePicker.test.tsx`（9）+ `tests/agentKnowledgeChip.test.tsx`（3）
++ `tests/promptAssembly.test.ts` 段位 2 例 + `tests/sessionsPromptAssembly.test.ts` 接线 4 例
++ `tests/agentsStoreModelBinding.test.ts` 三条写路径 4 例（含 **`mergeAgents` 漏字段**——
+本轮真实抓到的 bug：给内置专家绑的库会在重启后静默消失）；云端 `cloud/tests/test_kb.py` 新增 4 例
+（多库收窄 / 越权 403 / 空数组 422 / 重复 id 不重复计分）。
+全量 vitest 264 文件 3850 例全绿；`cloud` 73 passed + `ruff` 全清；7 项变异逐条精确变红。
+
+**卡片可见性**：两个专家列表页共用 `AgentKnowledgeChip`（未绑定不占位，「组织知识库」与
+「知识库 N 个」两档文案不同）。理由：这是唯一一个在界面上没有痕迹的能力，绑错了的唯一症状是
+「这个专家好像不用资料」——不留标记就只能去翻编辑表单。
 ## 20.10 更正：FR-7.4 的「入口未做」是过期结论（2026-10-05）
 
 `FR-7.4`（产物版本）此前标 🟡，理由是「**全仓没有版本对比 UI 与『切回此版本』入口

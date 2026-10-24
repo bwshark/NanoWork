@@ -47,6 +47,14 @@ WorkBuddy 式智能体客户端：React18+TS+Vite 渲染层 + Electron 主进程
 - 落点：`channelApprovalsStore`（1s 轮询 + 乐观出队 + `MAX_FAILURES=8`）、`ChannelApprovalCard`、`ChatPage` 按 `session?.channel` 二选一渲染。
 - ⚠️ 平台层是渲染层与主进程**共同底座** → 共享类型下沉 `src/types/permission.ts`；`src/ai/runtime/types.ts` 用 `export type {} from` + 同时 `import type`（否则 TS2304）。
 
+## 知识库绑定（FR-2.3 第四条 / M7，2026-10-24）
+- 形态是**渲染层每轮预取**，不是引擎工具：token 不出渲染层、权限规则只在云端解释一次；代价=模型不能追问检索（已写进 FR-4.7 未做）。
+- ⛔ `kbIds: []` = 该组织**可见的全部**库，与 `toolAllow: []`（一个都不许）**方向相反** → 两处不能共用归一函数。
+- ⛔ 检索不到就**不注入任何段**（别写「未找到资料」占位）；失败降级为「本轮没资料」但必须 `console.warn`。
+- provider 靠 `setKnowledgeSearchProvider` 注入（`sync/runtime` 装配处），否则 `lib ↔ sync/runtime` 成环。
+- ⛔ **Agent 上新字段必须改三处**：`types/agent.ts` + `agentsStore.buildAgent`（白名单构造）+ `mergeAgents`（内置专家逐字段手抄覆盖）。漏第三处不报错，症状是「给内置专家设的值重启后消失」。
+- `vite build` 清 `dist/` 会撞安全删除垫片批量阈值 → 必须 `CODEBUDDY_SAFE_DELETE_ENABLED=0`。
+
 ## 默认拒绝写入（FR-8.4，用户决策：默认 true）
 - ⚠️ **三层默认刻意不同**：引擎配置 `FileToolsConfig.default_deny_write=True`；客户端 `DEFAULT_DENY_WRITE=true`（必须与引擎逐字一致，否则界面说开着引擎在放行）；`_FsTool.__init__` 与 `resolve_allowed_path(deny_write_by_default=)` 参数默认 **False**（upstream 兼容，`memory.py` 依赖）。⛔ `sed` 批量替换会把两层一起改 → 有用例钉住「两层必须相反」。
 - 只在 **full 模式**生效；删除同样被拦；读不受影响；`pathRules` 是 full 模式唯一放行出口但**不能放宽边界**（restricted 下无效）。

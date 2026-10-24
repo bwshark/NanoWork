@@ -196,3 +196,27 @@ describe('identityContextBlock', () => {
     expect(block).not.toContain('一次性引导');
   });
 });
+
+describe('assemblePromptSections：知识库段（FR-2.3 / FR-4.7）', () => {
+  it('知识段落位：记忆写入之后、技能之前（事实先于方法）', () => {
+    const ids = assemblePromptSections({
+      memory: '记忆正文',
+      memoryWrite: '写入协议',
+      knowledge: '<knowledge_context>资料</knowledge_context>',
+      skills: ['技能A'],
+    }).map((s) => s.id);
+
+    expect(ids).toEqual([
+      'product-identity',
+      'memory',
+      'memory-write',
+      'knowledge',
+      'skills',
+    ]);
+  });
+
+  it('空的知识段整段不出现（不留一个空标签让模型以为检索过）', () => {
+    const ids = assemblePromptSections({ knowledge: '   ' }).map((s) => s.id);
+    expect(ids).not.toContain('knowledge');
+  });
+});
