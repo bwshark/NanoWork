@@ -98,7 +98,7 @@ describe('错误语义', () => {
     }
   });
 
-  it('网络失败给 status=0 与「连不上」，不让界面显示 500', async () => {
+  it('网络失败给 status=0，且文案带出**实际请求的地址**（不然只能猜是哪台没起）', async () => {
     const fetchImpl = (async () => {
       throw new Error('ECONNREFUSED');
     }) as unknown as typeof fetch;
@@ -106,7 +106,8 @@ describe('错误语义', () => {
     expect(result).toEqual({
       ok: false,
       status: 0,
-      message: '无法连接云端服务',
+      // BASE 带尾斜杠，文案里是归一后的地址（`normalizeBaseUrl` 去尾斜杠）
+      message: '无法连接云端服务（https://cloud.example.com）',
       unauthorized: false,
     });
   });

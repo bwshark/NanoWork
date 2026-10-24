@@ -12,6 +12,7 @@ import {
 } from '@mui/material';
 import {
   KB_LOGIN_REQUIRED,
+  KB_OFFLINE_HINT,
   createKbGateway,
   type KbApiResult,
   type KbGateway,
@@ -60,6 +61,8 @@ export function AgentKnowledgePicker({ value, onChange, gateway }: AgentKnowledg
   const [kbs, setKbs] = useState<KbSummary[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  /** status=0（没连上）与 403/404（业务语义）要分开：后者贴「请启动服务」只会误导 */
+  const [offline, setOffline] = useState(false);
 
   /** 首次进入：有注入网关就用它，否则从同步运行时取（token 只在这一跳里出现）。 */
   useEffect(() => {
@@ -79,8 +82,12 @@ export function AgentKnowledgePicker({ value, onChange, gateway }: AgentKnowledg
   }, [gateway]);
 
   const applyResult = useCallback(<T,>(result: KbApiResult<T>): T | null => {
-    if (result.ok) return result.data;
+    if (result.ok) {
+      setOffline(false);
+      return result.data;
+    }
     if (result.unauthorized) setNeedLogin(true);
+    setOffline(result.status === 0);
     setError(result.message);
     return null;
   }, []);
@@ -178,6 +185,11 @@ export function AgentKnowledgePicker({ value, onChange, gateway }: AgentKnowledg
             重试
           </Button>
         </Stack>
+      )}
+      {error !== '' && offline && (
+        <Typography sx={{ fontSize: 11, color: 'text.secondary', mb: 1 }}>
+          {KB_OFFLINE_HINT}
+        </Typography>
       )}
 
       {loading && orgs.length === 0 ? (

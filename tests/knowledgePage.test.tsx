@@ -148,6 +148,40 @@ describe('组织 → 知识库 → 文档', () => {
   });
 });
 
+describe('连不上云端（status=0）', () => {
+  it('报出地址，并补一句「怎么把它拉起来」——只报「连不上」等于把排查成本丢给用户', async () => {
+    const gateway = makeGateway({
+      listOrgs: vi.fn().mockResolvedValue({
+        ok: false,
+        status: 0,
+        message: '无法连接云端服务（http://127.0.0.1:8910）',
+        unauthorized: false,
+      }),
+    });
+    const host = render(gateway);
+    await flush();
+
+    expect(host.textContent).toContain('无法连接云端服务（http://127.0.0.1:8910）');
+    expect(host.textContent).toContain('uvicorn app.main:app --port 8910');
+  });
+
+  it('403 是业务语义，**不能**贴「请启动服务」', async () => {
+    const gateway = makeGateway({
+      listOrgs: vi.fn().mockResolvedValue({
+        ok: false,
+        status: 403,
+        message: '当前角色无权访问该知识库',
+        unauthorized: false,
+      }),
+    });
+    const host = render(gateway);
+    await flush();
+
+    expect(host.textContent).toContain('当前角色无权访问该知识库');
+    expect(host.textContent).not.toContain('uvicorn');
+  });
+});
+
 describe('写操作', () => {
   it('上传成功后刷新文档列表（用户能立刻看到刚传的那篇）', async () => {
     const listDocuments = vi

@@ -200,6 +200,20 @@ describe('异常态', () => {
     expect(radio(host, 'knowledge-org-o1')).toBeTruthy();
   });
 
+  it('连不上云端（status=0）：报出地址并给出启动命令（不是让用户去猜）', async () => {
+    const listOrgs = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 0,
+      message: '无法连接云端服务（http://127.0.0.1:8910）',
+      unauthorized: false,
+    });
+    const host = render(<Harness gateway={makeGateway({ listOrgs })} onChange={vi.fn()} />);
+    await flush();
+
+    expect(host.textContent).toContain('无法连接云端服务（http://127.0.0.1:8910）');
+    expect(host.textContent).toContain('uvicorn app.main:app --port 8910');
+  });
+
   it('组织列表 403：原样报服务端那句，并给出重试入口', async () => {
     const listOrgs = vi
       .fn()

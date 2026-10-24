@@ -78,6 +78,16 @@ export const KB_ROLE_LABELS: Record<string, string> = {
 /** 未登录时的统一文案：调用方不必各自编一句。 */
 export const KB_LOGIN_REQUIRED = '知识库在云端，需要先登录账户';
 
+/**
+ * 连不上云端时**补一句怎么把它拉起来**。
+ *
+ * 只报「无法连接云端服务」等于把排查成本丢给用户：知识库、同步、账户全挂在这一台上，
+ * 而这台服务是**本地起的**（默认 `127.0.0.1:8910`），最常见的原因就是终端没开。
+ * 所以文案里直接给可复制的命令，而不是让人去翻 README。
+ */
+export const KB_OFFLINE_HINT =
+  '本地开发请在 cloud/ 目录启动服务：.venv/Scripts/python.exe -m uvicorn app.main:app --port 8910（生产请检查 VITE_SYNC_BASE_URL 是否指向可达地址）';
+
 function normalizeBaseUrl(baseUrl: string): string {
   return baseUrl.replace(/\/+$/, '');
 }
@@ -100,8 +110,15 @@ async function request<T>(
       body: init.body === undefined ? undefined : JSON.stringify(init.body),
     });
   } catch {
-    // 网络层失败（断网 / 服务未起）：不给 status，让界面说「连不上」而不是「500」
-    return { ok: false, status: 0, message: '无法连接云端服务', unauthorized: false };
+    // 网络层失败（断网 / 服务未起）：不给 status，让界面说「连不上」而不是「500」。
+    // 文案带上**实际请求的地址**：同一个界面可能连本机 / 联调 / 正式三台，
+    // 不写地址时「连不上」只能靠猜是哪一台没起。
+    return {
+      ok: false,
+      status: 0,
+      message: `无法连接云端服务（${normalizeBaseUrl(config.baseUrl)}）`,
+      unauthorized: false,
+    };
   }
 
   if (!response.ok) {

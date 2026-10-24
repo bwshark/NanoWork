@@ -28,6 +28,7 @@ import { ROUTES } from "@/lib/constants";
 import { toast } from "@/components/Toast";
 import {
   KB_LOGIN_REQUIRED,
+  KB_OFFLINE_HINT,
   KB_ROLE_LABELS,
   createKbGateway,
   type KbApiResult,
@@ -80,6 +81,9 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
   const [orgs, setOrgs] = useState<KbOrg[]>([]);
   const [activeOrgId, setActiveOrgId] = useState<string>("");
   const [orgsError, setOrgsError] = useState("");
+  // status=0 = 根本没连上（服务没起 / 地址错）。与 403/404 分开：那两种是业务语义，
+  // 给它们贴「请启动服务」只会误导。
+  const [orgsOffline, setOrgsOffline] = useState(false);
   const [orgsLoading, setOrgsLoading] = useState(false);
   const [newOrgName, setNewOrgName] = useState("");
 
@@ -122,10 +126,12 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
     async (target: KbGateway) => {
       setOrgsLoading(true);
       setOrgsError("");
+      setOrgsOffline(false);
       const result = await target.listOrgs();
       setOrgsLoading(false);
       if (!result.ok) {
         if (result.unauthorized) setNeedLogin(true);
+        setOrgsOffline(result.status === 0);
         setOrgsError(result.message);
         return;
       }
@@ -314,8 +320,17 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
       </Stack>
 
       {orgsError && (
-        <Alert severity="error" action={<Button onClick={() => client && void loadOrgs(client)}>重试</Button>}>
+        <Alert
+          severity="error"
+          action={<Button onClick={() => client && void loadOrgs(client)}>重试</Button>}
+          data-testid="kb-error"
+        >
           {orgsError}
+          {orgsOffline && (
+            <Typography sx={{ fontSize: 12, mt: 0.5, color: "text.secondary" }}>
+              {KB_OFFLINE_HINT}
+            </Typography>
+          )}
         </Alert>
       )}
 
