@@ -20,6 +20,7 @@ import {
 import { notify } from './notification';
 import type {
   AppInfo,
+  AuditAppendResult,
   AuditLogReadResult,
   ChannelConnectAction,
   ChannelSyncResult,
@@ -629,6 +630,26 @@ export const platform: PlatformAdapter = {
   /** FR-8.9 读取工具网关审计日志（NDJSON 文本）；Web 端无文件系统权限 → exists:false */
   auditRead: (): Promise<AuditLogReadResult> => {
     if (isElectron() && window.electronAPI) return window.electronAPI.auditRead();
+    return Promise.resolve({ path: '', exists: false, content: '' });
+  },
+  /**
+   * FR-8.9 应用操作审计：写入与读取。
+   *
+   * Web 端**明说不支持**而不是静默 no-op：`recordAppAudit()` 是 fire-and-forget，
+   * 忽略返回值，所以这里必须让「读」也返回 `exists:false` 且界面上写清「Web 端不记录」，
+   * 否则用户会以为「一条都没发生」。
+   */
+  auditAppendApp: (lines: string[]): Promise<AuditAppendResult> => {
+    if (isElectron() && window.electronAPI) return window.electronAPI.auditAppendApp(lines);
+    return Promise.resolve({ ok: false, error: '浏览器端没有本地审计文件，应用操作不会被留痕' });
+  },
+  auditReadApp: (): Promise<AuditLogReadResult> => {
+    if (isElectron() && window.electronAPI) return window.electronAPI.auditReadApp();
+    return Promise.resolve({ path: '', exists: false, content: '' });
+  },
+  /** 引擎侧应用操作审计：与本机那份同一套行格式、不同落点，界面靠 origin 区分 */
+  auditReadAppEngine: (): Promise<AuditLogReadResult> => {
+    if (isElectron() && window.electronAPI) return window.electronAPI.auditReadAppEngine();
     return Promise.resolve({ path: '', exists: false, content: '' });
   },
   // —— 桌面端集成（窗口控制 / 托盘配置 / 主进程指令）——

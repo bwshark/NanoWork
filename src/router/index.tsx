@@ -84,6 +84,7 @@ const TasksPage = lazyPage(() => import('@/pages/tasks/TasksPage'), 'TasksPage')
 const SettingsRoute = lazyPage(() => import('@/pages/settings/SettingsRoute'), 'SettingsRoute');
 const ArtifactsPage = lazyPage(() => import('@/pages/artifacts/ArtifactsPage'), 'ArtifactsPage');
 const AuditPage = lazyPage(() => import('@/pages/audit/AuditPage'), 'AuditPage');
+const KnowledgePage = lazyPage(() => import('@/pages/knowledge/KnowledgePage'), 'KnowledgePage');
 const AuthPage = lazyPage(() => import('@/pages/auth/AuthPage'), 'AuthPage');
 
 export const router = createBrowserRouter([
@@ -114,6 +115,7 @@ export const router = createBrowserRouter([
           { path: ROUTES.settings, element: <SettingsRoute /> },
           { path: ROUTES.artifacts, element: <ArtifactsPage /> },
           { path: ROUTES.audit, element: <AuditPage /> },
+          { path: ROUTES.knowledge, element: <KnowledgePage /> },
           { path: '*', element: <Navigate to={ROUTES.chat} replace /> },
         ],
       },

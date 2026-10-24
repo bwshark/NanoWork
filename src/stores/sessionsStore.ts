@@ -11,6 +11,7 @@ import {
   CRON_SESSION_ID_PREFIX,
 } from '@/lib/sessionImport';
 import { artifactContentHash, hasContentHashInHistory } from '@/lib/artifactIndex';
+import { recordAppAudit } from '@/lib/appAudit';
 import {
   createRecorder,
   dropRecorder,
@@ -2206,6 +2207,15 @@ export const useSessionsStore = create<SessionsState>()(
 
       // 落盘走**墓碑**：内存视图已移除，但磁盘上要留下「它被删了」这条记录
       if (target) tombstoneSessionStream(target);
+      // 删会话是数据删除动作（合规口径），必须留痕；标题只记前 60 字，
+      // 个别标题本身带用户内容，但「删了哪个对话」不记就无从追溯
+      if (target) {
+        recordAppAudit({
+          action: 'session.delete',
+          targetId: id,
+          targetLabel: target.title,
+        });
+      }
 
       // 产物随会话一起清（FR-7.2 规格 D8）：`clearSession` 此前零调用点，
       // 于是「会话已删、产物库里还留着它的产物」，且索引只增不减。
@@ -2232,6 +2242,10 @@ export const useSessionsStore = create<SessionsState>()(
       targets.forEach(tombstoneSessionStream);
       // 同 deleteSession：批量删除也要带走产物（规格 D8）
       targets.forEach((t) => useArtifactsStore.getState().clearSession(t.id));
+      // 逐条留痕而不是记一条「删了 N 个」：事后要能回答「哪一个被删了」
+      targets.forEach((t) => {
+        recordAppAudit({ action: 'session.delete', targetId: t.id, targetLabel: t.title });
+      });
     },
 
     /**

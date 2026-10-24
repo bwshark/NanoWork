@@ -6,6 +6,7 @@ import { genId } from '@/lib/id';
 import { ensureMetaList, pickMeta, withTombstone, withoutTombstone } from '@/lib/syncMeta';
 import { metaForDelete, metaForEdit, metaForNew } from '@/lib/syncStamp';
 import { BUILTIN_AGENTS } from '@/ai/builtinAgents';
+import { changedFieldNames, recordAppAudit } from '@/lib/appAudit';
 import type { Agent, SyncTombstones } from '@/types';
 
 interface AgentsState {
@@ -156,6 +157,11 @@ export const useAgentsStore = create<AgentsState>()(
           tombstones: withoutTombstone(s.tombstones, agent.id),
           activeAgentId: agent.id,
         }));
+        recordAppAudit({
+          action: 'agent.create',
+          targetId: agent.id,
+          targetLabel: agent.name,
+        });
         return agent;
       },
 
@@ -166,23 +172,40 @@ export const useAgentsStore = create<AgentsState>()(
           tombstones: withoutTombstone(s.tombstones, agent.id),
           // 刻意不动 activeAgentId：见接口注释
         }));
+        recordAppAudit({
+          action: 'agent.import',
+          targetId: agent.id,
+          targetLabel: agent.name,
+        });
         return agent;
       },
 
       // 元数据在 `patch` **之后**展开：调用方传进来的 patch 里若夹带元数据字段
       // （如从别处整对象回填），不得覆盖本次改动的标记
-      updateAgent: (id, patch) =>
+      updateAgent: (id, patch) => {
+        const before = get().agents.find((a) => a.id === id);
         set((s) => ({
           agents: s.agents.map((a) =>
             a.id === id ? { ...a, ...patch, ...metaForEdit(a) } : a,
           ),
-        })),
+        }));
+        // 只记**字段名**，不记值：提示词正文可能有几 KB，且真值落库已经在了
+        const fields = changedFieldNames(before as unknown as Record<string, unknown>, patch);
+        if (fields.length) {
+          recordAppAudit({
+            action: 'agent.update',
+            targetId: id,
+            targetLabel: before?.name,
+            detail: { fields },
+          });
+        }
+      },
 
-      removeAgent: (id) =>
+      removeAgent: (id) => {
+        // 内置 Agent 不可删除，保持与 skillsStore 一致
+        const target = get().agents.find((a) => a.id === id);
+        if (!target || target.source === 'builtin') return;
         set((s) => {
-          // 内置 Agent 不可删除，保持与 skillsStore 一致
-          const target = s.agents.find((a) => a.id === id);
-          if (!target || target.source === 'builtin') return s;
           const agents = s.agents.filter((a) => a.id !== id);
           return {
             agents,
@@ -192,14 +215,26 @@ export const useAgentsStore = create<AgentsState>()(
             // 删掉的是当前激活项时，退到剩余列表的第一条（对齐原实现）
             activeAgentId: s.activeAgentId === id ? agents[0]?.id ?? null : s.activeAgentId,
           };
-        }),
+        });
+        recordAppAudit({ action: 'agent.delete', targetId: id, targetLabel: target.name });
+      },
 
-      toggleAgent: (id) =>
+      toggleAgent: (id) => {
+        const before = get().agents.find((a) => a.id === id);
         set((s) => ({
           agents: s.agents.map((a) =>
             a.id === id ? { ...a, enabled: !a.enabled, ...metaForEdit(a) } : a,
           ),
-        })),
+        }));
+        if (before) {
+          recordAppAudit({
+            action: 'agent.toggle',
+            targetId: id,
+            targetLabel: before.name,
+            detail: { enabled: !before.enabled },
+          });
+        }
+      },
 
       setActiveAgent: (id) => set({ activeAgentId: id }),
     }),

@@ -1457,6 +1457,33 @@ export interface PlatformAdapter {
    * - web：无文件系统权限，`exists:false`、空内容。
    */
   auditRead(): Promise<AuditLogReadResult>;
+  /**
+   * 追加应用操作审计行（FR-8.9 第二条来源：非工具类操作）。
+   *
+   * - electron：主进程追加到 `<userData>/audit/app-operations.ndjson`；
+   * - web：`{ ok: false, error }` —— 浏览器没有可追加的本地文件，且**不另起一份
+   *   localStorage 审计**（同一个功能在两端留痕语义不同，比没有更误导）。
+   *
+   * 传入的是**已序列化的单行 JSON**（不含换行）：序列化与脱敏都在渲染层
+   * `lib/appAudit.ts` 完成，主进程只做形态校验与 append，不解释字段。
+   */
+  auditAppendApp(lines: string[]): Promise<AuditAppendResult>;
+  /** 读取应用操作审计日志（形状与 `auditRead()` 一致，便于同一套解析与展示）。 */
+  auditReadApp(): Promise<AuditLogReadResult>;
+  /**
+   * 读取**引擎侧**应用操作审计（`<data_dir>/audit/app-operations.ndjson`）。
+   *
+   * 与本机那份是两个文件、同一套行格式：本机记「人点的按钮」，引擎记「引擎真的做了什么」
+   * （Dream 采纳、配置热加载、任务库重载）。合并展示时用 `origin` 区分，不合并文件——
+   * 两个进程各写各的，混写在同一个文件里迟早写花。
+   */
+  auditReadAppEngine(): Promise<AuditLogReadResult>;
+}
+
+/** 追加审计行的结果：`ok:false` 带原因，调用方**不应**把它当业务失败。 */
+export interface AuditAppendResult {
+  ok: boolean;
+  error?: string;
 }
 
 /** 本地文件 base64 读取结果 */
@@ -1915,6 +1942,12 @@ export interface ElectronAPI {
    * 的 NDJSON 原始文本与其路径、存在性。解析由渲染层完成。
    */
   auditRead(): Promise<AuditLogReadResult>;
+  /** 追加应用操作审计行（见 `PlatformAdapter.auditAppendApp`） */
+  auditAppendApp(lines: string[]): Promise<AuditAppendResult>;
+  /** 读取应用操作审计日志（`<userData>/audit/app-operations.ndjson`） */
+  auditReadApp(): Promise<AuditLogReadResult>;
+  /** 读取引擎侧应用操作审计（与工具审计同目录的 `app-operations.ndjson`） */
+  auditReadAppEngine(): Promise<AuditLogReadResult>;
   /** 窗口最小化 */
   windowMinimize(): void;
   /** 窗口最大化/还原切换 */

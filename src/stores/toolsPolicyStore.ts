@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { platform } from '@/platform';
 import type { NanobotFileToolsPolicy, NanobotPathRule } from '@/platform/types';
+import { recordAppAudit } from '@/lib/appAudit';
 
 /**
  * 引擎写策略（`tools.file.default_deny_write`，FR-8.4）的状态。
@@ -70,7 +71,17 @@ export const useToolsPolicyStore = create<ToolsPolicyState>((set, get) => ({
 
   setDefaultDenyWrite: async (value) => {
     const result = await platform.syncNanobotTools(JSON.stringify({ op: 'setDefaultDenyWrite', defaultDenyWrite: value }));
-    if (!result.ok) return false;
+    if (!result.ok) {
+      // 安全策略改不动也是事实：失败留痕比成功更需要（用户会以为已经生效）
+      recordAppAudit({
+        action: 'security.deny_write',
+        outcome: 'failed',
+        detail: { defaultDenyWrite: value },
+        reason: result.message,
+      });
+      return false;
+    }
+    recordAppAudit({ action: 'security.deny_write', detail: { defaultDenyWrite: value } });
     // 以磁盘为准回读：主进程会补出 `tools.file` 段（原先可能整段不存在），
     // 拿本地那份乐观状态显示就与文件里的实际形状对不上。
     await get().loadPolicy(true);
@@ -81,7 +92,26 @@ export const useToolsPolicyStore = create<ToolsPolicyState>((set, get) => ({
     const result = await platform.syncNanobotTools(
       JSON.stringify({ op: 'setPathRules', pathRules: rules }),
     );
-    if (!result.ok) return false;
+    if (!result.ok) {
+      recordAppAudit({
+        action: 'security.path_rules',
+        outcome: 'failed',
+        detail: { rules: rules.length },
+        reason: result.message,
+      });
+      return false;
+    }
+    // 只记条数与拒绝动作的分布：规则正文（路径 + 动作）可能包含目录结构，
+    // 记条数已足够回答「有没有人放宽过写权限」
+    recordAppAudit({
+      action: 'security.path_rules',
+      detail: {
+        rules: rules.length,
+        denyWrite: rules.filter((r) => r.action.write === 'deny').length,
+        denyDelete: rules.filter((r) => r.action.delete === 'deny').length,
+        denyRead: rules.filter((r) => r.action.read === 'deny').length,
+      },
+    });
     // 与写开关同一条理由：以盘为准回读（主进程可能补出整段 tools.file）
     await get().loadPolicy(true);
     return true;

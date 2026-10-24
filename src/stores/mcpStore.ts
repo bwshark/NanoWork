@@ -6,6 +6,7 @@ import { STORAGE_KEYS } from '@/lib/constants';
 import { genId } from '@/lib/id';
 import { ensureMetaList, pickMeta, withTombstone, withoutTombstone } from '@/lib/syncMeta';
 import { metaForDelete, metaForEdit, metaForNew } from '@/lib/syncStamp';
+import { changedFieldNames, recordAppAudit } from '@/lib/appAudit';
 import { getRuntime, type SyncResult } from '@/ai/runtime';
 import { MCP_SERVERS } from '@/ai/builtinMcps';
 import {
@@ -185,14 +186,34 @@ export const useMcpStore = create<McpState>()(
           // 的条目按「已删除」推出去，而本机看起来一切正常（理由同 agentsStore）
           tombstones: withoutTombstone(s.tombstones, config.id),
         }));
+        recordAppAudit({
+          action: 'mcp.create',
+          targetId: config.id,
+          targetLabel: config.name,
+          detail: { transport: config.transport },
+        });
         return config;
       },
 
       // 元数据在 patch 之后展开，理由同 agentsStore.updateAgent
-      updateConfig: (id, patch) =>
+      updateConfig: (id, patch) => {
+        const before = get().configs.find((c) => c.id === id);
         set((s) => ({
           configs: s.configs.map((c) => (c.id === id ? { ...c, ...patch, ...metaForEdit(c) } : c)),
-        })),
+        }));
+        // 只改凭据字段的 patch 不记成「改配置」：`saveSecrets` 内部也走这里，
+        // 两边都记会让一次「保存密钥」在审计里变成两条，反而看不出发生过什么
+        const fields = changedFieldNames(before as unknown as Record<string, unknown>, patch);
+        const secretOnly = fields.length > 0 && fields.every((f) => f === 'auth' || f === 'authKeyNames');
+        if (fields.length && !secretOnly) {
+          recordAppAudit({
+            action: 'mcp.update',
+            targetId: id,
+            targetLabel: before?.name,
+            detail: { fields },
+          });
+        }
+      },
 
       /** 删除自定义 MCP；builtin 拒绝删除（保护内置目录） */
       removeConfig: (id) => {
@@ -225,6 +246,7 @@ export const useMcpStore = create<McpState>()(
             .syncEnabled()
             .catch((err) => console.warn('[mcp] 删除后同步失败：', err));
         }
+        recordAppAudit({ action: 'mcp.delete', targetId: id, targetLabel: cfg.name });
       },
 
       /*
@@ -234,7 +256,8 @@ export const useMcpStore = create<McpState>()(
        * 而不是「尝试过但没连上」。重新启用**不恢复**旧值——连接事实只有再跑一次
        * 连接测试才算数。
        */
-      toggleMcp: (id) =>
+      toggleMcp: (id) => {
+        const before = get().configs.find((c) => c.id === id);
         set((s) => ({
           configs: s.configs.map((c) => {
             if (c.id !== id) return c;
@@ -246,9 +269,19 @@ export const useMcpStore = create<McpState>()(
               ...metaForEdit(c),
             };
           }),
-        })),
+        }));
+        if (before) {
+          recordAppAudit({
+            action: 'mcp.toggle',
+            targetId: id,
+            targetLabel: before.name,
+            detail: { enabled: !(before.enabled ?? !isBuiltinMcpId(before.id)) },
+          });
+        }
+      },
 
-      setMcpEnabled: (id, enabled) =>
+      setMcpEnabled: (id, enabled) => {
+        const before = get().configs.find((c) => c.id === id);
         set((s) => ({
           configs: s.configs.map((c) =>
             c.id === id
@@ -260,7 +293,16 @@ export const useMcpStore = create<McpState>()(
                 }
               : c,
           ),
-        })),
+        }));
+        if (before) {
+          recordAppAudit({
+            action: 'mcp.toggle',
+            targetId: id,
+            targetLabel: before.name,
+            detail: { enabled },
+          });
+        }
+      },
 
       setConnectionStatus: (id, status) =>
         set((s) => ({
@@ -301,15 +343,38 @@ export const useMcpStore = create<McpState>()(
           // 这里刻意不返回 ok:false——Web 端的凭据本来就不落保险库，
           // 报错只会让用户以为保存失败了。
           get().updateConfig(id, { auth: { ...secrets }, authKeyNames: names });
+          recordAppAudit({
+            action: 'mcp.secret.write',
+            targetId: id,
+            targetLabel: cfg.name,
+            detail: { fields: names, encrypted: false },
+          });
           return { ok: true };
         }
 
         const result = await platform.secretsSet(cfg.name, secrets);
-        if (!result.ok) return result;
+        if (!result.ok) {
+          recordAppAudit({
+            action: 'mcp.secret.write',
+            targetId: id,
+            targetLabel: cfg.name,
+            outcome: 'failed',
+            detail: { fields: names },
+            reason: result.error ?? '写入凭据失败',
+          });
+          return result;
+        }
         // 写入成功才更新"已配置"视图：否则界面显示已设置、实际保险库里没有，
         // 而失败是静默的——用户永远不会自己发现。
         get().updateConfig(id, { auth: undefined, authKeyNames: names });
         await get().refreshSecrets();
+        // 只记**字段名**：密钥值一旦进审计文件，等于给「可导出的 CSV」开了个口子
+        recordAppAudit({
+          action: 'mcp.secret.write',
+          targetId: id,
+          targetLabel: cfg.name,
+          detail: { fields: names, encrypted: true },
+        });
         return { ok: true };
       },
 

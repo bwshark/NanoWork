@@ -3565,6 +3565,89 @@ ipcMain.handle('audit:read', async () => {
   }
 });
 
+// —— FR-8.9 应用操作审计（第二条来源：人做的配置类操作）——
+/**
+ * 落点 `<userData>/audit/app-operations.ndjson`。
+ *
+ * **不落在引擎的审计目录**（`<configParent>/audit/`）：那里是引擎独占的文件，
+ * 而 `configParent` 在本机就是仓库根目录（跑一次真机会污染工作区）；
+ * 应用操作属于「这台机器的应用」而不是「这个引擎实例」，跟着 userData 更合语义。
+ */
+function resolveAppAuditLogPath(): string {
+  return join(app.getPath('userData'), 'audit', 'app-operations.ndjson');
+}
+
+/** 单行上限：一条记录只含标量 + 短数组，4000 足够；超长说明调用方把对象塞进来了。 */
+const APP_AUDIT_MAX_LINE = 4000;
+/** 单次调用最多行数：防止渲染层一次性灌进整份历史。 */
+const APP_AUDIT_MAX_BATCH = 50;
+
+/**
+ * 引擎侧应用操作审计的落点：与工具审计**同目录**、换文件名。
+ *
+ * 不放进 `<userData>/audit/`（那是渲染层那份）：引擎按自己的 data_dir 写，
+ * 主进程只负责读——让引擎往 userData 写等于把「引擎不认识 userData」这条边界抹掉。
+ * `NANOBOT_APP_AUDIT_LOG` 与引擎侧同名，客户端或用户在启动引擎时若重定向过，
+ * 这里读同一处；否则按工具审计的目录推断。
+ */
+async function resolveEngineAppAuditLogPath(): Promise<string> {
+  const envOverride = process.env.NANOBOT_APP_AUDIT_LOG;
+  if (envOverride && envOverride.trim()) {
+    return join(envOverride.trim());
+  }
+  return join(dirname(await resolveAuditLogPath()), 'app-operations.ndjson');
+}
+
+ipcMain.handle('audit:read-app-engine', async () => {
+  const target = await resolveEngineAppAuditLogPath();
+  try {
+    const data = await fs.readFile(target, 'utf-8');
+    return { path: target, exists: true, content: data };
+  } catch {
+    return { path: target, exists: false, content: '' };
+  }
+});
+
+ipcMain.handle('audit:read-app', async () => {
+  const target = resolveAppAuditLogPath();
+  try {
+    const data = await fs.readFile(target, 'utf-8');
+    return { path: target, exists: true, content: data };
+  } catch {
+    return { path: target, exists: false, content: '' };
+  }
+});
+
+ipcMain.handle('audit:append-app', async (_e, lines: unknown) => {
+  const target = resolveAppAuditLogPath();
+  if (!Array.isArray(lines) || lines.length === 0) {
+    return { ok: false, error: '没有可写入的审计行' };
+  }
+  if (lines.length > APP_AUDIT_MAX_BATCH) {
+    return { ok: false, error: `单次最多写入 ${APP_AUDIT_MAX_BATCH} 条` };
+  }
+  // 形态校验而不解释内容：换行会破坏 NDJSON 的「一行一条」不变量，
+  // 而渲染层若传进空串，append 出来就是一条空行（解析层虽能容忍，但没必要脏盘）。
+  const payload: string[] = [];
+  for (const line of lines) {
+    if (typeof line !== 'string') return { ok: false, error: '审计行必须是字符串' };
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    if (/[\r\n]/.test(trimmed)) return { ok: false, error: '审计行不得包含换行' };
+    if (trimmed.length > APP_AUDIT_MAX_LINE) return { ok: false, error: '审计行过长' };
+    payload.push(trimmed);
+  }
+  if (payload.length === 0) return { ok: false, error: '没有可写入的审计行' };
+  try {
+    await fs.mkdir(dirname(target), { recursive: true });
+    await fs.appendFile(target, `${payload.join('\n')}\n`, 'utf-8');
+    return { ok: true };
+  } catch (err) {
+    // 写失败不回抛：审计是旁路，抛错会让「停用一个技能」这类动作显示成失败
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+});
+
 // —— 通知桥 ——
 ipcMain.on('app:notify', (_e, title: string, body: string) => {
   new Notification({ title, body }).show();

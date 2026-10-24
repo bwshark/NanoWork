@@ -191,6 +191,11 @@ const api: ElectronAPI = {
   exportDiagnostics: () => ipcRenderer.invoke('diagnostics:export'),
   /** FR-8.9 工具网关审计日志：读 `<data_dir>/audit/tool-gateway.ndjson` 的 NDJSON 文本 */
   auditRead: () => ipcRenderer.invoke('audit:read'),
+  /** FR-8.9 应用操作审计（第二条来源）：追加已序列化的单行 JSON / 读回全文 */
+  auditAppendApp: (lines: string[]) => ipcRenderer.invoke('audit:append-app', lines),
+  auditReadApp: () => ipcRenderer.invoke('audit:read-app'),
+  /** 引擎侧应用操作审计（与工具审计同目录） */
+  auditReadAppEngine: () => ipcRenderer.invoke('audit:read-app-engine'),
   // ——— 窗口控制（自绘标题栏）———
   windowMinimize: () => ipcRenderer.send('window:minimize'),
   windowToggleMaximize: () => ipcRenderer.send('window:toggle-maximize'),

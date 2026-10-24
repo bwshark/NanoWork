@@ -34,6 +34,7 @@ import { useMcpStore } from '@/stores/mcpStore';
 import { useChannelsStore } from '@/stores/channelsStore';
 import { useSkillsStore } from '@/stores/skillsStore';
 import { useSettingsStore } from '@/stores/settingsStore';
+import { APP_AUDIT_LOCAL_ACTOR, setAppAuditActorProvider } from '@/lib/appAudit';
 import { useSessionsStore } from '@/stores/sessionsStore';
 import { useArtifactsStore } from '@/stores/artifactsStore';
 import { SyncClient } from './SyncClient';
@@ -167,6 +168,15 @@ export function createSyncRuntime(opts: SyncRuntimeOptions = {}): SyncRuntime {
   };
   const unsubAccount = account.subscribe(onSession);
 
+  /*
+   * 把「当前账户」注入审计日志（FR-8.9 应用操作留痕）。
+   *
+   * 只有这里知道登录态：`lib/appAudit.ts` 不能直接 import 本模块（本模块订阅了全部
+   * store，store 又要用审计 → 直接 import 必成环），所以走一次性注入。
+   * provider 每次调用都读实时 session，登录 / 登出后立刻反映，不需要再注册一次。
+   */
+  setAppAuditActorProvider(() => account.getSession()?.userId ?? APP_AUDIT_LOCAL_ACTOR);
+
   return {
     account,
     client,
@@ -183,6 +193,8 @@ export function createSyncRuntime(opts: SyncRuntimeOptions = {}): SyncRuntime {
       resetSyncStatus();
     },
     dispose(): void {
+      // 释放时摘掉注入：否则用例之间会残留上一个 runtime 的账户，audit 记录串号
+      setAppAuditActorProvider(null);
       unsubAccount();
       for (const unsubscribe of unsubscribers) unsubscribe();
       engine.stop();

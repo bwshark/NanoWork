@@ -11,6 +11,7 @@ import {
 } from '@/lib/channelSecrets';
 import { ensureMetaList, withTombstone, withoutTombstone } from '@/lib/syncMeta';
 import { metaForDelete, metaForEdit, metaForNew } from '@/lib/syncStamp';
+import { changedFieldNames, recordAppAudit } from '@/lib/appAudit';
 import { getRuntime, type SyncResult } from '@/ai/runtime';
 import type { ChannelRuntimeHealth, CredentialVaultStatus, SecretWriteResult } from '@/platform/types';
 import type { ChannelConfig, ChannelKind, SyncTombstones } from '@/types';
@@ -301,10 +302,32 @@ export const useChannelsStore = create<ChannelsState>()(
             }
           }
           scheduleAutoSync();
+          /*
+           * 审计一行而不是两行：渠道凭据是**跟着配置表单一起保存**的（不像连接器有
+           * 独立的「保存密钥」按钮），拆成 `channel.update` + `channel.secret.write`
+           * 会让一次点击变成两条账。所以密钥只以**字段名**出现在 detail 里。
+           */
+          const secretNames = Object.keys(pickChannelSecrets(result));
+          const nonSecretPatch: Record<string, unknown> = { ...partial };
+          for (const key of secretNames) delete nonSecretPatch[key];
+          recordAppAudit({
+            action: 'channel.update',
+            targetId: partial.kind,
+            targetLabel: partial.kind,
+            detail: {
+              created: !existing,
+              fields: changedFieldNames(
+                existing as unknown as Record<string, unknown>,
+                nonSecretPatch,
+              ),
+              secrets: secretNames,
+            },
+          });
           return result;
         },
 
         removeConfig: (kind) => {
+          const existing = get().configs.find((c) => c.kind === kind);
           set((s) => {
             const target = s.configs.find((c) => c.kind === kind);
             // 没有存活条目可删（重复删除 / 本就没配）：早退，不产生新对象引用
@@ -320,6 +343,10 @@ export const useChannelsStore = create<ChannelsState>()(
           // 是一份没有归属的密钥，且「删掉又配回来」时会被原样回补进引擎配置
           clearVaultEntry(kind);
           scheduleAutoSync();
+          // 早退那条路径（本来就没配）不该留一条「删过」的账
+          if (existing) {
+            recordAppAudit({ action: 'channel.delete', targetId: kind, targetLabel: kind });
+          }
         },
 
         setEnabled: (kind, enabled) => {
@@ -329,6 +356,13 @@ export const useChannelsStore = create<ChannelsState>()(
             ),
           }));
           scheduleAutoSync();
+          if (get().configs.some((c) => c.kind === kind)) {
+            recordAppAudit({
+              action: enabled ? 'channel.enable' : 'channel.disable',
+              targetId: kind,
+              targetLabel: kind,
+            });
+          }
         },
 
         setSyncStatus: (id, status) =>

@@ -31,6 +31,7 @@ import PsychologyIcon from "@mui/icons-material/Psychology";
 import GridViewIcon from "@mui/icons-material/GridView";
 import AutoFixHighIcon from "@mui/icons-material/AutoFixHigh";
 import HubIcon from "@mui/icons-material/Hub";
+import MenuBookIcon from "@mui/icons-material/MenuBook";
 import HistoryIcon from "@mui/icons-material/History";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import FolderIcon from "@mui/icons-material/Folder";
@@ -113,6 +114,7 @@ const LIBRARY_ITEMS: NavRouteItem[] = [
   { label: "专家", icon: <PsychologyIcon />, to: ROUTES.agents },
   { label: "技能", icon: <AutoFixHighIcon />, to: ROUTES.skills },
   { label: "连接器", icon: <HubIcon />, to: ROUTES.mcp },
+  { label: "知识库", icon: <MenuBookIcon />, to: ROUTES.knowledge },
 ];
 
 /** 侧边栏主组件 */

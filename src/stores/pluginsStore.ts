@@ -11,6 +11,7 @@ import {
 import { useSettingsStore } from '@/stores/settingsStore';
 import { useSessionsStore } from '@/stores/sessionsStore';
 import { referencedCopyPathsForSessions } from '@/lib/sessionPluginRefs';
+import { recordAppAudit } from '@/lib/appAudit';
 import type {
   MarketIndex,
   MarketInstallResult,
@@ -237,6 +238,13 @@ export const usePluginsStore = create<PluginsState>((set, get) => ({
     if (failure !== null) {
       // 引擎拒绝了：**意图一个字都不写**，否则界面会显示一个不成立的「已启用」
       set({ error: failure });
+      // 「被引擎拒绝」恰恰是审计里最该有的一类：用户确实点了、也确实没生效
+      recordAppAudit({
+        action: enabled ? 'plugin.enable' : 'plugin.disable',
+        targetId: name,
+        outcome: 'failed',
+        reason: failure,
+      });
       return false;
     }
 
@@ -276,6 +284,10 @@ export const usePluginsStore = create<PluginsState>((set, get) => ({
       notice: enabled ? `已启用「${name}」` : `已停用「${name}」`,
       installed: buildViews(scan.plugins, engine, get().appVersion || null),
     });
+    recordAppAudit({
+      action: enabled ? 'plugin.enable' : 'plugin.disable',
+      targetId: name,
+    });
     return true;
   },
 
@@ -283,9 +295,23 @@ export const usePluginsStore = create<PluginsState>((set, get) => ({
     const result = await platform.installPlugin(sourceDir, overwrite);
     if (!result.ok) {
       set({ error: result.error ?? '安装插件失败' });
+      recordAppAudit({
+        action: 'plugin.install',
+        targetId: result.manifest?.name,
+        targetLabel: result.manifest?.displayName,
+        outcome: 'failed',
+        detail: { sourceDir },
+        reason: result.error ?? '安装插件失败',
+      });
       return result;
     }
     set({ error: null, notice: `已安装「${result.manifest?.displayName ?? ''}」` });
+    recordAppAudit({
+      action: 'plugin.install',
+      targetId: result.manifest?.name,
+      targetLabel: result.manifest?.displayName,
+      detail: { sourceDir },
+    });
     await get().refresh();
     return result;
   },
@@ -294,6 +320,12 @@ export const usePluginsStore = create<PluginsState>((set, get) => ({
     const result = await platform.uninstallPlugin(name);
     if (!result.ok) {
       set({ error: result.error ?? '卸载插件失败' });
+      recordAppAudit({
+        action: 'plugin.uninstall',
+        targetId: name,
+        outcome: 'failed',
+        reason: result.error ?? '卸载插件失败',
+      });
       return false;
     }
     // 包已经不在磁盘上了，意图条目必须一并清掉——留着它会在
@@ -304,6 +336,7 @@ export const usePluginsStore = create<PluginsState>((set, get) => ({
       enabledPlugins: withPluginIntent(enabledPlugins, name, false),
     });
     set({ error: null, notice: `已卸载「${name}」` });
+    recordAppAudit({ action: 'plugin.uninstall', targetId: name });
     await get().refresh();
     return true;
   },
@@ -388,6 +421,13 @@ export const usePluginsStore = create<PluginsState>((set, get) => ({
       );
       if (!result.ok) {
         set({ marketError: result.error ?? '从市场安装失败' });
+        recordAppAudit({
+          action: 'plugin.install',
+          targetId: name,
+          outcome: 'failed',
+          detail: { market, version },
+          reason: result.error ?? '从市场安装失败',
+        });
         return false;
       }
       // FR-3.13：市场索引声明依赖时，主进程会把依赖一并装好。**必须说出来**——
@@ -405,6 +445,11 @@ export const usePluginsStore = create<PluginsState>((set, get) => ({
       });
       // 装完要重新扫：副本是新目录，磁盘事实变了
       await get().refresh();
+      recordAppAudit({
+        action: 'plugin.install',
+        targetId: name,
+        detail: { market, version, dependencies },
+      });
       return true;
     } catch (err) {
       set({ marketError: err instanceof Error ? err.message : String(err) });

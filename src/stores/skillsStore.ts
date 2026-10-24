@@ -18,6 +18,7 @@ import {
   upsertOverride,
 } from '@/lib/skillOverrideTable';
 import { metaForEdit, metaForNew } from '@/lib/syncStamp';
+import { recordAppAudit } from '@/lib/appAudit';
 import type { Skill, SkillOverride, SkillOverrideEntry } from '@/types';
 
 interface SkillsState {
@@ -184,7 +185,8 @@ export const useSkillsStore = create<SkillsState>()(
           const { skills, overrides } = get();
           // 只改**已存在**的技能：凭空加条目会让覆盖表指向一个不存在的技能，
           // 同步到对端就是一条永远不生效的指令
-          if (!skills.some((sk) => sk.id === id)) return;
+          const target = skills.find((sk) => sk.id === id);
+          if (!target) return;
           const prev = findOverride(overrides, id);
           const nextSkills = commitOverrides(
             upsertOverride(overrides, {
@@ -198,6 +200,14 @@ export const useSkillsStore = create<SkillsState>()(
           );
           // 先落状态再推引擎：界面必须立刻响应，同步是后台的事。
           void pushOverrides(nextSkills).then((error) => set({ syncError: error }));
+          // `toggleSkill` / `setSkillEnabled` 都收敛到这一个出口 → 只在这里记一次，
+          // 否则同一个开关动作会在审计里出现两三条（「谁改的」反而更难读）
+          recordAppAudit({
+            action: 'skill.override',
+            targetId: id,
+            targetLabel: target.name,
+            detail: { override },
+          });
         },
 
         toggleSkillPin: (id) => {
@@ -219,7 +229,7 @@ export const useSkillsStore = create<SkillsState>()(
           // 置顶不推引擎：见 `pinnedIds` 的说明
         },
 
-        installSkill: (skill) =>
+        installSkill: (skill) => {
           set((s) => {
             const next = withEffectiveOverride(skill, 'on');
             // 重新安装 = 明确回到默认档 `on`：覆盖表里若留着「停用」记录，必须一起
@@ -237,14 +247,24 @@ export const useSkillsStore = create<SkillsState>()(
               ? s.skills.map((sk) => (sk.id === skill.id && isUserOwnedSkill(sk) ? next : sk))
               : [...s.skills, next];
             return { skills, overrides, pinnedIds: pinnedSkillIds(overrides) };
-          }),
+          });
+          recordAppAudit({
+            action: 'skill.install',
+            targetId: skill.id,
+            targetLabel: skill.name,
+          });
+        },
 
         /*
          * 卸载时连带清掉覆盖条目，否则表里会攒下指向已卸载技能的僵尸记录
          * （技能重新装上时会**莫名其妙自己变回停用 / 自己置顶**）。清理是有条件的：
          * 内置技能卸不掉，那种情况下不能把它的覆盖悄悄抹掉。
          */
-        removeSkill: (id) =>
+        removeSkill: (id) => {
+          // 不可删的技能（内置 / 项目级）原本就是静默无操作；审计也不能给它记账，
+          // 否则留下一条「删过」但什么都没发生的记录，比不记更误导
+          const target = get().skills.find((sk) => sk.id === id && isUserOwnedSkill(sk));
+          if (!target) return;
           set((s) => {
             const removed = s.skills.some((sk) => sk.id === id && isUserOwnedSkill(sk));
             const overrides = removed ? dropOverride(s.overrides, id) : s.overrides;
@@ -253,7 +273,9 @@ export const useSkillsStore = create<SkillsState>()(
               overrides,
               pinnedIds: pinnedSkillIds(overrides),
             };
-          }),
+          });
+          recordAppAudit({ action: 'skill.remove', targetId: id, targetLabel: target.name });
+        },
       };
     },
     {

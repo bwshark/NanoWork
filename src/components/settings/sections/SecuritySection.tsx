@@ -5,6 +5,13 @@ import { toast } from '@/components/Toast';
 import { useToolsPolicyStore } from '@/stores/toolsPolicyStore';
 import { PathRulesEditor } from '@/components/settings/sections/PathRulesEditor';
 import { DEFAULT_DENY_WRITE } from '@/lib/constants';
+import {
+  SANDBOX_BOUNDARY_SUMMARY,
+  SANDBOX_LAYERS,
+  SANDBOX_RISK_NOTE,
+  SANDBOX_STATUS_LABELS,
+  type SandboxLayerStatus,
+} from '@/lib/sandboxBoundary';
 
 /**
  * 引擎侧的两条硬边界（FR-8.4「默认拒绝写入策略」）。
@@ -159,7 +166,7 @@ export function SecuritySection() {
         <SettingsRow
           label="默认拒绝写入"
           hint={
-            '默认已开启（不配即从严）。开启后，**没有可写范围**的作用域（引擎里的 ' +
+            '默认已开启（不配即从严）。开启后，「没有可写范围」的作用域（引擎里的 ' +
             '“完全访问”模式）一律拒绝写与删，而不是退化成“哪里都能写”。' +
             '影响面：① 只在“完全访问”模式生效——限定了工作区范围的作用域本来就只写工作区，不受影响；' +
             '② 删除操作同样被拦；③ 读取不受影响。' +
@@ -206,6 +213,56 @@ export function SecuritySection() {
           这一组是引擎里的名单常量而不是配置项，因此这里只展示、不提供修改入口。
         </Typography>
       </SettingsCard>
+
+      {/*
+        FR-8.5：沙箱**边界声明**（刻意只读）。
+        为什么是只读表而不是开关：引擎侧根本没有 native 沙箱可开关，做一个假开关
+        比不做更糟——用户会以为自己已经隔离了。表的内容来自 `lib/sandboxBoundary.ts`，
+        界面只渲染，避免文案与事实各说一套。
+      */}
+      <SettingsCard title="沙箱边界（有哪些隔离，缺什么）" description={SANDBOX_BOUNDARY_SUMMARY}>
+        {SANDBOX_LAYERS.map((layer) => (
+          <Box key={layer.id} sx={{ py: 1.75 }} data-testid={`sandbox-layer-${layer.id}`}>
+            <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+              <Typography sx={{ fontSize: 13.5, fontWeight: 600 }}>{layer.layer}</Typography>
+              <Chip
+                size="small"
+                variant="outlined"
+                color={sandboxStatusColor(layer.status)}
+                label={SANDBOX_STATUS_LABELS[layer.status]}
+                sx={{ fontSize: 11 }}
+              />
+              <Chip
+                size="small"
+                variant="outlined"
+                label={layer.owner === 'electron' ? '桌面外壳' : '引擎'}
+                sx={{ fontSize: 11, color: 'text.secondary' }}
+              />
+            </Stack>
+            <Typography sx={{ fontSize: 12.5, color: 'text.secondary', mt: 0.75, lineHeight: 1.6 }}>
+              {layer.enforced}
+            </Typography>
+            {layer.gap !== '' && (
+              <Typography
+                sx={{ fontSize: 12.5, mt: 0.5, lineHeight: 1.6, color: 'warning.main' }}
+                data-testid={`sandbox-gap-${layer.id}`}
+              >
+                缺口：{layer.gap}
+              </Typography>
+            )}
+          </Box>
+        ))}
+        <Typography sx={{ fontSize: 12.5, color: 'text.secondary', py: 1.75, lineHeight: 1.6 }}>
+          {SANDBOX_RISK_NOTE}
+        </Typography>
+      </SettingsCard>
     </Box>
   );
+}
+
+/** 状态 → Chip 颜色：缺得越多越显眼，但「没有」不用红（那是已知且已排期的事实，不是故障）。 */
+function sandboxStatusColor(status: SandboxLayerStatus): 'success' | 'warning' | 'default' {
+  if (status === 'on') return 'success';
+  if (status === 'partial') return 'warning';
+  return 'default';
 }

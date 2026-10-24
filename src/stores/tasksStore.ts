@@ -8,6 +8,7 @@ import { metaForDelete, metaForEdit, metaForNew } from '@/lib/syncStamp';
 import { toast } from '@/components/Toast';
 import { getRuntime } from '@/ai/runtime';
 import { cronRecordsToSession } from '@/lib/sessionImport';
+import { changedFieldNames, recordAppAudit } from '@/lib/appAudit';
 import { useSessionsStore } from '@/stores/sessionsStore';
 import type {
   SyncTombstones,
@@ -170,31 +171,51 @@ export const useTasksStore = create<TasksState>()(
           tombstones: withoutTombstone(s.tombstones, task.id),
         }));
         scheduleAutoSync();
+        // 调用方显式给了 id ⇒ 这是**引擎侧 job 的镜像**（`cronTaskMirror`）而不是用户
+        // 在表单里新建的：记成「用户新建」会把模型的动作冒名到人头上，审计就失真了
+        if (partial?.id == null) {
+          recordAppAudit({ action: 'task.create', targetId: task.id, targetLabel: task.name });
+        }
         return task;
       },
 
       // 元数据在 patch 之后展开，理由同 agentsStore.updateAgent
       updateTask: (id, patch) => {
+        const before = get().tasks.find((t) => t.id === id);
         set((s) => ({
           tasks: s.tasks.map((t) => (t.id === id ? { ...t, ...patch, ...metaForEdit(t) } : t)),
         }));
         scheduleAutoSync();
+        const fields = changedFieldNames(before as unknown as Record<string, unknown>, patch);
+        if (before && fields.length) {
+          recordAppAudit({
+            action: 'task.update',
+            targetId: id,
+            targetLabel: before.name,
+            detail: { fields },
+          });
+        }
       },
 
       removeTask: (id) => {
+        const target = get().tasks.find((t) => t.id === id);
         set((s) => {
-          const target = s.tasks.find((t) => t.id === id);
-          if (!target) return s;
+          const found = s.tasks.find((t) => t.id === id);
+          if (!found) return s;
           return {
             // 删除 = 摘除条目 + 留墓碑（理由同 agentsStore.removeAgent）
             tasks: s.tasks.filter((t) => t.id !== id),
-            tombstones: withTombstone(s.tombstones, id, metaForDelete(target)),
+            tombstones: withTombstone(s.tombstones, id, metaForDelete(found)),
           };
         });
         scheduleAutoSync();
+        if (target) {
+          recordAppAudit({ action: 'task.delete', targetId: id, targetLabel: target.name });
+        }
       },
 
       toggleTask: (id) => {
+        const before = get().tasks.find((t) => t.id === id);
         set((s) => ({
           tasks: s.tasks.map((t) =>
             t.id === id
@@ -207,6 +228,14 @@ export const useTasksStore = create<TasksState>()(
           ),
         }));
         scheduleAutoSync();
+        if (before) {
+          recordAppAudit({
+            action: 'task.toggle',
+            targetId: id,
+            targetLabel: before.name,
+            detail: { enabled: before.status !== 'enabled' },
+          });
+        }
       },
 
       finishRun: (runId, patch) =>
