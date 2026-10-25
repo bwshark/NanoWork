@@ -30,6 +30,7 @@ import {
   type KbApiResult,
   type KbDepartment,
   type KbDocument,
+  type KbDocumentDetail,
   type KbGateway,
   type KbOrg,
   type KbRetrievalInfo,
@@ -51,11 +52,12 @@ import { CreateKbDialog } from "@/components/knowledge/CreateKbDialog";
 import { TeamMembersDialog } from "@/components/knowledge/TeamMembersDialog";
 import {
   DeleteDocDialog,
-  NewDocDialog,
   PurgeDocDialog,
   RenameDocDialog,
   VisibilityDialog,
 } from "@/components/knowledge/KnowledgeDocDialogs";
+import { NewDocDrawer, titleFromContent } from "@/components/knowledge/NewDocDrawer";
+import { DocViewerDrawer } from "@/components/knowledge/DocViewerDrawer";
 import { DepartmentDialog } from "@/components/knowledge/DepartmentDialog";
 
 /**
@@ -189,9 +191,15 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
   const [newKbDeptIds, setNewKbDeptIds] = useState<string[]>([]);
   const [kbBusy, setKbBusy] = useState(false);
 
-  const [docDialogOpen, setDocDialogOpen] = useState(false);
+  const [docDrawerOpen, setDocDrawerOpen] = useState(false);
   const [docTitle, setDocTitle] = useState("");
   const [docContent, setDocContent] = useState("");
+
+  // 阅读抽屉：点列表里的一行打开。正文**单独取**（列表只有元数据）
+  const [viewDocId, setViewDocId] = useState("");
+  const [viewDetail, setViewDetail] = useState<KbDocumentDetail | null>(null);
+  const [viewLoading, setViewLoading] = useState(false);
+  const [viewError, setViewError] = useState("");
 
   // 改名 / 删除都要先确认：目标文档 + 改名时正在编辑的标题。
   // 用两个独立状态而不是一个 `{ doc, mode }`：两个弹窗的打开条件互斥，
@@ -214,7 +222,13 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
     () => orgs.find((org) => org.id === activeOrgId) ?? null,
     [orgs, activeOrgId],
   );
-  const kbs = useMemo(() => kbsByOrg[activeOrgId] ?? [], [kbsByOrg, activeOrgId]);
+  /**
+   * 抽屉元信息里的「谁」。
+   *
+   * 只用于显示，不参与任何判定（真正能写不能写由服务端按角色定），所以取一次
+   * 快照就够；`runtime` 本身是订阅来的，未登录时这页根本走不到这里。
+   */
+  const accountLabel = runtime?.account.getSession()?.email ?? "当前账户";  const kbs = useMemo(() => kbsByOrg[activeOrgId] ?? [], [kbsByOrg, activeOrgId]);
   const activeKb = useMemo(() => {
     for (const list of Object.values(kbsByOrg)) {
       const found = list.find((kb) => kb.id === activeKbId);
@@ -313,6 +327,30 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
   }, [client, activeKbId, trashOpen, loadDocs]);
 
   /**
+   * 读单篇正文。
+   *
+   * 与列表分开拉：列表只回元数据，正文可能有几十万字。失败**不清空已展示的标题**——
+   * 抽屉头部用的是列表给的那份元数据，报错只占正文区，用户至少还知道自己点开了哪篇。
+   */
+  const loadDetail = useCallback(async (target: KbGateway, kbId: string, docId: string) => {
+    setViewLoading(true);
+    setViewError("");
+    const result = await target.getDocument(kbId, docId);
+    setViewLoading(false);
+    if (!result.ok) {
+      setViewDetail(null);
+      setViewError(result.message);
+      return;
+    }
+    setViewDetail(result.data);
+  }, []);
+
+  useEffect(() => {
+    if (!client || activeKbId === "" || viewDocId === "") return;
+    void loadDetail(client, activeKbId, viewDocId);
+  }, [client, activeKbId, viewDocId, loadDetail]);
+
+  /**
    * 读部门树。失败**不 toast**：它是「可见范围」的附加信息，云端连不上时
    * 知识库页该说的第一句话是「连不上」，不是弹一排部门加载失败。
    */
@@ -366,10 +404,17 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
     setSearchError("");
   };
 
+  const closeViewer = () => {
+    setViewDocId("");
+    setViewDetail(null);
+    setViewError("");
+  };
+
   const selectTeam = (orgId: string) => {
     setActiveOrgId(orgId);
     setActiveKbId("");
     setTrashOpen(false);
+    closeViewer();
     resetSearch();
   };
 
@@ -377,6 +422,7 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
     setActiveOrgId(orgId);
     setActiveKbId(kbId);
     setTrashOpen(false);
+    closeViewer();
     resetSearch();
   };
 
@@ -471,18 +517,21 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
   };
 
   const handleUpload = async () => {
-    if (!client || !activeKbId || !docTitle.trim() || !docContent.trim()) return;
+    if (!client || !activeKbId || !docContent.trim()) return;
+    // 标题留空就用正文首行：服务端必须有标题，而「先想标题」是反的
+    const title = docTitle.trim() !== "" ? docTitle.trim() : titleFromContent(docContent);
     setRowBusy(true);
     const result = await client.uploadDocument(activeKbId, {
-      title: docTitle.trim(),
+      title: title === "" ? "未命名文档" : title,
       content: docContent,
     });
     setRowBusy(false);
     if (!result.ok) {
+      // 失败（含 409 判重）**不清稿**：用户下一秒可能就是改两个字再存
       toastIngestFailure(result);
       return;
     }
-    setDocDialogOpen(false);
+    setDocDrawerOpen(false);
     setDocTitle("");
     setDocContent("");
     toast.success(`已入库：${result.data.chunkCount} 块`);
@@ -566,6 +615,8 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
       return;
     }
     toast.success(`已删除「${deleteTarget.title}」`);
+    // 正在读的就是这一篇：抽屉必须跟着关，否则它会挂着一个已经不存在的正文
+    if (deleteTarget.id === viewDocId) closeViewer();
     // 三样都变了：文档列表、库上的文档数、索引覆盖率（块少了一批）
     await loadDocs(client, activeKbId);
     await loadKbs(client, orgs);
@@ -736,7 +787,7 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
       hint: hasKb ? "粘贴纯文本入库" : needKbHint,
       disabled: !hasKb,
       icon: <ArticleOutlinedIcon fontSize="small" />,
-      onSelect: () => setDocDialogOpen(true),
+      onSelect: () => setDocDrawerOpen(true),
     },
     {
       key: "new-sheet",
@@ -957,7 +1008,11 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
                 loading={docsLoading}
                 error={docsError}
                 trashOpen={trashOpen}
-                onToggleTrash={() => setTrashOpen((previous) => !previous)}
+                onToggleTrash={() => {
+                  setTrashOpen((previous) => !previous);
+                  // 回收站是另一个口径：上一篇的正文留在抽屉里会让人以为它还在
+                  closeViewer();
+                }}
                 view={view}
                 onViewChange={setView}
                 indexHint={indexHintFor}
@@ -978,6 +1033,11 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
                   lexicalOnly: retrieval === null || retrieval.embedder === "off",
                 }}
                 actions={{
+                  onOpen: (doc) => {
+                    setViewDocId(doc.id);
+                    setViewDetail(null);
+                    setViewError("");
+                  },
                   onRename: openRename,
                   onDelete: setDeleteTarget,
                   onRestore: (doc) => void handleRestore(doc),
@@ -1050,16 +1110,38 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
         onSubmit={() => void handleCreateKb()}
       />
 
-      <NewDocDialog
-        open={docDialogOpen}
+      <NewDocDrawer
+        open={docDrawerOpen}
         busy={rowBusy}
         kbName={activeKb?.name ?? ""}
+        authorLabel={accountLabel}
         title={docTitle}
         content={docContent}
         onTitleChange={setDocTitle}
         onContentChange={setDocContent}
-        onClose={() => setDocDialogOpen(false)}
+        onClose={(discard) => {
+          setDocDrawerOpen(false);
+          // 「丢弃」才清稿；Esc / 关闭按钮只关抽屉，回来还能接着写
+          if (discard) {
+            setDocTitle("");
+            setDocContent("");
+          }
+        }}
         onSubmit={() => void handleUpload()}
+      />
+
+      <DocViewerDrawer
+        open={viewDocId !== ""}
+        doc={docs.find((item) => item.id === viewDocId) ?? viewDetail}
+        detail={viewDetail}
+        loading={viewLoading}
+        error={viewError}
+        onRetry={() => {
+          if (client && viewDocId !== "") void loadDetail(client, activeKbId, viewDocId);
+        }}
+        onClose={closeViewer}
+        onRename={openRename}
+        onDelete={setDeleteTarget}
       />
 
       <RenameDocDialog

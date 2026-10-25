@@ -23,6 +23,7 @@ from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
 from app.db import engine
+from app.kb.chunking import chunk_text, join_chunks
 from app.kb.embedding import EmbedderResolution, HashingEmbedder
 from app.kb.models import KbChunk, KbDocument, KbVector
 from tests.conftest import auth_headers, register
@@ -324,3 +325,96 @@ def test_list_reports_kind_and_indexed_count(client: TestClient, monkeypatch) ->
 
     assert [doc["kind"] for doc in listed] == ["docx"]
     assert listed[0]["embedded"] == listed[0]["chunkCount"] >= 1
+
+
+# —— 单篇详情（抽屉里「打开文档」读的就是它）——
+
+
+def test_get_document_returns_joined_content(client: TestClient) -> None:
+    owner, _, org = _org(client)
+    kb = _kb(client, owner, org)
+    content = f"{KEYWORD}：走财务邮箱。\n\n住宿按城市分级。"
+    created = _add(client, owner, kb["id"], "差旅制度", content).json()
+
+    resp = client.get(f"/api/kbs/{kb['id']}/documents/{created['id']}", headers=auth_headers(owner))
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["title"] == "差旅制度"
+    # 正文是把块拼回来的：分段（空行）必须还原，否则详情页会读成一整坨
+    assert "走财务邮箱" in body["content"]
+    assert "\n\n" in body["content"]
+    assert body["content"].startswith(KEYWORD)
+
+
+def test_get_document_hides_trashed(client: TestClient) -> None:
+    """回收站里的不给读：能读会让「删了还看得到」变成第二个真相。"""
+    owner, _, org = _org(client)
+    kb = _kb(client, owner, org)
+    created = _add(client, owner, kb["id"], "制度", f"{KEYWORD}：走财务邮箱。").json()
+    client.delete(f"/api/kbs/{kb['id']}/documents/{created['id']}", headers=auth_headers(owner))
+
+    resp = client.get(f"/api/kbs/{kb['id']}/documents/{created['id']}", headers=auth_headers(owner))
+
+    assert resp.status_code == 404
+    assert "回收站" in resp.json()["detail"]
+
+
+def test_get_document_is_scoped_to_visible_kb(client: TestClient) -> None:
+    """读不到这个库就是 403（`_kb_or_404` 的口径：库里存在、角色不够）。
+
+    客户端必须原样转达这句，不能悄悄改成 404 或空正文 —— 那会让「权限配错了」
+    看起来像「这篇文档内容为空」。
+    """
+    owner, member, org = _org(client)
+    secret = _kb(client, owner, org, "管理层制度")
+    client.patch(
+        f"/api/kbs/{secret['id']}/visibility",
+        json={"allowedRoles": ["admin", "owner"]},
+        headers=auth_headers(owner),
+    )
+    created = _add(client, owner, secret["id"], "机密", f"{KEYWORD}：走财务邮箱。").json()
+
+    resp = client.get(
+        f"/api/kbs/{secret['id']}/documents/{created['id']}", headers=auth_headers(member)
+    )
+
+    assert resp.status_code == 403
+    assert "无权访问" in resp.json()["detail"]
+
+
+def test_join_chunks_trims_hard_split_overlap() -> None:
+    """硬切会留 80 字重叠：拼回去必须去掉，否则详情页在切口处读起来像重复了一整句。"""
+    # 每个字都不同：这样「最长的前后缀匹配」必然是硬切留下的那 80 字，
+    # 不用一个重复字符的长串去测（那会让匹配长度不可判定，测出来的东西没意义）
+    paragraph = "".join(chr(0x4E00 + index) for index in range(1400))
+    chunks = chunk_text(paragraph)
+    assert len(chunks) > 1
+
+    joined = join_chunks(chunks)
+
+    # 拼回来应当与原文逐字相同（重叠被削掉），而不是多出几十个字
+    assert joined == paragraph
+
+
+def test_visibility_patch_does_not_require_name(client: TestClient) -> None:
+    """改可见范围的请求体里**没有** `name`（客户端就是这么发的）。
+
+    这条守的是一个真出现过的 422：PATCH /visibility 曾复用 `CreateKbRequest`，而那里
+    `name` 是必填 —— 于是「保存可见范围」在真机上永远失败，客户端用例却全绿，
+    因为它们 mock 了网关，看不到请求体校验。
+    """
+    owner, member, org = _org(client)
+    kb = _kb(client, owner, org, "制度")
+
+    resp = client.patch(
+        f"/api/kbs/{kb['id']}/visibility",
+        json={"allowedRoles": ["admin", "owner"]},
+        headers=auth_headers(owner),
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["allowedRoles"] == ["admin", "owner"]
+    # 收紧了就要真的看不见（不然这条只是"接口没报错"）
+    visible = client.get(f"/api/orgs/{org}/kbs", headers=auth_headers(member)).json()
+    assert visible == []

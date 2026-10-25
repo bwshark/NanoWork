@@ -39,6 +39,7 @@ function makeGateway(overrides: Partial<KbGateway> = {}): KbGateway {
     listKbs: vi.fn().mockResolvedValue({ ok: true, data: [KB1, KB2] }),
     createKb: vi.fn(),
     listDocuments: vi.fn().mockResolvedValue({ ok: true, data: [] }),
+    getDocument: vi.fn(),
     uploadDocument: vi.fn(),
     uploadFile: vi.fn(),
     renameDocument: vi.fn(),

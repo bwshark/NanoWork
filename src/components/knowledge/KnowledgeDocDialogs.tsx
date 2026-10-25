@@ -9,96 +9,19 @@ import {
   Typography,
 } from "@mui/material";
 import type { KbDepartment, KbDocument, KbSummary } from "@/lib/kb/kbClient";
-import { KB_UPLOAD_ACCEPT } from "@/lib/kb/kbUpload";
 import { KbAccessFields } from "@/components/knowledge/kbAtoms";
 
 /**
- * 知识库页的五个确认 / 编辑弹窗。
+ * 知识库页的四个确认 / 设置弹窗。
  *
- * 收在一个文件里而不是五个：它们共享同一套「小弹窗」排版（标题 15px、正文 13px、
+ * 收在一个文件里而不是四个：它们共享同一套「小弹窗」排版（标题 15px、正文 13px、
  * 右下两个按钮），分开写迟早会有一个长歪。真正的业务判断都在页面里，这里只负责
- * 把当前的结论说清楚 —— 尤其是**后果不同**的那两对：
+ * 把当前的结论说清楚 —— 尤其是**后果不同**的那对：
  *
- * - 「删除」进回收站（可恢复）vs「彻底删除」（不可撤销）；
- * - 「新建文档」是粘贴纯文本，与「上传文件」走的是两个接口（解析在前者在后）。
+ * - 「删除」进回收站（可恢复）vs「彻底删除」（不可撤销）。
+ *
+ * 「新建文档」不在这里：它是一个整屏的编辑器抽屉，见 `NewDocDrawer`。
  */
-
-export interface NewDocDialogProps {
-  open: boolean;
-  busy: boolean;
-  kbName: string;
-  title: string;
-  content: string;
-  onTitleChange: (value: string) => void;
-  onContentChange: (value: string) => void;
-  onClose: () => void;
-  onSubmit: () => void;
-}
-
-/** 新建文档（粘贴纯文本入库）。 */
-export function NewDocDialog({
-  open,
-  busy,
-  kbName,
-  title,
-  content,
-  onTitleChange,
-  onContentChange,
-  onClose,
-  onSubmit,
-}: NewDocDialogProps) {
-  return (
-    <Dialog open={open} onClose={busy ? undefined : onClose} fullWidth maxWidth="sm">
-      <DialogTitle sx={{ fontSize: 15, fontWeight: 600, pb: 1 }}>
-        新建文档
-        <Typography component="div" sx={{ fontSize: 11.5, color: "text.secondary", mt: 0.25 }}>
-          入库到「{kbName}」· 正文按空行分段切成若干块，只有块参与检索
-        </Typography>
-      </DialogTitle>
-      <DialogContent>
-        <TextField
-          autoFocus
-          fullWidth
-          size="small"
-          label="标题"
-          value={title}
-          onChange={(event) => onTitleChange(event.target.value)}
-          inputProps={{ "data-testid": "doc-title" }}
-          sx={{ mb: 1.5 }}
-        />
-        <TextField
-          fullWidth
-          size="small"
-          label="正文（纯文本，单篇上限 20 万字符）"
-          value={content}
-          onChange={(event) => onContentChange(event.target.value)}
-          inputProps={{ "data-testid": "doc-content" }}
-          multiline
-          minRows={8}
-          maxRows={14}
-        />
-        <Typography sx={{ fontSize: 11.5, color: "text.secondary", mt: 1 }}>
-          真实资料大多在 .docx / .pdf 里：那种情况用「上传文件」更好，服务端会先解析再切块
-          （支持 {KB_UPLOAD_ACCEPT.split(",").join(" / ")}）。同一个库里重复入库相同内容会被拦下。
-        </Typography>
-      </DialogContent>
-      <DialogActions sx={{ px: 3, pb: 2 }}>
-        <Button size="small" onClick={onClose} disabled={busy}>
-          取消
-        </Button>
-        <Button
-          size="small"
-          variant="contained"
-          disabled={busy || title.trim() === "" || content.trim() === ""}
-          data-testid="doc-submit"
-          onClick={onSubmit}
-        >
-          {busy ? "入库中…" : "入库"}
-        </Button>
-      </DialogActions>
-    </Dialog>
-  );
-}
 
 export interface RenameDocDialogProps {
   target: KbDocument | null;

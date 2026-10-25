@@ -46,6 +46,7 @@ function makeGateway(overrides: Partial<KbGateway> = {}): KbGateway {
     listKbs: vi.fn(),
     createKb: vi.fn(),
     listDocuments: vi.fn(),
+    getDocument: vi.fn(),
     uploadDocument: vi.fn(),
     uploadFile: vi.fn(),
     renameDocument: vi.fn(),

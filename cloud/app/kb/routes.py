@@ -26,7 +26,7 @@ from app.auth.deps import current_user
 from app.auth.models import User
 from app.auth.security import new_user_id
 from app.db import get_session
-from app.kb.chunking import chunk_text
+from app.kb.chunking import chunk_text, join_chunks
 from app.kb.digest import digest_of
 from app.kb.embedding import resolve_embedder
 from app.kb.models import (
@@ -114,6 +114,20 @@ class CreateKbRequest(BaseModel):
     allowedDepartments: list[str] | None = None
 
 
+class UpdateKbVisibilityRequest(BaseModel):
+    """改可见范围 / 改名（PATCH /visibility）。
+
+    ⚠️ **不能复用 `CreateKbRequest`**：那里的 `name` 是必填的，而客户端改可见范围时
+    只发 `allowedRoles` / `allowedDepartments` —— 复用的结果是每次保存都 422
+    `Field required`，而它只在真机上才暴露（客户端用例 mock 了网关，看不到请求体校验）。
+    这里三个字段全部可选，语义是「传了才改」。
+    """
+
+    name: str | None = Field(default=None, min_length=1, max_length=64)
+    allowedRoles: list[str] | None = None
+    allowedDepartments: list[str] | None = None
+
+
 class KbView(BaseModel):
     id: str
     orgId: str
@@ -166,6 +180,17 @@ class DocumentView(BaseModel):
     warnings: list[str] = []
     #: 进回收站的时间；空串 = 正常文档。列表里要能看出"哪些是删过的"。
     deletedAt: str = ""
+
+
+class DocumentDetailView(DocumentView):
+    """单篇详情 = 列表项 + 正文。
+
+    `content` 是**把块按 `ordinal` 拼回来**的（见 `chunking.join_chunks`），
+    不是原文件：切块会吃掉原始排版（表格摊成一行、图片直接不在里面）。界面必须
+    把这件事说出来 —— 否则用户会以为「打开文档」看到的就是他上传的那份 PDF。
+    """
+
+    content: str = ""
 
 
 class SearchRequest(BaseModel):
@@ -572,6 +597,43 @@ def list_documents(
     ]
 
 
+@router.get("/kbs/{kb_id}/documents/{doc_id}", response_model=DocumentDetailView)
+def get_document(
+    kb_id: str,
+    doc_id: str,
+    user: User = Depends(current_user),
+    session: Session = Depends(get_session),
+) -> DocumentDetailView:
+    """读单篇：元数据 + 正文（块按 `ordinal` 拼回）。
+
+    三件事按顺序说清：
+    1. **读权限就是可见性**：走 `_kb_or_404`（`visibility.allows` 的唯一实现），
+       越权与不存在一律 404 —— 不在客户端做任何过滤。
+    2. **回收站里的不给读**：它已经「不在资料里」了，能读会让「删了还看得到」变成
+       第二个真相。提示里直接说「恢复后才能查看」，省一次猜。
+    3. **正文是拼回来的**：`join_chunks` 会去掉硬切的重叠，但原始排版（表格、图片）
+       在切块那一步就没了 —— 界面必须如实标注。
+    """
+    kb, _member = _kb_or_404(session, kb_id, user)
+    doc = _kb_document_or_404(session, kb, doc_id)
+    if doc.deleted_at != "":
+        raise HTTPException(status_code=404, detail="文档在回收站里，恢复后才能查看")
+
+    chunks = session.exec(
+        select(KbChunk).where(KbChunk.doc_id == doc.id).order_by(KbChunk.ordinal)
+    ).all()
+    resolution = resolve_embedder()
+    embedded = (
+        count_vectors_by_doc(session, kb_id=kb.id, model=resolution.model).get(doc.id, 0)
+        if resolution.embedder is not None
+        else 0
+    )
+    view = _document_view(doc, embedded=embedded)
+    return DocumentDetailView(
+        **view.model_dump(), content=join_chunks([chunk.text for chunk in chunks])
+    )
+
+
 @router.patch("/kbs/{kb_id}/documents/{doc_id}", response_model=DocumentView)
 def rename_document(
     kb_id: str,
@@ -794,11 +856,11 @@ def search_org_kbs(
 @router.patch("/kbs/{kb_id}/visibility", response_model=KbView)
 def update_kb_visibility(
     kb_id: str,
-    payload: CreateKbRequest,
+    payload: UpdateKbVisibilityRequest,
     user: User = Depends(current_user),
     session: Session = Depends(get_session),
 ) -> KbView:
-    """改可见范围：**必须 admin**。
+    """改可见范围 / 改名：**必须 admin**。
 
     这是本模块唯一「收紧之后别人就看不见」的操作，也是权限设计里最该有门槛的一步：
     普通成员能改，就等于任何人都能把管理员库对全员开放（或反过来把同事锁在门外）。
@@ -806,6 +868,8 @@ def update_kb_visibility(
     kb, member = _kb_or_404(session, kb_id, user)
     if not role_at_least(member.role, ROLE_ADMIN):
         raise HTTPException(status_code=403, detail="权限不足")
+    if payload.name is not None:
+        kb.name = payload.name.strip()[:64]
     if payload.allowedRoles is not None:
         if not payload.allowedRoles:
             raise HTTPException(status_code=422, detail="可见范围不能为空")

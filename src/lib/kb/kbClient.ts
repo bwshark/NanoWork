@@ -133,6 +133,16 @@ export interface KbDocument {
   deletedAt?: string;
 }
 
+/**
+ * 单篇详情 = 列表项 + 正文。
+ *
+ * `content` 是服务端**把块按序拼回来**的（不是原文件）：切块会吃掉原始排版，
+ * 所以界面上必须标注这一点，别让人以为「打开文档」等于看原 PDF。
+ */
+export interface KbDocumentDetail extends KbDocument {
+  content: string;
+}
+
 export interface KbSearchHit {
   chunkId: string;
   docId: string;
@@ -348,6 +358,12 @@ export interface KbGateway {
   removeDepartmentMember(departmentId: string, userId: string): Promise<KbApiResult<undefined>>;
   /** 文档列表。`trashed` = 看回收站（**只看删过的**，不含正常文档） */
   listDocuments(kbId: string, input?: { trashed?: boolean }): Promise<KbApiResult<KbDocument[]>>;
+  /**
+   * 读单篇（元数据 + 正文，抽屉里「打开文档」用）。
+   *
+   * 失败语义照旧原样转达：403 = 角色不够，404 = 不存在 / 在回收站里。
+   */
+  getDocument(kbId: string, docId: string): Promise<KbApiResult<KbDocumentDetail>>;
   uploadDocument(
     kbId: string,
     input: { title: string; content: string },
@@ -404,6 +420,7 @@ export function createKbGateway(config: KbClientConfig): KbGateway {
     updateKbVisibility: (kbId, input) => updateKbVisibility(config, kbId, input),
     createKb: (orgId, input) => createKb(config, orgId, input),
     listDocuments: (kbId, input) => listDocuments(config, kbId, input),
+    getDocument: (kbId, docId) => getKbDocument(config, kbId, docId),
     uploadDocument: (kbId, input) => uploadDocument(config, kbId, input),
     uploadFile: (kbId, input) => uploadKbFile(config, kbId, input),
     renameDocument: (kbId, docId, title) => renameKbDocument(config, kbId, docId, title),
@@ -473,7 +490,24 @@ export function listDocuments(
   );
 }
 
-/** 改可见范围。`name` 也走同一个接口（服务端复用 `CreateKbRequest`）。 */
+/**
+ * 读单篇详情（正文由服务端把块拼回来）。
+ *
+ * 与列表分开是因为**代价不同**：列表只读元数据，一次几十行；正文可能有几十万字，
+ * 打开哪一篇才拉哪一篇。
+ */
+export function getKbDocument(
+  config: KbClientConfig,
+  kbId: string,
+  docId: string,
+): Promise<KbApiResult<KbDocumentDetail>> {
+  return request<KbDocumentDetail>(
+    config,
+    `/api/kbs/${encodeURIComponent(kbId)}/documents/${encodeURIComponent(docId)}`,
+  );
+}
+
+/** 改可见范围。`name` 也走同一个接口（服务端复用同一份请求体，字段全部可选）。 */
 export function updateKbVisibility(
   config: KbClientConfig,
   kbId: string,

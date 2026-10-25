@@ -77,3 +77,36 @@ def chunk_text(
 
     # 保底再过滤一次：硬切可能产出只含空白的尾巴
     return [chunk.strip() for chunk in chunks if chunk.strip()]
+
+
+def join_chunks(chunks: list[str], *, min_overlap: int = 40) -> str:
+    """把块按序拼回正文（详情页用），并**去掉硬切留下的重叠**。
+
+    为什么不能直接 `"\\n\\n".join(chunks)`：超长段落走 `_hard_split`（固定重叠
+    `OVERLAP_CHARS` 字），直接拼会在切口处重复一段 —— 详情页是给人读的，重复比
+    丢字更刺眼（也更容易被当成"数据坏了"）。
+
+    只处理「前块尾巴 == 后块开头」且长度 ≥ `min_overlap` 的情况：作者自己写的重复
+    （比如两句一样的口号）通常短于 40 字，不会被误伤。宁可少修一点，也不要把
+    正常正文吃掉。
+
+    ⚠️ 拼回来的**不是原文件**：切块本身就会吃掉原始排版（表格变行、图片丢失）。
+    这条限制写在接口的 docstring 与界面提示里，不能装作它等于原文档。
+    """
+    if not chunks:
+        return ""
+    out = chunks[0]
+    for chunk in chunks[1:]:
+        overlap = 0
+        for size in range(min(len(out), len(chunk)), min_overlap - 1, -1):
+            if out.endswith(chunk[:size]):
+                overlap = size
+                break
+        tail = chunk[overlap:]
+        if tail == "":
+            # 整块都是上一块的重叠：跳过，别留一对多余的空行
+            continue
+        # 有重叠 = 同**一段**被硬切开了：直接接上，不能插空行（插了就等于凭空
+        # 多出一个段落边界，而原文那里并没有分段）
+        out = f"{out}{tail}" if overlap else f"{out}\n\n{tail}"
+    return out

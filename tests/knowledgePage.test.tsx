@@ -30,6 +30,7 @@ import {
   mount,
   setInputValue,
   unmount,
+  waitForSettled,
 } from './helpers/reactMount';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -106,6 +107,9 @@ function makeGateway(overrides: Partial<KbGateway> = {}): KbGateway {
     listKbs: vi.fn().mockResolvedValue({ ok: true, data: [KB] }),
     createKb: vi.fn().mockResolvedValue({ ok: true, data: KB }),
     listDocuments: vi.fn().mockResolvedValue({ ok: true, data: [DOC] }),
+    getDocument: vi
+      .fn()
+      .mockResolvedValue({ ok: true, data: { ...DOC, content: '报销流程：走财务邮箱。' } }),
     uploadDocument: vi.fn().mockResolvedValue({ ok: true, data: DOC }),
     uploadFile: vi.fn().mockResolvedValue({ ok: true, data: { ...DOC, kind: 'docx' } }),
     renameDocument: vi.fn(),
@@ -933,5 +937,200 @@ describe('写操作', () => {
     // 上传后重拉了一次文档列表
     expect(listDocuments).toHaveBeenCalledTimes(2);
     expect(host.textContent).toContain('差旅制度');
+  });
+
+  /**
+   * 抽屉的三条「不丢内容」判据。
+   *
+   * 写正文是一个会停很久的动作，所以这里的失败代价不是「多一次点击」而是「几百字
+   * 没了」。三条都要成立：留空标题有兜底、关掉能留住草稿、失败不清稿。
+   */
+  it('标题留空时用正文首行兜底（先想标题是反的）', async () => {
+    const uploadDocument = vi.fn().mockResolvedValue({ ok: true, data: DOC });
+    const host = render(makeGateway({ uploadDocument }));
+    await flush();
+    await enterKb(host);
+    await pickMenu(host, 'kb-add-menu', 'new-doc');
+
+    setInputValue(
+      dialogRoot().querySelector('[data-testid="doc-content"]') as HTMLTextAreaElement,
+      '\n# 差旅报销制度（2026 版）\n\n报销流程：走财务邮箱。',
+    );
+    await act(async () => {
+      await flush();
+    });
+    // 提交按钮只看正文：标题不是必填项
+    await act(async () => {
+      click(dialogRoot().querySelector('[data-testid="doc-submit"]'));
+      await flush();
+    });
+
+    expect(uploadDocument).toHaveBeenCalledWith(
+      'k1',
+      expect.objectContaining({ title: '差旅报销制度（2026 版）' }),
+    );
+  });
+
+  it('「保留草稿并关闭」之后重开抽屉，内容还在', async () => {
+    const host = render(makeGateway());
+    await flush();
+    await enterKb(host);
+    await pickMenu(host, 'kb-add-menu', 'new-doc');
+
+    setInputValue(
+      dialogRoot().querySelector('[data-testid="doc-content"]') as HTMLTextAreaElement,
+      '报销流程：走财务邮箱。',
+    );
+    await act(async () => {
+      await flush();
+    });
+    await act(async () => {
+      click(document.querySelector('[data-testid="doc-drawer-close"]'));
+      await flush();
+    });
+    // 有内容时先问一句（不问就等于关一次丢一次）。确认框也是 Portal，只能从 document 找
+    await act(async () => {
+      click(document.querySelector('[data-testid="doc-keep-confirm"]'));
+      await flush();
+    });
+    // 抽屉是滑出动画：等它真的卸载再重开，否则会同时挂两个 [role=dialog]
+    await waitForSettled(() => document.querySelector('[data-testid="doc-content"]') === null);
+
+    await pickMenu(host, 'kb-add-menu', 'new-doc');
+    const body = dialogRoot().querySelector('[data-testid="doc-content"]') as HTMLTextAreaElement;
+    expect(body.value).toBe('报销流程：走财务邮箱。');
+  });
+
+  it('「丢弃并关闭」把草稿清干净（不留下上次的残稿）', async () => {
+    const host = render(makeGateway());
+    await flush();
+    await enterKb(host);
+    await pickMenu(host, 'kb-add-menu', 'new-doc');
+
+    setInputValue(
+      dialogRoot().querySelector('[data-testid="doc-content"]') as HTMLTextAreaElement,
+      '临时写两句',
+    );
+    await act(async () => {
+      await flush();
+    });
+    await act(async () => {
+      click(document.querySelector('[data-testid="doc-drawer-close"]'));
+      await flush();
+    });
+    await act(async () => {
+      click(document.querySelector('[data-testid="doc-discard-confirm"]'));
+      await flush();
+    });
+    await waitForSettled(() => document.querySelector('[data-testid="doc-content"]') === null);
+
+    await pickMenu(host, 'kb-add-menu', 'new-doc');
+    const body = dialogRoot().querySelector('[data-testid="doc-content"]') as HTMLTextAreaElement;
+    expect(body.value).toBe('');
+  });
+});
+
+/**
+ * 阅读抽屉（点列表里的一行）。
+ *
+ * 这一组守的是「点开之后到底看到了什么」：正文是**另取**的一份数据（列表只有元数据），
+ * 所以四件事必须分别成立 —— 取对了、术语不串、失败说实话、删了要跟着关。
+ */
+describe('阅读抽屉', () => {
+  it('点一行就打开抽屉，并按 id 另取正文', async () => {
+    const getDocument = vi.fn().mockResolvedValue({
+      ok: true,
+      data: { ...DOC, content: '报销流程：走财务邮箱。\n\n住宿按城市分级。' },
+    });
+    const host = render(makeGateway({ getDocument }));
+    await flush();
+    await enterKb(host);
+
+    await act(async () => {
+      click(host.querySelector('[data-testid="kb-doc-row-d1"]'));
+      await flush();
+    });
+
+    expect(getDocument).toHaveBeenCalledWith('k1', 'd1');
+    // 标题来自列表（先画出来），正文来自详情
+    expect(dialogRoot().textContent).toContain('差旅制度');
+    const body = dialogRoot().querySelector('[data-testid="kb-doc-view-body"]');
+    expect(body?.textContent).toContain('住宿按城市分级');
+  });
+
+  it('点行内的改名按钮不会顺带把阅读抽屉也打开', async () => {
+    const getDocument = vi.fn();
+    const host = render(makeGateway({ getDocument }));
+    await flush();
+    await enterKb(host);
+
+    await act(async () => {
+      click(host.querySelector('[data-testid="kb-doc-rename-d1"]'));
+      await flush();
+    });
+
+    // 命名冲突：行是"打开"，按钮是"改名"，两者不能串
+    expect(getDocument).not.toHaveBeenCalled();
+    expect(dialogRoot().textContent).toContain('重命名文档');
+  });
+
+  it('正文读不到时原样报出服务端那句，标题照旧显示（不然不知道点开了哪篇）', async () => {
+    const getDocument = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 403,
+      message: '当前角色无权访问该知识库',
+      unauthorized: false,
+    });
+    const host = render(makeGateway({ getDocument }));
+    await flush();
+    await enterKb(host);
+
+    await act(async () => {
+      click(host.querySelector('[data-testid="kb-doc-row-d1"]'));
+      await flush();
+    });
+
+    expect(dialogRoot().querySelector('[data-testid="kb-doc-view-error"]')?.textContent).toBe(
+      '当前角色无权访问该知识库',
+    );
+    expect(dialogRoot().textContent).toContain('差旅制度');
+    // 不能同时又渲染一个空正文的结论
+    expect(dialogRoot().querySelector('[data-testid="kb-doc-view-body"]')).toBeNull();
+  });
+
+  it('删掉正在读的那一篇，抽屉跟着关（否则它挂着一个不存在的正文）', async () => {
+    const deleteDocument = vi.fn().mockResolvedValue({ ok: true, data: undefined });
+    const listDocuments = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, data: [DOC] })
+      .mockResolvedValue({ ok: true, data: [] });
+    const host = render(makeGateway({ deleteDocument, listDocuments }));
+    await flush();
+    await enterKb(host);
+
+    await act(async () => {
+      click(host.querySelector('[data-testid="kb-doc-row-d1"]'));
+      await flush();
+    });
+    expect(dialogRoot().textContent).toContain('差旅制度');
+
+    // 抽屉里的「⋯ → 删除（进回收站）」走的是同一个确认弹窗
+    await act(async () => {
+      click(document.querySelector('[data-testid="kb-doc-view-menu"]'));
+      await flush();
+    });
+    await act(async () => {
+      click(document.querySelector('[data-testid="kb-doc-delete-from-view"]'));
+      await flush();
+    });
+    await act(async () => {
+      click(document.querySelector('[data-testid="kb-delete-confirm"]'));
+      await flush();
+    });
+
+    await waitForSettled(
+      () => document.querySelector('[data-testid="kb-doc-view-title"]') === null,
+    );
+    expect(document.querySelector('[data-testid="kb-doc-view-title"]')).toBeNull();
   });
 });

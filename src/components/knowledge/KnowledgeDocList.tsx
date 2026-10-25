@@ -55,6 +55,8 @@ export interface KnowledgeDocListProps {
     lexicalOnly: boolean;
   };
   actions: {
+    /** 点行 = 打开阅读抽屉（正文另取，见 `getDocument`） */
+    onOpen: (doc: KbDocument) => void;
     onRename: (doc: KbDocument) => void;
     onDelete: (doc: KbDocument) => void;
     onRestore: (doc: KbDocument) => void;
@@ -337,6 +339,7 @@ export function KnowledgeDocList({
                 alignItems="center"
                 spacing={1}
                 data-testid={`kb-doc-row-${doc.id}`}
+                onClick={() => actions.onOpen(doc)}
                 onMouseEnter={() => setHovered(doc.id)}
                 onMouseLeave={() => setHovered("")}
                 sx={{
@@ -345,6 +348,7 @@ export function KnowledgeDocList({
                   borderRadius: 1.5,
                   borderBottom: "1px solid",
                   borderColor: "divider",
+                  cursor: "pointer",
                   "&:hover": { bgcolor: "action.hover" },
                 }}
               >
@@ -375,6 +379,8 @@ export function KnowledgeDocList({
                 <Stack
                   direction="row"
                   spacing={0.25}
+                  // 行内按钮自己处理点击：不拦的话「点改名」会同时打开阅读抽屉
+                  onClick={(event) => event.stopPropagation()}
                   sx={{
                     width: 68,
                     justifyContent: "flex-end",
@@ -402,9 +408,15 @@ export function KnowledgeDocList({
               <Paper
                 key={doc.id}
                 variant="outlined"
+                onClick={() => actions.onOpen(doc)}
                 onMouseEnter={() => setHovered(doc.id)}
                 onMouseLeave={() => setHovered("")}
-                sx={{ p: 1.5, borderRadius: 2, "&:hover": { bgcolor: "action.hover" } }}
+                sx={{
+                  p: 1.5,
+                  borderRadius: 2,
+                  cursor: "pointer",
+                  "&:hover": { bgcolor: "action.hover" },
+                }}
               >
                 <Stack direction="row" alignItems="flex-start" spacing={1}>
                   <KbDocIcon kind={doc.kind} size={20} />
@@ -433,6 +445,7 @@ export function KnowledgeDocList({
                   <Stack
                     direction="row"
                     spacing={0.25}
+                    onClick={(event) => event.stopPropagation()}
                     sx={{ opacity: hovered === doc.id ? 1 : 0.35, transition: "opacity .12s" }}
                   >
                     {rowActions(doc)}
