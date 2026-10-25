@@ -37,8 +37,13 @@ ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     # 2026-10-24 文档生命周期：内容摘要用于「同一篇重复入库」判重。
     # 空串 = 本行产生于这个字段存在之前（读的时候要按「没有摘要」处理，见 routes）。
     ("kb_documents", "content_hash", "TEXT NOT NULL DEFAULT ''"),
-    # 来源格式（text / docx / pdf），列表里要显示，用户才知道「那篇是 PDF」。
+    # 来源格式（text / docx / pdf / xlsx / pptx），列表里要显示。
     ("kb_documents", "kind", "TEXT NOT NULL DEFAULT 'text'"),
+    # 2026-10-25 回收站：软删时间（ISO 字符串，空串 = 未删）。
+    ("kb_documents", "deleted_at", "TEXT NOT NULL DEFAULT ''"),
+    # 2026-10-25 部门负责人：部门内角色（member / manager）。
+    # 老行按 member 处理：把历史成员默认成负责人等于凭空扩权，方向必须 fail-closed。
+    ("department_members", "role", "TEXT NOT NULL DEFAULT 'member'"),
 )
 
 #: (索引名, 表名, 列清单)。`CREATE INDEX IF NOT EXISTS` 在 SQLite 与 PostgreSQL
@@ -46,6 +51,8 @@ ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
 #: （`ix_<表>_<列>`），否则新库会同时存在两个同义索引。
 ADDED_INDEXES: tuple[tuple[str, str, str], ...] = (
     ("ix_kb_documents_content_hash", "kb_documents", "content_hash"),
+    # 回收站过滤走 `deleted_at == ''`，它出现在每一次检索的 WHERE 里
+    ("ix_kb_documents_deleted_at", "kb_documents", "deleted_at"),
 )
 
 

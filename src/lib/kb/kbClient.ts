@@ -88,6 +88,8 @@ export interface KbDepartment {
 export interface KbDepartmentMember {
   userId: string;
   email: string;
+  /** 部门内角色：member / manager（负责人可维护"仅限本部门"的知识库） */
+  departmentRole?: string;
   /** 该用户在**组织**里的角色（部门本身没有角色，只有归属） */
   role: string;
   joinedAt: string;
@@ -106,6 +108,8 @@ export interface KbDocument {
   kind?: string;
   /** 解析降级说明（如「2 页没有文本层」）——必须展示，否则用户不知道为什么搜不全 */
   warnings?: string[];
+  /** 进回收站的时间；空串 = 正常文档。回收站视图靠它区分"删过的" */
+  deletedAt?: string;
 }
 
 export interface KbSearchHit {
@@ -284,6 +288,11 @@ export interface KbGateway {
   listOrgs(): Promise<KbApiResult<KbOrg[]>>;
   createOrg(name: string): Promise<KbApiResult<KbOrg>>;
   listKbs(orgId: string): Promise<KbApiResult<KbSummary[]>>;
+  /** 改库的可见范围（角色 + 部门）。要求 admin —— 它会改变别人能不能看见 */
+  updateKbVisibility(
+    kbId: string,
+    input: { name?: string; allowedRoles?: string[]; allowedDepartments?: string[] },
+  ): Promise<KbApiResult<KbSummary>>;
   createKb(
     orgId: string,
     input: {
@@ -298,7 +307,17 @@ export interface KbGateway {
     orgId: string,
     input: { name: string; parentId?: string },
   ): Promise<KbApiResult<KbDepartment>>;
-  renameDepartment(departmentId: string, name: string): Promise<KbApiResult<KbDepartment>>;
+  /** 改名 / 换父节点（`parentId` 省略 = 不动结构，空串 = 移到根） */
+  updateDepartment(
+    departmentId: string,
+    input: { name?: string; parentId?: string },
+  ): Promise<KbApiResult<KbDepartment>>;
+  /** 设置部门内角色（manager = 该部门负责人，可维护"仅限本部门"的知识库） */
+  setDepartmentMemberRole(
+    departmentId: string,
+    userId: string,
+    role: string,
+  ): Promise<KbApiResult<KbDepartmentMember>>;
   deleteDepartment(departmentId: string): Promise<KbApiResult<undefined>>;
   listDepartmentMembers(departmentId: string): Promise<KbApiResult<KbDepartmentMember[]>>;
   addDepartmentMember(
@@ -306,7 +325,8 @@ export interface KbGateway {
     email: string,
   ): Promise<KbApiResult<KbDepartmentMember>>;
   removeDepartmentMember(departmentId: string, userId: string): Promise<KbApiResult<undefined>>;
-  listDocuments(kbId: string): Promise<KbApiResult<KbDocument[]>>;
+  /** 文档列表。`trashed` = 看回收站（**只看删过的**，不含正常文档） */
+  listDocuments(kbId: string, input?: { trashed?: boolean }): Promise<KbApiResult<KbDocument[]>>;
   uploadDocument(
     kbId: string,
     input: { title: string; content: string },
@@ -318,8 +338,17 @@ export interface KbGateway {
   ): Promise<KbApiResult<KbDocument>>;
   /** 改标题（内容与块都不动）；需要管理员 */
   renameDocument(kbId: string, docId: string, title: string): Promise<KbApiResult<KbDocument>>;
-  /** 删文档（连同块与向量）；需要管理员 */
-  deleteDocument(kbId: string, docId: string): Promise<KbApiResult<undefined>>;
+  /**
+   * 删文档。默认**进回收站**（可从 `undo` 恢复），`purge` = 彻底删除（不可撤销）。
+   * 需要管理员或该库允许部门的负责人。
+   */
+  deleteDocument(
+    kbId: string,
+    docId: string,
+    input?: { purge?: boolean },
+  ): Promise<KbApiResult<undefined>>;
+  /** 从回收站恢复（块与向量都在，恢复即刻可检索） */
+  restoreDocument(kbId: string, docId: string): Promise<KbApiResult<KbDocument>>;
   search(
     orgId: string,
     input: { query: string; kbId?: string; kbIds?: string[]; topK?: number },
@@ -336,18 +365,22 @@ export function createKbGateway(config: KbClientConfig): KbGateway {
     listOrgs: () => listMyOrgs(config),
     createOrg: (name) => createOrg(config, name),
     listKbs: (orgId) => listKbs(config, orgId),
+    updateKbVisibility: (kbId, input) => updateKbVisibility(config, kbId, input),
     createKb: (orgId, input) => createKb(config, orgId, input),
-    listDocuments: (kbId) => listDocuments(config, kbId),
+    listDocuments: (kbId, input) => listDocuments(config, kbId, input),
     uploadDocument: (kbId, input) => uploadDocument(config, kbId, input),
     uploadFile: (kbId, input) => uploadKbFile(config, kbId, input),
     renameDocument: (kbId, docId, title) => renameKbDocument(config, kbId, docId, title),
-    deleteDocument: (kbId, docId) => deleteKbDocument(config, kbId, docId),
+    deleteDocument: (kbId, docId, input) => deleteKbDocument(config, kbId, docId, input),
+    restoreDocument: (kbId, docId) => restoreKbDocument(config, kbId, docId),
     search: (orgId, input) => searchOrgKbs(config, orgId, input),
     retrievalInfo: (kbId) => retrievalInfo(config, kbId),
     reindex: (kbId) => reindexKb(config, kbId),
     listDepartments: (orgId) => listDepartments(config, orgId),
     createDepartment: (orgId, input) => createDepartment(config, orgId, input),
-    renameDepartment: (departmentId, name) => renameDepartment(config, departmentId, name),
+    updateDepartment: (departmentId, input) => updateDepartment(config, departmentId, input),
+    setDepartmentMemberRole: (departmentId, userId, role) =>
+      setDepartmentMemberRole(config, departmentId, userId, role),
     deleteDepartment: (departmentId) => deleteDepartment(config, departmentId),
     listDepartmentMembers: (departmentId) => listDepartmentMembers(config, departmentId),
     addDepartmentMember: (departmentId, email) =>
@@ -391,8 +424,25 @@ export function createKb(
 export function listDocuments(
   config: KbClientConfig,
   kbId: string,
+  input: { trashed?: boolean } = {},
 ): Promise<KbApiResult<KbDocument[]>> {
-  return request<KbDocument[]>(config, `/api/kbs/${encodeURIComponent(kbId)}/documents`);
+  const query = input.trashed ? '?includeDeleted=true' : '';
+  return request<KbDocument[]>(
+    config,
+    `/api/kbs/${encodeURIComponent(kbId)}/documents${query}`,
+  );
+}
+
+/** 改可见范围。`name` 也走同一个接口（服务端复用 `CreateKbRequest`）。 */
+export function updateKbVisibility(
+  config: KbClientConfig,
+  kbId: string,
+  input: { name?: string; allowedRoles?: string[]; allowedDepartments?: string[] },
+): Promise<KbApiResult<KbSummary>> {
+  return request<KbSummary>(config, `/api/kbs/${encodeURIComponent(kbId)}/visibility`, {
+    method: 'PATCH',
+    body: input,
+  });
 }
 
 export function uploadDocument(
@@ -466,11 +516,26 @@ export function deleteKbDocument(
   config: KbClientConfig,
   kbId: string,
   docId: string,
+  input: { purge?: boolean } = {},
 ): Promise<KbApiResult<undefined>> {
+  const query = input.purge ? '?purge=true' : '';
   return request<undefined>(
     config,
-    `/api/kbs/${encodeURIComponent(kbId)}/documents/${encodeURIComponent(docId)}`,
+    `/api/kbs/${encodeURIComponent(kbId)}/documents/${encodeURIComponent(docId)}${query}`,
     { method: 'DELETE' },
+  );
+}
+
+/** 从回收站恢复。 */
+export function restoreKbDocument(
+  config: KbClientConfig,
+  kbId: string,
+  docId: string,
+): Promise<KbApiResult<KbDocument>> {
+  return request<KbDocument>(
+    config,
+    `/api/kbs/${encodeURIComponent(kbId)}/documents/${encodeURIComponent(docId)}/restore`,
+    { method: 'POST' },
   );
 }
 
@@ -513,15 +578,29 @@ export function createDepartment(
   });
 }
 
-export function renameDepartment(
+export function updateDepartment(
   config: KbClientConfig,
   departmentId: string,
-  name: string,
+  input: { name?: string; parentId?: string },
 ): Promise<KbApiResult<KbDepartment>> {
   return request<KbDepartment>(config, `/api/departments/${encodeURIComponent(departmentId)}`, {
     method: 'PATCH',
-    body: { name },
+    body: input,
   });
+}
+
+/** 设置部门内角色（manager = 负责人）。 */
+export function setDepartmentMemberRole(
+  config: KbClientConfig,
+  departmentId: string,
+  userId: string,
+  role: string,
+): Promise<KbApiResult<KbDepartmentMember>> {
+  return request<KbDepartmentMember>(
+    config,
+    `/api/departments/${encodeURIComponent(departmentId)}/members/${encodeURIComponent(userId)}`,
+    { method: 'PATCH', body: { role } },
+  );
 }
 
 /** 删部门（要 admin；有子部门 / 有成员 / 被知识库引用时服务端会 409 并说明原因）。 */

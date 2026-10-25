@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
@@ -47,9 +48,10 @@ from app.kb.vectors import (
     vector_coverage,
 )
 from app.kb.visibility import kb_department_ids, member_can_read_kb, visible_kb_ids
+from app.orgs.department_access import managed_department_ids
 from app.orgs.models import Department, OrgMember
 from app.orgs.roles import ROLE_ADMIN, role_at_least
-from app.timeutil import iso_z
+from app.timeutil import iso_z, utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +60,46 @@ router = APIRouter(prefix="/api", tags=["knowledge-base"])
 #: 重建索引时每批处理多少块。分批是为了**部分成功也算数**：一次 300 块的 KB 打云端
 #: 会中途限流，整批回滚等于什么都没做；分批写则前几批留着，重跑只补剩下的。
 REINDEX_BATCH = 64
+
+#: 回收站保留天数。超过就惰性清理（下一次任何列表/检索请求顺手清），
+#: 不做定时任务：没有调度器时「靠 cron 清理」等于「永远不会清理」。
+TRASH_RETENTION_DAYS = 30
+
+
+def _trash_cutoff() -> str:
+    """早于这个时间进回收站的文档该被真正删掉（ISO 字符串，与 `deleted_at` 同形状）。"""
+    return iso_z(utc_now() - timedelta(days=TRASH_RETENTION_DAYS))
+
+
+def _purge_document(session: Session, doc: KbDocument) -> None:
+    """**真正**删掉一篇文档：三张表依次清空，顺序见 `delete_document` 的 docstring。
+
+    单独抽出来是因为有两个入口（手动彻底删除、超过保留期惰性清理），
+    而它们的顺序要求完全一样 —— 抄第二份就会有一份写错顺序。
+    """
+    delete_vectors_for_doc(session, doc_id=doc.id)
+    for chunk in session.exec(select(KbChunk).where(KbChunk.doc_id == doc.id)).all():
+        session.delete(chunk)
+    session.delete(doc)
+
+
+def _purge_expired(session: Session, kb_id: str) -> int:
+    """清掉这个库里过了保留期的回收站文档，返回删了几篇。"""
+    cutoff = _trash_cutoff()
+    expired = session.exec(
+        select(KbDocument).where(
+            KbDocument.kb_id == kb_id,
+            KbDocument.deleted_at != "",
+            KbDocument.deleted_at < cutoff,
+        )
+    ).all()
+    if not expired:
+        return 0
+    for doc in expired:
+        _purge_document(session, doc)
+    session.commit()
+    return len(expired)
+
 
 #: 单文档上限（字符）。没有上限的话，一次上传就能把 SQLite 撑到几百 MB，
 #: 而解析是同步的——请求会先超时再留下半截数据。
@@ -119,6 +161,8 @@ class DocumentView(BaseModel):
     #: 解析过程中的降级说明（"PDF 有 2 页没有文本层"之类）。**必须回给用户**：
     #: 静默丢内容会变成"我明明传了那份资料，它就是搜不到"。
     warnings: list[str] = []
+    #: 进回收站的时间；空串 = 正常文档。列表里要能看出"哪些是删过的"。
+    deletedAt: str = ""
 
 
 class SearchRequest(BaseModel):
@@ -293,9 +337,20 @@ def _writable_kb_or_404(
     也不会让「只读成员」看到任何差异。
     """
     kb, member = _kb_or_404(session, kb_id, user)
-    if not role_at_least(member.role, ROLE_ADMIN):
-        raise HTTPException(status_code=403, detail="只有管理员可以修改知识库内容")
-    return kb, member
+    if role_at_least(member.role, ROLE_ADMIN):
+        return kb, member
+
+    # 第二条通路：**该库允许部门的负责人**。
+    # 只对"有部门范围"的库成立 —— 没有部门范围的库没有"这条线归谁管"的概念，
+    # 那种库只能由组织管理员维护（否则任何 member 都能凭某个部门的负责人身份
+    # 去改一个全组织可见的库，那就把写权限放得比读权限还宽了）。
+    allowed = set(kb_department_ids(session, kb.id))
+    if allowed:
+        managed = managed_department_ids(session, kb.org_id, user.id)
+        if managed & allowed:
+            return kb, member
+
+    raise HTTPException(status_code=403, detail="只有管理员或该部门的负责人可以修改知识库内容")
 
 
 def _backfill_hashes(session: Session, kb_id: str) -> int:
@@ -349,6 +404,15 @@ def _insert_document(
             select(KbDocument).where(KbDocument.kb_id == kb.id, KbDocument.content_hash == digest)
         ).first()
         if duplicate is not None:
+            # 回收站里的同内容要单独说：此时的正确动作是「恢复」，不是「再删一次」也不是
+            # 让用户以为必须先彻底删除才能重传（那会白丢一次索引重建）。
+            if duplicate.deleted_at:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"这篇内容和回收站里的《{duplicate.title}》一样，恢复它就行（不必重新上传）"
+                    ),
+                )
             raise HTTPException(
                 status_code=409,
                 detail=(
@@ -402,6 +466,7 @@ def _document_view(
         embedded=embedded,
         kind=doc.kind,
         warnings=list(warnings or []),
+        deletedAt=doc.deleted_at,
     )
 
 
@@ -465,11 +530,25 @@ def upload_document(
 @router.get("/kbs/{kb_id}/documents", response_model=list[DocumentView])
 def list_documents(
     kb_id: str,
+    includeDeleted: bool = False,
     user: User = Depends(current_user),
     session: Session = Depends(get_session),
 ) -> list[DocumentView]:
+    """文档列表。默认只看活文档；`includeDeleted=true` 看**回收站**（只看删过的）。
+
+    两个口径而不是一个「全都要 + 前端筛」：回收站是个独立视图，
+    混在同一个列表里最容易出的错是「以为删了、其实还混在正常列表里」。
+    """
     kb, _member = _kb_or_404(session, kb_id, user)
-    rows = session.exec(select(KbDocument).where(KbDocument.kb_id == kb.id)).all()
+    # 惰性清理：进来一次就顺手把过期清掉，不依赖外部调度
+    _purge_expired(session, kb.id)
+    query = select(KbDocument).where(KbDocument.kb_id == kb.id)
+    query = (
+        query.where(KbDocument.deleted_at != "")
+        if includeDeleted
+        else query.where(KbDocument.deleted_at == "")
+    )
+    rows = session.exec(query).all()
     # 「这篇有没有建索引」是列表最该回答的问题之一：一篇没索引的文档搜不到，
     # 而界面上它和正常文档长得一模一样 —— 那是「我明明传了，它就是搜不到」的根。
     # 一次 GROUP BY 拿到全部文档的向量条数，不逐篇查（见 vectors.count_vectors_by_doc）。
@@ -479,6 +558,10 @@ def list_documents(
         if resolution.embedder is not None
         else {}
     )
+    # 回收站里的文档向量还留着（恢复后不必重建），但列表里显示"已建索引"会让人
+    # 以为它还能被搜到 —— 统一显示 0，配合 `deletedAt` 一起看。
+    if includeDeleted:
+        by_doc = {}
     return [
         _document_view(doc, embedded=by_doc.get(doc.id, 0))
         for doc in sorted(rows, key=lambda item: (item.created_at, item.id))
@@ -516,33 +599,81 @@ def rename_document(
     return _document_view(doc, embedded=embedded)
 
 
+def _kb_document_or_404(session: Session, kb: KnowledgeBase, doc_id: str) -> KbDocument:
+    """按 **库 + 文档** 取一篇，跨库一律 404。
+
+    `doc.kb_id != kb.id` 这条不能省：否则可以拿 A 库的 kb_id 去删 B 库的文档。
+    """
+    doc = session.get(KbDocument, doc_id)
+    if doc is None or doc.kb_id != kb.id:
+        raise HTTPException(status_code=404, detail="文档不存在")
+    return doc
+
+
 @router.delete("/kbs/{kb_id}/documents/{doc_id}", status_code=204)
 def delete_document(
     kb_id: str,
     doc_id: str,
+    purge: bool = False,
     user: User = Depends(current_user),
     session: Session = Depends(get_session),
 ) -> None:
-    """删一篇文档：连同它的**块、向量**一起删干净。
+    """删一篇文档：**默认进回收站**（软删），`purge=true` 才是彻底删除。
 
-    ## 三张表都要动，且顺序有意义
+    ## 为什么默认软删
+
+    硬删是不可逆的，而这个动作的触发场景恰恰最需要后悔药：一份资料传错了库、
+    被别人误删、"删完才发现那是唯一一份"。软删的代价只是块与向量多占一份空间
+    （30 天后惰性清理），换来的是「点错了还能恢复」。
+
+    ## 软删只需要动一行，但**必须同时把它从检索里摘掉**
+
+    块和向量都留着（恢复时才不用重建索引），所以"删了之后搜不到"不能靠数据消失
+    来实现，只能靠查询条件（`KbDocument.deleted_at == ""` 的 join）。这条条件
+    写在 `search_org_kbs` / `reindex_kb` / `list_documents` 三处，少一处就是
+    「删掉了还能被搜到」。
+
+    ## 彻底删除要动三张表，顺序也有意义
 
     `kb_vectors` → `kb_chunks` → `kb_documents`。SQLite 默认不强制外键，
-    所以顺序不是「不这样就报错」，而是「不这样就会留下孤儿行」：孤儿块会被
-    检索命中（它们还带着 kb_id），于是用户看到一份**已经删掉的**文档出现在结果里，
-    而列表里找不到它 —— 那种「幽灵数据」比直接报错难排查得多。
+    顺序不是「不这样就报错」，而是「不这样会留下孤儿行」：孤儿块带着 kb_id，
+    照样被检索命中，于是列表里找不到的文档出现在结果里。
     """
     kb, _member = _writable_kb_or_404(session, kb_id, user)
-    doc = session.get(KbDocument, doc_id)
-    if doc is None or doc.kb_id != kb.id:
-        # `doc.kb_id != kb.id` 这条不能省：否则可以拿 A 库的 kb_id 去删 B 库的文档
-        raise HTTPException(status_code=404, detail="文档不存在")
+    doc = _kb_document_or_404(session, kb, doc_id)
 
-    delete_vectors_for_doc(session, doc_id=doc.id)
-    for chunk in session.exec(select(KbChunk).where(KbChunk.doc_id == doc.id)).all():
-        session.delete(chunk)
-    session.delete(doc)
+    if purge:
+        _purge_document(session, doc)
+        session.commit()
+        return
+    if doc.deleted_at:
+        # 幂等：已经在回收站里再删一次不算错，但也不该把进站时间刷新成"刚刚"
+        # （否则重复点删除会把保留期无限延后）
+        return
+    doc.deleted_at = iso_z(utc_now())
+    session.add(doc)
     session.commit()
+
+
+@router.post("/kbs/{kb_id}/documents/{doc_id}/restore", response_model=DocumentView)
+def restore_document(
+    kb_id: str,
+    doc_id: str,
+    user: User = Depends(current_user),
+    session: Session = Depends(get_session),
+) -> DocumentView:
+    """从回收站恢复。块与向量都在（软删没动它们），所以恢复是**立刻可检索**的。"""
+    kb, _member = _writable_kb_or_404(session, kb_id, user)
+    doc = _kb_document_or_404(session, kb, doc_id)
+    doc.deleted_at = ""
+    session.add(doc)
+    session.commit()
+    session.refresh(doc)
+    resolution = resolve_embedder()
+    embedded = 0
+    if resolution.embedder is not None:
+        embedded = count_vectors_by_doc(session, kb_id=kb.id, model=resolution.model).get(doc.id, 0)
+    return _document_view(doc, embedded=embedded)
 
 
 def _rank_candidates(
@@ -619,8 +750,14 @@ def search_org_kbs(
     if not scope_ids:
         return []
 
-    # 这一步就是「检索前过滤」：过滤条件在 SQL 里，候选集天生不含越权内容
-    candidates = session.exec(select(KbChunk).where(KbChunk.kb_id.in_(scope_ids))).all()
+    # 这一步就是「检索前过滤」：过滤条件在 SQL 里，候选集天生不含越权内容。
+    # 回收站里的文档也要在这里排掉 —— 慢一步（比如在打分之后筛）就等于
+    # 「删掉的东西还能被搜到」，而且会挤掉真正命中的名额。
+    candidates = session.exec(
+        select(KbChunk)
+        .join(KbDocument, KbChunk.doc_id == KbDocument.id)
+        .where(KbChunk.kb_id.in_(scope_ids), KbDocument.deleted_at == "")
+    ).all()
     if not candidates:
         return []
 
@@ -722,7 +859,11 @@ def retrieval_status(
         indexed, total = vector_coverage(session, model=model, kb_id=kbId)
     else:
         # embedder 关着时仍然给出「总块数」，好让界面解释「打开后要建多少块」
-        query = select(KbChunk)
+        query = (
+            select(KbChunk)
+            .join(KbDocument, KbChunk.doc_id == KbDocument.id)
+            .where(KbDocument.deleted_at == "")
+        )
         if kbId:
             query = query.where(KbChunk.kb_id == kbId)
         indexed, total = 0, len(session.exec(query).all())
@@ -761,7 +902,12 @@ def reindex_kb(
             detail=resolution.error or "未启用向量检索（NANOWORK_KB_EMBEDDER=off）",
         )
 
-    chunks = session.exec(select(KbChunk).where(KbChunk.kb_id == kb.id)).all()
+    # 只重建活文档：给回收站里的块算向量既浪费额度，又会让覆盖率算不平
+    chunks = session.exec(
+        select(KbChunk)
+        .join(KbDocument, KbChunk.doc_id == KbDocument.id)
+        .where(KbChunk.kb_id == kb.id, KbDocument.deleted_at == "")
+    ).all()
     indexed = 0
     error = ""
     for start in range(0, len(chunks), REINDEX_BATCH):

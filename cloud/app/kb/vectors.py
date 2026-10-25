@@ -18,7 +18,7 @@ from array import array
 from sqlalchemy import func
 from sqlmodel import Session, select
 
-from app.kb.models import KbChunk, KbVector
+from app.kb.models import KbChunk, KbDocument, KbVector
 
 
 def pack(vector: list[float]) -> bytes:
@@ -150,8 +150,18 @@ def vector_coverage(session: Session, *, model: str, kb_id: str | None = None) -
     差值是「有新文档没建索引」或「换了 embedder 但没重建」——两种情况都该提示重建，
     所以状态接口把它们合并成一个 `stale` 上报，不在这里猜原因。
     """
-    chunk_query = select(KbChunk)
-    vector_query = select(KbVector).where(KbVector.model == model)
+    # 两边都 join 文档并排除回收站：只排除一侧会让 `indexed > total`（回收站里的
+    # 向量还在、块却没算进总数），那种覆盖率界面无法解释。
+    chunk_query = (
+        select(KbChunk)
+        .join(KbDocument, KbChunk.doc_id == KbDocument.id)
+        .where(KbDocument.deleted_at == "")
+    )
+    vector_query = (
+        select(KbVector)
+        .join(KbDocument, KbVector.doc_id == KbDocument.id)
+        .where(KbVector.model == model, KbDocument.deleted_at == "")
+    )
     if kb_id:
         chunk_query = chunk_query.where(KbChunk.kb_id == kb_id)
         vector_query = vector_query.where(KbVector.kb_id == kb_id)

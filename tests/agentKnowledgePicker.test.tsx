@@ -50,7 +50,10 @@ function makeGateway(overrides: Partial<KbGateway> = {}): KbGateway {
     // 部门相关是知识库页的能力，选择器不用；但网关类型要求齐全
     listDepartments: vi.fn(),
     createDepartment: vi.fn(),
-    renameDepartment: vi.fn(),
+    updateDepartment: vi.fn(),
+    setDepartmentMemberRole: vi.fn(),
+    updateKbVisibility: vi.fn(),
+    restoreDocument: vi.fn(),
     deleteDepartment: vi.fn(),
     listDepartmentMembers: vi.fn(),
     addDepartmentMember: vi.fn(),

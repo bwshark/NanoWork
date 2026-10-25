@@ -98,3 +98,31 @@ def child_depth(departments: Iterable[Department], parent_id: str) -> int:
         depth += 1
         current = by_id[current].parent_id
     return depth
+
+
+def subtree_height(departments: Iterable[Department], root_id: str) -> int:
+    """以 `root_id` 为根的子树高度（只有自己 = 1）。
+
+    ## 为什么移动部门要先算这个
+
+    层级上限约束的是**最深的一条链**，而移动一个节点等于移动它的整个子树：
+    把一个 3 层高的子树挂到第 6 层下，最深就变成了 8 层（上限 8 时刚好踩线），
+    挂到第 7 层下就超了。只看「新父的深度」会放过这种情况，且超限之后
+    列表缩进会变得没有意义 —— 而那时已经写进库了。
+    """
+    by_parent = children_map(departments)
+    # 迭代而不是递归：部门树是用户输入的数据，脏数据（环）会让递归栈直接崩
+    height = 0
+    frontier = [root_id]
+    seen: set[str] = set()
+    while frontier:
+        height += 1
+        next_frontier: list[str] = []
+        for node in frontier:
+            if node in seen:
+                # 环保护：真出现环时按当前高度返回，由上层用别的规则兜住
+                return height
+            seen.add(node)
+            next_frontier.extend(child.id for child in by_parent.get(node, []))
+        frontier = next_frontier
+    return height

@@ -41,3 +41,19 @@ def subtree_of_departments(session: Session, org_id: str, roots: list[str]) -> s
         return set()
     departments = session.exec(select(Department).where(Department.org_id == org_id)).all()
     return subtree_ids(departments, roots)
+
+
+def managed_department_ids(session: Session, org_id: str, user_id: str) -> set[str]:
+    """某人**作为负责人**（`role == "manager"`）的部门 id 集合。
+
+    与 `department_ids_for_user` 分开：那个回答"我在哪些部门"（读可见性用），
+    这个回答"哪条线归我管"（写权限用）。合成一个会让"普通成员"看起来像负责人。
+    """
+    rows = session.exec(
+        select(DepartmentMember).where(
+            DepartmentMember.org_id == org_id,
+            DepartmentMember.user_id == user_id,
+            DepartmentMember.role == "manager",
+        )
+    ).all()
+    return {row.department_id for row in rows}

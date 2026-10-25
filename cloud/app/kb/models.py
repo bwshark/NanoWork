@@ -79,10 +79,22 @@ class KbDocument(SQLModel, table=True):
     #: 空串 = 这一行产生于该字段存在之前（`migrations.ADDED_COLUMNS` 的默认值），
     #: 读的时候要按「没有摘要」处理，写入时由 `routes._backfill_hashes` 懒回填。
     content_hash: str = Field(default="", index=True)
-    #: 来源格式：text（粘贴 / 纯文本）/ docx / pdf。列表要显示，用户才知道那篇是 PDF。
+    #: 来源格式：text（粘贴 / 纯文本）/ docx / pdf / xlsx / pptx。列表要显示，用户才知道那篇是什么。
     kind: str = "text"
+    #: 进回收站的时间（ISO 字符串，空串 = **没删**）。
+    #:
+    #: 为什么是字符串而不是 `datetime | None`：这一列要经 `migrations.ensure_columns` 用
+    #: 裸 DDL 加到**已存在的表**上，而 SQLite / PostgreSQL 对 datetime 的存储类型不同
+    #: （DATETIME 字符串 vs TIMESTAMP）。用 ISO 字符串则两边都是文本，比较大小仍然等于
+    #: 比较时间（字典序 = 时序），也不必担心方言。空串表示"未删除"也与本仓
+    #: `departments.parent_id`（空串 = 根）的既有约定一致。
+    deleted_at: str = Field(default="", index=True)
     created_by: str = Field(index=True)
     created_at: datetime = Field(default_factory=utc_now)
+
+    @property
+    def trashed(self) -> bool:
+        return self.deleted_at != ""
 
 
 class KbChunk(SQLModel, table=True):

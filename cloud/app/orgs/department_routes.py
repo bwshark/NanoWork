@@ -29,7 +29,13 @@ from app.auth.models import User
 from app.auth.security import new_user_id
 from app.db import get_session
 from app.kb.models import KnowledgeBase, KnowledgeBaseDepartment
-from app.orgs.departments import MAX_DEPTH, child_depth, ordered_for_display
+from app.orgs.departments import (
+    MAX_DEPTH,
+    child_depth,
+    ordered_for_display,
+    subtree_height,
+    subtree_ids,
+)
 from app.orgs.guards import membership_or_404, require_role
 from app.orgs.models import Department, DepartmentMember, OrgMember
 from app.orgs.roles import ROLE_ADMIN
@@ -44,8 +50,24 @@ class CreateDepartmentRequest(BaseModel):
     parentId: str | None = None
 
 
-class RenameDepartmentRequest(BaseModel):
-    name: str = Field(min_length=1, max_length=64)
+class UpdateDepartmentRequest(BaseModel):
+    """改名 / 移动。**两者都可省略** = 什么都不改。
+
+    `parentId` 的三种取值刻意都保留：
+    - 不传（`None`）= 不动结构；
+    - `""` = 移到根；
+    - 具体 id = 挂到那个部门下。
+    少了 `""` 这一档就表达不了「把子部门提成根部门」，那是个常用操作。
+    """
+
+    name: str | None = Field(default=None, max_length=64)
+    parentId: str | None = None
+
+
+class DepartmentMemberRoleRequest(BaseModel):
+    """部门内角色。只有两档：普通成员 / 负责人。"""
+
+    role: str = Field(min_length=1, max_length=16)
 
 
 class DepartmentView(BaseModel):
@@ -61,8 +83,12 @@ class DepartmentView(BaseModel):
 class DepartmentMemberView(BaseModel):
     userId: str
     email: str
-    #: 该用户在**组织**里的角色（不是部门角色——部门只有归属，没有角色）
+    #: 该用户在**组织**里的角色（owner / admin / member）
     role: str
+    #: **部门内**角色：member / manager。
+    #: 与上面那个字段并存，因为它们是两个维度：「某人是普通成员，但他是人事部负责人」
+    #: 这种组合必须能表达 —— 那正是部门存在的意义。
+    departmentRole: str = "member"
     joinedAt: str
 
 
@@ -166,26 +192,63 @@ def create_department(
 
 
 @router.patch("/departments/{department_id}", response_model=DepartmentView)
-def rename_department(
+def update_department(
     department_id: str,
-    payload: RenameDepartmentRequest,
+    payload: UpdateDepartmentRequest,
     user: User = Depends(current_user),
     session: Session = Depends(get_session),
 ) -> DepartmentView:
+    """改名 / **换父节点**（同一棵树内移动）。
+
+    ## 移动的四条校验，缺一条都能把树写坏
+
+    1. **不能挂到自己身上** —— 自环。
+    2. **不能挂到自己的子孙里** —— 那会切出一个环，之后 `ordered_for_display`
+       会把它当成孤儿丢掉，而 `subtree_ids` 会一路查下去。这类脏数据一旦写进库，
+       只能靠人工改数据库救。
+    3. **层级上限按子树高度算**：移动的是整棵子树，只算「新父深度」会把
+       「3 层高的子树挂到第 7 层下」放过去（最深变 10 层）。
+    4. **新父下不能同名** —— 与建部门同一条规则，否则同级会出现两个「技术部」。
+    """
     department, member = _department_or_404(session, department_id, user)
     require_role(member, ROLE_ADMIN)
 
-    name = payload.name.strip()
-    if name == "":
-        raise HTTPException(status_code=422, detail="部门名不能为空")
-    _assert_unique_name(
-        _departments_of(session, department.org_id),
-        parent_id=department.parent_id,
-        name=name,
-        exclude_id=department.id,
-    )
+    departments = _departments_of(session, department.org_id)
+    new_parent = department.parent_id
+    if payload.parentId is not None:
+        new_parent = payload.parentId.strip()
+        if new_parent and all(item.id != new_parent for item in departments):
+            # 父部门必须属于同一组织：否则能把别的组织的部门当父，造出跨组织引用
+            raise HTTPException(status_code=422, detail="父部门不存在")
+        if new_parent == department.id:
+            raise HTTPException(status_code=422, detail="不能把部门挂到它自己下面")
+        if new_parent and new_parent in subtree_ids(departments, [department.id]):
+            raise HTTPException(
+                status_code=422, detail="不能把部门移到它自己的子部门下面（会形成环）"
+            )
+        depth = child_depth(departments, new_parent)
+        if depth == 0:
+            raise HTTPException(status_code=422, detail="父部门不存在")
+        height = subtree_height(departments, department.id)
+        if depth + height - 1 > MAX_DEPTH:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"移过去最深会有 {depth + height - 1} 层，超过 {MAX_DEPTH} 层上限"
+                    f"（该部门下还有 {height - 1} 层子部门）"
+                ),
+            )
+
+    name = department.name
+    if payload.name is not None:
+        name = payload.name.strip()
+        if name == "":
+            raise HTTPException(status_code=422, detail="部门名不能为空")
+
+    _assert_unique_name(departments, parent_id=new_parent, name=name, exclude_id=department.id)
 
     department.name = name
+    department.parent_id = new_parent
     session.add(department)
     session.commit()
     session.refresh(department)
@@ -256,6 +319,7 @@ def list_department_members(
                 userId=row.user_id,
                 email=person.email if person else "",
                 role=org_member.role if org_member else "",
+                departmentRole=row.role,
                 joinedAt=iso_z(row.joined_at),
             )
         )
@@ -326,3 +390,52 @@ def remove_department_member(
         return
     session.delete(row)
     session.commit()
+
+
+#: 部门内只有两档。刻意不引进第三档（"只读"）：部门维度管的是"这条线的资料谁维护"，
+#: 读权限已经由组织角色 + 部门归属决定了，再加只读档只会让两套规则打架。
+DEPARTMENT_ROLES = ("member", "manager")
+
+
+@router.patch(
+    "/departments/{department_id}/members/{member_user_id}", response_model=DepartmentMemberView
+)
+def set_department_member_role(
+    department_id: str,
+    member_user_id: str,
+    payload: DepartmentMemberRoleRequest,
+    user: User = Depends(current_user),
+    session: Session = Depends(get_session),
+) -> DepartmentMemberView:
+    """设置部门内角色（`manager` = 该部门负责人）。
+
+    负责人的实际作用是**写权限**：一个「仅限人事部」的知识库，人事部负责人可以往里
+    加/删资料，而不必先被提成组织管理员。这条规则写在 `kb/routes._writable_kb_or_404`，
+    不在这里 —— 本接口只管"谁是谁的负责人"，权限判断只有一处。
+    """
+    department, member = _department_or_404(session, department_id, user)
+    require_role(member, ROLE_ADMIN)
+
+    role = payload.role.strip().lower()
+    if role not in DEPARTMENT_ROLES:
+        raise HTTPException(
+            status_code=422, detail=f"部门内角色只能是 {' / '.join(DEPARTMENT_ROLES)}"
+        )
+
+    row = session.get(DepartmentMember, (department.id, member_user_id))
+    if row is None:
+        raise HTTPException(status_code=404, detail="该成员不在这个部门里")
+    row.role = role
+    session.add(row)
+    session.commit()
+    session.refresh(row)
+
+    person = session.get(User, row.user_id)
+    org_member = session.get(OrgMember, (department.org_id, row.user_id))
+    return DepartmentMemberView(
+        userId=row.user_id,
+        email=person.email if person else "",
+        role=org_member.role if org_member else "",
+        departmentRole=row.role,
+        joinedAt=iso_z(row.joined_at),
+    )

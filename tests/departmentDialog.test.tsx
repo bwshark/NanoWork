@@ -55,7 +55,10 @@ function makeGateway(overrides: Partial<KbGateway> = {}): KbGateway {
     reindex: vi.fn(),
     listDepartments: vi.fn().mockResolvedValue({ ok: true, data: [ROOT, CHILD] }),
     createDepartment: vi.fn().mockResolvedValue({ ok: true, data: ROOT }),
-    renameDepartment: vi.fn().mockResolvedValue({ ok: true, data: ROOT }),
+    updateDepartment: vi.fn().mockResolvedValue({ ok: true, data: ROOT }),
+    setDepartmentMemberRole: vi.fn(),
+    updateKbVisibility: vi.fn(),
+    restoreDocument: vi.fn(),
     deleteDepartment: vi.fn().mockResolvedValue({ ok: true, data: undefined }),
     listDepartmentMembers: vi.fn().mockResolvedValue({
       ok: true,
@@ -249,5 +252,155 @@ describe('删除与成员', () => {
     expect(
       document.body.querySelector('[data-testid="dept-error"]')?.textContent,
     ).toContain('无法连接云端服务');
+  });
+});
+
+/**
+ * 移动与部门负责人（2026-10-25）。
+ *
+ * 移动的两条客户端职责：**下拉里不出现非法目标**（自己和自己的子孙），
+ * 以及把 `parentId` 原样发出去（"移到根"必须是空串，不能是省略 ——
+ * 省略表示"不动"，那会让"提成根部门"这个操作静默失效）。
+ */
+describe('移动部门', () => {
+  it('下拉里排掉自己和自己的子孙（选完才报错体验很差）', async () => {
+    mount(<Harness gateway={makeGateway()} />);
+    await flush();
+    await act(async () => {
+      click(document.body.querySelector('[data-testid="dept-row-d1"]'));
+      await flush();
+    });
+    await act(async () => {
+      // MUI 的 Select 靠 mousedown 打开（click 不够）—— 与页面里那个部门下拉同一个坑
+      // 要点在可见的 combobox 容器上：`data-testid` 落的是隐藏的原生 input，
+      // 在它上面派发 mousedown 不会打开菜单
+      (document.body.querySelector('[role="combobox"]') as HTMLElement).dispatchEvent(
+        new MouseEvent('mousedown', { bubbles: true }),
+      );
+      await flush();
+    });
+
+    const options = Array.from(document.querySelectorAll('[role="option"]')).map(
+      (item) => item.textContent ?? '',
+    );
+    expect(options).toContain('根（最外层）');
+    // d1 是根，d2 是它的子：两个都不能作为 d1 的新父
+    expect(options.join('|')).not.toContain('技术部');
+    expect(options.join('|')).not.toContain('前端');
+  });
+
+  it('移到根发的是空串（省略 = 不动，两者语义不同）', async () => {
+    const gateway = makeGateway({
+      updateDepartment: vi.fn().mockResolvedValue({ ok: true, data: CHILD }),
+    });
+    mount(<Harness gateway={gateway} />);
+    await flush();
+    await act(async () => {
+      click(document.body.querySelector('[data-testid="dept-row-d2"]'));
+      await flush();
+    });
+
+    await act(async () => {
+      click(document.body.querySelector('[data-testid="dept-move"]'));
+      await flush();
+    });
+
+    expect(gateway.updateDepartment).toHaveBeenCalledWith('d2', { parentId: '' });
+    expect(toast.success).toHaveBeenCalledWith(expect.stringContaining('已移动到根'));
+  });
+
+  it('环 / 层级超限的报错原样弹出来（服务端解释了为什么不行）', async () => {
+    const gateway = makeGateway({
+      updateDepartment: vi.fn().mockResolvedValue({
+        ok: false,
+        status: 422,
+        message: '不能把部门移到它自己的子部门下面（会形成环）',
+        unauthorized: false,
+      }),
+    });
+    mount(<Harness gateway={gateway} />);
+    await flush();
+    await act(async () => {
+      click(document.body.querySelector('[data-testid="dept-row-d2"]'));
+      await flush();
+    });
+    await act(async () => {
+      click(document.body.querySelector('[data-testid="dept-move"]'));
+      await flush();
+    });
+
+    expect(toast.error).toHaveBeenCalledWith(expect.stringContaining('会形成环'));
+  });
+});
+
+describe('部门负责人', () => {
+  it('成员行显示部门角色，并能切换成负责人', async () => {
+    const gateway = makeGateway({
+      setDepartmentMemberRole: vi.fn().mockResolvedValue({
+        ok: true,
+        data: {
+          userId: 'u1',
+          email: 'one@corp.example',
+          role: 'member',
+          departmentRole: 'manager',
+          joinedAt: 'x',
+        },
+      }),
+    });
+    mount(<Harness gateway={gateway} />);
+    await flush();
+    await act(async () => {
+      click(document.body.querySelector('[data-testid="dept-row-d1"]'));
+      await flush();
+    });
+
+    // 默认是「成员」——不能因为"在部门里"就默认成负责人（那是凭空扩权）
+    expect(
+      document.body.querySelector('[data-testid="dept-member-role-u1"]')?.textContent,
+    ).toBe('成员');
+
+    await act(async () => {
+      click(document.body.querySelector('[data-testid="dept-toggle-manager-u1"]'));
+      await flush();
+    });
+
+    expect(gateway.setDepartmentMemberRole).toHaveBeenCalledWith('d1', 'u1', 'manager');
+    // 改完要重读成员列表，否则界面还显示「成员」
+    expect(gateway.listDepartmentMembers).toHaveBeenCalledTimes(2);
+  });
+
+  it('已经是负责人的可以取消（回来的是 member）', async () => {
+    const gateway = makeGateway({
+      listDepartmentMembers: vi.fn().mockResolvedValue({
+        ok: true,
+        data: [
+          {
+            userId: 'u1',
+            email: 'one@corp.example',
+            role: 'member',
+            departmentRole: 'manager',
+            joinedAt: 'x',
+          },
+        ],
+      }),
+      setDepartmentMemberRole: vi.fn().mockResolvedValue({ ok: true, data: {} }),
+    });
+    mount(<Harness gateway={gateway} />);
+    await flush();
+    await act(async () => {
+      click(document.body.querySelector('[data-testid="dept-row-d1"]'));
+      await flush();
+    });
+
+    expect(
+      document.body.querySelector('[data-testid="dept-member-role-u1"]')?.textContent,
+    ).toBe('负责人');
+
+    await act(async () => {
+      click(document.body.querySelector('[data-testid="dept-toggle-manager-u1"]'));
+      await flush();
+    });
+
+    expect(gateway.setDepartmentMemberRole).toHaveBeenCalledWith('d1', 'u1', 'member');
   });
 });

@@ -55,6 +55,15 @@ FR 状态权威在 `docs/nanowork-prd-design-v2.md` 第 3 章（`docs/README.md`
 - 加列迁移（2026-10-24 起）：`cloud/app/migrations.py` 的 `ADDED_COLUMNS`（DDL **必须带 DEFAULT**）+ `ADDED_INDEXES`，`create_db_and_tables()` 在 `create_all` 后调 `ensure_columns()`。⛔ 只加不改不删；**加字段不再需要旁表**。⚠️ 判据必须在**自建 engine** 上跑（`tests/test_migrations.py`），conftest 每例重建库、迁移分支永远走不到。
 - 文档生命周期：写要 admin（`_writable_kb_or_404`，`allowed_roles` 只管读），成员写 403；判重 `kb/digest.py::digest_of(chunks)` 按**切好的块**算 sha256、作用域本库、重复 409 点名已有标题；删除要**三张表都清**（`kb_vectors → kb_chunks → kb_documents`，只删文档行会留孤儿块、检索照样命中）并校验 `doc.kb_id == kb.id`；`_document_view` 的 `kind` **从行上读**。
 - 部门与可见性：规则只有 `cloud/app/kb/visibility.py::allows()` 一份（列表 / `_kb_or_404` / 检索预过滤都走它）。公式：admin|owner 豁免 → member 需 `角色 ∈ allowed_roles` ∧（不按部门收窄 ∨ 我直属部门 ∈ 允许集合的**子树**，方向反了会漏「人在子部门、库共享给父部门」）。部门表 `parent_id` 用**空串**表根（NULL 在唯一索引里互不相等）；成员关系独立表。
+- **回收站（2026-10-25）**：`kb_documents.deleted_at` = ISO 字符串，**空串 = 活**（不用 `datetime|None`：这一列要经迁移器裸 DDL 加到已存在的表，SQLite/PG 存储类型不同）。删除默认**软删**（打戳，块与向量留着 → 恢复即刻可检索），`?purge=true` 才动三张表。⛔ **「删了搜不到」靠查询条件**：`deleted_at == ''` 的 join 写在**四处**（检索候选 / 重建索引 / 列表 / 覆盖率），少一处就是「删掉了还能被搜到」；覆盖率两侧都要排（否则 `indexed > total`）。30 天保留 + **惰性清理**（列表请求顺手清，不靠 cron）；判重认得回收站 → 409「恢复它就行」。
+- **部门移动 + 部门负责人（2026-10-25）**：`PATCH /departments/{id}` 的 `parentId` 三档（不传=不动 / `""`=移到根 / id=挂它下面，`""` 不能省）；四条校验：不能挂自己、**不能挂到自己的子孙里**（环）、层级上限按**整棵子树高度**算（只看新父深度会放过「3 层子树挂到第 7 层下」）、新父下不能同名（纯函数 `departments.subtree_height()`，迭代不递归）。部门角色 `member/manager` 与**组织角色是两个维度**；写权限多一条通路：**有部门范围**的库，其允许部门的负责人可维护；⛔ 没有部门范围的库仍只由组织管理员维护（否则写权限比读权限还宽）。
+- **解析支持表（2026-10-25）**：`.xlsx` 走 `sharedStrings.xml` + 各 sheet 的 `<row>`（一行一段，`单元格 | 单元格`），工作表路径靠 `workbook.xml.rels` 解析（**不能猜 `sheet1.xml`**）；`.pptx` 取各 `slideN.xml` 的 `<a:t>`，**按页号数字排序**（`slide10` 字典序会排到 `slide2` 前）；表格丢结构必须进 `warnings`，公式取缓存值 `<v>`；**OCR 明确不做**，图片/扫描件回 422 + 三条可照着做的路径。
+- **pgvector 结论（2026-10-25）**：⛔ 本机无 Postgres → **未验证的代码路径不写**。接入点只有两处：`vectors.load_vectors`（改成 `ORDER BY vector <=> $1 LIMIT k`）+ `retrieval.rank_by_vectors`（不再在 Python 算余弦）；换实现时**必须用同一批用例跑**（`test_kb_vector.py` 的可见性不变量原样通过 —— 换检索实现最容易顺手把「过滤」挪到打分之后）。
+
+## 本机环境坑（2026-10-25 新踩）
+- ⚠️ **`HTTP_PROXY` 会让 urllib 把 127.0.0.1 也交给代理 → 502**（症状像「服务挂了」，其实 uvicorn 好好的；Windows 上 `proxy_bypass` 默认不认回环地址）。本机验证脚本要用 `urllib.request.build_opener(urllib.request.ProxyHandler({}))`。
+- ⚠️ 重启 8910 前**先确认端口上的 PID 换成新的**：旧进程占着时新进程会打印完迁移日志就 `WinError 10048` 退出，而 `/health` 仍 200（老进程在答）—— 差点误判成「新接口已上线」。
+- ⚠️ 云端全量 pytest **别加 `-q`**：Windows 上 `-q` 不打汇总行，`grep passed` 抓不到会被误判失败；用不带 `-q` 的（verbose 汇总自带）。
 
 ## 变异验证铁律（踩过：变异没还原就收尾）
 - 变异脚本用**绝对路径**，还原用**无条件 `cp` 备份**（别用 `eval "cd x && ..."`，会改 shell cwd 让 `cp` 静默失败），结尾 `cmp` 校验。

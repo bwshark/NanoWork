@@ -65,10 +65,18 @@ describe('precheckUpload', () => {
 });
 
 describe('来源格式的中文名', () => {
-  it('三种已知格式都有中文名（缺一个界面上就是裸英文）', () => {
-    expect(Object.keys(KB_KIND_LABELS).sort()).toEqual(['docx', 'pdf', 'text']);
+  it('支持的格式都有中文名（缺一个界面上就是裸英文）', () => {
+    expect(Object.keys(KB_KIND_LABELS).sort()).toEqual([
+      'docx',
+      'pdf',
+      'pptx',
+      'text',
+      'xlsx',
+    ]);
     expect(kindLabel('pdf')).toBe('PDF');
     expect(kindLabel('docx')).toBe('Word');
+    expect(kindLabel('xlsx')).toBe('Excel');
+    expect(kindLabel('pptx')).toBe('PPT');
   });
 
   it('缺省当纯文本：老接口没回 kind 时列表不该出现 undefined', () => {
@@ -76,7 +84,7 @@ describe('来源格式的中文名', () => {
     expect(kindLabel('')).toBe('纯文本');
   });
 
-  it('未知格式原样返回（后端将来加了 xlsx，显示 xlsx 也比空白强）', () => {
-    expect(kindLabel('xlsx')).toBe('xlsx');
+  it('未知格式原样返回（后端再加格式时，显示原名也比空白强）', () => {
+    expect(kindLabel('doc')).toBe('doc');
   });
 });

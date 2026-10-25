@@ -14,7 +14,7 @@
 export const KB_MAX_UPLOAD_BYTES = 8 * 1024 * 1024;
 
 /** 文件选择框的 accept 列表（同上：与服务端 `SUPPORTED_EXTENSIONS` 同源）。 */
-export const KB_UPLOAD_ACCEPT = '.txt,.md,.csv,.docx,.pdf';
+export const KB_UPLOAD_ACCEPT = '.txt,.md,.csv,.docx,.pdf,.xlsx,.pptx';
 
 /** 体积文案（B / KB / MB）。 */
 export function formatBytesLabel(bytes: number): string {
@@ -29,6 +29,8 @@ export const KB_KIND_LABELS: Record<string, string> = {
   text: '纯文本',
   docx: 'Word',
   pdf: 'PDF',
+  xlsx: 'Excel',
+  pptx: 'PPT',
 };
 
 /** 未知格式原样返回：后端将来加了 `.xlsx` 时，界面显示 `xlsx` 也比显示空白强。 */

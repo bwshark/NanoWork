@@ -33,6 +33,9 @@ import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 import SearchIcon from "@mui/icons-material/Search";
 import AddIcon from "@mui/icons-material/Add";
+import TuneIcon from "@mui/icons-material/Tune";
+import RestoreFromTrashIcon from "@mui/icons-material/RestoreFromTrash";
+import DeleteForeverIcon from "@mui/icons-material/DeleteForever";
 import { ROUTES } from "@/lib/core/constants";
 import { toast } from "@/components/Toast";
 import {
@@ -163,6 +166,14 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
   const [renameTarget, setRenameTarget] = useState<KbDocument | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<KbDocument | null>(null);
+  /** 回收站视图：看的是"删过的"，与正常列表互斥（服务端也是两个口径） */
+  const [trashOpen, setTrashOpen] = useState(false);
+  /** 彻底删除的目标：与「删除」分开一个弹窗，因为两者的后果不一样 */
+  const [purgeTarget, setPurgeTarget] = useState<KbDocument | null>(null);
+  /** 改可见范围的目标库（null = 弹窗关着） */
+  const [scopeKb, setScopeKb] = useState<KbSummary | null>(null);
+  const [scopeRoles, setScopeRoles] = useState<string[]>([]);
+  const [scopeDeptIds, setScopeDeptIds] = useState<string[]>([]);
   const [rowBusy, setRowBusy] = useState(false);
 
   const [query, setQuery] = useState("");
@@ -228,14 +239,14 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
     if (client) void loadKbs(client, activeOrgId);
   }, [client, activeOrgId, loadKbs]);
 
-  const loadDocs = useCallback(async (target: KbGateway, kbId: string) => {
+  const loadDocs = useCallback(async (target: KbGateway, kbId: string, trashed = false) => {
     if (!kbId) {
       setDocs([]);
       return;
     }
     setDocsLoading(true);
     setDocsError("");
-    const result = await target.listDocuments(kbId);
+    const result = await target.listDocuments(kbId, { trashed });
     setDocsLoading(false);
     if (!result.ok) {
       setDocs([]);
@@ -246,8 +257,8 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
   }, []);
 
   useEffect(() => {
-    if (client) void loadDocs(client, activeKbId);
-  }, [client, activeKbId, loadDocs]);
+    if (client) void loadDocs(client, activeKbId, trashOpen);
+  }, [client, activeKbId, trashOpen, loadDocs]);
 
   /**
    * 读检索状态。**失败不报错、只保留上一次**：它是说明文字的数据源，
@@ -450,6 +461,71 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
     await loadDocs(client, activeKbId);
     await loadKbs(client, activeOrgId);
     await loadRetrieval(client, activeKbId);
+  };
+
+  const handleRestore = async (doc: KbDocument) => {
+    if (!client || !activeKbId) return;
+    const result = await client.restoreDocument(activeKbId, doc.id);
+    if (!result.ok) {
+      toast.error(result.message);
+      return;
+    }
+    toast.success(`已恢复「${doc.title}」`);
+    await loadDocs(client, activeKbId, true);
+    await loadKbs(client, activeOrgId);
+    await loadRetrieval(client, activeKbId);
+  };
+
+  /**
+   * 彻底删除：**独立的确认弹窗**。
+   *
+   * 与「删除」分开是刻意的：删除只是进回收站（可恢复），彻底删除不可撤销。
+   * 两者共用同一个弹窗，用户会以为"反正能恢复"，然后点错 —— 那是这一屏里
+   * 唯一一个真正不可逆的操作。
+   */
+  const handlePurge = async () => {
+    if (!client || !activeKbId || purgeTarget === null) return;
+    const target = purgeTarget;
+    setRowBusy(true);
+    const result = await client.deleteDocument(activeKbId, target.id, { purge: true });
+    setRowBusy(false);
+    setPurgeTarget(null);
+    if (!result.ok) {
+      toast.error(result.message);
+      return;
+    }
+    toast.success(`已彻底删除「${target.title}」`);
+    await loadDocs(client, activeKbId, true);
+    await loadKbs(client, activeOrgId);
+    await loadRetrieval(client, activeKbId);
+  };
+
+  const openScope = (kb: KbSummary) => {
+    setScopeRoles([...kb.allowedRoles]);
+    setScopeDeptIds([...(kb.allowedDepartments ?? [])]);
+    setScopeKb(kb);
+  };
+
+  const handleSaveScope = async () => {
+    if (!client || scopeKb === null) return;
+    if (scopeRoles.length === 0) {
+      // 服务端也会 422，但这里先挡一次：省一趟往返，也说清是哪个字段不对
+      toast.error("至少要选一个能看见的角色");
+      return;
+    }
+    setRowBusy(true);
+    const result = await client.updateKbVisibility(scopeKb.id, {
+      allowedRoles: scopeRoles,
+      allowedDepartments: scopeDeptIds,
+    });
+    setRowBusy(false);
+    if (!result.ok) {
+      toast.error(result.message);
+      return;
+    }
+    setScopeKb(null);
+    toast.success(`已更新「${result.data.name}」的可见范围`);
+    await loadKbs(client, activeOrgId);
   };
 
   const handleReindex = async () => {
@@ -747,21 +823,39 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
             )}
             <List dense sx={{ overflowY: "auto", flex: 1 }}>
               {kbs.map((kb) => (
-                <ListItemButton
+                <ListItem
                   key={kb.id}
-                  selected={kb.id === activeKbId}
-                  onClick={() => {
-                    setActiveKbId(kb.id);
-                    setHits(null);
-                    setSearchError("");
-                  }}
+                  disablePadding
+                  // 范围入口放在行尾：它是"改这个库对谁可见"，属于库级设置，
+                  // 不是"进这个库"的一部分——混在正文点击里会误触。
+                  secondaryAction={
+                    <IconButton
+                      size="small"
+                      edge="end"
+                      aria-label={`设置 ${kb.name} 的可见范围`}
+                      data-testid={`kb-scope-${kb.id}`}
+                      onClick={() => openScope(kb)}
+                    >
+                      <TuneIcon fontSize="small" />
+                    </IconButton>
+                  }
                 >
-                  <ListItemText
-                    primary={kb.name}
-                    secondary={kbSecondary(kb)}
-                    primaryTypographyProps={{ fontSize: 13.5 }}
-                  />
-                </ListItemButton>
+                  <ListItemButton
+                    selected={kb.id === activeKbId}
+                    onClick={() => {
+                      setActiveKbId(kb.id);
+                      setHits(null);
+                      setSearchError("");
+                      setTrashOpen(false);
+                    }}
+                  >
+                    <ListItemText
+                      primary={kb.name}
+                      secondary={kbSecondary(kb)}
+                      primaryTypographyProps={{ fontSize: 13.5 }}
+                    />
+                  </ListItemButton>
+                </ListItem>
               ))}
               {!kbsLoading && kbs.length === 0 && !kbsError && (
                 <Typography sx={{ fontSize: 12, color: "text.secondary", p: 2 }}>
@@ -895,6 +989,30 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
             </Paper>
 
             <Paper variant="outlined" sx={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
+              {/* 回收站是**独立视图**，不是一个过滤器：默认列表只有活文档，
+                  这里换成"只看删过的"。两个口径都由服务端给，前端不合并。 */}
+              <Stack
+                direction="row"
+                spacing={1}
+                alignItems="center"
+                sx={{ px: 2, pt: 1.5, pb: 0.5 }}
+              >
+                <Button
+                  size="small"
+                  variant={trashOpen ? "contained" : "text"}
+                  startIcon={<RestoreFromTrashIcon />}
+                  data-testid="kb-trash-toggle"
+                  disabled={!activeKbId}
+                  onClick={() => setTrashOpen((previous) => !previous)}
+                >
+                  {trashOpen ? "返回文档" : "回收站"}
+                </Button>
+                {trashOpen && (
+                  <Typography variant="caption" color="text.secondary">
+                    回收站里的资料不参与检索；保留 30 天，过期自动清理
+                  </Typography>
+                )}
+              </Stack>
               {docsError && (
                 <Alert severity="error" sx={{ m: 1 }}>
                   {docsError}
@@ -908,25 +1026,47 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
                       key={doc.id}
                       divider
                       secondaryAction={
-                        <Stack direction="row" spacing={0.25}>
-                          <IconButton
-                            size="small"
-                            aria-label={`重命名 ${doc.title}`}
-                            data-testid={`kb-doc-rename-${doc.id}`}
-                            onClick={() => openRename(doc)}
-                          >
-                            <EditOutlinedIcon fontSize="small" />
-                          </IconButton>
-                          <IconButton
-                            size="small"
-                            edge="end"
-                            aria-label={`删除 ${doc.title}`}
-                            data-testid={`kb-doc-delete-${doc.id}`}
-                            onClick={() => setDeleteTarget(doc)}
-                          >
-                            <DeleteOutlineIcon fontSize="small" />
-                          </IconButton>
-                        </Stack>
+                        trashOpen ? (
+                          <Stack direction="row" spacing={0.25}>
+                            <IconButton
+                              size="small"
+                              aria-label={`恢复 ${doc.title}`}
+                              data-testid={`kb-doc-restore-${doc.id}`}
+                              onClick={() => void handleRestore(doc)}
+                            >
+                              <RestoreFromTrashIcon fontSize="small" />
+                            </IconButton>
+                            <IconButton
+                              size="small"
+                              edge="end"
+                              aria-label={`彻底删除 ${doc.title}`}
+                              data-testid={`kb-doc-purge-${doc.id}`}
+                              onClick={() => setPurgeTarget(doc)}
+                            >
+                              <DeleteForeverIcon fontSize="small" />
+                            </IconButton>
+                          </Stack>
+                        ) : (
+                          <Stack direction="row" spacing={0.25}>
+                            <IconButton
+                              size="small"
+                              aria-label={`重命名 ${doc.title}`}
+                              data-testid={`kb-doc-rename-${doc.id}`}
+                              onClick={() => openRename(doc)}
+                            >
+                              <EditOutlinedIcon fontSize="small" />
+                            </IconButton>
+                            <IconButton
+                              size="small"
+                              edge="end"
+                              aria-label={`删除 ${doc.title}`}
+                              data-testid={`kb-doc-delete-${doc.id}`}
+                              onClick={() => setDeleteTarget(doc)}
+                            >
+                              <DeleteOutlineIcon fontSize="small" />
+                            </IconButton>
+                          </Stack>
+                        )
                       }
                     >
                       <ListItemText
@@ -954,7 +1094,11 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
                 })}
                 {!docsLoading && docs.length === 0 && !docsError && (
                   <Typography sx={{ fontSize: 12, color: "text.secondary", p: 2 }}>
-                    {activeKbId ? "这个知识库还没有文档。" : "先在左侧选一个知识库。"}
+                    {!activeKbId
+                      ? "先在左侧选一个知识库。"
+                      : trashOpen
+                        ? "回收站是空的。"
+                        : "这个知识库还没有文档。"}
                   </Typography>
                 )}
               </List>
@@ -962,6 +1106,37 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
           </Box>
         </Stack>
       )}
+
+      {/* 彻底删除：不可撤销，所以文案要说明"和进回收站不是一回事" */}
+      <Dialog
+        open={purgeTarget !== null}
+        onClose={() => setPurgeTarget(null)}
+        fullWidth
+        maxWidth="xs"
+      >
+        <DialogTitle sx={{ fontSize: 16 }}>彻底删除「{purgeTarget?.title}」？</DialogTitle>
+        <DialogContent>
+          <DialogContentText sx={{ fontSize: 13 }}>
+            分块与向量索引会被清空，**无法恢复**，只能重新上传。
+            只想暂时移除的话，右上角返回文档列表后点删除即可（那会进回收站）。
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button size="small" onClick={() => setPurgeTarget(null)}>
+            取消
+          </Button>
+          <Button
+            size="small"
+            color="error"
+            variant="contained"
+            disabled={rowBusy}
+            data-testid="kb-purge-confirm"
+            onClick={() => void handlePurge()}
+          >
+            彻底删除
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       {/* 改名：内容不动，所以这里只开一个输入框。判重会让「换个标题重传」变成 409，
           所以标题必须能单独改 —— 否则改错标题只能删了重传。 */}
@@ -1006,8 +1181,8 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
         <DialogTitle sx={{ fontSize: 16 }}>删除「{deleteTarget?.title}」？</DialogTitle>
         <DialogContent>
           <DialogContentText sx={{ fontSize: 13 }}>
-            这篇文档的 {deleteTarget?.chunkCount ?? 0} 个分块会被一并删除，检索将立刻搜不到它。
-            此操作不可撤销，需要重新上传才能恢复。
+            这篇文档会进入回收站，立刻从检索结果里消失；{deleteTarget?.chunkCount ?? 0} 个分块和
+            索引会保留 30 天，期间可以恢复。
           </DialogContentText>
         </DialogContent>
         <DialogActions>
@@ -1023,6 +1198,84 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
             onClick={() => void handleDeleteDoc()}
           >
             删除
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* 改可见范围：角色 × 部门。这是"谁能看见"的唯一入口，所以两条都必须能改，
+          而且必须显示当前值（否则用户不知道现在是收紧还是放开）。 */}
+      <Dialog open={scopeKb !== null} onClose={() => setScopeKb(null)} fullWidth maxWidth="xs">
+        <DialogTitle sx={{ fontSize: 16 }}>「{scopeKb?.name}」的可见范围</DialogTitle>
+        <DialogContent>
+          <Typography sx={{ fontSize: 12.5, color: "text.secondary", mb: 1 }}>
+            角色决定「谁有这个身份能看」，部门再收窄一层；普通成员要同时满足两者。
+            管理员与所有者始终可见（否则会出现「建完自己看不见、也改不了」）。
+          </Typography>
+          <Typography sx={{ fontSize: 12.5, mb: 0.5 }}>可见角色</Typography>
+          <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap sx={{ mb: 1.5 }}>
+            {(["member", "admin", "owner"] as const).map((role) => {
+              const checked = scopeRoles.includes(role);
+              return (
+                <Chip
+                  key={role}
+                  size="small"
+                  label={KB_ROLE_LABELS[role]}
+                  data-testid={`kb-scope-role-${role}`}
+                  color={checked ? "primary" : "default"}
+                  variant={checked ? "filled" : "outlined"}
+                  onClick={() =>
+                    setScopeRoles((previous) =>
+                      previous.includes(role)
+                        ? previous.filter((item) => item !== role)
+                        : [...previous, role],
+                    )
+                  }
+                />
+              );
+            })}
+          </Stack>
+          <Typography sx={{ fontSize: 12.5, mb: 0.5 }}>仅限部门（不选 = 不按部门收窄）</Typography>
+          {departments.length === 0 ? (
+            <Typography sx={{ fontSize: 12, color: "text.secondary" }}>
+              这个组织还没有部门。要按部门收窄，先点上方的「部门」建几个。
+            </Typography>
+          ) : (
+            <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
+              {departments.map((item) => {
+                const checked = scopeDeptIds.includes(item.id);
+                return (
+                  <Chip
+                    key={item.id}
+                    size="small"
+                    label={item.name}
+                    data-testid={`kb-scope-dept-${item.id}`}
+                    color={checked ? "primary" : "default"}
+                    variant={checked ? "filled" : "outlined"}
+                    onClick={() =>
+                      setScopeDeptIds((previous) =>
+                        previous.includes(item.id)
+                          ? previous.filter((id) => id !== item.id)
+                          : [...previous, item.id],
+                      )
+                    }
+                  />
+                );
+              })}
+            </Stack>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button size="small" onClick={() => setScopeKb(null)}>
+            取消
+          </Button>
+          <Button
+            size="small"
+            variant="contained"
+            disabled={rowBusy}
+            data-testid="kb-scope-save"
+            onClick={() => void handleSaveScope()}
+          >
+            保存
           </Button>
         </DialogActions>
       </Dialog>

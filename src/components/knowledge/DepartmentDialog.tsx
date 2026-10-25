@@ -12,6 +12,8 @@ import {
   List,
   ListItemButton,
   ListItemText,
+  MenuItem,
+  Select,
   Stack,
   TextField,
   Typography,
@@ -60,12 +62,41 @@ export function departmentDepth(items: readonly KbDepartment[], id: string): num
   return depth;
 }
 
+/**
+ * 某部门的全部子孙 id：**移动时不可选**。
+ *
+ * 客户端先筛掉是为了让下拉框里只剩合法选项（选完才报错体验很差）；
+ * 服务端仍然要独立校验 —— 这层筛选是可以被绕过的，它只是体验优化。
+ */
+function descendantIds(items: KbDepartment[], rootId: string): Set<string> {
+  const childrenOf = new Map<string, string[]>();
+  for (const item of items) {
+    const list = childrenOf.get(item.parentId) ?? [];
+    list.push(item.id);
+    childrenOf.set(item.parentId, list);
+  }
+  const out = new Set<string>();
+  const stack = [rootId];
+  while (stack.length > 0) {
+    const current = stack.pop() as string;
+    for (const child of childrenOf.get(current) ?? []) {
+      if (out.has(child)) continue;
+      out.add(child);
+      stack.push(child);
+    }
+  }
+  return out;
+}
+
 export function DepartmentDialog({ open, orgId, gateway, onClose, onChanged }: DepartmentDialogProps) {
   const [items, setItems] = useState<KbDepartment[]>([]);
   const [selectedId, setSelectedId] = useState("");
   const [members, setMembers] = useState<KbDepartmentMember[]>([]);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
+  // 移动目标父部门（空串 = 根）。用独立状态而不是复用 `selectedId`：
+  // 后者是"当前正在看的部门"，把两者混起来会出现"选了下拉框就换了右侧面板"。
+  const [moveParent, setMoveParent] = useState("");
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -142,7 +173,7 @@ export function DepartmentDialog({ open, orgId, gateway, onClose, onChanged }: D
   const handleRename = async () => {
     if (!gateway || !selected || name.trim() === "") return;
     setBusy(true);
-    const result = await gateway.renameDepartment(selected.id, name.trim());
+    const result = await gateway.updateDepartment(selected.id, { name: name.trim() });
     setBusy(false);
     if (!result.ok) {
       toast.error(result.message);
@@ -150,6 +181,35 @@ export function DepartmentDialog({ open, orgId, gateway, onClose, onChanged }: D
     }
     setName("");
     toast.success("已改名");
+    await afterChange();
+  };
+
+  const handleMove = async () => {
+    if (!gateway || !selected) return;
+    setBusy(true);
+    const result = await gateway.updateDepartment(selected.id, { parentId: moveParent });
+    setBusy(false);
+    if (!result.ok) {
+      // 环 / 层级上限的报错必须原样给出来：它解释了"为什么这次不行"
+      toast.error(result.message);
+      return;
+    }
+    toast.success(`已移动到${moveParent === "" ? "根" : "新上级"}下`);
+    setMoveParent("");
+    await afterChange();
+  };
+
+  const handleToggleManager = async (member: KbDepartmentMember) => {
+    if (!gateway || !selected) return;
+    const next = member.departmentRole === "manager" ? "member" : "manager";
+    setBusy(true);
+    const result = await gateway.setDepartmentMemberRole(selected.id, member.userId, next);
+    setBusy(false);
+    if (!result.ok) {
+      toast.error(result.message);
+      return;
+    }
+    await loadMembers(selected.id);
     await afterChange();
   };
 
@@ -242,6 +302,51 @@ export function DepartmentDialog({ open, orgId, gateway, onClose, onChanged }: D
           </Button>
         </Stack>
 
+        {/* 移动：换父节点。下拉里只列**合法**目标（自己和自己的子孙不可选），
+            层级上限由服务端按"整棵子树"算，所以这里不做猜测性禁用。 */}
+        {selected !== null && (
+          <Stack direction="row" spacing={1} alignItems="center" sx={{ mt: 1 }}>
+            <Typography sx={{ fontSize: 12.5, color: "text.secondary" }}>移到</Typography>
+            <Select
+              size="small"
+              displayEmpty
+              value={moveParent}
+              onChange={(event) => setMoveParent(event.target.value as string)}
+              inputProps={{ "data-testid": "dept-move-parent" }}
+              sx={{ width: 220, fontSize: 13 }}
+              renderValue={(value) =>
+                value === ""
+                  ? "根（最外层）"
+                  : (items.find((item) => item.id === value)?.name ?? String(value))
+              }
+            >
+              <MenuItem value="" sx={{ fontSize: 13 }}>
+                根（最外层）
+              </MenuItem>
+              {items
+                .filter(
+                  (item) =>
+                    item.id !== selected.id &&
+                    !descendantIds(items, selected.id).has(item.id),
+                )
+                .map((item) => (
+                  <MenuItem key={item.id} value={item.id} sx={{ fontSize: 13 }}>
+                    {item.name}
+                  </MenuItem>
+                ))}
+            </Select>
+            <Button
+              size="small"
+              variant="outlined"
+              data-testid="dept-move"
+              disabled={busy || moveParent === selected.parentId}
+              onClick={() => void handleMove()}
+            >
+              移动
+            </Button>
+          </Stack>
+        )}
+
         <Stack direction={{ xs: "column", md: "row" }} spacing={2} sx={{ mt: 1 }}>
           <Box sx={{ width: { md: 320 }, flexShrink: 0 }}>
             {loading ? (
@@ -319,7 +424,24 @@ export function DepartmentDialog({ open, orgId, gateway, onClose, onChanged }: D
                         data-testid={`dept-member-${member.userId}`}
                       >
                         <Typography sx={{ fontSize: 13 }}>{member.email}</Typography>
+                        {/* 两个角色都要显示：组织角色决定"能不能看"，部门角色决定
+                            "这条线归不归他管"，合成一个会让负责人看起来像管理员 */}
                         <Chip size="small" variant="outlined" label={member.role} />
+                        <Chip
+                          size="small"
+                          variant={member.departmentRole === "manager" ? "filled" : "outlined"}
+                          color={member.departmentRole === "manager" ? "primary" : "default"}
+                          label={member.departmentRole === "manager" ? "负责人" : "成员"}
+                          data-testid={`dept-member-role-${member.userId}`}
+                        />
+                        <Button
+                          size="small"
+                          data-testid={`dept-toggle-manager-${member.userId}`}
+                          disabled={busy}
+                          onClick={() => void handleToggleManager(member)}
+                        >
+                          {member.departmentRole === "manager" ? "取消负责人" : "设为负责人"}
+                        </Button>
                         <Button
                           size="small"
                           color="warning"

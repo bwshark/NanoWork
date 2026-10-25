@@ -82,7 +82,10 @@ function makeGateway(overrides: Partial<KbGateway> = {}): KbGateway {
       .mockResolvedValue({ ok: true, data: { indexed: 2, total: 2, model: 'hash:64', error: '' } }),
     listDepartments: vi.fn().mockResolvedValue({ ok: true, data: [DEPT] }),
     createDepartment: vi.fn(),
-    renameDepartment: vi.fn(),
+    updateDepartment: vi.fn(),
+    setDepartmentMemberRole: vi.fn(),
+    updateKbVisibility: vi.fn(),
+    restoreDocument: vi.fn(),
     deleteDepartment: vi.fn(),
     listDepartmentMembers: vi.fn().mockResolvedValue({ ok: true, data: [] }),
     addDepartmentMember: vi.fn(),
@@ -483,8 +486,9 @@ describe('文档生命周期（删除 / 改名 / 判重）', () => {
       click(host.querySelector('[data-testid="kb-doc-delete-d1"]'));
       await flush();
     });
-    // 文案要说清后果，而不是只问「确定吗」
-    expect(dialogRoot().textContent).toContain('2 个分块会被一并删除');
+    // 文案要说清后果（进回收站 / 保留 30 天），而不是只问「确定吗」
+    expect(dialogRoot().textContent).toContain('2 个分块');
+    expect(dialogRoot().textContent).toContain('回收站');
     expect(deleteDocument).not.toHaveBeenCalled();
 
     await act(async () => {
@@ -561,6 +565,157 @@ describe('文档生命周期（删除 / 改名 / 判重）', () => {
 
     expect(toast.warning).toHaveBeenCalledWith(expect.stringContaining('已经在库里了'));
     expect(toast.error).not.toHaveBeenCalledWith(expect.stringContaining('已经在库里了'));
+  });
+});
+
+describe('回收站（软删 / 恢复 / 彻底删除）', () => {
+  const TRASHED = { ...DOC, deletedAt: '2026-10-25T02:00:00Z' };
+
+  /** 回收站与正常列表由同一个接口的两个口径返回，用参数区分 */
+  function twoViews(normal: unknown[], trashed: unknown[]) {
+    return vi.fn((_kbId: string, input?: { trashed?: boolean }) =>
+      Promise.resolve({ ok: true, data: input?.trashed ? trashed : normal }),
+    );
+  }
+
+  it('切到回收站会换一个口径请求，并把行操作换成「恢复 / 彻底删除」', async () => {
+    const listDocuments = twoViews([DOC], [TRASHED]);
+    const host = render(makeGateway({ listDocuments }));
+    await flush();
+    expect(host.querySelector('[data-testid="kb-doc-rename-d1"]')).toBeTruthy();
+
+    await act(async () => {
+      click(host.querySelector('[data-testid="kb-trash-toggle"]'));
+      await flush();
+    });
+
+    // 服务端有两个口径，前端就必须真的去要第二个（本地筛等于把两件事混成一件）
+    expect(listDocuments).toHaveBeenCalledWith('k1', { trashed: true });
+    expect(host.querySelector('[data-testid="kb-doc-restore-d1"]')).toBeTruthy();
+    expect(host.querySelector('[data-testid="kb-doc-purge-d1"]')).toBeTruthy();
+    // 回收站里的文档不该还能「改名」（它不是正常资料了）
+    expect(host.querySelector('[data-testid="kb-doc-rename-d1"]')).toBeNull();
+  });
+
+  it('回收站为空时的文案要说「空的」，不能复用「这个库还没有文档」', async () => {
+    const host = render(makeGateway({ listDocuments: twoViews([DOC], []) }));
+    await flush();
+
+    await act(async () => {
+      click(host.querySelector('[data-testid="kb-trash-toggle"]'));
+      await flush();
+    });
+
+    expect(host.textContent).toContain('回收站是空的');
+    expect(host.textContent).not.toContain('这个知识库还没有文档');
+  });
+
+  it('恢复直接调接口并重读回收站列表（不本地插一行）', async () => {
+    const restoreDocument = vi.fn().mockResolvedValue({ ok: true, data: DOC });
+    const listDocuments = twoViews([], [TRASHED]);
+    const host = render(makeGateway({ restoreDocument, listDocuments }));
+    await flush();
+    await act(async () => {
+      click(host.querySelector('[data-testid="kb-trash-toggle"]'));
+      await flush();
+    });
+    const before = listDocuments.mock.calls.length;
+
+    await act(async () => {
+      click(host.querySelector('[data-testid="kb-doc-restore-d1"]'));
+      await flush();
+    });
+
+    expect(restoreDocument).toHaveBeenCalledWith('k1', 'd1');
+    expect(listDocuments.mock.calls.length).toBeGreaterThan(before);
+    expect(toast.success).toHaveBeenCalledWith(expect.stringContaining('已恢复'));
+  });
+
+  it('彻底删除要自己的确认弹窗，并带上 purge=true（和「删除」不是一回事）', async () => {
+    const deleteDocument = vi.fn().mockResolvedValue({ ok: true, data: undefined });
+    const listDocuments = twoViews([], [TRASHED]);
+    const host = render(makeGateway({ deleteDocument, listDocuments }));
+    await flush();
+    await act(async () => {
+      click(host.querySelector('[data-testid="kb-trash-toggle"]'));
+      await flush();
+    });
+
+    await act(async () => {
+      click(host.querySelector('[data-testid="kb-doc-purge-d1"]'));
+      await flush();
+    });
+    expect(dialogRoot().textContent).toContain('无法恢复');
+    expect(deleteDocument).not.toHaveBeenCalled();
+
+    await act(async () => {
+      click(dialogRoot().querySelector('[data-testid="kb-purge-confirm"]'));
+      await flush();
+    });
+
+    expect(deleteDocument).toHaveBeenCalledWith('k1', 'd1', { purge: true });
+  });
+});
+
+describe('改可见范围（库级设置）', () => {
+  it('打开时回填当前范围，点选后保存把角色与部门一起下发', async () => {
+    const listKbs = vi.fn().mockResolvedValue({
+      ok: true,
+      data: [{ ...KB, allowedRoles: ['member', 'admin', 'owner'], allowedDepartments: ['d1'] }],
+    });
+    const updateKbVisibility = vi.fn().mockResolvedValue({
+      ok: true,
+      data: { ...KB, allowedDepartments: ['d1'] },
+    });
+    const host = render(makeGateway({ listKbs, updateKbVisibility }));
+    await flush();
+
+    await act(async () => {
+      click(host.querySelector('[data-testid="kb-scope-k1"]'));
+      await flush();
+    });
+    // 当前值必须看得见，否则用户不知道这次是收紧还是放开
+    expect(dialogRoot().textContent).toContain('技术部');
+
+    await act(async () => {
+      click(dialogRoot().querySelector('[data-testid="kb-scope-role-member"]'));
+      await flush();
+    });
+    await act(async () => {
+      click(dialogRoot().querySelector('[data-testid="kb-scope-save"]'));
+      await flush();
+    });
+
+    expect(updateKbVisibility).toHaveBeenCalledWith('k1', {
+      allowedRoles: ['admin', 'owner'],
+      allowedDepartments: ['d1'],
+    });
+  });
+
+  it('一个角色都不选时本地就拦住（不让服务端用 422 告诉我）', async () => {
+    const updateKbVisibility = vi.fn();
+    const listKbs = vi.fn().mockResolvedValue({
+      ok: true,
+      data: [{ ...KB, allowedRoles: ['member'], allowedDepartments: [] }],
+    });
+    const host = render(makeGateway({ listKbs, updateKbVisibility }));
+    await flush();
+
+    await act(async () => {
+      click(host.querySelector('[data-testid="kb-scope-k1"]'));
+      await flush();
+    });
+    await act(async () => {
+      click(dialogRoot().querySelector('[data-testid="kb-scope-role-member"]'));
+      await flush();
+    });
+    await act(async () => {
+      click(dialogRoot().querySelector('[data-testid="kb-scope-save"]'));
+      await flush();
+    });
+
+    expect(updateKbVisibility).not.toHaveBeenCalled();
+    expect(toast.error).toHaveBeenCalledWith(expect.stringContaining('至少要选一个'));
   });
 });
 

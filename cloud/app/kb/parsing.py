@@ -41,9 +41,38 @@ MAX_UPLOAD_BYTES = 8 * 1024 * 1024
 MAX_UNCOMPRESSED_BYTES = 40 * 1024 * 1024
 
 #: 页面能否上传由这个集合决定；别在别处再抄一份。
-SUPPORTED_EXTENSIONS: tuple[str, ...] = (".txt", ".md", ".csv", ".docx", ".pdf")
+SUPPORTED_EXTENSIONS: tuple[str, ...] = (
+    ".txt",
+    ".md",
+    ".csv",
+    ".docx",
+    ".pdf",
+    ".xlsx",
+    ".pptx",
+)
+
+#: 需要 OCR 才能读的格式。**明确拒绝而不是"不支持"**：用户手里的扫描件、截图
+#: 是真实存在的资料，只说"不支持"等于让人去猜该怎么办。
+IMAGE_SUFFIXES: tuple[str, ...] = (
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".bmp",
+    ".gif",
+    ".webp",
+    ".tif",
+    ".tiff",
+    ".heic",
+)
+
+#: 单个表格最多读多少个单元格。防的是"整本台账当知识库"——
+#: 那种文件动辄几十万格，读进来既超字数上限又毫无检索价值。
+MAX_TABLE_CELLS = 20_000
 
 _W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+_S = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+_A = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
+_REL = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
 
 
 class ParseError(ValueError):
@@ -89,8 +118,24 @@ def parse_document(filename: str, data: bytes) -> ParsedDocument:
     if suffix == ".pdf":
         text, warnings = _parse_pdf(data)
         return ParsedDocument(text=text, kind="pdf", warnings=warnings)
+    if suffix == ".xlsx":
+        text, warnings = _parse_xlsx(data)
+        return ParsedDocument(text=text, kind="xlsx", warnings=warnings)
+    if suffix == ".pptx":
+        text, warnings = _parse_pptx(data)
+        return ParsedDocument(text=text, kind="pptx", warnings=warnings)
     if suffix in (".doc", ".xls", ".ppt"):
-        raise ParseError(f"不支持旧版 Office 格式（{suffix}），请另存为 .docx / .pdf 再上传")
+        raise ParseError(
+            f"不支持旧版 Office 格式（{suffix}），请另存为 .docx / .xlsx / .pptx / .pdf 再上传"
+        )
+    if suffix in IMAGE_SUFFIXES:
+        # 图片里的文字必须过 OCR 才能变成可检索的文本。我们不做 OCR（需要模型/引擎，
+        # 而且识别质量直接决定检索质量），但要把"该怎么办"说清楚。
+        raise ParseError(
+            f"图片（{suffix}）里的文字需要先 OCR 成文本："
+            "① 用系统/在线 OCR 导出 .txt 再上传；② 或在原程序里另存为带文本层的 PDF；"
+            "③ 也可以直接把文字粘贴到「正文」框里入库"
+        )
     raise ParseError(
         f"不支持的格式：{suffix or '（无后缀）'}；目前支持 {'、'.join(SUPPORTED_EXTENSIONS)}"
     )
@@ -250,3 +295,152 @@ def _parse_pdf(data: bytes) -> tuple[str, list[str]]:
     if empty_pages:
         warnings.append(f"{empty_pages} 页没有文本层（可能是图片页），这部分内容不会被检索到")
     return text, warnings
+
+
+def _sheet_targets(zf: zipfile.ZipFile) -> list[tuple[str, str]]:
+    """返回 `[(工作表名, zip 内路径)]`，顺序与工作簿里一致。
+
+    为什么必须读 rels 而不是猜 `xl/worksheets/sheet1.xml`：sheet 的**序号**
+    与它在工作簿里的**位置**不成正比（删除/重排之后 common 是 sheet3 排在第一位）。
+    猜路径的结果是"表格读出来了，但内容对应错了工作表名"——比读不出来更难发现。
+    """
+    workbook = ET.fromstring(_read_zip_member(zf, "xl/workbook.xml"))
+    rels = ET.fromstring(_read_zip_member(zf, "xl/_rels/workbook.xml.rels"))
+    by_id = {
+        node.get("Id", ""): node.get("Target", "")
+        for node in rels.iter()
+        if node.tag.endswith("Relationship")
+    }
+
+    out: list[tuple[str, str]] = []
+    for sheet in workbook.iter(_S + "sheet"):
+        name = sheet.get("name", "") or "工作表"
+        rel_id = sheet.get(_REL + "id", "")
+        target = by_id.get(rel_id, "")
+        if not target:
+            continue
+        # rels 里的 Target 相对 `xl/`，也可能写成绝对路径（开头带 /）
+        path = target.lstrip("/") if target.startswith("/") else f"xl/{target}"
+        out.append((name, path.replace("/./", "/")))
+    return out
+
+
+def _cell_text(cell: ET.Element, shared: list[str]) -> str:
+    kind = cell.get("t", "")
+    if kind == "inlineStr":
+        return "".join(node.text or "" for node in cell.iter(_S + "t")).strip()
+    value = cell.find(_S + "v")
+    raw = (value.text or "") if value is not None else ""
+    if kind == "s":
+        # 共享字符串：`<v>` 里是下标
+        try:
+            return shared[int(raw)].strip()
+        except (ValueError, IndexError):
+            return ""
+    return raw.strip()
+
+
+def _parse_xlsx(data: bytes) -> tuple[str, list[str]]:
+    """把工作簿按「一行一段」摊成文本。
+
+    刻意**不保留行列结构**：知识库的检索单位是文本段，`A1|B1|C1` 这种表格形态
+    对人和模型都不好读；而"每行拼一句"恰好是表格最常见的语义（一条记录一行）。
+    这一点必须写进 warnings —— 丢掉结构是真的丢了信息，不能装作没丢。
+
+    公式取的是**缓存值**（`<v>`），不是公式本身：公式文本对检索毫无意义，
+    而 Excel 存盘时都会带上最后一次计算的结果。
+    """
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(data))
+    except zipfile.BadZipFile as error:
+        raise ParseError("不是有效的 .xlsx（zip 结构损坏）") from error
+
+    with zf:
+        shared: list[str] = []
+        if "xl/sharedStrings.xml" in zf.namelist():
+            try:
+                root = ET.fromstring(_read_zip_member(zf, "xl/sharedStrings.xml"))
+                shared = [
+                    "".join(node.text or "" for node in item.iter(_S + "t"))
+                    for item in root.iter(_S + "si")
+                ]
+            except ET.ParseError:
+                # 共享字符串坏了不该毁掉整篇：降到"只读得到数字列"也比失败强
+                shared = []
+
+        blocks: list[str] = []
+        cells_read = 0
+        truncated = False
+        for name, path in _sheet_targets(zf):
+            try:
+                root = ET.fromstring(_read_zip_member(zf, path))
+            except ET.ParseError:
+                blocks.append(f"【工作表：{name}】\n（这张表解析失败，已跳过）")
+                continue
+            lines: list[str] = []
+            for row in root.iter(_S + "row"):
+                values = [_cell_text(cell, shared) for cell in row.iter(_S + "c")]
+                values = [item for item in values if item]
+                cells_read += len(values)
+                if cells_read > MAX_TABLE_CELLS:
+                    truncated = True
+                    break
+                if values:
+                    # 「 | 」而不是制表符：制表符在纯文本里与空格无法区分，
+                    # 分隔符必须让人眼也能看出"这是两个格子"
+                    lines.append(" | ".join(values))
+            if lines:
+                blocks.append(f"【工作表：{name}】\n" + "\n".join(lines))
+            if truncated:
+                break
+
+    if not blocks:
+        raise ParseError("表格里没有可提取的内容（可能是空表或只有图表）")
+
+    warnings = ["表格已按行展开为文本，行列结构不保留"]
+    if truncated:
+        warnings.append(f"表格过大，只读了前 {MAX_TABLE_CELLS} 个单元格")
+    return _normalize("\n\n".join(blocks)), warnings
+
+
+def _parse_pptx(data: bytes) -> tuple[str, list[str]]:
+    """按页提取幻灯片正文。
+
+    排序按**文件名里的数字**，不按字典序：`slide10.xml` 字典序会排在 `slide2.xml`
+    之前，症状是"第 10 页的内容跑到第 2 页前面"——检索照样能用，但引用顺序是乱的。
+    """
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(data))
+    except zipfile.BadZipFile as error:
+        raise ParseError("不是有效的 .pptx（zip 结构损坏）") from error
+
+    with zf:
+        names = [
+            item
+            for item in zf.namelist()
+            if item.startswith("ppt/slides/slide") and item.endswith(".xml")
+        ]
+        names.sort(key=lambda item: int("".join(ch for ch in item if ch.isdigit()) or 0))
+        if not names:
+            raise ParseError("这份 .pptx 里没有幻灯片")
+
+        blocks: list[str] = []
+        for index, name in enumerate(names, start=1):
+            try:
+                root = ET.fromstring(_read_zip_member(zf, name))
+            except ET.ParseError:
+                continue
+            paragraphs: list[str] = []
+            for paragraph in root.iter(_A + "p"):
+                text = "".join(node.text or "" for node in paragraph.iter(_A + "t")).strip()
+                if text:
+                    paragraphs.append(text)
+            if paragraphs:
+                blocks.append(f"【第 {index} 页】\n" + "\n".join(paragraphs))
+
+    if not blocks:
+        raise ParseError(
+            "幻灯片里没有可提取的文字（可能整份都是图片）。"
+            "图文类幻灯片建议先导出为文本，或把要点粘贴到「正文」框里"
+        )
+    return _normalize("\n\n".join(blocks)), ["已提取幻灯片正文；备注、图片与图表里的文字未提取"]

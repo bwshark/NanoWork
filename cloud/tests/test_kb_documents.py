@@ -198,7 +198,15 @@ def test_member_cannot_write(client: TestClient) -> None:
 # —— 删除 ——
 
 
-def test_delete_removes_chunks_vectors_and_hits(client: TestClient, monkeypatch) -> None:
+def test_delete_takes_document_out_of_search_but_keeps_it_restorable(
+    client: TestClient, monkeypatch
+) -> None:
+    """默认删除 = 进回收站：**从检索里摘掉，但块与向量留着**。
+
+    这条用例盯的是「摘掉」这件事的实现方式：块没被物理删掉，所以搜不到必须靠
+    查询条件（`deleted_at == ''` 的 join）。少了那个条件，删掉的资料照样被搜出来 ——
+    而列表里已经没有它，用户完全无法解释搜索结果。
+    """
     _use_hash_embedder(monkeypatch)
     owner, _, org = _org(client)
     kb = _kb(client, owner, org)
@@ -212,11 +220,12 @@ def test_delete_removes_chunks_vectors_and_hits(client: TestClient, monkeypatch)
 
     assert resp.status_code == 204
     assert _docs(client, owner, kb["id"]) == []
-    # 检索是另一条路径（kb_chunks IN scope_ids）：只删文档行的话，这里仍然会命中
+    # 检索是另一条路径（kb_chunks IN scope_ids），必须同样看不见
     assert _hits(client, owner, org, KEYWORD) == []
     with Session(engine) as session:
-        assert session.exec(select(KbChunk).where(KbChunk.doc_id == created["id"])).all() == []
-        assert session.exec(select(KbVector).where(KbVector.doc_id == created["id"])).all() == []
+        # 块与向量都还在 —— 恢复时才不用重建索引
+        assert session.exec(select(KbChunk).where(KbChunk.doc_id == created["id"])).all() != []
+        assert session.exec(select(KbVector).where(KbVector.doc_id == created["id"])).all() != []
 
 
 def test_delete_document_from_another_kb_is_404(client: TestClient) -> None:
@@ -234,13 +243,19 @@ def test_delete_document_from_another_kb_is_404(client: TestClient) -> None:
     assert [doc["id"] for doc in _docs(client, owner, second["id"])] == [foreign["id"]]
 
 
-def test_deleted_content_can_be_reingested(client: TestClient) -> None:
-    """删掉之后同内容必须能重新入库 —— 否则判重会把人锁在门外。"""
+def test_purged_content_can_be_reingested(client: TestClient) -> None:
+    """**彻底删除**之后同内容必须能重新入库 —— 否则判重会把人锁在门外。
+
+    ⚠️ 注意是「彻底删除」：只进回收站时同内容仍然是重复的（这时正确动作是恢复，
+    见 `test_kb_trash.py`），两种情况要分开断言，否则测试会让人以为「软删等于删了」。
+    """
     owner, _, org = _org(client)
     kb = _kb(client, owner, org)
     content = f"{KEYWORD}：走财务邮箱。"
     created = _add(client, owner, kb["id"], "制度", content).json()
-    client.delete(f"/api/kbs/{kb['id']}/documents/{created['id']}", headers=auth_headers(owner))
+    client.delete(
+        f"/api/kbs/{kb['id']}/documents/{created['id']}?purge=true", headers=auth_headers(owner)
+    )
 
     assert _add(client, owner, kb["id"], "制度（修订）", content).status_code == 201
 

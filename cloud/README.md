@@ -143,8 +143,19 @@ NANOWORK_KB_EMBED_API_KEY="sk-..." \
 |---|---|---|
 | `.txt` / `.md` / `.csv` | UTF-8 → GB18030 依次尝试 | 标准库 |
 | `.docx` | 读 zip 里的 `word/document.xml` 抽段落（表格按段落展开） | 标准库 |
+| `.xlsx` | 读 `sharedStrings.xml` + 各 sheet 的 `<row>`，**一行一段**（`单元格 | 单元格`） | 标准库 |
+| `.pptx` | 各 `slideN.xml` 里的 `<a:t>`，按**页号数字**排序（`slide10` 不能排到 `slide2` 前） | 标准库 |
 | `.pdf` | 抽文本层 | **可选**：`pip install -i https://pypi.org/simple pypdf` |
-| 旧版 `.doc/.xls/.ppt`、图片、扫描件 PDF | 明确回 422 并说清该换什么格式 | —— |
+| 旧版 `.doc/.xls/.ppt` | 422，提示另存为 `.docx / .xlsx / .pptx / .pdf` | —— |
+| 图片（png/jpg/…） | 422，**给出三条 OCR 路径**（OCR 导出 txt / 另存带文本层的 PDF / 直接粘贴正文） | —— |
+| 扫描件 PDF | 422，提示先 OCR（空文本层不入库） | —— |
+
+`.xlsx` / `.pptx` 的三条口径：**行列结构不保留**（表格按行摊成文本）必须写进
+`warnings`；公式取**缓存值**（`<v>`）而不是公式文本；单表超过 2 万格截断并告警
+（整本台账当知识库既超字数上限又毫无检索价值）。
+
+**OCR 明确不做**：它需要模型/引擎，识别质量直接决定检索质量。能做的只有
+"把该怎么办说清楚"，这一点落在 422 的文案里。
 
 ```bash
 # 装可选依赖（国内镜像可能没有这个包，加 -i 走官方源）
@@ -196,25 +207,78 @@ member         → 角色 ∈ allowed_roles  AND  ( 不按部门收窄 OR 我直
 ```http
 GET    /api/orgs/{orgId}/departments            # 父在子前的扁平列表（客户端按 parentId 缩进）
 POST   /api/orgs/{orgId}/departments            # {name, parentId?}  admin
-PATCH  /api/departments/{id}                    # {name}            admin
+PATCH  /api/departments/{id}                    # {name?, parentId?} admin（改名 / 换父节点）
 DELETE /api/departments/{id}                    # admin；有子部门/成员/被库引用 → 409
 GET    /api/departments/{id}/members
 POST   /api/departments/{id}/members            # {email}  要求已是组织成员
+PATCH  /api/departments/{id}/members/{userId}   # {role}   member | manager
 DELETE /api/departments/{id}/members/{userId}
 ```
+
+### 移动（换父节点）
+
+`PATCH` 的 `parentId` 三档语义：**不传 = 不动结构**；`""` = 移到根；具体 id = 挂到它下面。
+`""` 这一档不能省——否则表达不了「把子部门提成根部门」。
+
+四条校验（缺一条都会把树写坏）：不能挂自己、**不能挂到自己的子孙里**（环）、
+层级上限按**整棵子树的高度**算（不是只看新父深度）、新父下不能同名。
+
+### 部门负责人（部门内角色）
+
+`PATCH .../members/{userId}` 只有两档：`member` / `manager`。与**组织角色**是两个维度：
+
+| | 决定什么 |
+|---|---|
+| 组织角色（owner/admin/member） | 能不能**看**（配合部门范围） |
+| 部门角色（member/manager） | 这条线的资料能不能**维护** |
+
+写权限判定在 `kb/routes._writable_kb_or_404`：**组织 admin/owner** 或
+**该库某个允许部门的 manager**。边界很要紧：**只对有部门范围的库成立**——
+没有部门范围的库没有"这条线归谁管"，只能由组织管理员维护，否则部门负责人
+就能改一个全组织可见的库，写权限比读权限还宽。
 
 建库时带 `allowedDepartments: ["<deptId>"]` 即收窄；`[]` = 不按部门收窄。
 
 **未做**：换父节点（移动部门）、部门级角色（现在部门只有归属）、界面上改库范围的入口。
 
+## 向量检索的规模边界（为什么还没有 ANN）
+
+当前实现是**精确检索**：把候选块的向量全取进内存，在 Python 里逐个算余弦，
+复杂度 `O(候选数 × 维度)`。单库几百到几千块、维度 256 时毫秒级，够用；
+十万级块时内存与耗时都会失控，那时正确的做法是 **pgvector**（或 HNSW）。
+
+**现在不写 pgvector 代码，是刻意的**：本机没有 Postgres 实例，
+一条没跑过的 SQL 路径就是"看起来支持 pgvector"——真上线时才会发现驱动、
+方言、`vector` 类型的写入方式都不一样。**未验证的代码路径不写**，
+这是本仓反复强调的"不要假绿"。
+
+真正要做时，接入点只有两处（其余不动）：
+
+| 现在 | 换成 pgvector |
+|---|---|
+| `vectors.load_vectors()` 把候选向量全取回 Python | 改成一条 `ORDER BY vector <=> $1 LIMIT k`（走 ivfflat/hnsw 索引） |
+| `retrieval.rank_by_vectors()` 在 Python 里算余弦 | 不再需要（距离由索引算好） |
+
+配套要做的：① `kb_vectors` 换成 `vector(dim)` 列（维度必须与 embedder 一致，
+不一致的行直接跳过 —— 错位点积是**看似有分**的噪声）；② 建 ivfflat / hnsw 索引；
+③ 按 `NANOWORK_KB_VECTOR_BACKEND` 选择实现；④ **用同一批用例跑**
+（`tests/test_kb_vector.py` 里的可见性不变量必须原样通过 —— 换检索实现时，
+最容易顺手把「过滤」挪到打分之后）。
+
+一个**中间档**是现在就能做的：候选数超过阈值时先用词法粗筛再算向量（两级检索）。
+它不解决内存问题（向量还是要取），但能把余弦计算量压到候选集的一小部分。
+
 ## 文档生命周期：判重 / 删除 / 改名 / 写入权限
 
 ```http
-GET    /api/kbs/{kbId}/documents                # 列表：kind + 每篇已建向量条数
-POST   /api/kbs/{kbId}/documents                # 粘贴入库（判重 → 重复返回 409）
-POST   /api/kbs/{kbId}/documents/file           # 文件入库（解析后同样判重）
-PATCH  /api/kbs/{kbId}/documents/{docId}        # 改名（内容不动）
-DELETE /api/kbs/{kbId}/documents/{docId}        # 删除（连同块与向量）
+GET    /api/kbs/{kbId}/documents                     # 列表：kind + 每篇已建向量条数
+GET    /api/kbs/{kbId}/documents?includeDeleted=true # 回收站（只看删过的）
+POST   /api/kbs/{kbId}/documents                     # 粘贴入库（判重 → 重复返回 409）
+POST   /api/kbs/{kbId}/documents/file                # 文件入库（解析后同样判重）
+PATCH  /api/kbs/{kbId}/documents/{docId}             # 改名（内容不动）
+DELETE /api/kbs/{kbId}/documents/{docId}             # 删除 → **进回收站**（可恢复）
+DELETE /api/kbs/{kbId}/documents/{docId}?purge=true  # 彻底删除（不可撤销）
+POST   /api/kbs/{kbId}/documents/{docId}/restore     # 从回收站恢复
 ```
 
 四条口径：
@@ -223,9 +287,16 @@ DELETE /api/kbs/{kbId}/documents/{docId}        # 删除（连同块与向量）
    否则「全员可见的制度库」上任何成员都能删别人的资料。这是写侧加门槛、读侧不动。
 2. **判重按内容、作用域是本库**：摘要按**切好的块**算（`app/kb/digest.py`），所以换行/缩进
    差异骗不过去；跨库同内容是正常用法，不拦。重复返回 **409** 并点名「已在库里的是《X》」。
-3. **删除要删三张表**：`kb_vectors` → `kb_chunks` → `kb_documents`。只删文档行会留下
-   **孤儿块**——它们带着 kb_id，照样被检索命中，于是「列表里没有它、结果里有它」。
-4. **判重不会把人锁在门外**：删掉之后同内容可以重新入库（有用例钉住）。
+3. **删除默认是软删（回收站）**：`deleted_at` 打时间戳，块与向量**留着**（恢复时才不用
+   重建索引）。所以"删了搜不到"靠的是查询条件（`KbDocument.deleted_at == ''` 的 join）——
+   它写在 `search_org_kbs` / `reindex_kb` / `list_documents` / `vector_coverage` 四处，
+   **少一处就是"删掉了还能被搜到"**。
+4. **彻底删除才动三张表**：`kb_vectors` → `kb_chunks` → `kb_documents`。只删文档行会留下
+   **孤儿块**（带着 kb_id，照样被检索命中）。
+5. **回收站保留 30 天**，过期由**惰性清理**（下一次列表请求顺手清）兜底，不依赖外部调度：
+   没有调度器的部署里「靠 cron 清理」等于「永远不会清理」。
+6. **判重认得回收站**：回收站里已有同内容时回 409 并说「恢复它就行」，而不是让用户重传
+   （重传会被判重拦下，用户会以为必须彻底删除——那白丢一次索引重建）。
 
 成员/只读身份调写接口一律 403；跨库拿别人的 `kbId` 删文档一律 404（`doc.kb_id != kb.id`）。
 

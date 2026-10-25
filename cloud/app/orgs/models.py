@@ -81,4 +81,10 @@ class DepartmentMember(SQLModel, table=True):
     department_id: str = Field(primary_key=True, foreign_key="departments.id")
     user_id: str = Field(primary_key=True, index=True)
     org_id: str = Field(index=True)
+    #: 部门内角色：`member`（普通）/ `manager`（负责人）。
+    #:
+    #: 与**组织角色**是两件事，刻意不合并：组织角色决定"能不能看"，
+    #: 部门负责人决定"这条线范围内的资料能不能维护"。合并成一个字段就没法表达
+    #: 「某人是普通成员，但他是人事部负责人」——那正是部门存在的意义。
+    role: str = Field(default="member")
     joined_at: datetime = Field(default_factory=utc_now)

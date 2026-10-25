@@ -116,7 +116,11 @@ def test_empty_and_unknown_formats_are_rejected_with_reasons() -> None:
         parse_document("a.txt", b"")
     with pytest.raises(ParseError, match="不支持旧版 Office"):
         parse_document("a.doc", b"whatever")
+    # 图片走**专门的 OCR 提示**（只说不支持等于让人去猜怎么办），
+    # 所以"未知格式"这条要用一个真的谁都不认识的扩展名来测
     with pytest.raises(ParseError, match="不支持的格式"):
+        parse_document("a.zip", b"PK\x03\x04")
+    with pytest.raises(ParseError, match="OCR"):
         parse_document("a.png", b"\x89PNG")
 
 
