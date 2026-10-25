@@ -58,6 +58,11 @@ function makeGateway(overrides: Partial<KbGateway> = {}): KbGateway {
     listDepartmentMembers: vi.fn(),
     addDepartmentMember: vi.fn(),
     removeDepartmentMember: vi.fn(),
+    // 组织成员同上：选择器不碰人员管理，但网关类型要求齐全
+    listMembers: vi.fn(),
+    addMember: vi.fn(),
+    updateMemberRole: vi.fn(),
+    removeMember: vi.fn(),
     ...overrides,
   };
 }

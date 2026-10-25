@@ -44,6 +44,9 @@ ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     # 2026-10-25 部门负责人：部门内角色（member / manager）。
     # 老行按 member 处理：把历史成员默认成负责人等于凭空扩权，方向必须 fail-closed。
     ("department_members", "role", "TEXT NOT NULL DEFAULT 'member'"),
+    # 2026-10-25 列表「更新时间」：改名 / 恢复要能反映出来。
+    # 空串 = 本行产生于该字段之前 → 读的时候退回 `created_at`（见 routes._document_view）。
+    ("kb_documents", "updated_at", "TEXT NOT NULL DEFAULT ''"),
 )
 
 #: (索引名, 表名, 列清单)。`CREATE INDEX IF NOT EXISTS` 在 SQLite 与 PostgreSQL

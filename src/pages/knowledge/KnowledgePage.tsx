@@ -1,41 +1,24 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Alert,
   Box,
   Button,
-  Checkbox,
-  Chip,
   CircularProgress,
-  Dialog,
-  DialogActions,
-  DialogContent,
-  DialogContentText,
-  DialogTitle,
   Divider,
-  FormControl,
-  FormControlLabel,
-  IconButton,
-  InputLabel,
-  List,
-  ListItem,
-  ListItemButton,
-  ListItemText,
-  MenuItem,
+  InputBase,
   Paper,
-  Select,
   Stack,
-  TextField,
   Typography,
 } from "@mui/material";
-import RefreshIcon from "@mui/icons-material/Refresh";
-import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
-import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
-import SearchIcon from "@mui/icons-material/Search";
 import AddIcon from "@mui/icons-material/Add";
-import TuneIcon from "@mui/icons-material/Tune";
-import RestoreFromTrashIcon from "@mui/icons-material/RestoreFromTrash";
-import DeleteForeverIcon from "@mui/icons-material/DeleteForever";
+import ArticleOutlinedIcon from "@mui/icons-material/ArticleOutlined";
+import FolderOutlinedIcon from "@mui/icons-material/FolderOutlined";
+import GridOnOutlinedIcon from "@mui/icons-material/GridOnOutlined";
+import CodeOutlinedIcon from "@mui/icons-material/CodeOutlined";
+import ChatBubbleOutlineIcon from "@mui/icons-material/ChatBubbleOutline";
+import UploadFileOutlinedIcon from "@mui/icons-material/UploadFileOutlined";
+import RefreshIcon from "@mui/icons-material/Refresh";
 import { ROUTES } from "@/lib/core/constants";
 import { toast } from "@/components/Toast";
 import {
@@ -45,25 +28,53 @@ import {
   KB_ROLE_LABELS,
   KB_SESSION_EXPIRED,
   type KbApiResult,
+  type KbDepartment,
   type KbDocument,
   type KbGateway,
   type KbOrg,
-  type KbDepartment,
   type KbRetrievalInfo,
   type KbSearchHit,
   type KbSummary,
 } from "@/lib/kb/kbClient";
 import { describeRetrieval } from "@/lib/kb/kbRetrievalCaption";
-import { DepartmentDialog } from "@/components/knowledge/DepartmentDialog";
-import { KB_UPLOAD_ACCEPT, kindLabel, precheckUpload } from "@/lib/kb/kbUpload";
+import { KB_UPLOAD_ACCEPT, precheckUpload } from "@/lib/kb/kbUpload";
+import { docIndexHint } from "@/lib/kb/kbDocumentMeta";
 import { readFileAsBase64 } from "@/lib/artifact/fileBase64";
 import { createRuntimeKbGateway } from "@/sync/kbGateway";
 import { useSyncRuntime } from "@/sync/useSyncRuntime";
+import { KnowledgeSidebar } from "@/components/knowledge/KnowledgeSidebar";
+import { HeaderSubtitle, KnowledgeHeader, type KbMenuItem } from "@/components/knowledge/KnowledgeHeader";
+import { KnowledgeTeamPanel } from "@/components/knowledge/KnowledgeTeamPanel";
+import { KnowledgeDocList, type KbDocView } from "@/components/knowledge/KnowledgeDocList";
+import { CreateTeamDialog } from "@/components/knowledge/CreateTeamDialog";
+import { CreateKbDialog } from "@/components/knowledge/CreateKbDialog";
+import { TeamMembersDialog } from "@/components/knowledge/TeamMembersDialog";
+import {
+  DeleteDocDialog,
+  NewDocDialog,
+  PurgeDocDialog,
+  RenameDocDialog,
+  VisibilityDialog,
+} from "@/components/knowledge/KnowledgeDocDialogs";
+import { DepartmentDialog } from "@/components/knowledge/DepartmentDialog";
 
 /**
- * 知识库（M7 客户端）：组织 → 知识库 → 文档 / 检索。
+ * 知识库（M7 客户端）：团队 → 知识库 → 文档 / 检索。
  *
- * ## 三条设计取舍
+ * ## 布局（与参考界面一致）
+ *
+ * ```
+ * ┌ 侧栏（团队 → 知识库两级树）┬ 团队视图：知识库卡片网格 ┐
+ * │ 个人知识库（占位）          │ 或                       │
+ * │ 团队知识库                  │ 知识库视图：文件列表      │
+ * └───────────────────────────┴─────────────────────────┘
+ * ```
+ *
+ * 两个视图互斥，靠**有没有选中库**切换：没选库 = 先看清楚这个团队有哪些库
+ * （卡片上是范围与篇数），选了库 = 看里面的文件。刻意不给「默认直接进第一个库」：
+ * 那会让「这个团队一共有什么」变成必须点很多次才能回答的问题。
+ *
+ * ## 三条设计取舍（沿用上一版，重构没有改变它们）
  *
  * 1. **不复制服务端的可见性判断**：列表与检索结果都原样显示服务端给的集合。
  *    客户端再筛一次会让「服务端漏过滤」变成看不见的 bug（而它正是本模块最该防的事）。
@@ -131,6 +142,8 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
   const authIssue: AuthIssue =
     client === null ? "anonymous" : sessionExpired ? "expired" : "none";
 
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
   const [orgs, setOrgs] = useState<KbOrg[]>([]);
   const [activeOrgId, setActiveOrgId] = useState<string>("");
   const [orgsError, setOrgsError] = useState("");
@@ -139,35 +152,53 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
   const [orgsOffline, setOrgsOffline] = useState(false);
   const [orgsLoading, setOrgsLoading] = useState(false);
   const [newOrgName, setNewOrgName] = useState("");
+  const [teamBusy, setTeamBusy] = useState(false);
 
-  const [kbs, setKbs] = useState<KbSummary[]>([]);
+  /** 团队 id → 该团队下我可见的库。一次全取：侧栏的树要同时显示多个团队 */
+  const [kbsByOrg, setKbsByOrg] = useState<Record<string, KbSummary[]>>({});
+  const [kbsError, setKbsError] = useState("");
+  const [kbsLoading, setKbsLoading] = useState(false);
   const [activeKbId, setActiveKbId] = useState<string>("");
+
+  const [docs, setDocs] = useState<KbDocument[]>([]);
+  const [docsError, setDocsError] = useState("");
+  const [docsLoading, setDocsLoading] = useState(false);
+  /** 回收站视图：看的是「删过的」，与正常列表互斥（服务端也是两个口径） */
+  const [trashOpen, setTrashOpen] = useState(false);
+  const [view, setView] = useState<KbDocView>("list");
+
   // 检索能力 + 索引覆盖率：说明文字按它渲染（原来写死「词法检索」，开了向量就说谎）
   const [retrieval, setRetrieval] = useState<KbRetrievalInfo | null>(null);
   const [reindexing, setReindexing] = useState(false);
   const [uploading, setUploading] = useState(false);
   // 部门树：既用于「仅限部门」的选项，也用于列表里把范围显示成人话
   const [departments, setDepartments] = useState<KbDepartment[]>([]);
-  const [newKbDeptIds, setNewKbDeptIds] = useState<string[]>([]);
-  const [deptOpen, setDeptOpen] = useState(false);
-  const [kbsError, setKbsError] = useState("");
-  const [kbsLoading, setKbsLoading] = useState(false);
-  const [newKbName, setNewKbName] = useState("");
-  const [newKbRoles, setNewKbRoles] = useState<string[]>([...ALL_ROLES]);
 
-  const [docs, setDocs] = useState<KbDocument[]>([]);
-  const [docsError, setDocsError] = useState("");
-  const [docsLoading, setDocsLoading] = useState(false);
+  const [query, setQuery] = useState("");
+  const [hits, setHits] = useState<KbSearchHit[] | null>(null);
+  const [searchError, setSearchError] = useState("");
+  const [searching, setSearching] = useState(false);
+
+  // —— 弹窗状态 ——
+  const [teamDialogOpen, setTeamDialogOpen] = useState(false);
+  const [kbDialogOpen, setKbDialogOpen] = useState(false);
+  const [newKbOrgId, setNewKbOrgId] = useState("");
+  const [newKbName, setNewKbName] = useState("");
+  const [newKbDescription, setNewKbDescription] = useState("");
+  const [newKbRoles, setNewKbRoles] = useState<string[]>([...ALL_ROLES]);
+  const [newKbDeptIds, setNewKbDeptIds] = useState<string[]>([]);
+  const [kbBusy, setKbBusy] = useState(false);
+
+  const [docDialogOpen, setDocDialogOpen] = useState(false);
   const [docTitle, setDocTitle] = useState("");
   const [docContent, setDocContent] = useState("");
+
   // 改名 / 删除都要先确认：目标文档 + 改名时正在编辑的标题。
   // 用两个独立状态而不是一个 `{ doc, mode }`：两个弹窗的打开条件互斥，
   // 合成一个对象会让「关掉其中一个」把另一个也顺手关掉。
   const [renameTarget, setRenameTarget] = useState<KbDocument | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<KbDocument | null>(null);
-  /** 回收站视图：看的是"删过的"，与正常列表互斥（服务端也是两个口径） */
-  const [trashOpen, setTrashOpen] = useState(false);
   /** 彻底删除的目标：与「删除」分开一个弹窗，因为两者的后果不一样 */
   const [purgeTarget, setPurgeTarget] = useState<KbDocument | null>(null);
   /** 改可见范围的目标库（null = 弹窗关着） */
@@ -176,68 +207,89 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
   const [scopeDeptIds, setScopeDeptIds] = useState<string[]>([]);
   const [rowBusy, setRowBusy] = useState(false);
 
-  const [query, setQuery] = useState("");
-  const [hits, setHits] = useState<KbSearchHit[] | null>(null);
-  const [searchError, setSearchError] = useState("");
-  const [searching, setSearching] = useState(false);
+  const [membersOpen, setMembersOpen] = useState(false);
+  const [deptOpen, setDeptOpen] = useState(false);
 
-  const activeOrg = useMemo(() => orgs.find((org) => org.id === activeOrgId) ?? null, [orgs, activeOrgId]);
-  const activeKb = useMemo(() => kbs.find((kb) => kb.id === activeKbId) ?? null, [kbs, activeKbId]);
-
-  const loadOrgs = useCallback(
-    async (target: KbGateway) => {
-      setOrgsLoading(true);
-      setOrgsError("");
-      setOrgsOffline(false);
-      const result = await target.listOrgs();
-      setOrgsLoading(false);
-      if (!result.ok) {
-        // 走到这里说明 `kbClient` 已经试过刷新：仍 401 = 凭据整体失效（refresh 被吊销 /
-        // 账户被删），只能请用户重新登录。这不是「没登录」。
-        if (result.unauthorized) setSessionExpired(true);
-        setOrgsOffline(result.status === 0);
-        setOrgsError(result.message);
-        return;
-      }
-      setOrgs(result.data);
-      // 这一次成功了：之前的「过期」结论作废（重试 / 引擎刚换过票都会走到这里）
-      setSessionExpired(false);
-      // 只在「当前选择失效」时改选中项：否则每次刷新都会把用户踢回第一个组织
-      setActiveOrgId((prev) =>
-        result.data.some((org) => org.id === prev) ? prev : result.data[0]?.id ?? "",
-      );
-    },
-    [],
+  const activeOrg = useMemo(
+    () => orgs.find((org) => org.id === activeOrgId) ?? null,
+    [orgs, activeOrgId],
   );
+  const kbs = useMemo(() => kbsByOrg[activeOrgId] ?? [], [kbsByOrg, activeOrgId]);
+  const activeKb = useMemo(() => {
+    for (const list of Object.values(kbsByOrg)) {
+      const found = list.find((kb) => kb.id === activeKbId);
+      if (found) return found;
+    }
+    return null;
+  }, [kbsByOrg, activeKbId]);
+
+  const loadOrgs = useCallback(async (target: KbGateway) => {
+    setOrgsLoading(true);
+    setOrgsError("");
+    setOrgsOffline(false);
+    const result = await target.listOrgs();
+    setOrgsLoading(false);
+    if (!result.ok) {
+      // 走到这里说明 `kbClient` 已经试过刷新：仍 401 = 凭据整体失效（refresh 被吊销 /
+      // 账户被删），只能请用户重新登录。这不是「没登录」。
+      if (result.unauthorized) setSessionExpired(true);
+      setOrgsOffline(result.status === 0);
+      setOrgsError(result.message);
+      return;
+    }
+    setOrgs(result.data);
+    // 这一次成功了：之前的「过期」结论作废（重试 / 引擎刚换过票都会走到这里）
+    setSessionExpired(false);
+    // 只在「当前选择失效」时改选中项：否则每次刷新都会把用户踢回第一个团队
+    setActiveOrgId((prev) =>
+      result.data.some((org) => org.id === prev) ? prev : result.data[0]?.id ?? "",
+    );
+  }, []);
 
   useEffect(() => {
     if (client) void loadOrgs(client);
   }, [client, loadOrgs]);
 
-  const loadKbs = useCallback(async (target: KbGateway, orgId: string) => {
-    if (!orgId) {
-      setKbs([]);
-      setActiveKbId("");
+  /**
+   * 一次取回**所有团队**的库列表。
+   *
+   * 侧栏的树要同时显示多个团队下的库，逐个团队懒加载会让「同事说他有个库」
+   * 在自己侧栏里看不见（得先猜是哪个团队）。团队数量是个位数，一次并发取完
+   * 比这种猜测便宜得多。
+   *
+   * 单个团队失败**不影响**其它团队：失败的那个记空数组并把第一句错误报出来，
+   * 其余照常渲染——一次 403 不该让整个页面变成错误态。
+   */
+  const loadKbs = useCallback(async (target: KbGateway, list: readonly KbOrg[]) => {
+    if (list.length === 0) {
+      setKbsByOrg({});
+      setKbsError("");
       return;
     }
     setKbsLoading(true);
-    setKbsError("");
-    const result = await target.listKbs(orgId);
+    const results = await Promise.all(
+      list.map(async (org) => [org.id, await target.listKbs(org.id)] as const),
+    );
     setKbsLoading(false);
-    if (!result.ok) {
-      setKbs([]);
-      setKbsError(result.message);
-      return;
+    const next: Record<string, KbSummary[]> = {};
+    let firstError = "";
+    for (const [orgId, result] of results) {
+      next[orgId] = result.ok ? result.data : [];
+      if (!result.ok && firstError === "") firstError = result.message;
     }
-    setKbs(result.data);
+    setKbsByOrg(next);
+    setKbsError(firstError);
+    // 选中的库可能刚被删掉 / 权限被收回：清掉，别让右侧挂着一个不存在的库
     setActiveKbId((prev) =>
-      result.data.some((kb) => kb.id === prev) ? prev : result.data[0]?.id ?? "",
+      prev !== "" && Object.values(next).some((items) => items.some((kb) => kb.id === prev))
+        ? prev
+        : "",
     );
   }, []);
 
   useEffect(() => {
-    if (client) void loadKbs(client, activeOrgId);
-  }, [client, activeOrgId, loadKbs]);
+    if (client) void loadKbs(client, orgs);
+  }, [client, orgs, loadKbs]);
 
   const loadDocs = useCallback(async (target: KbGateway, kbId: string, trashed = false) => {
     if (!kbId) {
@@ -261,10 +313,6 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
   }, [client, activeKbId, trashOpen, loadDocs]);
 
   /**
-   * 读检索状态。**失败不报错、只保留上一次**：它是说明文字的数据源，
-   * 拿不到时就退回「不猜引擎」的中性文案，不该因为一个附加信息把整页打成错误态。
-   */
-  /**
    * 读部门树。失败**不 toast**：它是「可见范围」的附加信息，云端连不上时
    * 知识库页该说的第一句话是「连不上」，不是弹一排部门加载失败。
    */
@@ -281,6 +329,10 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
     if (client) void loadDepartments(client, activeOrgId);
   }, [client, activeOrgId, loadDepartments]);
 
+  /**
+   * 读检索状态。**失败不报错、只保留上一次**：它是说明文字的数据源，
+   * 拿不到时就退回「不猜引擎」的中性文案，不该因为一个附加信息把整页打成错误态。
+   */
   const loadRetrieval = useCallback(async (target: KbGateway, kbId: string) => {
     const result = await target.retrievalInfo(kbId || undefined);
     if (result.ok) setRetrieval(result.data);
@@ -294,9 +346,9 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
    * 库的可见范围人话：`N 篇 · 角色可见 · 仅 部门A、部门B`。
    *
    * 部门名字查不到时退回 id —— 比显示空白强：空白会让用户以为「没设范围」，
-   * 而实际情况是"设了但部门已被删"（这种情况删部门时会被服务端拦住，理论上不该出现）。
+   * 而实际情况是「设了但部门已被删」（这种情况删部门时会被服务端拦住，理论上不该出现）。
    */
-  const kbSecondary = (kb: KbSummary): string => {
+  const describeKb = (kb: KbSummary): string => {
     const parts = [`${kb.documentCount} 篇`, `${roleLabels(kb.allowedRoles)}可见`];
     const ids = kb.allowedDepartments ?? [];
     if (ids.length > 0) {
@@ -306,27 +358,78 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
     return parts.join(" · ");
   };
 
-  /**
-   * 文档副标题：`PDF · 1234 字 · 5 块`。
-   *
-   * 格式显示出来是有用的：同一份资料传成 .docx 还是粘贴纯文本，出问题时的排查
-   * 路径完全不同（前者可能丢表格结构，后者可能是复制时带了奇怪换行）。
-   */
-  const docSecondary = (doc: KbDocument): string =>
-    `${kindLabel(doc.kind)} · ${doc.chars} 字 · ${doc.chunkCount} 块`;
+  const indexHintFor = (doc: KbDocument): string =>
+    docIndexHint(doc, retrieval === null || retrieval.embedder === "off");
 
-  /**
-   * 「这篇有没有建索引」只在**缺**的时候说。
-   *
-   * 没索引的文档搜不到，而它在列表里和正常文档长得一样 —— 那正是
-   * 「我明明传了，它就是搜不到」最常见的来源。反过来，正常文档不必挂个「已索引」，
-   * 那只是噪音。
-   */
-  const docIndexHint = (doc: KbDocument): string => {
-    if (retrieval === null || retrieval.embedder === "off") return "";
-    const indexed = doc.embedded ?? 0;
-    if (doc.chunkCount === 0 || indexed >= doc.chunkCount) return "";
-    return indexed === 0 ? "未建索引" : `索引 ${indexed}/${doc.chunkCount}`;
+  const resetSearch = () => {
+    setHits(null);
+    setSearchError("");
+  };
+
+  const selectTeam = (orgId: string) => {
+    setActiveOrgId(orgId);
+    setActiveKbId("");
+    setTrashOpen(false);
+    resetSearch();
+  };
+
+  const selectKb = (orgId: string, kbId: string) => {
+    setActiveOrgId(orgId);
+    setActiveKbId(kbId);
+    setTrashOpen(false);
+    resetSearch();
+  };
+
+  const openCreateKb = (orgId?: string) => {
+    const target = orgId ?? activeOrgId;
+    if (target === "") {
+      toast.error("先建一个团队：知识库挂在团队下");
+      return;
+    }
+    setNewKbOrgId(target);
+    setNewKbName("");
+    setNewKbDescription("");
+    setNewKbRoles([...ALL_ROLES]);
+    setNewKbDeptIds([]);
+    setKbDialogOpen(true);
+  };
+
+  const toggleRole = (role: string) =>
+    setNewKbRoles((previous) =>
+      previous.includes(role) ? previous.filter((item) => item !== role) : [...previous, role],
+    );
+
+  const toggleNewKbDept = (id: string) =>
+    setNewKbDeptIds((previous) =>
+      previous.includes(id) ? previous.filter((item) => item !== id) : [...previous, id],
+    );
+
+  const handleCreateKb = async () => {
+    if (!client || newKbOrgId === "" || !newKbName.trim()) return;
+    if (newKbRoles.length === 0) {
+      // 服务端也会 422，但这里先挡一次：省一趟往返，也说清是哪个字段不对
+      toast.error("至少要选一个可见角色");
+      return;
+    }
+    setKbBusy(true);
+    const result = await client.createKb(newKbOrgId, {
+      name: newKbName.trim(),
+      ...(newKbDescription.trim() !== "" ? { description: newKbDescription.trim() } : {}),
+      allowedRoles: newKbRoles,
+      // 空数组与"不传"在服务端语义不同：不传 = 不动；建库时两者等价，
+      // 但显式只在非空时下发，避免把「没选」写成一个刻意的收窄
+      ...(newKbDeptIds.length > 0 ? { allowedDepartments: newKbDeptIds } : {}),
+    });
+    setKbBusy(false);
+    if (!result.ok) {
+      toast.error(errorText(result));
+      return;
+    }
+    setKbDialogOpen(false);
+    toast.success(`已创建知识库「${result.data.name}」`);
+    await loadKbs(client, orgs);
+    // 建完直接进去：用户刚建它就是为了往里放东西
+    selectKb(newKbOrgId, result.data.id);
   };
 
   const handleCreateOrg = async () => {
@@ -341,45 +444,50 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
     await loadOrgs(client);
   };
 
-  const handleCreateKb = async () => {
-    if (!client || !activeOrgId || !newKbName.trim()) return;
-    if (newKbRoles.length === 0) {
-      toast.error("至少要选一个可见角色");
+  const handleCreateTeam = async (input: { name: string; emails: string[] }) => {
+    if (!client) return;
+    setTeamBusy(true);
+    const created = await client.createOrg(input.name);
+    if (!created.ok) {
+      setTeamBusy(false);
+      toast.error(errorText(created));
       return;
     }
-    const result = await client.createKb(activeOrgId, {
-      name: newKbName.trim(),
-      allowedRoles: newKbRoles,
-      // 空数组与"不传"在服务端语义不同：不传 = 不动；建库时两者等价，
-      // 但显式只在非空时下发，避免把「没选」写成一个刻意的收窄
-      ...(newKbDeptIds.length > 0 ? { allowedDepartments: newKbDeptIds } : {}),
-    });
-    if (!result.ok) {
-      toast.error(errorText(result));
-      return;
+    // 团队已经建好了：后面加人失败不能回滚（也不该回滚），逐条报出来
+    const failed: string[] = [];
+    for (const email of input.emails) {
+      const added = await client.addMember(created.data.id, { email });
+      if (!added.ok) failed.push(`${email}：${added.message}`);
     }
-    setNewKbName("");
-    setNewKbRoles([...ALL_ROLES]);
-    setNewKbDeptIds([]);
-    toast.success(`已创建知识库「${result.data.name}」`);
-    await loadKbs(client, activeOrgId);
+    setTeamBusy(false);
+    setTeamDialogOpen(false);
+    if (failed.length === 0) toast.success(`已创建团队「${created.data.name}」`);
+    else {
+      toast.success(`已创建团队「${created.data.name}」`);
+      for (const item of failed) toast.warning(`没加进去 · ${item}`);
+    }
+    await loadOrgs(client);
+    selectTeam(created.data.id);
   };
 
   const handleUpload = async () => {
     if (!client || !activeKbId || !docTitle.trim() || !docContent.trim()) return;
+    setRowBusy(true);
     const result = await client.uploadDocument(activeKbId, {
       title: docTitle.trim(),
       content: docContent,
     });
+    setRowBusy(false);
     if (!result.ok) {
       toastIngestFailure(result);
       return;
     }
+    setDocDialogOpen(false);
     setDocTitle("");
     setDocContent("");
     toast.success(`已入库：${result.data.chunkCount} 块`);
     await loadDocs(client, activeKbId);
-    await loadKbs(client, activeOrgId);
+    await loadKbs(client, orgs);
   };
 
   /**
@@ -414,6 +522,7 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
       for (const warning of warnings ?? []) toast.warning(warning);
       await loadDocs(client, activeKbId);
       await loadRetrieval(client, activeKbId);
+      await loadKbs(client, orgs);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "读取文件失败");
     } finally {
@@ -459,7 +568,7 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
     toast.success(`已删除「${deleteTarget.title}」`);
     // 三样都变了：文档列表、库上的文档数、索引覆盖率（块少了一批）
     await loadDocs(client, activeKbId);
-    await loadKbs(client, activeOrgId);
+    await loadKbs(client, orgs);
     await loadRetrieval(client, activeKbId);
   };
 
@@ -472,16 +581,12 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
     }
     toast.success(`已恢复「${doc.title}」`);
     await loadDocs(client, activeKbId, true);
-    await loadKbs(client, activeOrgId);
+    await loadKbs(client, orgs);
     await loadRetrieval(client, activeKbId);
   };
 
   /**
-   * 彻底删除：**独立的确认弹窗**。
-   *
-   * 与「删除」分开是刻意的：删除只是进回收站（可恢复），彻底删除不可撤销。
-   * 两者共用同一个弹窗，用户会以为"反正能恢复"，然后点错 —— 那是这一屏里
-   * 唯一一个真正不可逆的操作。
+   * 彻底删除：**不可撤销**，所以文案与弹窗都与「删除」分开。
    */
   const handlePurge = async () => {
     if (!client || !activeKbId || purgeTarget === null) return;
@@ -496,7 +601,7 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
     }
     toast.success(`已彻底删除「${target.title}」`);
     await loadDocs(client, activeKbId, true);
-    await loadKbs(client, activeOrgId);
+    await loadKbs(client, orgs);
     await loadRetrieval(client, activeKbId);
   };
 
@@ -525,7 +630,7 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
     }
     setScopeKb(null);
     toast.success(`已更新「${result.data.name}」的可见范围`);
-    await loadKbs(client, activeOrgId);
+    await loadKbs(client, orgs);
   };
 
   const handleReindex = async () => {
@@ -560,6 +665,14 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
       return;
     }
     setHits(result.data);
+  };
+
+  const refreshAll = () => {
+    if (!client) return;
+    void loadOrgs(client);
+    void loadKbs(client, orgs);
+    void loadDocs(client, activeKbId, trashOpen);
+    void loadRetrieval(client, activeKbId);
   };
 
   const caption = describeRetrieval(retrieval);
@@ -599,686 +712,411 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
     );
   }
 
+  const hasKb = activeKb !== null;
+  const needKbHint = "先在左侧选一个知识库";
+
+  /** 「+」菜单：未开放项灰掉并写明原因（点了没反应会被读成「卡了」） */
+  const addItems: KbMenuItem[] = [
+    ...(hasKb
+      ? []
+      : [
+          {
+            key: "new-kb",
+            group: "新建知识",
+            label: "知识库",
+            hint: "建在当前团队下",
+            icon: <AddIcon fontSize="small" />,
+            onSelect: () => openCreateKb(),
+          } satisfies KbMenuItem,
+        ]),
+    {
+      key: "new-doc",
+      group: "新建知识",
+      label: "文档",
+      hint: hasKb ? "粘贴纯文本入库" : needKbHint,
+      disabled: !hasKb,
+      icon: <ArticleOutlinedIcon fontSize="small" />,
+      onSelect: () => setDocDialogOpen(true),
+    },
+    {
+      key: "new-sheet",
+      group: "新建知识",
+      label: "智能表格",
+      hint: "暂未支持",
+      disabled: true,
+      icon: <GridOnOutlinedIcon fontSize="small" />,
+    },
+    {
+      key: "new-folder",
+      group: "新建知识",
+      label: "文件夹",
+      hint: "暂未支持（知识库是扁平结构）",
+      disabled: true,
+      icon: <FolderOutlinedIcon fontSize="small" />,
+    },
+    {
+      key: "upload-file",
+      group: "从本地上传",
+      label: "文件",
+      hint: hasKb ? "Word / PDF / Excel / PPT / 文本" : needKbHint,
+      disabled: !hasKb,
+      icon: <UploadFileOutlinedIcon fontSize="small" />,
+      onSelect: () => fileInputRef.current?.click(),
+    },
+    {
+      key: "upload-folder",
+      group: "从本地上传",
+      label: "文件夹",
+      hint: "暂未支持（一次一个文件）",
+      disabled: true,
+      icon: <FolderOutlinedIcon fontSize="small" />,
+    },
+    {
+      key: "upload-html",
+      group: "从本地上传",
+      label: "HTML",
+      hint: "暂未支持（另存为 .txt / .md 再传）",
+      disabled: true,
+      icon: <CodeOutlinedIcon fontSize="small" />,
+    },
+    {
+      key: "import-mp",
+      group: "从其他平台导入",
+      label: "公众号文章",
+      hint: "暂未支持（需要公众号抓取）",
+      disabled: true,
+      icon: <ChatBubbleOutlineIcon fontSize="small" />,
+    },
+  ];
+
+  const moreItems: KbMenuItem[] = [
+    {
+      key: "members",
+      group: "团队",
+      label: hasKb ? "成员与权限" : "团队成员与权限",
+      hint: hasKb ? "谁可以看这本库" : "管理团队里的人和角色",
+      onSelect: () => (hasKb && activeKb ? openScope(activeKb) : setMembersOpen(true)),
+    },
+    {
+      key: "departments",
+      group: "团队",
+      label: "团队管理",
+      hint: "部门树与部门负责人",
+      disabled: activeOrgId === "",
+      onSelect: () => setDeptOpen(true),
+    },
+    {
+      key: "refresh",
+      group: "团队",
+      label: "刷新",
+      icon: <RefreshIcon fontSize="small" />,
+      onSelect: refreshAll,
+    },
+  ];
+
   return (
-    <Box sx={{ p: 2.5, height: "100%", display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
-      {/* 标题栏 */}
-      <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={2}>
-        <Box minWidth={0}>
-          <Typography variant="h6" sx={{ fontWeight: 700 }}>
-            知识库
-          </Typography>
-          <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
-            <Typography
-              variant="caption"
-              color={caption.warning ? "warning.main" : "text.secondary"}
-              data-testid="kb-caption"
-            >
-              {caption.text}
-            </Typography>
-            {/* 只在「引擎开着但还有块没索引」时出现：其余时候这个按钮点了也没意义 */}
-            {canReindex && (
-              <Button
-                size="small"
-                data-testid="kb-reindex"
-                disabled={reindexing}
-                onClick={() => void handleReindex()}
-              >
-                {reindexing ? "重建中…" : "重建索引"}
-              </Button>
+    <Box sx={{ display: "flex", height: "100%", minHeight: 0, bgcolor: "background.default" }}>
+      <KnowledgeSidebar
+        orgs={orgs}
+        kbsByOrg={kbsByOrg}
+        activeOrgId={activeOrgId}
+        activeKbId={activeKbId}
+        onSelectTeam={selectTeam}
+        onSelectKb={selectKb}
+        onCreateTeam={() => setTeamDialogOpen(true)}
+        onCreateKb={(orgId) => openCreateKb(orgId)}
+      />
+
+      <Box
+        sx={{
+          flex: 1,
+          minWidth: 0,
+          display: "flex",
+          flexDirection: "column",
+          bgcolor: "background.paper",
+          borderTopLeftRadius: 10,
+          overflow: "hidden",
+        }}
+      >
+        {orgsError !== "" && (
+          <Alert
+            severity="error"
+            data-testid="kb-error"
+            sx={{ m: 2, mb: 0 }}
+            action={<Button onClick={() => client && void loadOrgs(client)}>重试</Button>}
+          >
+            {orgsError}
+            {orgsOffline && (
+              <Typography sx={{ fontSize: 12, mt: 0.5, color: "text.secondary" }}>
+                {KB_OFFLINE_HINT}
+              </Typography>
             )}
-          </Stack>
-        </Box>
-        <Stack direction="row" spacing={1} alignItems="center">
-          {orgs.length > 0 && (
-            <FormControl size="small" sx={{ minWidth: 180 }}>
-              <InputLabel>组织</InputLabel>
-              <Select
-                label="组织"
-                value={activeOrgId}
-                onChange={(event) => {
-                  setActiveOrgId(event.target.value);
-                  setHits(null);
-                  setSearchError("");
-                }}
-              >
-                {orgs.map((org) => (
-                  <MenuItem key={org.id} value={org.id}>
-                    {org.name}（{KB_ROLE_LABELS[org.role] ?? org.role}）
-                  </MenuItem>
-                ))}
-              </Select>
-            </FormControl>
-          )}
-          <Button
-            size="small"
-            data-testid="kb-open-departments"
-            disabled={!client || !activeOrgId}
-            onClick={() => setDeptOpen(true)}
-          >
-            部门
-          </Button>
-          <Button
-            size="small"
-            startIcon={<RefreshIcon />}
-            disabled={!client || orgsLoading}
-            onClick={() => {
-              if (!client) return;
-              void loadOrgs(client);
-              void loadKbs(client, activeOrgId);
-              void loadDocs(client, activeKbId);
-            }}
-          >
-            刷新
-          </Button>
-        </Stack>
-      </Stack>
+          </Alert>
+        )}
 
-      {orgsError && (
-        <Alert
-          severity="error"
-          action={<Button onClick={() => client && void loadOrgs(client)}>重试</Button>}
-          data-testid="kb-error"
-        >
-          {orgsError}
-          {orgsOffline && (
-            <Typography sx={{ fontSize: 12, mt: 0.5, color: "text.secondary" }}>
-              {KB_OFFLINE_HINT}
+        {orgsLoading && orgs.length === 0 && (
+          <Stack direction="row" spacing={1} alignItems="center" sx={{ p: 2.5 }}>
+            <CircularProgress size={14} />
+            <Typography variant="caption" color="text.secondary">
+              正在读取团队…
             </Typography>
-          )}
-        </Alert>
-      )}
-
-      {/* 没有任何组织：说明白 + 给创建入口（不假装「加载中」） */}
-      {!orgsLoading && !orgsError && orgs.length === 0 && (
-        <Paper variant="outlined" sx={{ p: 2 }}>
-          <Typography sx={{ fontSize: 13.5, mb: 1 }}>
-            你还没有加入任何组织。知识库挂在组织下，先建一个（你成为所有者），或让管理员把你加进去。
-          </Typography>
-          <Stack direction="row" spacing={1}>
-            <TextField
-              size="small"
-              label="组织名称"
-              value={newOrgName}
-              onChange={(event) => setNewOrgName(event.target.value)}
-              inputProps={{ "data-testid": "new-org-name" }}
-            />
-            <Button
-              variant="contained"
-              size="small"
-              startIcon={<AddIcon />}
-              disabled={!client || !newOrgName.trim()}
-              onClick={() => void handleCreateOrg()}
-            >
-              创建组织
-            </Button>
           </Stack>
-        </Paper>
-      )}
+        )}
 
-      {orgsLoading && (
-        <Stack direction="row" spacing={1} alignItems="center">
-          <CircularProgress size={14} />
-          <Typography variant="caption" color="text.secondary">
-            正在读取组织…
-          </Typography>
-        </Stack>
-      )}
-
-      {activeOrg && (
-        <Stack direction="row" spacing={2} sx={{ flex: 1, minHeight: 0 }}>
-          {/* 左：知识库列表 */}
-          <Paper
-            variant="outlined"
-            sx={{ width: 300, flexShrink: 0, display: "flex", flexDirection: "column", minHeight: 0 }}
-          >
-            <Box sx={{ p: 1.5 }}>
-              <Typography sx={{ fontSize: 13.5, fontWeight: 600, mb: 1 }}>知识库</Typography>
+        {/* 没有任何组织：说明白 + 给创建入口（不假装「加载中」） */}
+        {!orgsLoading && orgsError === "" && orgs.length === 0 && (
+          <Box sx={{ p: 3 }}>
+            <Paper variant="outlined" sx={{ p: 2.5, maxWidth: 520 }}>
+              <Typography sx={{ fontSize: 13.5, mb: 1.5 }}>
+                你还没有加入任何团队。知识库挂在团队下，先建一个（你成为所有者），
+                或让管理员把你加进去。
+              </Typography>
               <Stack direction="row" spacing={1}>
-                <TextField
-                  size="small"
-                  placeholder="新建知识库"
-                  value={newKbName}
-                  onChange={(event) => setNewKbName(event.target.value)}
-                  inputProps={{ "data-testid": "new-kb-name" }}
-                  fullWidth
-                />
-                <Button
-                  size="small"
-                  variant="outlined"
-                  disabled={!newKbName.trim()}
-                  onClick={() => void handleCreateKb()}
-                  sx={{ flexShrink: 0 }}
-                >
-                  建
-                </Button>
-              </Stack>
-              <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap sx={{ mt: 1 }}>
-                {ALL_ROLES.map((role) => (
-                  <FormControlLabel
-                    key={role}
-                    control={
-                      <Checkbox
-                        size="small"
-                        checked={newKbRoles.includes(role)}
-                        onChange={(_event, checked) =>
-                          setNewKbRoles((prev) =>
-                            checked ? [...prev, role] : prev.filter((item) => item !== role),
-                          )
-                        }
-                      />
-                    }
-                    label={<Typography sx={{ fontSize: 12 }}>{KB_ROLE_LABELS[role]}可见</Typography>}
-                  />
-                ))}
-              </Stack>
-              {/* 部门范围（FR-4.7「按部门/角色设访问范围」的后半句）。
-                  用可点选的 Chip 而不是下拉框：部门通常只有几个，点两下比
-                  「打开菜单 → 勾选 → 关闭」快，也不用处理多选下拉的交互细节。
-                  只有组织建过部门才出现——没部门时给一个空控件只会让人困惑。 */}
-              {departments.length > 0 && (
-                <Stack
-                  direction="row"
-                  spacing={0.75}
-                  alignItems="center"
-                  flexWrap="wrap"
-                  useFlexGap
-                  sx={{ mt: 1 }}
-                >
-                  <Typography sx={{ fontSize: 12, color: "text.secondary" }}>
-                    仅限部门
-                  </Typography>
-                  {departments.map((item) => {
-                    const selected = newKbDeptIds.includes(item.id);
-                    return (
-                      <Chip
-                        key={item.id}
-                        size="small"
-                        label={item.name}
-                        data-testid={`new-kb-dept-${item.id}`}
-                        color={selected ? "primary" : "default"}
-                        variant={selected ? "filled" : "outlined"}
-                        onClick={() =>
-                          setNewKbDeptIds((previous) =>
-                            previous.includes(item.id)
-                              ? previous.filter((id) => id !== item.id)
-                              : [...previous, item.id],
-                          )
-                        }
-                      />
-                    );
-                  })}
-                  <Typography sx={{ fontSize: 11.5, color: "text.secondary" }}>
-                    {newKbDeptIds.length === 0
-                      ? "不选 = 角色能看就能看"
-                      : "普通成员还需属于这些部门（含子部门）"}
-                  </Typography>
-                </Stack>
-              )}
-            </Box>
-            <Divider />
-            {kbsError && (
-              <Alert severity="error" sx={{ m: 1 }}>
-                {kbsError}
-              </Alert>
-            )}
-            <List dense sx={{ overflowY: "auto", flex: 1 }}>
-              {kbs.map((kb) => (
-                <ListItem
-                  key={kb.id}
-                  disablePadding
-                  // 范围入口放在行尾：它是"改这个库对谁可见"，属于库级设置，
-                  // 不是"进这个库"的一部分——混在正文点击里会误触。
-                  secondaryAction={
-                    <IconButton
-                      size="small"
-                      edge="end"
-                      aria-label={`设置 ${kb.name} 的可见范围`}
-                      data-testid={`kb-scope-${kb.id}`}
-                      onClick={() => openScope(kb)}
-                    >
-                      <TuneIcon fontSize="small" />
-                    </IconButton>
-                  }
-                >
-                  <ListItemButton
-                    selected={kb.id === activeKbId}
-                    onClick={() => {
-                      setActiveKbId(kb.id);
-                      setHits(null);
-                      setSearchError("");
-                      setTrashOpen(false);
-                    }}
-                  >
-                    <ListItemText
-                      primary={kb.name}
-                      secondary={kbSecondary(kb)}
-                      primaryTypographyProps={{ fontSize: 13.5 }}
-                    />
-                  </ListItemButton>
-                </ListItem>
-              ))}
-              {!kbsLoading && kbs.length === 0 && !kbsError && (
-                <Typography sx={{ fontSize: 12, color: "text.secondary", p: 2 }}>
-                  这个组织下还没有你能看到的知识库。
-                </Typography>
-              )}
-            </List>
-          </Paper>
-
-          {/* 右：选中库的文档 / 上传 / 检索 */}
-          <Box sx={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 2 }}>
-            <Paper variant="outlined" sx={{ p: 1.5 }}>
-              <Stack direction="row" spacing={1} alignItems="center">
-                <TextField
-                  size="small"
-                  label="在组织内检索"
-                  placeholder="例如：报销流程"
-                  value={query}
-                  onChange={(event) => setQuery(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") void handleSearch();
+                <InputBase
+                  placeholder="团队名称"
+                  value={newOrgName}
+                  onChange={(event) => setNewOrgName(event.target.value)}
+                  inputProps={{ "data-testid": "new-org-name" }}
+                  sx={{
+                    flex: 1,
+                    px: 1.25,
+                    py: 0.5,
+                    fontSize: 13,
+                    borderRadius: 1.5,
+                    border: "1px solid",
+                    borderColor: "divider",
                   }}
-                  inputProps={{ "data-testid": "kb-query" }}
-                  sx={{ flex: 1 }}
                 />
                 <Button
                   variant="contained"
                   size="small"
-                  startIcon={<SearchIcon />}
-                  disabled={searching || !query.trim()}
-                  onClick={() => void handleSearch()}
+                  startIcon={<AddIcon />}
+                  disabled={!client || !newOrgName.trim()}
+                  onClick={() => void handleCreateOrg()}
                 >
-                  检索
+                  创建团队
                 </Button>
               </Stack>
-              {searchError && (
-                <Alert severity="error" sx={{ mt: 1 }}>
-                  {searchError}
-                </Alert>
-              )}
-              {hits !== null && !searchError && (
-                <Box sx={{ mt: 1 }} data-testid="kb-hits">
-                  {hits.length === 0 ? (
-                    <Typography sx={{ fontSize: 12.5, color: "text.secondary" }}>
-                      没有命中。换个关键词试试（当前是词法匹配，同义词不会命中）。
-                    </Typography>
-                  ) : (
-                    <Stack spacing={1}>
-                      {hits.map((hit) => (
-                        <Paper key={hit.chunkId} variant="outlined" sx={{ p: 1.25 }}>
-                          <Stack direction="row" spacing={1} alignItems="center">
-                            <Typography sx={{ fontSize: 13, fontWeight: 600 }}>{hit.docTitle}</Typography>
-                            <Chip size="small" variant="outlined" label={hit.score.toFixed(3)} />
-                          </Stack>
-                          <Typography sx={{ fontSize: 12.5, color: "text.secondary", mt: 0.5 }}>
-                            {hit.snippet}
-                          </Typography>
-                        </Paper>
-                      ))}
-                    </Stack>
-                  )}
-                </Box>
-              )}
-            </Paper>
-
-            <Paper variant="outlined" sx={{ p: 1.5, display: "flex", flexDirection: "column", gap: 1 }}>
-              <Typography sx={{ fontSize: 13.5, fontWeight: 600 }}>
-                {activeKb ? `上传到「${activeKb.name}」` : "上传文档"}
-              </Typography>
-              <Stack direction="row" spacing={1}>
-                <TextField
-                  size="small"
-                  label="标题"
-                  value={docTitle}
-                  onChange={(event) => setDocTitle(event.target.value)}
-                  inputProps={{ "data-testid": "doc-title" }}
-                  sx={{ width: 240 }}
-                />
-                <Button
-                  size="small"
-                  variant="contained"
-                  disabled={!activeKbId || !docTitle.trim() || !docContent.trim()}
-                  onClick={() => void handleUpload()}
-                >
-                  入库
-                </Button>
-              </Stack>
-              {/* 文件上传：改成「选文件」而不是「粘贴」是这一步的实际价值——
-                  真实资料都在 .docx / .pdf 里，要求用户先复制成纯文本等于没这个功能。 */}
-              <Stack direction="row" spacing={1} alignItems="center">
-                <Button
-                  component="label"
-                  size="small"
-                  variant="outlined"
-                  disabled={!activeKbId || uploading}
-                  data-testid="kb-upload-file"
-                >
-                  {uploading ? "上传中…" : "上传文件"}
-                  <input
-                    type="file"
-                    hidden
-                    accept={KB_UPLOAD_ACCEPT}
-                    data-testid="kb-file-input"
-                    onChange={(event) => {
-                      const file = event.target.files?.[0];
-                      // 清空：否则再选同一个文件不会触发 onChange（浏览器认为值没变）
-                      event.target.value = "";
-                      if (file) void handleFileUpload(file);
-                    }}
-                  />
-                </Button>
-                <Typography variant="caption" color="text.secondary">
-                  支持 {KB_UPLOAD_ACCEPT.split(",").join(" / ")}（单文件 8MB；PDF 需服务端装 pypdf）
-                </Typography>
-              </Stack>
-              <TextField
-                size="small"
-                label="正文（纯文本，按空行分段；单篇上限 20 万字符）"
-                value={docContent}
-                onChange={(event) => setDocContent(event.target.value)}
-                inputProps={{ "data-testid": "doc-content" }}
-                multiline
-                minRows={3}
-                maxRows={6}
-              />
-              <Typography variant="caption" color="text.secondary">
-                正文会被切成若干块入库，只有块参与检索。也可以直接上传 .docx / .pdf ——
-                服务端会先解析成文本再切块；解析失败会说明原因（旧版 .doc 需要另存为新格式）。
-                同一个库里重复入库相同内容会被拦下（提示已在库里的那一篇）。
-              </Typography>
-            </Paper>
-
-            <Paper variant="outlined" sx={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
-              {/* 回收站是**独立视图**，不是一个过滤器：默认列表只有活文档，
-                  这里换成"只看删过的"。两个口径都由服务端给，前端不合并。 */}
-              <Stack
-                direction="row"
-                spacing={1}
-                alignItems="center"
-                sx={{ px: 2, pt: 1.5, pb: 0.5 }}
-              >
-                <Button
-                  size="small"
-                  variant={trashOpen ? "contained" : "text"}
-                  startIcon={<RestoreFromTrashIcon />}
-                  data-testid="kb-trash-toggle"
-                  disabled={!activeKbId}
-                  onClick={() => setTrashOpen((previous) => !previous)}
-                >
-                  {trashOpen ? "返回文档" : "回收站"}
-                </Button>
-                {trashOpen && (
-                  <Typography variant="caption" color="text.secondary">
-                    回收站里的资料不参与检索；保留 30 天，过期自动清理
-                  </Typography>
-                )}
-              </Stack>
-              {docsError && (
-                <Alert severity="error" sx={{ m: 1 }}>
-                  {docsError}
-                </Alert>
-              )}
-              <List dense>
-                {docs.map((doc) => {
-                  const hint = docIndexHint(doc);
-                  return (
-                    <ListItem
-                      key={doc.id}
-                      divider
-                      secondaryAction={
-                        trashOpen ? (
-                          <Stack direction="row" spacing={0.25}>
-                            <IconButton
-                              size="small"
-                              aria-label={`恢复 ${doc.title}`}
-                              data-testid={`kb-doc-restore-${doc.id}`}
-                              onClick={() => void handleRestore(doc)}
-                            >
-                              <RestoreFromTrashIcon fontSize="small" />
-                            </IconButton>
-                            <IconButton
-                              size="small"
-                              edge="end"
-                              aria-label={`彻底删除 ${doc.title}`}
-                              data-testid={`kb-doc-purge-${doc.id}`}
-                              onClick={() => setPurgeTarget(doc)}
-                            >
-                              <DeleteForeverIcon fontSize="small" />
-                            </IconButton>
-                          </Stack>
-                        ) : (
-                          <Stack direction="row" spacing={0.25}>
-                            <IconButton
-                              size="small"
-                              aria-label={`重命名 ${doc.title}`}
-                              data-testid={`kb-doc-rename-${doc.id}`}
-                              onClick={() => openRename(doc)}
-                            >
-                              <EditOutlinedIcon fontSize="small" />
-                            </IconButton>
-                            <IconButton
-                              size="small"
-                              edge="end"
-                              aria-label={`删除 ${doc.title}`}
-                              data-testid={`kb-doc-delete-${doc.id}`}
-                              onClick={() => setDeleteTarget(doc)}
-                            >
-                              <DeleteOutlineIcon fontSize="small" />
-                            </IconButton>
-                          </Stack>
-                        )
-                      }
-                    >
-                      <ListItemText
-                        primary={doc.title}
-                        secondary={
-                          <Stack direction="row" spacing={1} alignItems="center">
-                            <span>{docSecondary(doc)}</span>
-                            {hint !== "" && (
-                              <Chip
-                                size="small"
-                                color="warning"
-                                variant="outlined"
-                                label={hint}
-                                data-testid={`kb-doc-index-${doc.id}`}
-                                sx={{ height: 18, fontSize: 11 }}
-                              />
-                            )}
-                          </Stack>
-                        }
-                        primaryTypographyProps={{ fontSize: 13 }}
-                        secondaryTypographyProps={{ component: "div" }}
-                      />
-                    </ListItem>
-                  );
-                })}
-                {!docsLoading && docs.length === 0 && !docsError && (
-                  <Typography sx={{ fontSize: 12, color: "text.secondary", p: 2 }}>
-                    {!activeKbId
-                      ? "先在左侧选一个知识库。"
-                      : trashOpen
-                        ? "回收站是空的。"
-                        : "这个知识库还没有文档。"}
-                  </Typography>
-                )}
-              </List>
             </Paper>
           </Box>
-        </Stack>
-      )}
+        )}
 
-      {/* 彻底删除：不可撤销，所以文案要说明"和进回收站不是一回事" */}
-      <Dialog
-        open={purgeTarget !== null}
-        onClose={() => setPurgeTarget(null)}
-        fullWidth
-        maxWidth="xs"
-      >
-        <DialogTitle sx={{ fontSize: 16 }}>彻底删除「{purgeTarget?.title}」？</DialogTitle>
-        <DialogContent>
-          <DialogContentText sx={{ fontSize: 13 }}>
-            分块与向量索引会被清空，**无法恢复**，只能重新上传。
-            只想暂时移除的话，右上角返回文档列表后点删除即可（那会进回收站）。
-          </DialogContentText>
-        </DialogContent>
-        <DialogActions>
-          <Button size="small" onClick={() => setPurgeTarget(null)}>
-            取消
-          </Button>
-          <Button
-            size="small"
-            color="error"
-            variant="contained"
-            disabled={rowBusy}
-            data-testid="kb-purge-confirm"
-            onClick={() => void handlePurge()}
-          >
-            彻底删除
-          </Button>
-        </DialogActions>
-      </Dialog>
-
-      {/* 改名：内容不动，所以这里只开一个输入框。判重会让「换个标题重传」变成 409，
-          所以标题必须能单独改 —— 否则改错标题只能删了重传。 */}
-      <Dialog open={renameTarget !== null} onClose={() => setRenameTarget(null)} fullWidth maxWidth="xs">
-        <DialogTitle sx={{ fontSize: 16 }}>重命名文档</DialogTitle>
-        <DialogContent>
-          <TextField
-            autoFocus
-            fullWidth
-            size="small"
-            label="标题"
-            value={renameValue}
-            onChange={(event) => setRenameValue(event.target.value)}
-            inputProps={{ "data-testid": "kb-rename-input" }}
-            sx={{ mt: 1 }}
-          />
-        </DialogContent>
-        <DialogActions>
-          <Button size="small" onClick={() => setRenameTarget(null)}>
-            取消
-          </Button>
-          <Button
-            size="small"
-            variant="contained"
-            disabled={rowBusy || renameValue.trim() === ""}
-            data-testid="kb-rename-confirm"
-            onClick={() => void handleRename()}
-          >
-            保存
-          </Button>
-        </DialogActions>
-      </Dialog>
-
-      {/* 删除：**必须确认**。它连带块与向量一起消失，且退不回来（
-          重建索引救不了，只能重新上传）。确认文案里写清这一点，而不是只问「确定吗」。 */}
-      <Dialog
-        open={deleteTarget !== null}
-        onClose={() => setDeleteTarget(null)}
-        fullWidth
-        maxWidth="xs"
-      >
-        <DialogTitle sx={{ fontSize: 16 }}>删除「{deleteTarget?.title}」？</DialogTitle>
-        <DialogContent>
-          <DialogContentText sx={{ fontSize: 13 }}>
-            这篇文档会进入回收站，立刻从检索结果里消失；{deleteTarget?.chunkCount ?? 0} 个分块和
-            索引会保留 30 天，期间可以恢复。
-          </DialogContentText>
-        </DialogContent>
-        <DialogActions>
-          <Button size="small" onClick={() => setDeleteTarget(null)}>
-            取消
-          </Button>
-          <Button
-            size="small"
-            color="error"
-            variant="contained"
-            disabled={rowBusy}
-            data-testid="kb-delete-confirm"
-            onClick={() => void handleDeleteDoc()}
-          >
-            删除
-          </Button>
-        </DialogActions>
-      </Dialog>
-
-      {/* 改可见范围：角色 × 部门。这是"谁能看见"的唯一入口，所以两条都必须能改，
-          而且必须显示当前值（否则用户不知道现在是收紧还是放开）。 */}
-      <Dialog open={scopeKb !== null} onClose={() => setScopeKb(null)} fullWidth maxWidth="xs">
-        <DialogTitle sx={{ fontSize: 16 }}>「{scopeKb?.name}」的可见范围</DialogTitle>
-        <DialogContent>
-          <Typography sx={{ fontSize: 12.5, color: "text.secondary", mb: 1 }}>
-            角色决定「谁有这个身份能看」，部门再收窄一层；普通成员要同时满足两者。
-            管理员与所有者始终可见（否则会出现「建完自己看不见、也改不了」）。
-          </Typography>
-          <Typography sx={{ fontSize: 12.5, mb: 0.5 }}>可见角色</Typography>
-          <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap sx={{ mb: 1.5 }}>
-            {(["member", "admin", "owner"] as const).map((role) => {
-              const checked = scopeRoles.includes(role);
-              return (
-                <Chip
-                  key={role}
-                  size="small"
-                  label={KB_ROLE_LABELS[role]}
-                  data-testid={`kb-scope-role-${role}`}
-                  color={checked ? "primary" : "default"}
-                  variant={checked ? "filled" : "outlined"}
-                  onClick={() =>
-                    setScopeRoles((previous) =>
-                      previous.includes(role)
-                        ? previous.filter((item) => item !== role)
-                        : [...previous, role],
-                    )
-                  }
-                />
-              );
-            })}
-          </Stack>
-          <Typography sx={{ fontSize: 12.5, mb: 0.5 }}>仅限部门（不选 = 不按部门收窄）</Typography>
-          {departments.length === 0 ? (
-            <Typography sx={{ fontSize: 12, color: "text.secondary" }}>
-              这个组织还没有部门。要按部门收窄，先点上方的「部门」建几个。
-            </Typography>
-          ) : (
-            <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
-              {departments.map((item) => {
-                const checked = scopeDeptIds.includes(item.id);
-                return (
-                  <Chip
-                    key={item.id}
+        {activeOrg !== null && (
+          <>
+            <KnowledgeHeader
+              variant={hasKb ? "kb" : "team"}
+              title={hasKb && activeKb ? activeKb.name : activeOrg.name}
+              subtitle={
+                <HeaderSubtitle>
+                  {hasKb && activeKb
+                    ? describeKb(activeKb)
+                    : `${KB_ROLE_LABELS[activeOrg.role] ?? activeOrg.role} · ${activeOrg.memberCount} 人 · ${kbs.length} 个知识库`}
+                </HeaderSubtitle>
+              }
+              addItems={addItems}
+              moreItems={moreItems}
+              primary={
+                hasKb ? (
+                  <Button
                     size="small"
-                    label={item.name}
-                    data-testid={`kb-scope-dept-${item.id}`}
-                    color={checked ? "primary" : "default"}
-                    variant={checked ? "filled" : "outlined"}
-                    onClick={() =>
-                      setScopeDeptIds((previous) =>
-                        previous.includes(item.id)
-                          ? previous.filter((id) => id !== item.id)
-                          : [...previous, item.id],
-                      )
-                    }
-                  />
-                );
-              })}
-            </Stack>
-          )}
-        </DialogContent>
-        <DialogActions>
-          <Button size="small" onClick={() => setScopeKb(null)}>
-            取消
-          </Button>
-          <Button
-            size="small"
-            variant="contained"
-            disabled={rowBusy}
-            data-testid="kb-scope-save"
-            onClick={() => void handleSaveScope()}
-          >
-            保存
-          </Button>
-        </DialogActions>
-      </Dialog>
+                    variant="outlined"
+                    startIcon={<UploadFileOutlinedIcon />}
+                    disabled={uploading}
+                    data-testid="kb-upload-file"
+                    onClick={() => fileInputRef.current?.click()}
+                    sx={{ ml: 1, flexShrink: 0 }}
+                  >
+                    {uploading ? "上传中…" : "上传文件"}
+                  </Button>
+                ) : (
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    startIcon={<AddIcon />}
+                    data-testid="kb-header-create"
+                    onClick={() => openCreateKb()}
+                    sx={{ ml: 1, flexShrink: 0 }}
+                  >
+                    新建知识库
+                  </Button>
+                )
+              }
+            />
+
+            <Divider />
+
+            {kbsError !== "" && (
+              <Typography sx={{ px: 2.5, py: 1, fontSize: 12.5, color: "error.main" }}>
+                {kbsError}
+              </Typography>
+            )}
+
+            {hasKb && activeKb ? (
+              <KnowledgeDocList
+                docs={docs}
+                loading={docsLoading}
+                error={docsError}
+                trashOpen={trashOpen}
+                onToggleTrash={() => setTrashOpen((previous) => !previous)}
+                view={view}
+                onViewChange={setView}
+                indexHint={indexHintFor}
+                retrieval={{
+                  caption: caption.text,
+                  warning: caption.warning,
+                  canReindex,
+                  reindexing,
+                  onReindex: () => void handleReindex(),
+                }}
+                search={{
+                  query,
+                  onQueryChange: setQuery,
+                  onSubmit: () => void handleSearch(),
+                  searching,
+                  error: searchError,
+                  hits,
+                  lexicalOnly: retrieval === null || retrieval.embedder === "off",
+                }}
+                actions={{
+                  onRename: openRename,
+                  onDelete: setDeleteTarget,
+                  onRestore: (doc) => void handleRestore(doc),
+                  onPurge: setPurgeTarget,
+                }}
+                emptyHint={
+                  trashOpen ? "回收站是空的。" : "这个知识库还没有文档。用右上角「上传文件」加一篇。"
+                }
+              />
+            ) : (
+              <KnowledgeTeamPanel
+                kbs={kbs}
+                loading={kbsLoading}
+                error=""
+                describe={describeKb}
+                onOpenKb={(kbId) => selectKb(activeOrgId, kbId)}
+                onCreateKb={() => openCreateKb()}
+              />
+            )}
+          </>
+        )}
+
+        {/* 组织存在但还没选到库时，若正在加载库列表，给一行进度 */}
+        {activeOrg !== null && !hasKb && kbsLoading && kbs.length === 0 && (
+          <Stack direction="row" spacing={1} alignItems="center" sx={{ px: 2.5, pb: 1 }}>
+            <CircularProgress size={12} />
+            <Typography variant="caption" color="text.secondary">
+              正在读取知识库…
+            </Typography>
+          </Stack>
+        )}
+      </Box>
+
+      {/* 唯一的文件选择框：菜单项与「上传文件」都点它（value 清空见 handleFileUpload） */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        hidden
+        accept={KB_UPLOAD_ACCEPT}
+        data-testid="kb-file-input"
+        onChange={(event) => {
+          const file = event.target.files?.[0];
+          // 清空：否则再选同一个文件不会触发 onChange（浏览器认为值没变）
+          event.target.value = "";
+          if (file) void handleFileUpload(file);
+        }}
+      />
+
+      <CreateTeamDialog
+        open={teamDialogOpen}
+        busy={teamBusy}
+        onClose={() => setTeamDialogOpen(false)}
+        onSubmit={(input) => void handleCreateTeam(input)}
+      />
+
+      <CreateKbDialog
+        open={kbDialogOpen}
+        busy={kbBusy}
+        teamName={orgs.find((org) => org.id === newKbOrgId)?.name ?? ""}
+        name={newKbName}
+        onNameChange={setNewKbName}
+        description={newKbDescription}
+        onDescriptionChange={setNewKbDescription}
+        roles={newKbRoles}
+        onToggleRole={toggleRole}
+        deptIds={newKbDeptIds}
+        onToggleDept={toggleNewKbDept}
+        departments={departments}
+        onClose={() => setKbDialogOpen(false)}
+        onSubmit={() => void handleCreateKb()}
+      />
+
+      <NewDocDialog
+        open={docDialogOpen}
+        busy={rowBusy}
+        kbName={activeKb?.name ?? ""}
+        title={docTitle}
+        content={docContent}
+        onTitleChange={setDocTitle}
+        onContentChange={setDocContent}
+        onClose={() => setDocDialogOpen(false)}
+        onSubmit={() => void handleUpload()}
+      />
+
+      <RenameDocDialog
+        target={renameTarget}
+        value={renameValue}
+        busy={rowBusy}
+        onChange={setRenameValue}
+        onClose={() => setRenameTarget(null)}
+        onConfirm={() => void handleRename()}
+      />
+
+      <DeleteDocDialog
+        target={deleteTarget}
+        busy={rowBusy}
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={() => void handleDeleteDoc()}
+      />
+
+      <PurgeDocDialog
+        target={purgeTarget}
+        busy={rowBusy}
+        onClose={() => setPurgeTarget(null)}
+        onConfirm={() => void handlePurge()}
+      />
+
+      <VisibilityDialog
+        target={scopeKb}
+        busy={rowBusy}
+        roles={scopeRoles}
+        onToggleRole={(role) =>
+          setScopeRoles((previous) =>
+            previous.includes(role)
+              ? previous.filter((item) => item !== role)
+              : [...previous, role],
+          )
+        }
+        deptIds={scopeDeptIds}
+        onToggleDept={(id) =>
+          setScopeDeptIds((previous) =>
+            previous.includes(id) ? previous.filter((item) => item !== id) : [...previous, id],
+          )
+        }
+        departments={departments}
+        onClose={() => setScopeKb(null)}
+        onSave={() => void handleSaveScope()}
+      />
+
+      <TeamMembersDialog
+        open={membersOpen}
+        orgId={activeOrgId}
+        teamName={activeOrg?.name ?? ""}
+        gateway={client}
+        onClose={() => setMembersOpen(false)}
+        onChanged={() => {
+          if (client) void loadKbs(client, orgs);
+        }}
+      />
 
       <DepartmentDialog
         open={deptOpen}

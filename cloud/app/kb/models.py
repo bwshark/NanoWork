@@ -89,6 +89,12 @@ class KbDocument(SQLModel, table=True):
     #: 比较时间（字典序 = 时序），也不必担心方言。空串表示"未删除"也与本仓
     #: `departments.parent_id`（空串 = 根）的既有约定一致。
     deleted_at: str = Field(default="", index=True)
+    #: 最后一次改动的时间（ISO 字符串，空串 = 本行产生于该字段之前 → 读的时候用 `created_at`）。
+    #:
+    #: 为什么与 `deleted_at` 一样用字符串：它要经 `migrations.ensure_columns` 用裸 DDL
+    #: 加到已存在的表上，而 SQLite / PostgreSQL 对 datetime 的存储类型不同。空串而不是
+    #: NULL，是为了让「按时间排序」在两边都只是字典序比较。
+    updated_at: str = ""
     created_by: str = Field(index=True)
     created_at: datetime = Field(default_factory=utc_now)
 

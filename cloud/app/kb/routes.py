@@ -152,6 +152,9 @@ class DocumentView(BaseModel):
     chars: int
     chunkCount: int
     createdAt: str
+    #: 最后一次改动的时间（改名 / 恢复）。老行没有这一列 → 服务端退回 `createdAt`，
+    #: 所以客户端拿到的永远是**可显示的时间**，不必自己判空。
+    updatedAt: str = ""
     #: 本次实际写入的向量条数（0 = 没建索引：embedder 关着，或云端向量化失败）。
     #: 单列一个字段是为了让「入库成功但没索引」这件事**看得见**——否则用户只会觉得
     #: 「新传的文档搜不到」，而界面一切正常。
@@ -463,6 +466,7 @@ def _document_view(
         chars=doc.chars,
         chunkCount=doc.chunk_count,
         createdAt=iso_z(doc.created_at),
+        updatedAt=doc.updated_at or iso_z(doc.created_at),
         embedded=embedded,
         kind=doc.kind,
         warnings=list(warnings or []),
@@ -589,6 +593,9 @@ def rename_document(
     if title == "":
         raise HTTPException(status_code=422, detail="标题不能为空")
     doc.title = title[:200]
+    # 改名要打更新时间戳：列表上的「更新时间」如果一直等于创建时间，用户改完名
+    # 会以为没生效（而这一列存在的全部意义就是「这篇什么时候被动过」）。
+    doc.updated_at = iso_z(utc_now())
     session.add(doc)
     session.commit()
     session.refresh(doc)
@@ -666,6 +673,8 @@ def restore_document(
     kb, _member = _writable_kb_or_404(session, kb_id, user)
     doc = _kb_document_or_404(session, kb, doc_id)
     doc.deleted_at = ""
+    # 恢复也算一次改动：否则「刚从回收站捞回来」的文档会显示成几个月前的创建时间
+    doc.updated_at = iso_z(utc_now())
     session.add(doc)
     session.commit()
     session.refresh(doc)

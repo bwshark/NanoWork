@@ -75,6 +75,20 @@ export interface KbSummary {
   createdAt: string;
 }
 
+/**
+ * 组织（团队）里的一名成员。
+ *
+ * 与 `KbDepartmentMember` 是两个维度：这里说的是「他在这家公司是什么身份」，
+ * 部门表说的是「他在哪个部门、是不是部门负责人」。界面上的「成员与权限」看的是前者。
+ */
+export interface KbOrgMember {
+  userId: string;
+  email: string;
+  /** 组织角色：owner / admin / member */
+  role: string;
+  joinedAt: string;
+}
+
 /** 组织内的一个部门（树用一个扁平列表表示，`parentId` 为空串即根）。 */
 export interface KbDepartment {
   id: string;
@@ -102,6 +116,13 @@ export interface KbDocument {
   chars: number;
   chunkCount: number;
   createdAt: string;
+  /**
+   * 最后一次改动的时间（改名 / 恢复）；空串 = 这行产生于该字段之前 → 退回 `createdAt`。
+   *
+   * 列表上的「更新时间」必须读它：拿 `createdAt` 冒充更新时间，用户改完名会看到
+   * 一个没动的时间，进而以为改名没生效。
+   */
+  updatedAt?: string;
   /** 实际写入的向量条数（0 = 没建索引） */
   embedded?: number;
   /** 来源格式：text / docx / pdf */
@@ -357,6 +378,21 @@ export interface KbGateway {
   retrievalInfo(kbId?: string): Promise<KbApiResult<KbRetrievalInfo>>;
   /** 给一个库重建向量索引（补老文档 / 换 embedder 之后） */
   reindex(kbId: string): Promise<KbApiResult<KbReindexResult>>;
+  /** 组织成员列表（任何成员都能看：知道同事是谁不需要管理员权限） */
+  listMembers(orgId: string): Promise<KbApiResult<KbOrgMember[]>>;
+  /** 按邮箱加人。对方**必须已有账户**（服务端 404「该邮箱还没有账户」） */
+  addMember(
+    orgId: string,
+    input: { email: string; role?: string },
+  ): Promise<KbApiResult<KbOrgMember>>;
+  /** 改组织角色（要 admin；不能授予高于自己的角色） */
+  updateMemberRole(
+    orgId: string,
+    userId: string,
+    role: string,
+  ): Promise<KbApiResult<KbOrgMember>>;
+  /** 移除成员；**移除自己 = 主动退出**（不需要管理员权限） */
+  removeMember(orgId: string, userId: string): Promise<KbApiResult<undefined>>;
 }
 
 /** 用一份配置装配网关（页面在拿到 token 后调用一次）。 */
@@ -387,6 +423,10 @@ export function createKbGateway(config: KbClientConfig): KbGateway {
       addDepartmentMember(config, departmentId, email),
     removeDepartmentMember: (departmentId, userId) =>
       removeDepartmentMember(config, departmentId, userId),
+    listMembers: (orgId) => listOrgMembers(config, orgId),
+    addMember: (orgId, input) => addOrgMember(config, orgId, input),
+    updateMemberRole: (orgId, userId, role) => updateOrgMemberRole(config, orgId, userId, role),
+    removeMember: (orgId, userId) => removeOrgMember(config, orgId, userId),
   };
 }
 
@@ -558,8 +598,7 @@ export function reindexKb(
   });
 }
 
-/** 组织里的部门树（**父在子前**的扁平顺序，按 parentId 缩进即可）。 */
-export function listDepartments(
+/** 组织里的部门树（**父在子前**的扁平顺序，按 parentId 缩进即可）。 */export function listDepartments(
   config: KbClientConfig,
   orgId: string,
 ): Promise<KbApiResult<KbDepartment[]>> {
@@ -644,6 +683,60 @@ export function removeDepartmentMember(
   return request<undefined>(
     config,
     `/api/departments/${encodeURIComponent(departmentId)}/members/${encodeURIComponent(userId)}`,
+    { method: 'DELETE' },
+  );
+}
+
+/*
+ * 组织成员（团队级权限）。
+ *
+ * 与知识库的 `allowedRoles` 是**两层**：这里决定"他在这家公司是什么身份"，
+ * 库上的角色决定"这个身份能不能看这个库"。界面上混在一起说会让人以为
+ * 「把某人从管理员改成成员」= 「把他从这个库里踢掉」，其实前者影响所有库。
+ */
+
+export function listOrgMembers(
+  config: KbClientConfig,
+  orgId: string,
+): Promise<KbApiResult<KbOrgMember[]>> {
+  return request<KbOrgMember[]>(config, `/api/orgs/${encodeURIComponent(orgId)}/members`);
+}
+
+/** 加人：按邮箱（MVP 不发邀请邮件，对方必须已有账户）。 */
+export function addOrgMember(
+  config: KbClientConfig,
+  orgId: string,
+  input: { email: string; role?: string },
+): Promise<KbApiResult<KbOrgMember>> {
+  return request<KbOrgMember>(config, `/api/orgs/${encodeURIComponent(orgId)}/members`, {
+    method: 'POST',
+    // 不传 role 时服务端默认 member；这里显式给一个，省得调用方以为"不传=继承"
+    body: { email: input.email, role: input.role ?? 'member' },
+  });
+}
+
+export function updateOrgMemberRole(
+  config: KbClientConfig,
+  orgId: string,
+  userId: string,
+  role: string,
+): Promise<KbApiResult<KbOrgMember>> {
+  return request<KbOrgMember>(
+    config,
+    `/api/orgs/${encodeURIComponent(orgId)}/members/${encodeURIComponent(userId)}`,
+    { method: 'PATCH', body: { role } },
+  );
+}
+
+/** 移除成员（自己移除自己 = 退出组织，服务端允许）。 */
+export function removeOrgMember(
+  config: KbClientConfig,
+  orgId: string,
+  userId: string,
+): Promise<KbApiResult<undefined>> {
+  return request<undefined>(
+    config,
+    `/api/orgs/${encodeURIComponent(orgId)}/members/${encodeURIComponent(userId)}`,
     { method: 'DELETE' },
   );
 }

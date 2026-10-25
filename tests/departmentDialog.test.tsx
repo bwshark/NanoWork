@@ -69,6 +69,10 @@ function makeGateway(overrides: Partial<KbGateway> = {}): KbGateway {
       data: { userId: 'u2', email: 'two@corp.example', role: 'member', joinedAt: 'x' },
     }),
     removeDepartmentMember: vi.fn().mockResolvedValue({ ok: true, data: undefined }),
+    listMembers: vi.fn(),
+    addMember: vi.fn(),
+    updateMemberRole: vi.fn(),
+    removeMember: vi.fn(),
     ...overrides,
   };
 }

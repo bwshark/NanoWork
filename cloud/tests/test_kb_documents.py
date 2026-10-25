@@ -281,6 +281,10 @@ def test_rename_changes_title_only(client: TestClient) -> None:
     assert body["chunkCount"] == created["chunkCount"]
     assert body["chars"] == created["chars"]
     assert body["createdAt"] == created["createdAt"]
+    # 刚入库的文档「更新时间」等于创建时间（老库没有这一列时服务端也这样兜底），
+    # 改完名必须真的往前走 —— 否则列表上那一列永远是创建时间，用户会以为改名没生效
+    assert created["updatedAt"] == created["createdAt"]
+    assert body["updatedAt"] > created["updatedAt"]
     assert _hits(client, owner, org, KEYWORD), "改名不该影响检索"
 
 

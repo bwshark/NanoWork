@@ -2,10 +2,18 @@
  * 知识库页（M7 客户端）：三条「不给假象」的判据。
  *
  * 1. 没有登录 / 没有网关 → 明说要去登录，**不是**显示一个空列表（空列表会被读成
- *    「组织里没资料」）；
+ *    「团队里没资料」）；
  * 2. 服务端说没权限（403）→ 原样把那句话说给用户，**不在客户端悄悄筛掉**
  *    （筛掉就把服务端的 bug 藏了）；
  * 3. 检索结果按服务端返回原样渲染（含分数），不二次过滤。
+ *
+ * ## 2026-10-26 重排版之后的两处交互变化（判据没变）
+ *
+ * - 进页面先看到**团队视图**（知识库卡片），点卡片才进文件列表 —— 所以下面
+ *   大量用例第一步是 `enterKb()`。这不是测试的权宜：不给「默认进第一个库」是
+ *   产品决定（否则「这个团队一共有什么」永远要翻好几层）。
+ * - 建库 / 新建文档 / 成员与权限都收进了弹窗或「+」菜单，取值要走 `dialogRoot()`
+ *   或 `document`（MUI 的 Portal 不在挂载容器里）。
  */
 
 import { act } from 'react';
@@ -13,7 +21,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { KnowledgePage } from '@/pages/knowledge/KnowledgePage';
 import { toast } from '@/components/Toast';
-import type { KbGateway } from '@/lib/kb/kbClient';
+import type { KbApiResult, KbDocument, KbGateway, KbSummary } from '@/lib/kb/kbClient';
 import {
   buttonByText,
   click,
@@ -90,6 +98,10 @@ function makeGateway(overrides: Partial<KbGateway> = {}): KbGateway {
     listDepartmentMembers: vi.fn().mockResolvedValue({ ok: true, data: [] }),
     addDepartmentMember: vi.fn(),
     removeDepartmentMember: vi.fn(),
+    listMembers: vi.fn().mockResolvedValue({ ok: true, data: [] }),
+    addMember: vi.fn(),
+    updateMemberRole: vi.fn(),
+    removeMember: vi.fn(),
     createOrg: vi.fn().mockResolvedValue({ ok: true, data: ORG }),
     listKbs: vi.fn().mockResolvedValue({ ok: true, data: [KB] }),
     createKb: vi.fn().mockResolvedValue({ ok: true, data: KB }),
@@ -111,6 +123,38 @@ function render(gateway?: KbGateway) {
   );
 }
 
+/** 从团队视图点进知识库（重排版后的必经一步） */
+async function enterKb(host: ParentNode) {
+  await act(async () => {
+    click(host.querySelector('[data-testid="kb-card-k1"]'));
+    await flush();
+  });
+}
+
+/** 打开顶栏的「+」或「⋯」菜单并点其中一项（菜单在 Portal 里，只能从 document 找） */
+async function pickMenu(
+  host: ParentNode,
+  which: 'kb-add-menu' | 'kb-more-menu',
+  item: string,
+) {
+  await act(async () => {
+    click(host.querySelector(`[data-testid="${which}"]`));
+    await flush();
+  });
+  await act(async () => {
+    click(document.querySelector(`[data-testid="kb-menu-${item}"]`));
+    await flush();
+  });
+}
+
+/** 打开新建知识库弹窗（团队视图里的卡片入口） */
+async function openCreateKbDialog(host: ParentNode) {
+  await act(async () => {
+    click(host.querySelector('[data-testid="kb-card-create"]'));
+    await flush();
+  });
+}
+
 afterEach(async () => {
   // 先让在途的加载 promise 落定再卸载：否则卸载后的 setState 会触发
   // 「update ... not wrapped in act」噪声，掩盖真正的失败
@@ -119,7 +163,7 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-describe('未登录 / 空组织', () => {
+describe('未登录 / 空团队', () => {
   it('没有可用网关时说「需要登录」，而不是显示空列表', async () => {
     const host = render(undefined);
     await flush();
@@ -129,12 +173,12 @@ describe('未登录 / 空组织', () => {
     expect(buttonByText(host, '去登录')).toBeTruthy();
   });
 
-  it('没有任何组织时给出创建入口（不假装在加载）', async () => {
+  it('没有任何团队时给出创建入口（不假装在加载）', async () => {
     const gateway = makeGateway({ listOrgs: vi.fn().mockResolvedValue({ ok: true, data: [] }) });
     const host = render(gateway);
     await flush();
 
-    expect(host.textContent).toContain('还没有加入任何组织');
+    expect(host.textContent).toContain('还没有加入任何团队');
     expect(host.querySelector('[data-testid="new-org-name"]')).toBeTruthy();
   });
 });
@@ -188,23 +232,69 @@ describe('登录态：未登录 vs 已过期', () => {
   });
 });
 
-describe('组织 → 知识库 → 文档', () => {
-  it('三级数据都渲染出来，且角色与可见范围可读', async () => {
-    const host = render(makeGateway());
+describe('团队视图 → 知识库视图', () => {
+  it('先给团队的知识库卡片，点进去才是文件列表（不默认进第一个库）', async () => {
+    const listDocuments = vi.fn().mockResolvedValue({ ok: true, data: [DOC] });
+    const host = render(makeGateway({ listDocuments }));
     await flush();
 
     const text = host.textContent ?? '';
     expect(text).toContain('Acme');
     expect(text).toContain('制度库');
-    expect(text).toContain('差旅制度');
+    // 团队视图里不该已经有文件列表：那是「进库之后」才有的东西
+    expect(host.querySelector('[data-testid="kb-doc-row-d1"]')).toBeNull();
+    expect(listDocuments).not.toHaveBeenCalled();
+
+    await enterKb(host);
+
+    expect(host.textContent).toContain('差旅制度');
+    expect(listDocuments).toHaveBeenCalledWith('k1', { trashed: false });
     // 可见范围用人话展示（否则用户不知道同事为什么看不到）
-    expect(text).toContain('成员 / 管理员 / 所有者可见');
+    expect(host.textContent).toContain('成员 / 管理员 / 所有者可见');
   });
 
+  it('侧栏的两级树同时显示多个团队及各自的库', async () => {
+    const ORG2 = { ...ORG, id: 'o2', name: '第二个团队' };
+    const KB2 = { ...KB, id: 'k2', orgId: 'o2', name: '另一本库' };
+    const listKbs = vi.fn((orgId: string) =>
+      Promise.resolve<KbApiResult<KbSummary[]>>({ ok: true, data: orgId === 'o2' ? [KB2] : [KB] }),
+    );
+    const host = render(makeGateway({ listOrgs: vi.fn().mockResolvedValue({ ok: true, data: [ORG, ORG2] }), listKbs }));
+    await flush();
+
+    // 两个团队的库都在树上：否则「同事说他有个库」得先猜是哪个团队
+    expect(host.querySelector('[data-testid="kb-tree-k1"]')).toBeTruthy();
+    expect(host.querySelector('[data-testid="kb-tree-k2"]')).toBeTruthy();
+    expect(listKbs).toHaveBeenCalledWith('o2');
+  });
+
+  it('点侧栏的库与点卡片等价，都会切换右侧内容', async () => {
+    const host = render(makeGateway());
+    await flush();
+
+    await act(async () => {
+      click(host.querySelector('[data-testid="kb-tree-k1"]'));
+      await flush();
+    });
+
+    expect(host.textContent).toContain('差旅制度');
+  });
+
+  it('团队还没库时给「新建知识库」入口，而不是一片空白', async () => {
+    const host = render(makeGateway({ listKbs: vi.fn().mockResolvedValue({ ok: true, data: [] }) }));
+    await flush();
+
+    expect(host.textContent).toContain('还没有知识库'); // 侧栏
+    expect(host.querySelector('[data-testid="kb-card-create"]')).toBeTruthy();
+  });
+});
+
+describe('检索', () => {
   it('检索把服务端返回的命中原样显示（含分数与片段）', async () => {
     const gateway = makeGateway();
     const host = render(gateway);
     await flush();
+    await enterKb(host);
 
     setInputValue(host.querySelector('[data-testid="kb-query"]') as HTMLInputElement, '报销');
     await act(async () => {
@@ -231,6 +321,7 @@ describe('组织 → 知识库 → 文档', () => {
     });
     const host = render(gateway);
     await flush();
+    await enterKb(host);
 
     setInputValue(host.querySelector('[data-testid="kb-query"]') as HTMLInputElement, '特批');
     await act(async () => {
@@ -268,6 +359,7 @@ describe('上传文件（FR-4.7 解析）', () => {
     });
     const host = render(makeGateway({ uploadFile }));
     await flush();
+    await enterKb(host);
 
     await selectFile(host, new File([new Uint8Array([0x25, 0x50])], '制度.pdf'));
 
@@ -285,6 +377,7 @@ describe('上传文件（FR-4.7 解析）', () => {
     const uploadFile = vi.fn();
     const host = render(makeGateway({ uploadFile }));
     await flush();
+    await enterKb(host);
 
     await selectFile(host, new File([new Uint8Array([0x89, 0x50])], '截图.png'));
 
@@ -301,6 +394,7 @@ describe('上传文件（FR-4.7 解析）', () => {
     });
     const host = render(makeGateway({ uploadFile }));
     await flush();
+    await enterKb(host);
 
     // 后缀能过前端预检、内容被服务端判定损坏 —— 这正是「只有服务端知道」的那类失败
     await selectFile(host, new File([new Uint8Array([1])], '坏.docx'));
@@ -311,7 +405,7 @@ describe('上传文件（FR-4.7 解析）', () => {
 });
 
 describe('部门范围（FR-4.7「按部门/角色」）', () => {
-  it('列表把部门范围说成人话（而不是只显示角色）', async () => {
+  it('卡片把部门范围说成人话（而不是只显示角色）', async () => {
     const listKbs = vi
       .fn()
       .mockResolvedValue({ ok: true, data: [{ ...KB, allowedDepartments: ['d1'] }] });
@@ -324,7 +418,8 @@ describe('部门范围（FR-4.7「按部门/角色」）', () => {
   it('组织有部门时才出现「仅限部门」（没部门时不留一个空控件）', async () => {
     const withDept = render(makeGateway());
     await flush();
-    expect(withDept.querySelector('[data-testid="new-kb-dept-d1"]')).toBeTruthy();
+    await openCreateKbDialog(withDept);
+    expect(dialogRoot().querySelector('[data-testid="new-kb-dept-d1"]')).toBeTruthy();
 
     await flush();
     unmount();
@@ -333,25 +428,24 @@ describe('部门范围（FR-4.7「按部门/角色」）', () => {
       makeGateway({ listDepartments: vi.fn().mockResolvedValue({ ok: true, data: [] }) }),
     );
     await flush();
-    expect(noDept.querySelector('[data-testid="new-kb-dept-d1"]')).toBeNull();
-    expect(noDept.textContent).not.toContain('仅限部门');
+    await openCreateKbDialog(noDept);
+    expect(dialogRoot().querySelector('[data-testid="new-kb-dept-d1"]')).toBeNull();
+    expect(dialogRoot().textContent).not.toContain('仅限部门');
   });
 
   it('点选部门后建库会把它随请求下发；不点则完全不下发该字段', async () => {
     const createKb = vi.fn().mockResolvedValue({ ok: true, data: KB });
     const host = render(makeGateway({ createKb }));
     await flush();
+    await openCreateKbDialog(host);
 
-    setInputValue(
-      host.querySelector('[data-testid="new-kb-name"]') as HTMLInputElement,
-      '研发制度',
-    );
+    setInputValue(dialogRoot().querySelector('[data-testid="new-kb-name"]') as HTMLInputElement, '研发制度');
     await act(async () => {
-      click(host.querySelector('[data-testid="new-kb-dept-d1"]'));
+      click(dialogRoot().querySelector('[data-testid="new-kb-dept-d1"]'));
       await flush();
     });
     await act(async () => {
-      click(buttonByText(host, '建'));
+      click(dialogRoot().querySelector('[data-testid="new-kb-confirm"]'));
       await flush();
     });
 
@@ -365,18 +459,35 @@ describe('部门范围（FR-4.7「按部门/角色」）', () => {
     const createKb = vi.fn().mockResolvedValue({ ok: true, data: KB });
     const host = render(makeGateway({ createKb }));
     await flush();
+    await openCreateKbDialog(host);
 
-    setInputValue(
-      host.querySelector('[data-testid="new-kb-name"]') as HTMLInputElement,
-      '公开制度',
-    );
+    setInputValue(dialogRoot().querySelector('[data-testid="new-kb-name"]') as HTMLInputElement, '公开制度');
     await act(async () => {
-      click(buttonByText(host, '建'));
+      click(dialogRoot().querySelector('[data-testid="new-kb-confirm"]'));
       await flush();
     });
 
     const [, payload] = createKb.mock.calls[0];
     expect('allowedDepartments' in payload).toBe(false);
+  });
+
+  it('建完直接进入新库（刚建它就是为了往里放东西）', async () => {
+    const createKb = vi.fn().mockResolvedValue({ ok: true, data: { ...KB, id: 'k9', name: '新库' } });
+    const listKbs = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, data: [] })
+      .mockResolvedValue({ ok: true, data: [{ ...KB, id: 'k9', name: '新库' }] });
+    const host = render(makeGateway({ createKb, listKbs }));
+    await flush();
+    await openCreateKbDialog(host);
+
+    setInputValue(dialogRoot().querySelector('[data-testid="new-kb-name"]') as HTMLInputElement, '新库');
+    await act(async () => {
+      click(dialogRoot().querySelector('[data-testid="new-kb-confirm"]'));
+      await flush();
+    });
+
+    expect(host.textContent).toContain('所有知识');
   });
 });
 
@@ -384,6 +495,7 @@ describe('检索能力说明（FR-4.7 向量检索）', () => {
   it('默认（词法）：明说未启用向量检索，且不给「重建索引」按钮', async () => {
     const host = render(makeGateway());
     await flush();
+    await enterKb(host);
 
     const caption = host.querySelector('[data-testid="kb-caption"]')?.textContent ?? '';
     expect(caption).toContain('当前词法检索，向量检索未启用');
@@ -409,6 +521,7 @@ describe('检索能力说明（FR-4.7 向量检索）', () => {
       .mockResolvedValue({ ok: true, data: { indexed: 5, total: 5, model: 'hash:64', error: '' } });
     const host = render(makeGateway({ retrievalInfo, reindex }));
     await flush();
+    await enterKb(host);
 
     const caption = host.querySelector('[data-testid="kb-caption"]')?.textContent ?? '';
     // 「非语义」必须写出来：哈希向量只认字面重合，不写会被当成语义检索用
@@ -440,6 +553,7 @@ describe('检索能力说明（FR-4.7 向量检索）', () => {
     });
     const host = render(makeGateway({ retrievalInfo }));
     await flush();
+    await enterKb(host);
 
     const caption = host.querySelector('[data-testid="kb-caption"]')?.textContent ?? '';
     expect(caption).toContain('检索配置有误');
@@ -459,6 +573,7 @@ describe('文档生命周期（删除 / 改名 / 判重）', () => {
       .mockResolvedValue({ ok: true, data: [{ ...DOC, kind: 'pdf', embedded: 0 }] });
     const host = render(makeGateway({ retrievalInfo, listDocuments }));
     await flush();
+    await enterKb(host);
 
     expect(host.textContent).toContain('PDF · 42 字 · 2 块');
     expect(host.querySelector('[data-testid="kb-doc-index-d1"]')?.textContent).toBe('未建索引');
@@ -470,6 +585,7 @@ describe('文档生命周期（删除 / 改名 / 判重）', () => {
       .mockResolvedValue({ ok: true, data: [{ ...DOC, kind: 'text', embedded: 0 }] });
     const host = render(makeGateway({ listDocuments }));
     await flush();
+    await enterKb(host);
 
     expect(host.textContent).toContain('纯文本 · 42 字 · 2 块');
     expect(host.querySelector('[data-testid="kb-doc-index-d1"]')).toBeNull();
@@ -480,6 +596,7 @@ describe('文档生命周期（删除 / 改名 / 判重）', () => {
     const listDocuments = vi.fn().mockResolvedValue({ ok: true, data: [DOC] });
     const host = render(makeGateway({ deleteDocument, listDocuments }));
     await flush();
+    await enterKb(host);
     const before = listDocuments.mock.calls.length;
 
     await act(async () => {
@@ -505,6 +622,7 @@ describe('文档生命周期（删除 / 改名 / 判重）', () => {
     const deleteDocument = vi.fn();
     const host = render(makeGateway({ deleteDocument }));
     await flush();
+    await enterKb(host);
 
     await act(async () => {
       click(host.querySelector('[data-testid="kb-doc-delete-d1"]'));
@@ -522,6 +640,7 @@ describe('文档生命周期（删除 / 改名 / 判重）', () => {
     const renameDocument = vi.fn().mockResolvedValue({ ok: true, data: DOC });
     const host = render(makeGateway({ renameDocument }));
     await flush();
+    await enterKb(host);
 
     await act(async () => {
       click(host.querySelector('[data-testid="kb-doc-rename-d1"]'));
@@ -552,6 +671,7 @@ describe('文档生命周期（删除 / 改名 / 判重）', () => {
     });
     const host = render(makeGateway({ uploadFile }));
     await flush();
+    await enterKb(host);
 
     const input = host.querySelector('[data-testid="kb-file-input"]') as HTMLInputElement;
     Object.defineProperty(input, 'files', {
@@ -572,9 +692,12 @@ describe('回收站（软删 / 恢复 / 彻底删除）', () => {
   const TRASHED = { ...DOC, deletedAt: '2026-10-25T02:00:00Z' };
 
   /** 回收站与正常列表由同一个接口的两个口径返回，用参数区分 */
-  function twoViews(normal: unknown[], trashed: unknown[]) {
+  function twoViews(normal: KbDocument[], trashed: KbDocument[]) {
     return vi.fn((_kbId: string, input?: { trashed?: boolean }) =>
-      Promise.resolve({ ok: true, data: input?.trashed ? trashed : normal }),
+      Promise.resolve<KbApiResult<KbDocument[]>>({
+        ok: true,
+        data: input?.trashed ? trashed : normal,
+      }),
     );
   }
 
@@ -582,6 +705,7 @@ describe('回收站（软删 / 恢复 / 彻底删除）', () => {
     const listDocuments = twoViews([DOC], [TRASHED]);
     const host = render(makeGateway({ listDocuments }));
     await flush();
+    await enterKb(host);
     expect(host.querySelector('[data-testid="kb-doc-rename-d1"]')).toBeTruthy();
 
     await act(async () => {
@@ -597,9 +721,10 @@ describe('回收站（软删 / 恢复 / 彻底删除）', () => {
     expect(host.querySelector('[data-testid="kb-doc-rename-d1"]')).toBeNull();
   });
 
-  it('回收站为空时的文案要说「空的」，不能复用「这个库还没有文档」', async () => {
+  it('回收站为空时的文案要说「空的」，不能复用「这个知识库还没有文档」', async () => {
     const host = render(makeGateway({ listDocuments: twoViews([DOC], []) }));
     await flush();
+    await enterKb(host);
 
     await act(async () => {
       click(host.querySelector('[data-testid="kb-trash-toggle"]'));
@@ -615,6 +740,7 @@ describe('回收站（软删 / 恢复 / 彻底删除）', () => {
     const listDocuments = twoViews([], [TRASHED]);
     const host = render(makeGateway({ restoreDocument, listDocuments }));
     await flush();
+    await enterKb(host);
     await act(async () => {
       click(host.querySelector('[data-testid="kb-trash-toggle"]'));
       await flush();
@@ -636,6 +762,7 @@ describe('回收站（软删 / 恢复 / 彻底删除）', () => {
     const listDocuments = twoViews([], [TRASHED]);
     const host = render(makeGateway({ deleteDocument, listDocuments }));
     await flush();
+    await enterKb(host);
     await act(async () => {
       click(host.querySelector('[data-testid="kb-trash-toggle"]'));
       await flush();
@@ -658,7 +785,7 @@ describe('回收站（软删 / 恢复 / 彻底删除）', () => {
 });
 
 describe('改可见范围（库级设置）', () => {
-  it('打开时回填当前范围，点选后保存把角色与部门一起下发', async () => {
+  it('打开时回填当前范围，点掉「成员」后保存把角色与部门一起下发', async () => {
     const listKbs = vi.fn().mockResolvedValue({
       ok: true,
       data: [{ ...KB, allowedRoles: ['member', 'admin', 'owner'], allowedDepartments: ['d1'] }],
@@ -669,11 +796,9 @@ describe('改可见范围（库级设置）', () => {
     });
     const host = render(makeGateway({ listKbs, updateKbVisibility }));
     await flush();
+    await enterKb(host);
+    await pickMenu(host, 'kb-more-menu', 'members');
 
-    await act(async () => {
-      click(host.querySelector('[data-testid="kb-scope-k1"]'));
-      await flush();
-    });
     // 当前值必须看得见，否则用户不知道这次是收紧还是放开
     expect(dialogRoot().textContent).toContain('技术部');
 
@@ -692,30 +817,56 @@ describe('改可见范围（库级设置）', () => {
     });
   });
 
-  it('一个角色都不选时本地就拦住（不让服务端用 422 告诉我）', async () => {
+  /**
+   * 管理员 / 所有者**不可关闭**：`visibility.py::allows()` 对它们是无条件放行
+   * （管理豁免，少了它会出现「建完看不见、也改不了」的死锁）。
+   *
+   * 以前这里画的是可点的 chip —— 点得动但不改变任何结果，用户会以为「我把管理员
+   * 关了」，然后发现同事照样看得见，进而怀疑整个权限系统。
+   */
+  it('管理员与所有者是固定开着的，点不动', async () => {
     const updateKbVisibility = vi.fn();
-    const listKbs = vi.fn().mockResolvedValue({
+    const host = render(makeGateway({ updateKbVisibility }));
+    await flush();
+    await enterKb(host);
+    await pickMenu(host, 'kb-more-menu', 'members');
+
+    for (const role of ['admin', 'owner']) {
+      const chip = dialogRoot().querySelector(`[data-testid="kb-scope-role-${role}"]`);
+      expect(chip).toBeTruthy();
+      expect(chip!.className).toContain('Mui-disabled');
+    }
+  });
+});
+
+describe('团队级成员（与库级可见范围是两层）', () => {
+  it('团队视图的「成员与权限」列出组织成员与角色，改角色走组织接口', async () => {
+    const listMembers = vi.fn().mockResolvedValue({
       ok: true,
-      data: [{ ...KB, allowedRoles: ['member'], allowedDepartments: [] }],
+      data: [{ userId: 'u1', email: 'one@corp.example', role: 'member', joinedAt: 'x' }],
     });
-    const host = render(makeGateway({ listKbs, updateKbVisibility }));
+    const updateMemberRole = vi
+      .fn()
+      .mockResolvedValue({ ok: true, data: { userId: 'u1', email: 'one@corp.example', role: 'admin', joinedAt: 'x' } });
+    const host = render(makeGateway({ listMembers, updateMemberRole }));
     await flush();
 
+    // 团队视图（没选库）：「⋯」的第一个入口是团队的人，不是某本库的可见范围
+    await pickMenu(host, 'kb-more-menu', 'members');
+    expect(dialogRoot().textContent).toContain('one@corp.example');
+    expect(listMembers).toHaveBeenCalledWith('o1');
+
+    const select = dialogRoot().querySelector(
+      '[data-testid="team-member-role-u1"]',
+    ) as HTMLSelectElement;
+    expect(select).toBeTruthy();
     await act(async () => {
-      click(host.querySelector('[data-testid="kb-scope-k1"]'));
-      await flush();
-    });
-    await act(async () => {
-      click(dialogRoot().querySelector('[data-testid="kb-scope-role-member"]'));
-      await flush();
-    });
-    await act(async () => {
-      click(dialogRoot().querySelector('[data-testid="kb-scope-save"]'));
+      select.value = 'admin';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
       await flush();
     });
 
-    expect(updateKbVisibility).not.toHaveBeenCalled();
-    expect(toast.error).toHaveBeenCalledWith(expect.stringContaining('至少要选一个'));
+    expect(updateMemberRole).toHaveBeenCalledWith('o1', 'u1', 'admin');
   });
 });
 
@@ -754,7 +905,7 @@ describe('连不上云端（status=0）', () => {
 });
 
 describe('写操作', () => {
-  it('上传成功后刷新文档列表（用户能立刻看到刚传的那篇）', async () => {
+  it('新建文档（粘贴正文）成功后刷新文档列表（用户能立刻看到刚写的那篇）', async () => {
     const listDocuments = vi
       .fn()
       .mockResolvedValueOnce({ ok: true, data: [] })
@@ -762,14 +913,16 @@ describe('写操作', () => {
     const uploadDocument = vi.fn().mockResolvedValue({ ok: true, data: DOC });
     const host = render(makeGateway({ listDocuments, uploadDocument }));
     await flush();
+    await enterKb(host);
+    await pickMenu(host, 'kb-add-menu', 'new-doc');
 
-    setInputValue(host.querySelector('[data-testid="doc-title"]') as HTMLInputElement, '差旅制度');
+    setInputValue(dialogRoot().querySelector('[data-testid="doc-title"]') as HTMLInputElement, '差旅制度');
     setInputValue(
-      host.querySelector('[data-testid="doc-content"]') as HTMLTextAreaElement,
+      dialogRoot().querySelector('[data-testid="doc-content"]') as HTMLTextAreaElement,
       '报销流程：走财务邮箱。',
     );
     await act(async () => {
-      click(buttonByText(host, '入库'));
+      click(dialogRoot().querySelector('[data-testid="doc-submit"]'));
       await flush();
     });
 
