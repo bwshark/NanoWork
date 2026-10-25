@@ -93,7 +93,7 @@
 
 **会话与交互**
 
-- `src/pages/chat/*` —— `ChatPage` / `MessageStream` / `AssistantMessage`（流式 markdown）/ `ReasoningBlock` + `ProcessView`（思考过程时间线，`lib/processDigest.ts`）/ `ToolCallCard`（工具调用卡片）。
+- `src/pages/chat/*` —— `ChatPage` / `MessageStream` / `AssistantMessage`（流式 markdown）/ `ReasoningBlock` + `ProcessView`（思考过程时间线，`lib/ui/processDigest.ts`）/ `ToolCallCard`（工具调用卡片）。
 - `src/components/composer/*` —— 斜杠命令选择器、文件引用选择器、附件栏、内联附件 chip；`useVoiceInput` + `TranscriptionConfig`（OpenAI 兼容 `/audio/transcriptions` 语音输入）。
 - `src/pages/chat/heroPresets.tsx` —— 空状态三级联动：**模式（日常办公 / 代码开发 / 设计创意）→ Skill 技能 → 提示词标签 → 提示词**（对应 `docs/chat.md` 的需求，已实现）。
 
@@ -106,19 +106,19 @@
 **扩展与运维页**
 
 - `/skills` 技能页、`/mcp` MCP 管理（CRUD + 连接测试 + 同步状态）、`/tasks` 定时任务、`/memory` 记忆页（用户级 / 工作区级双层切换）、`/persona` 人格页（身份文件 + 提示词模板外置编辑）、`/artifacts` 产物库、`/im` IM 频道页。
-- `src/lib/skillParser.ts` —— SKILL.md 解析。
+- `src/lib/agent/skillParser.ts` —— SKILL.md 解析。
 
 **IM 通道（超出既有文档记录的部分）**
 
 - `src/types/channel.ts` —— 支持 `dingtalk` / `feishu` / `lark` / `weixin` / `wecom`；字段含 `allowFrom`、`groupPolicy`(open/mention)、`topicIsolation`。
-- `src/lib/channelScan.ts` + `components/im/ChannelScanPanel.tsx` —— **扫码接入**，走网关 `settings.channel.connect.*` 认证 WebSocket 帧。**协议层已收进 `src/ai/runtime/nanobotHttp/channelConnect.ts`**（wire 键名 / 起始参数 / 编码解码都在那里，2026-09-28，ADR-020）。
+- `src/lib/channel/channelScan.ts` + `components/im/ChannelScanPanel.tsx` —— **扫码接入**，走网关 `settings.channel.connect.*` 认证 WebSocket 帧。**协议层已收进 `src/ai/runtime/nanobotHttp/channelConnect.ts`**（wire 键名 / 起始参数 / 编码解码都在那里，2026-09-28，ADR-020）。
 - `electron/channelAllowFrom.ts`、`electron/channelDisconnect.ts` —— 主进程侧白名单写入与断开。
 - 同步链路：`ChannelConfig[]` → `toNanobotChannels()` → `platform.syncNanobotChannels()` → 主进程合并进 `config.json` + 重启网关（Web 降级为下载片段）。
 
 **自动化**
 
 - `src/types/task.ts` —— `TaskSchedule` = `cron`(5 段 + tz) | `interval`(分钟) | `once`(ISO 时间)；`TaskRunRecord`（含 `trigger`/`sessionKey`/`runId`/`durationMs`）；`TaskRunOptions`（model / skillIds / fullAccess）。
-- `src/lib/cron.ts` —— `validateCron` + `describeSchedule` + `nextCronRunMs`。
+- `src/lib/task/cron.ts` —— `validateCron` + `describeSchedule` + `nextCronRunMs`。
 - 镜像：`toNanobotJob()` → `{workspace}/cron/jobs.json`，带 `originMetadata.managedBy='smartagent'` 托管标记、`sessionKey='api:cron-{taskId}'` 会话绑定、前端自算 `state.nextRunAtMs`。
 
 **安全与权限**
@@ -129,7 +129,7 @@
 
 **记忆**
 
-- `src/lib/memory.ts`（MemoryService）+ `/memory` 页 + `MemoryBar`。
+- `src/lib/memory/memory.ts`（MemoryService）+ `/memory` 页 + `MemoryBar`。
 - `MEMORY.md` 文本、`/` 注入标签、\`\` 幂等去重标记、多工作区 `workspaceKey`。
 
 **跨端与桌面**
@@ -148,7 +148,7 @@
 | # | 冲突点          | 材料 A                                           | 材料 B                                       | 裁决                                                                                                                                  |
 | - | ------------ | ---------------------------------------------- | ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------- |
 | 1 | WorkBuddy 归属 | `docs/prd.md`：网易有道                             | 安装目录：腾讯 CodeBuddy                          | **以安装目录为准**（见 0.1）                                                                                                                  |
-| 2 | 默认网关端口       | `docs/architecture.md`：`127.0.0.1:8765`        | `lib/constants.ts`：`127.0.0.1:18900/v1`    | **以代码为准：`18900`**（`docs/architecture.md` 需修正）。演进：`8765` → `8900` → `18900`（`8900` 落在 Windows 保留端口区间内绑不上，见 `docs/README.md` 修正记录 13） |
+| 2 | 默认网关端口       | `docs/architecture.md`：`127.0.0.1:8765`        | `lib/core/constants.ts`：`127.0.0.1:18900/v1`    | **以代码为准：`18900`**（`docs/architecture.md` 需修正）。演进：`8765` → `8900` → `18900`（`8900` 落在 Windows 保留端口区间内绑不上，见 `docs/README.md` 修正记录 13） |
 | 3 | 产品形态         | `docs/nanowork-prd.md`：企业多租户平台                 | 代码：本地优先单用户客户端                              | **分期**：V1 客户端 → V1.5 账户同步 → V2 团队 → V3 企业（见第 2 章）                                                                                   |
 | 4 | nanobot 引入方式 | `docs/nanowork-prd.md`：Python 依赖 + 防腐层 Adapter | 代码：独立进程 `nanobot serve` + HTTP 直连          | **保持独立进程**（进程隔离更符合 sidecar 思想），但**必须补上防腐层**（第 8 章）                                                                                  |
 | 5 | 持久化介质        | `docs/architecture.md`：JSON 过渡，SQLite 预留       | 代码：Zustand persist（localStorage / JSON）    | **V1 引入事件日志（JSONL）+ 索引库（SQLite）双轨**（第 9 章）                                                                                          |
@@ -162,7 +162,7 @@
 | ----- | ----------------------------------------------------------------------------------------------- | ----------------------- | ----------------------------------------------------------------- | -------------------------- |
 | 会话执行  | Ask / Plan / Craft 三模式                                                                          | Ask / Plan / Craft      | 仅 `fullAccess` 权限开关 + 空状态三级模式（非执行模式）                              | **缺 Plan 审批流与执行模式**        |
 | 事件模型  | JSONL + `parentId` DAG，含 reasoning / function_call / file-history-snapshot                      | —                       | Zustand 整块 blob                                                   | **缺事件化（D3）**               |
-| 文件回滚  | `file-history-snapshot` + `*.file-rollback.ndjson`                                              | F1.4 版本 / 回退            | 仅 `lib/undoStack.ts`（UI 级撤销）                                      | **缺文件级回滚**                 |
+| 文件回滚  | `file-history-snapshot` + `*.file-rollback.ndjson`                                              | F1.4 版本 / 回退            | 仅 `lib/editor/undoStack.ts`（UI 级撤销）                                      | **缺文件级回滚**                 |
 | 权限安全  | 三层（提示词 / UI / 运行时 shim 强制）                                                                      | F5.1–F5.5 全部            | 两层（提示词 / UI），nanobot 侧有 `tools/sandbox.py`、`security/` 未启用（**2026-10-23 勘误**：`security/` 已全面启用——`tool_approval` / `trash` / `audit` / `workspace_access` / `network` 都在执行路径上；`sandbox.py` 实际在 `agent/tools/`，仅 Linux bwrap 且默认关闭，见 §11.3.1）        | **缺运行时硬兜底（D3）**            |
 | 扩展生态  | Plugin / Skill / Connector / Expert 四级 + 市场                                                     | F2.1–F2.4               | Agent / 专家团 / 内置技能 / MCP，无 Plugin 包、无市场                           | **缺 Plugin 形态与分发**         |
 | 提示词工程 | 10 组合（模式×领域）× 7 风格 × 4 层记忆注入，Nunjucks 外置模板                                                      | —                       | 内置模板 + `~/.nanowork/prompts/<kind>/<key>.md` 外置覆盖（引擎白名单模板同样可覆盖）   | ✅ 已补（M3 首轮，见第 13 章进度注）     |
@@ -205,8 +205,8 @@
 | FR-1.4 | **三种执行模式 Ask / Plan / Craft** | **P0** | ✅  | both | Ask：只读，禁止任何写工具；Plan：先产出结构化计划，**经用户批准后**才进入执行；Craft：直接执行。模式在会话内可切换且落到会话元数据。**已落地**：`session.mode`（事件 `session-start` / `mode-change` + meta），引擎侧由工具网关强制，不靠提示词（见 10.1）         |
 | FR-1.5 | **计划审批流**                     | **P0** | ✅  | both | Plan 模式产出的计划以可勾选清单呈现；支持逐项批准 / 全批准 / 打回并附意见；未批准前引擎不得调用写类工具（由工具网关强制，见第 11 章）。**已落地**：引擎新增 `submit_plan` 工具 → `kind=plan` 事件 → 客户端 `PlanCard` 勾选清单 → `plan-decision` 事件（见 10.2） |
 | FR-1.6 | 事件化会话记录                       | **P0** | ✅  | both | 会话以 JSONL 追加事件流持久化；事件带 `id`/`parentId`；支持按 `parentId` 重建分支与重放。**已落地**：`src/events/` 双实现（Electron 主进程落盘 / Web 降级），迁移三步（双写 → 切读 → 清理）均已完成，见 §9.6                               |
-| FR-1.7 | 会话检索                          | P1     | ✅ | both | **已落地（commit `39847f9`，2026-10-06 复核）**：`lib/sessionSearch.ts`（`searchSessions` 异步读事件流做全文匹配，按 `sessionId+updatedAt` 缓存投影正文）、`lib/taskQuery.ts`（状态/时间/Agent/工作空间同步维度 + 标题/工作空间/正文 `matchQuery`）、`TaskSearchDialog`（⌘K 居中搜索窗，键盘导航）、`TaskFilterPanel`（状态/时间/工作空间/Agent 四维度筛选，选项从现有会话与 Agent 目录动态推导）、`taskQueryStore`；`TitleBar` 挂载搜索窗+筛选面板、`SidebarNav` 消费同一份 `filters`；测试 `tests/lib/sessionSearch.test.ts` / `taskQuery.test.ts` / `stores/taskQueryStore.test.ts` 已覆盖。⚠️ 今日日志「V1 剩余纯客户端」清单把 FR-1.7 误列未做，实为陈旧备注——它已于 `39847f9` 实现并提交 |
-| FR-1.8 | 会话导入导出                        | P2     | ✅ | both | **已落地（批次 6a/6b）**：导入 `lib/sessionImport.ts`（`mapRecordsToMessages` / `cronRecordsToSession` / `toIso`）；导出与跨端迁移由 `lib/accountArchive.ts` 的 `buildArchive`/`parseArchive`/`applyArchive` 承担，`ArchiveSessions` 含 `meta[]` + `events: Record<sessionId, SessionEvent[]>`（逐会话事件流无损），`AccountSection`「导出全部数据」入口已接；导入忽略 `workdir`（落接收方自身分片，与批次 5 同口径）。今日日志「V1 剩余纯客户端」把 FR-1.8 误列未做，实为陈旧备注 |
+| FR-1.7 | 会话检索                          | P1     | ✅ | both | **已落地（commit `39847f9`，2026-10-06 复核）**：`lib/session/sessionSearch.ts`（`searchSessions` 异步读事件流做全文匹配，按 `sessionId+updatedAt` 缓存投影正文）、`lib/task/taskQuery.ts`（状态/时间/Agent/工作空间同步维度 + 标题/工作空间/正文 `matchQuery`）、`TaskSearchDialog`（⌘K 居中搜索窗，键盘导航）、`TaskFilterPanel`（状态/时间/工作空间/Agent 四维度筛选，选项从现有会话与 Agent 目录动态推导）、`taskQueryStore`；`TitleBar` 挂载搜索窗+筛选面板、`SidebarNav` 消费同一份 `filters`；测试 `tests/lib/session/sessionSearch.test.ts` / `taskQuery.test.ts` / `stores/taskQueryStore.test.ts` 已覆盖。⚠️ 今日日志「V1 剩余纯客户端」清单把 FR-1.7 误列未做，实为陈旧备注——它已于 `39847f9` 实现并提交 |
+| FR-1.8 | 会话导入导出                        | P2     | ✅ | both | **已落地（批次 6a/6b）**：导入 `lib/session/sessionImport.ts`（`mapRecordsToMessages` / `cronRecordsToSession` / `toIso`）；导出与跨端迁移由 `lib/sync/accountArchive.ts` 的 `buildArchive`/`parseArchive`/`applyArchive` 承担，`ArchiveSessions` 含 `meta[]` + `events: Record<sessionId, SessionEvent[]>`（逐会话事件流无损），`AccountSection`「导出全部数据」入口已接；导入忽略 `workdir`（落接收方自身分片，与批次 5 同口径）。今日日志「V1 剩余纯客户端」把 FR-1.8 误列未做，实为陈旧备注 |
 | FR-1.9 | **输入区富编辑与右键菜单**              | **P1** | ✅ | both | 输入区（`Composer`）是 contentEditable：撤销/重做走**自管快照栈**（原生 `execCommand` 对**手动插入的附件徽章**无效）、全选经 `composerEditBridge` 供 TitleBar「编辑」菜单调用；右键菜单为 **剪切 / 复制 / 粘贴 / 全选**。**已落地（2026-10-08）**：`src/pages/chat/ComposerContextMenu.tsx`（纯展示件，锚点走 `anchorPosition`）+ `Composer.tsx::handleEditableContextMenu`。三条关键取舍：① **剪贴走应用富剪贴板**（`writeRichClipboard` + 应用层缓存，键为 `RICH_CLIP_MIME` 与纯文本），不用浏览器默认 —— 徽章只是带 `data-att-id` 的 span，系统剪贴只带走文字，附件会**静默丢失**；② **右键不改变区内已有选区**，但菜单 `autoFocus` 会抢走焦点，故在右键那一刻快照 Range、每个动作前还原（否则表现为「点了复制却复制到空」）；③ 菜单「粘贴」没有 `ClipboardEvent`，只能主动读剪贴板，优先级与 Ctrl+V 完全对齐（富 MIME → 图片文件 → 文本键命中富缓存 → 纯文本），`clipboard.read()` 被拒时降级 `readText()`。契约由 `tests/composerContextMenu.test.tsx`（15 例：形态/置灰/选区还原/粘贴四条路径/全选）守护 |
 
 ## R2 Agent、专家与专家团
@@ -216,7 +216,7 @@
 | FR-2.1 | Agent CRUD 与启停 | P0     | ✅  | both | 完整 CRUD + 持久化；可作为会话目标                                                                                                                                                                                                            |
 | FR-2.2 | Agent 工具白名单    | **P0** | ✅  | both | 每个 Agent 可声明允许/禁止的工具集；默认最小权限；越权调用被工具网关拦截（不依赖提示词）。引擎侧：`WorkspaceScope.tool_allow/tool_deny` + 纯函数 `agent_blocks_tool` + `AgentToolPolicyHook`（挂在**基线**钩子链上，ephemeral turn 同样绕不过）；客户端：`Agent.toolAllow/toolDeny` + 编辑 UI + 随每轮请求下发 |
 | FR-2.3 | 专家（Expert）     | P0     | ✅ | both | 专家 = 系统提示词 + 知识库绑定 + 工具白名单 + 模型绑定；内置招聘 / 法务 / 投研 / 财务 / 写作等模板。**2026-10-05 核实**：四类绑定里**三类已生效**（提示词走 agent-persona 段、工具白名单逐轮下发 `tool_allow`/`tool_deny`、领域/风格覆盖），本轮补上**模型绑定**（`Agent.model`，预设名与 `Session.model` 同域；优先级 会话 > 专家；下发前拦已失效的预设）；内置模板补齐到 8 条（写作由「文档写作专家」承担），法务/投研的能力边界写进 systemPrompt。**知识库绑定 2026-10-24 落地（M7）**：专家 `knowledge: { orgId, kbIds }` → 每轮按**本轮用户发言**检索一次云端组织资料，命中渲染成 `<knowledge_context>` 注入本轮 system 段（段位在 `memory-write` 之后、`skills` 之前——事实先于方法）。`kbIds: []` = **该组织里我可见的全部库**（与 `toolAllow: []` 方向相反，所以两处不共用归一函数）；范围收窄在**服务端**完成（`POST /api/orgs/{id}/search` 新增 `kbIds`，越权 id 回 403 而不是静默跳过，空数组回 422）。超时 2.5s、失败一律降级为「本轮没资料」并留一行 warn（静默降级不能连日志都静默）。**刻意不做引擎侧检索工具**：token 不出渲染层、权限规则只解释一次，代价是不能多轮追问检索（写进 FR-4.7 的未做）。四类绑定至此全部生效。详见 §20.9.9 |
-| FR-2.4 | 专家团编排          | P0     | ✅  | both | `sequential` / `parallel` / `coordinator` 三模式**真实执行**；编排过程在 ProcessView 中可见（按成员分组）。**2026-10-06 落地**：走方案里的路径 2（**引擎侧编排**，而非客户端编排）。引擎侧新增 `agent/expert_group.py`（`parse_expert_group` 严格校验、**形状非法一律 400 不静默降级**；`ExpertGroupOrchestrator` 按 mode 调度、按 `aggregate` 收口；`run_member` 依赖注入 → 调度语义不依赖模型即可单测），`loop.py` 命中即接管本轮、正常 agent loop 完全不跑；客户端 `lib/expertGroupRequest.ts` 下发 `expert_group`（camelCase→snake_case 在 `expertGroupWire`），`sessionsStore` 由 `session.groupId` 解析团。**落库形态定死**：成员输出不是消息、只随进度事件出站，**只有最终汇总落成一条 assistant 消息**（否则会话历史 N 倍膨胀并污染下一轮）。成员的三项绑定（人设 / 工具策略 / 模型）均已接线并配生产接线测试（13 例 + 4 条变异验证），工具白名单取**交集**、黑名单取**并集**（权限单调递减，FR-2.5 依赖同一约束）。**2026-10-07 真机已验证**：起真实网关打两成员请求，日志可见成员被真实派发与 lead 收口。**未做**：成员 token 用量未汇总进 `_last_usage`（用量页看不到这 N 倍成本）、客户端未暴露 `lead`/`aggregate`/`maxConcurrent` 三个旋钮、带真实 LLM 输出的整轮跑通待 provider 配额恢复。详见 `docs/design-fr-2-4-expert-orchestration.md` |
+| FR-2.4 | 专家团编排          | P0     | ✅  | both | `sequential` / `parallel` / `coordinator` 三模式**真实执行**；编排过程在 ProcessView 中可见（按成员分组）。**2026-10-06 落地**：走方案里的路径 2（**引擎侧编排**，而非客户端编排）。引擎侧新增 `agent/expert_group.py`（`parse_expert_group` 严格校验、**形状非法一律 400 不静默降级**；`ExpertGroupOrchestrator` 按 mode 调度、按 `aggregate` 收口；`run_member` 依赖注入 → 调度语义不依赖模型即可单测），`loop.py` 命中即接管本轮、正常 agent loop 完全不跑；客户端 `lib/agent/expertGroupRequest.ts` 下发 `expert_group`（camelCase→snake_case 在 `expertGroupWire`），`sessionsStore` 由 `session.groupId` 解析团。**落库形态定死**：成员输出不是消息、只随进度事件出站，**只有最终汇总落成一条 assistant 消息**（否则会话历史 N 倍膨胀并污染下一轮）。成员的三项绑定（人设 / 工具策略 / 模型）均已接线并配生产接线测试（13 例 + 4 条变异验证），工具白名单取**交集**、黑名单取**并集**（权限单调递减，FR-2.5 依赖同一约束）。**2026-10-07 真机已验证**：起真实网关打两成员请求，日志可见成员被真实派发与 lead 收口。**未做**：成员 token 用量未汇总进 `_last_usage`（用量页看不到这 N 倍成本）、客户端未暴露 `lead`/`aggregate`/`maxConcurrent` 三个旋钮、带真实 LLM 输出的整轮跑通待 provider 配额恢复。详见 `docs/design-fr-2-4-expert-orchestration.md` |
 | FR-2.5 | 子 Agent 委派     | P1     | ✅  | both | 主 Agent 可委派子任务（nanobot `spawn` 工具）；子 Agent 的工具权限不得超过父级（权限单调递减）。**已落地（V1.7 B3-01，2026-10-18 代码 + 2026-10-23 真机 6/6）**：① `/v1` 链路改走 `run_inline`（`agent/tools/spawn.py` 在 `channel=="api"` 时强制 `wait=True`，否则 `serve` 拓扑下结果必丢）；② 权限单调递减由 `bind_workspace_scope(parent_scope)` + `AgentToolPolicyHook` 继承父 `tool_allow/tool_deny`，三组用例锁死「父空→子按声明 / 父窄→子不得更宽 / 父 None→子按声明」；③ 客户端按子代理分组（`agent/subagent_progress.py` → SSE `kind:subagent` → `sessionsStore.handleProcessSubagent` → `ProcessView.SubagentGroupView`）。真机判据 6 条全过（结果回注 `391`、SSE `started→done`、三条权限含对照）。⚠️ 语义边界：`tool_deny` 按**工具名**不按能力，父 deny `write_file` 后子代理仍可用 `apply_patch`/`exec` 写文件（父也允许 → 子集仍 ⊆ 父集，不算越权）
 | FR-2.6 | 组织级资产发布        | P2     | ⬜  | both | 管理员把个人 Skill / 专家 / 提示词模板发布为组织资产，全员可见（V2）                                                                                                                                                                                        |
 
@@ -226,17 +226,17 @@
 | ------ | ---------------- | ------ | -- | ---- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | FR-3.1 | Skill 管理         | P0     | ✅  | both | 目录展示 + 启停 + 能力详情 + 搜索；用户级（`~/.nanowork/skills`）与项目级（`<workspace>/skills`）目录扫描 + `fs.watch` 热加载；`skillOverrides` 三态 `off` / `user-invocable-only` / `on`；`allowed-tools` / `user-invocable` frontmatter 落地（见 §12.4 落地说明）                                                |
 | FR-3.2 | Connector（MCP）管理 | P0     | ✅  | both | CRUD + 同步 + **真实连接测试**（主进程探针真实走 `initialize` / `tools/list`，替代原先 `delay(700)` 的假实现）+ **工具级授权**（`disabledTools` 黑名单 → 引擎 `MCPServerConfig.disabled_tools`）+ **凭据加密存储**（`~/.nanowork/connectors/.credentials.v3.json`，Electron `safeStorage` 托管密钥；渲染层只拿 key 名，见 §12.4.2） |
-| FR-3.3 | Expert 包         | P1     | ✅ | both | **单专家包导出 / 导入（2026-10-22 落地）**：`types/expertPackage.ts`（包格式 `nanowork.expert/v1`）+ `lib/expertPackage.ts`（build / parse / planImport 全纯函数）+ `lib/expertPackageIo.ts`（平台 IO）+ `ExpertPackageImportDialog`（预览对账）。包含头像、初始提示词、工具白/黑名单、领域风格覆盖、技能引用；**缺技能不阻塞导入**（如实报缺失）、**缺模型预设丢弃**（失效预设会让引擎每轮报错）、**重名自动加「（导入）」后缀**、`toolAllow: []` 原样保留（空数组 = 一个工具都不许）。团队包（`expertType: team`）明确拒导——需成员互相引用，未定义。跨端一致：Electron 落 `~/.nanowork/`、Web 降级为浏览器下载，均走既有 `platform.writeTextFile`，未新增平台能力 |
+| FR-3.3 | Expert 包         | P1     | ✅ | both | **单专家包导出 / 导入（2026-10-22 落地）**：`types/expertPackage.ts`（包格式 `nanowork.expert/v1`）+ `lib/agent/expertPackage.ts`（build / parse / planImport 全纯函数）+ `lib/agent/expertPackageIo.ts`（平台 IO）+ `ExpertPackageImportDialog`（预览对账）。包含头像、初始提示词、工具白/黑名单、领域风格覆盖、技能引用；**缺技能不阻塞导入**（如实报缺失）、**缺模型预设丢弃**（失效预设会让引擎每轮报错）、**重名自动加「（导入）」后缀**、`toolAllow: []` 原样保留（空数组 = 一个工具都不许）。团队包（`expertType: team`）明确拒导——需成员互相引用，未定义。跨端一致：Electron 落 `~/.nanowork/`、Web 降级为浏览器下载，均走既有 `platform.writeTextFile`，未新增平台能力 |
 | FR-3.4 | **Plugin 形态**    | **P1** | ✅  | both | 一个插件 = 清单 + SKILL.md + agents/ + experts/ + hooks/ + mcp/ + prompt/ + commands/ + skills/ + scripts/；安装 / 升级 / 卸载 + 版本区间校验已落地（**市场流程与版本锁定写入未做**，属 FR-3.7/3.8）；激活状态权威在引擎（指纹绑定标记 + `GET /v1/plugins`），客户端只做文件系统那一半，见 §12.2.1                                             |
 | FR-3.5 | 扩展市场             | P2     | ⬜  | both | 远程市场索引 + 一键安装 + 来源可信校验（签名/哈希）（V2）                                                                                                                                                                                                                                      |
-| FR-3.6 | 生命周期钩子 | P2 | ✅ | both | **2026-10-23 落地（声明式）**：插件 `hooks/hooks.json`（或清单 `hooks:` 声明的文件）→ 引擎 `agent/hooks/plugin_lifecycle.py`。四个事件：`session_start`（注入系统提示词；市场副本包 `<untrusted_content>`）/ `before_tool`（按**工具名精确**拒绝，原因回注给模型）/ `after_tool` 与 `session_end`（观察，只记日志）。挂**基线链**：ephemeral turn（定时任务）与子代理都绕不过——否则「插件禁止 exec」只是对用户手点那条路生效的礼貌（与 FR-2.2 / FR-3.12 同一条教训）。`deny` 只能收窄（`CompositeHook` 只收集 deny，`allow()` 被丢弃），因此插件永远盖不掉审批门 / 执行模式 / Agent 白名单。上限：单条注入 4000 字符、单轮合计 8000、每插件 32 条，超限截断或丢弃并**报进 `GET /v1/plugins`**（客户端插件卡片显示「N 个钩子生效」/「M 条声明被忽略」）。**刻意不跑外部命令**：钩子不经审批门、也不进工具网关审计，允许它执行命令等于给插件一条免审批的任意代码执行路径（ADR-0025「声明即权限」）。判据 `nanobot/tests/agent/test_plugin_lifecycle_hooks.py` 23 例 + 5 项变异逐条变红；客户端 `tests/lib/pluginHooks.test.ts` 11 例 |
+| FR-3.6 | 生命周期钩子 | P2 | ✅ | both | **2026-10-23 落地（声明式）**：插件 `hooks/hooks.json`（或清单 `hooks:` 声明的文件）→ 引擎 `agent/hooks/plugin_lifecycle.py`。四个事件：`session_start`（注入系统提示词；市场副本包 `<untrusted_content>`）/ `before_tool`（按**工具名精确**拒绝，原因回注给模型）/ `after_tool` 与 `session_end`（观察，只记日志）。挂**基线链**：ephemeral turn（定时任务）与子代理都绕不过——否则「插件禁止 exec」只是对用户手点那条路生效的礼貌（与 FR-2.2 / FR-3.12 同一条教训）。`deny` 只能收窄（`CompositeHook` 只收集 deny，`allow()` 被丢弃），因此插件永远盖不掉审批门 / 执行模式 / Agent 白名单。上限：单条注入 4000 字符、单轮合计 8000、每插件 32 条，超限截断或丢弃并**报进 `GET /v1/plugins`**（客户端插件卡片显示「N 个钩子生效」/「M 条声明被忽略」）。**刻意不跑外部命令**：钩子不经审批门、也不进工具网关审计，允许它执行命令等于给插件一条免审批的任意代码执行路径（ADR-0025「声明即权限」）。判据 `nanobot/tests/agent/test_plugin_lifecycle_hooks.py` 23 例 + 5 项变异逐条变红；客户端 `tests/lib/agent/pluginHooks.test.ts` 11 例 |
 | FR-3.7 | **市场注册与来源分级**    | **P1** | ✅  | both | 市场注册表含 `type`（directory/remote）/ `isBuiltIn` / `autoUpdate` / `lastSyncAt`；目录型不联网；远程型按 `autoUpdate` 决定启动拉取或按需拉取；**这两字段即「能否离线 / 失败怎么办」的判据**（见 12.5）。**本轮落地口径**：注册表 + 目录型同步 + 归档（`main.cjs` 侧的 `registry.json`）已通；远程型**无服务端，本轮只留模型与开关**，界面上同步按钮**禁用并说明原因**，不偷偷联网                                                                                                                                                       |
 | FR-3.8 | **版本隔离缓存**       | **P1** | ✅  | both | 缓存目录为 `cache/<market>/<plugin>/<version>/`；市场刷新只覆盖 `marketplaces/`，不替换生效副本；活跃会话按 `{plugin, version}` **版本引用集**解析而非取最新版；无引用旧副本可 GC（见 12.6）。**本轮落地口径**：目录布局与 `marketplaces/<m>/<n>/<v>/` 归档已通；**用 `<version>/current` 指针代替「活跃会话版本引用集」达成同一目标**（引擎插件发现发生在 `ContextBuilder` 构造期、工作区级，拿不到会话引用集，见 12.6.1）；GC 的引用集由客户端按「磁盘扫描出的生效包根」给出（主进程不知道哪些在跑，硬塞进去只会误删）                                                                                                        |
-| FR-3.9 | 扩展态同步边界          | P1     | ✅ | both | 多端同步仅同步**启用态**（`enabledPlugins` + 会话版本引用集），不同步包本体；专家身份资源走云端、失败降级内置默认（见 12.7）。**2026-10-06 代码核实**：**已落**——① 启用态同步：`src/lib/settingsSync.ts:47-49` 把 `enabledPlugins` 列为**保留**（可上云），注释显式对齐 FR-3.9「只同步意图、包本体各设备自装」；② 版本引用集概念：`src/stores/pluginsStore.ts:123/405`（GC 的 `referenced` 由客户端按生效包根给出）、`src/platform/types.ts:1092`，FR-3.8 另以 `<version>/current` 指针达成同一目标。**未落**——① 会话版本引用集的**跨端同步**（当前引用集只服务本机 GC，未进同步负载）；② 专家身份资源走**账户级 CDN**（`avatarUrl` 两形态）：现仅 `Agent.avatar?: string` 本地字段 + 派生占位（`src/types/agent.ts:85`），无账户命名空间云端与内置默认回退 **2026-10-17 收窄（V1.7 B1-04）**：本期只剩两块 —— ① 会话版本引用集**进同步负载**（当前只服务本机 GC，未进同步负载）→ V1.7 B2-01，且**包本体仍不上行**；② 专家身份资源走账户级 CDN → 本期**降级**为「无账户命名空间时给**确定性**占位（同 Agent 同色同字）+ 编辑页写明未接入」，不承诺云端资产。**2026-10-17 落地（V1.7 B2）**：① 会话版本引用集已进同步负载——`Session.pluginVersions`（建会话时快照，`src/lib/sessionPluginRefs.ts`）+ 白名单 `pluginVersions` + meta 往返 + **GC 引用集并集**（`collectCache` = 本机生效副本 ∪ 会话引用集，否则换机 GC 会删掉别的设备仍在用的那一版）；② 已按降级口径落地：占位本就确定（`hashHue` 由名称哈希），本轮补 `helperText` 写明「云端头像未接入」并用 9 条用例**锁定确定性**（同名同色同字）。包本体仍不上行（用例断言 payload 里没有任何 `cache/` 路径）。 |
+| FR-3.9 | 扩展态同步边界          | P1     | ✅ | both | 多端同步仅同步**启用态**（`enabledPlugins` + 会话版本引用集），不同步包本体；专家身份资源走云端、失败降级内置默认（见 12.7）。**2026-10-06 代码核实**：**已落**——① 启用态同步：`src/lib/sync/settingsSync.ts:47-49` 把 `enabledPlugins` 列为**保留**（可上云），注释显式对齐 FR-3.9「只同步意图、包本体各设备自装」；② 版本引用集概念：`src/stores/pluginsStore.ts:123/405`（GC 的 `referenced` 由客户端按生效包根给出）、`src/platform/types.ts:1092`，FR-3.8 另以 `<version>/current` 指针达成同一目标。**未落**——① 会话版本引用集的**跨端同步**（当前引用集只服务本机 GC，未进同步负载）；② 专家身份资源走**账户级 CDN**（`avatarUrl` 两形态）：现仅 `Agent.avatar?: string` 本地字段 + 派生占位（`src/types/agent.ts:85`），无账户命名空间云端与内置默认回退 **2026-10-17 收窄（V1.7 B1-04）**：本期只剩两块 —— ① 会话版本引用集**进同步负载**（当前只服务本机 GC，未进同步负载）→ V1.7 B2-01，且**包本体仍不上行**；② 专家身份资源走账户级 CDN → 本期**降级**为「无账户命名空间时给**确定性**占位（同 Agent 同色同字）+ 编辑页写明未接入」，不承诺云端资产。**2026-10-17 落地（V1.7 B2）**：① 会话版本引用集已进同步负载——`Session.pluginVersions`（建会话时快照，`src/lib/agent/sessionPluginRefs.ts`）+ 白名单 `pluginVersions` + meta 往返 + **GC 引用集并集**（`collectCache` = 本机生效副本 ∪ 会话引用集，否则换机 GC 会删掉别的设备仍在用的那一版）；② 已按降级口径落地：占位本就确定（`hashHue` 由名称哈希），本轮补 `helperText` 写明「云端头像未接入」并用 9 条用例**锁定确定性**（同名同色同字）。包本体仍不上行（用例断言 payload 里没有任何 `cache/` 路径）。 |
 
 | FR-3.10 | **插件可提供 prompt 片段**（★结构性） | **P1** | ✅ | both | 插件清单的读者从 2 个（`skills` / `mcpServers`）扩到 5 个，**最关键的是 prompt 片段**。`AgentPlugin` 加 `prompt_dirs`（与 `skills` 同形：`string \| string[]`）；`prompt_templates.py` 单 loader → **ChainLoader**：① 插件命名空间 ② 工作区覆盖 ③ 内置 —— ⚠️ **内置 `FileSystemLoader` 必须常驻链尾**，漏掉它会让内置模板（如 `agent/platform_policy.md`）解析失败，报错看起来像「模板文件不见了」。`user` 档片段在最终提示词中被 `<untrusted_content>` 包裹。**已落地（2026-10-16）**：`agent/plugins.py` + `utils/prompt_templates.py` + `agent/context.py`；14 条用例（整链路 / 「去掉第①级就变红」对照 / 越界三类 / 改内容即失效 / 声明目录外不可读）。⚠️ 覆盖模板**必须走 loader**，不能用 `Environment.from_string`（产出的模板没有 loader，`{% include %}` 一律解析不到）。另：自定义 loader 的 `get_source` 找不到时必须 `raise TemplateNotFound`，返回 `None` 会让 `BaseLoader.load` 解包失败抛 `TypeError`，而 `ChoiceLoader` 只捕 `TemplateNotFound` |
 | FR-3.11 | 插件清单读取器统一 | P1 | ✅ | both | `AgentPlugin` 扩为 `skill_dirs` / `agent_files` / `command_files` / `prompt_dirs` / `hook_manifest` / `tool_policy`，**所有新路径在解析期过同一套 `_contained()`**（绕过它 = 给已有的防路径逃逸开后门，不能等运行期再挡）；`PluginMount` 统一挂载表；`plugin_trust()` / `plugin_prompt_mounts()`。字段未声明时行为与现状完全一致 |
-| FR-3.12 | 声明式工具策略（**只收紧**） | P1 | ✅ | both | 技能 frontmatter 与插件 manifest 两处支持 `tools:`，装配进 `turn_hooks.py` 的基线链；语义是**交集**（`allow &=` 而非 `\|=`）——白名单只能收紧，`tools: [shell]` **不得**使 `shell` 绕过审批门。新增 `agent/hooks/plugin_tools.py`；20 条用例 + 3 项变异验证（交集改并集 / 装配期摘审批门 / 单值声明读成空）。**落差必须说出来**：前端 `src/lib/pluginToolGaps.ts` 复刻引擎 `agent_blocks_tool` 语义，`PluginsPage` 按 `activeAgent` 算落差并渲染「N 项工具被收窄」徽标 + Tooltip（2026-10-17） |
+| FR-3.12 | 声明式工具策略（**只收紧**） | P1 | ✅ | both | 技能 frontmatter 与插件 manifest 两处支持 `tools:`，装配进 `turn_hooks.py` 的基线链；语义是**交集**（`allow &=` 而非 `\|=`）——白名单只能收紧，`tools: [shell]` **不得**使 `shell` 绕过审批门。新增 `agent/hooks/plugin_tools.py`；20 条用例 + 3 项变异验证（交集改并集 / 装配期摘审批门 / 单值声明读成空）。**落差必须说出来**：前端 `src/lib/agent/pluginToolGaps.ts` 复刻引擎 `agent_blocks_tool` 语义，`PluginsPage` 按 `activeAgent` 算落差并渲染「N 项工具被收窄」徽标 + Tooltip（2026-10-17） |
 | FR-3.13 | 市场索引与依赖解析 | P2 | ✅ | electron | 可选 `marketplace.json`（`{name, plugins:[{name, source, category, dependencies[]}]}`）带来**依赖解析**：`resolveInstallOrder` 拓扑序（**循环要把环打印出来** `a → b → a`，只说「存在循环」用户没法行动）+ `pickNewestVersion`（**语义化比较，不是字符串序**：`'0.1.9' > '0.1.10'` 会装到旧版且无报错）。两条纪律：**索引不是白名单**（没提到的包按单包处理，否则一份没写全的索引会变成「市场里别的包装不上」）+ **无索引回退目录扫描**；18 条用例 + 2 项变异 |
 | FR-3.14 | 应用级扩展运行时（ADR） | P1 | ✅（ADR） | electron | `docs/adr/ADR-0025.md`：① 进程模型 `fork` 独立进程，**不抄 Module Federation**（三条否决理由：共享依赖单例 / 权限面无处安放 / 首屏回退）② 权限面 = manifest 声明式白名单，**未声明＝拿不到** ③ 生命周期（activate / deactivate / 崩溃重启；主进程持唯一权威、不无限自动重启）④ 与插件分工（插件给 agent 加能力、扩展给应用加功能，**两套机制不混**）。**「不做 Guest 桥接 SDK」**的两条理由：没有真实需求方（会逼出第二套权限模型）+ 它把「声明即权限」滑回「代码即权限」。**实施另排**（ADR 通过即视为本批完成） |
 
@@ -247,7 +247,7 @@
 | FR-4.1 | 工作区记忆       | P0     | ✅  | both     | `MEMORY.md` 读写 / 注入 / 幂等去重 / 多工作区（已实现，单测覆盖）                                                                                                                                                                                                                                                                                                                               |
 | FR-4.2 | 用户级长期记忆     | **P0** | ✅  | both     | `~/.nanowork/MEMORY.md`（跨项目生效）。**已落地**：`MemoryService` 增加 `scope` 分层——`user` → ① `MEMORY.md`，`workspace` → ① `memory/<key>.md`；`scope` 作为**末位可选参数**接入（40+ 既有调用点语义不变）。**写入方三类**（2026-09-17 修正，原「仅用户显式要求」过窄）：①记忆页手动编辑；②自动沉淀识别出的**身份类**事实（称呼/年龄段/职业/稳定偏好）；③Agent 在用户明确要求下写的 `<memory-save scope="user">`。任务类事实仍只进 L3。记忆页顶部按作用域切换，切层强制重新读盘，并显示**磁盘真实落点**                      |
 | FR-4.3 | 身份文件        | **P1** | ✅  | both     | `SOUL.md` / `IDENTITY.md` / `USER.md` 每会话注入 `<identity_context>`；支持 `BOOTSTRAP.md` 一次性引导模式（引导完成后删除）。**已落地**：四文件落 ① 根目录；引擎 `context.py` 把三个身份文件合成**单个** `<identity_context>` 块（`AGENTS.md` 留在块外，按 PRD 13.3）；`IDENTITY.md` 为新增的「我是谁」模板；`BOOTSTRAP.md` **非空**才进引导态（空文件 = 用户自己关掉了流程）；「完成引导」删除该文件；`/persona` 人格页可编辑四者，**空文件与未写过是两种状态**；身份文件**豁免** `storage:clear`（清本地数据不该抹掉人格） |
-| FR-4.4 | 记忆分级与命名空间 | P1 | 🟡 | both | 三级：个人 / 项目 / 组织，命名空间按「租户 + 用户 + 工作区」隔离。**2026-10-17 复核改判（V1.7 B1-02）**：**个人 / 项目两级已由记忆 v2 落地**——`src/lib/memoryPaths.ts` 定义两类存储根（用户级 `~/.nanowork/user-memory/u_<hash>/`、工作区级 `<wd>/.nanowork/memory/`），隔离键分别是 `scopeIdFor()` 与 `workspaceIdFor()`；canonical JSON 内另存 `userScope` 做归属校验（路径负责正常路由、marker 负责发现错误复制）。**只剩「组织级」**——它必须有租户 / 组织模型（FR-12.1 / 12.2）→ 归 V3。故 **V1 范围视为已完成**，本轮只改判、不写代码 |
+| FR-4.4 | 记忆分级与命名空间 | P1 | 🟡 | both | 三级：个人 / 项目 / 组织，命名空间按「租户 + 用户 + 工作区」隔离。**2026-10-17 复核改判（V1.7 B1-02）**：**个人 / 项目两级已由记忆 v2 落地**——`src/lib/memory/memoryPaths.ts` 定义两类存储根（用户级 `~/.nanowork/user-memory/u_<hash>/`、工作区级 `<wd>/.nanowork/memory/`），隔离键分别是 `scopeIdFor()` 与 `workspaceIdFor()`；canonical JSON 内另存 `userScope` 做归属校验（路径负责正常路由、marker 负责发现错误复制）。**只剩「组织级」**——它必须有租户 / 组织模型（FR-12.1 / 12.2）→ 归 V3。故 **V1 范围视为已完成**，本轮只改判、不写代码 |
 | FR-4.5 | 记忆可见可删      | **P0** | ✅  | both     | 记忆页可查看 / 编辑 / 删除 / 导出；删除为真实删除（合规要求，见 FR-8.6）。**已落地**：两层（用户级 / 工作区级）各有独立的查看 / 编辑 / 清空 / 导出，导出文件名按作用域区分（两层默认同名 `MEMORY.md`，不带 key 会在下载目录互相覆盖）                                                                                                                                                                                                                               |
 | FR-4.6 | Dream 双阶段记忆 | P1     | ✅  | electron | 接入 nanobot Dream（短期→长期合并）；合并产物需用户可审查后才生效。**已落地（V1.7 B3-02，2026-10-18 代码 + 2026-10-23 真机 11/11 + 回退 2/2）**：`MemoryStore` 新增 `dream_candidate_dir` 与 `prepare_dream_candidate`/`has_dream_candidate`/`compute_dream_candidate_diff`/`accept_dream_candidate`(逐字节比对，仅变化才写回)/`reject_dream_candidate`(永不碰正式文件)；`build_dream_tools(require_review=True)` 把写工具指向候选副本，手动 `/dream` 与 cron 两条路径都接闸门；REST `GET /v1/dream/review`、`POST /v1/dream/accept`、`POST /v1/dream/reject`；客户端 `DreamReviewPanel` 接进记忆页（工作区作用域）。回退开关 `DreamConfig.require_review`（默认 **True**，关掉即回到「直落」旧行为）。真机判据含「候选存在期间三件套 sha 不变」「采纳只写变化项」「丢弃逐字节不变」。⚠️ Dream 的输入只有 `memory/history.jsonl`，而它由**会话归档**写入——发几条消息再 `/dream` 通常得到 `nothing to process`
 | FR-4.7 | 组织知识库       | P2     | 🟡  | both     | 文档上传 → 解析 → 检索；按部门/角色设访问范围；**检索前过滤而非检索后过滤**。**2026-10-24 服务端 MVP 已落**（`cloud/app/orgs` + `cloud/app/kb`）：组织/成员/三级角色（owner-admin-member）、知识库（`allowedRoles` 可见范围）、文档入库（按空行分段装箱切块，超长段硬切 + 重叠）、`POST /api/orgs/{id}/search`（**先按角色算可见库集合 → SQL `kb_id IN (…)` 取候选 → 才打分**，词法打分：拉丁词 + 中文双字，词频 / √长度归一）。判据：`cloud/tests/test_kb.py`(19) + `test_orgs.py`(10)，其中 `test_member_never_sees_admin_only_kb` 用「越权文档写得更相关 + topK=1」钉住「先过滤后打分」——变异成「先取全部再过滤」会精确变红。**2026-10-24 客户端补齐**：③ 已落 —— `pages/knowledge/KnowledgePage.tsx`（组织 → 知识库 → 文档 / 检索，未登录明说需要登录、403 原样报出）+ `FR-2.3` 的知识库绑定（专家表单 `AgentKnowledgePicker` 选组织与范围 → 每轮检索一次 → `<knowledge_context>` 注入，见 §20.9.9）。**2026-10-24 向量检索已落**（`cloud/app/kb/embedding.py` + `vectors.py` + `retrieval.py`）：`resolve_embedder()` 按环境变量选档 —— `off`（默认，排序与纯词法逐条一致）/ `hash`（词袋随机投影，**非语义**，无依赖可离线验证链路）/ `openai`（任何 OpenAI 兼容 `/embeddings`，真语义）。向量存独立表 `kb_vectors`（主键 `(chunk_id, model)`）——**不给 `kb_chunks` 加列**：`create_all` 不会 ALTER 已存在的表，老库会静默少列，而测试库每次重建永远看不出来。排序走**混合**：词法 + 余弦经 RRF 合并（RRF 只用名次，不用为两个不同量纲的分数调权重）；词法零命中而向量命中时返回纯向量结果。**可见性不因换打分方式而放宽**：候选仍先按角色 + `kbIds` 在 SQL 里收窄，向量只决定顺序。索引缺失按「不参与向量排序」处理（不是 0 分参与），并可由 `POST /api/kbs/{id}/reindex` 补建（幂等、分批、中途失败回报已完成数）；覆盖率与配置错误由 `GET /api/kb/retrieval` 上报，知识库页据此渲染说明文字（原来写死「向量检索未接入」，开了 embedder 就会说谎）。**2026-10-24 文档解析已落**（`cloud/app/kb/parsing.py` + `POST /api/kbs/{id}/documents/file`）：`.txt/.md/.csv`（UTF-8 → GB18030）、`.docx`（zip + OOXML，标准库）、`.pdf`（`pypdf`，**可选依赖**）；旧版 `.doc/.xls/.ppt`、图片、扫描件 PDF 一律 422 并说清该换什么格式。四条口径：① 先解析后落库（失败不留半篇）；② 上限 8MB / 单篇 20 万字，超限**报错而不是截断**；③ 降级必须说出来（PDF 某几页没文本层 / docx 表格被摊平 → 响应 `warnings` → 客户端逐条弹出）；④ 扫描件不假装成功（没有文本层就 422 + 提示 OCR，不入库空文档）。传输入口走 base64 JSON，避免为一个接口引入 `python-multipart`。**2026-10-24 部门范围已落**（`FR-12.2` 的部门树 + 本模块的 `kb_departments`）：知识库可以指定「仅限这些部门（含子部门）」，与角色是 **AND** 但**只收窄普通成员**——admin/owner 有管理豁免，否则会出现「建完自己看不见、也改不了范围」的死锁。可见性收成 `kb/visibility.py` 的**唯一一条规则**（`allows()`，单本判定与列表判定共用）；方向是「允许集合往下展开 ∩ 我直属的部门」，反着算会漏掉「人在子部门、库共享给父部门」。判据 `cloud/tests/test_departments.py`（20 例，含「列表看不到 + 直连 403 + 检索搜不到」三条同源断言）。**2026-10-24 文档生命周期已落**：`GET /kbs/{id}/documents` 原先只增不减——传错一份资料就永久参与检索，同一篇重复上传则产生完全重复的块（top-5 全是同一篇的副本）。现在补齐四件事：① **内容判重**（`kb/digest.py` 按**切好块**算 sha256，作用域**本库**——跨库同内容是正常用法）→ 重复入库 409 并点名「已在库里的是哪一篇」；判重前先 `_backfill_hashes` 给「字段存在之前入库」的老文档从块重算摘要（正文不入库、块一直在，所以补得回来）。② **删除** `DELETE /kbs/{id}/documents/{docId}`：按 `kb_vectors → kb_chunks → kb_documents` 清三张表 —— 只删文档行会留下孤儿块，它们带着 kb_id 照样被检索命中，于是「列表里没有、结果里有」；同时校验 `doc.kb_id == kb.id`（防拿 A 库凭证删 B 库文档）。③ **改名** `PATCH`：判重让「同内容换标题重传」变成 409，所以标题必须能单独改，否则改错标题只能删了重传。④ **读写分权**：`_writable_kb_or_404` 要求 admin —— `allowed_roles` 控制的是**读**，写沿用它就等于「任何能看的人都能删别人的资料」。列表同时上报 `kind` 与**每篇已建向量条数**（一次 GROUP BY），界面据此给缺索引的文档挂警示（没索引 = 搜不到，而它长得和正常文档一样）。**仍未做（本期的边界，别当成完成）**：① `.xlsx`/`.pptx`/OCR/图片内文字；② **没有 ANN 索引**——候选全取进内存算余弦，适合单库几百到几千块，十万级要换 pgvector/HNSW；③ 向量与正文没有版本绑定（换了 embedder 必须重建，界面会显示待建块数）；④ 界面上只能**建库时**设部门范围，改范围还没有入口（服务端 `PATCH /visibility` 已支持）；⑤ 删除是硬删，没有回收站/撤销（确认弹窗写清了后果）
@@ -258,9 +258,9 @@
 | ------ | ----------------- | ------ | -- | -------- | ---------------------------------------------------------------------------------------------------- |
 | FR-5.1 | 定时任务 CRUD         | P0     | ✅  | both     | cron / interval / once + 启停 / 删除（已实现）                                                                |
 | FR-5.2 | 任务镜像到引擎           | P0     | ✅  | electron | 合并进 `cron/jobs.json` + 热加载，无需重启网关（已实现，含托管标记）                                                         |
-| FR-5.3 | 执行留痕              | P0     | ✅  | both     | `TaskRunRecord` 已有；**2026-10-03 补齐三处缺口**：① 成功率统计（`src/lib/taskRunStats.ts` 的 `summarizeRuns`/`summarizeRunsByTask`，运行记录页统计条 + 每条任务卡片上的成功率）；② **失败原因分类**（7 类 + `unknown`，判据取自引擎与客户端**真实会写入的文案**，见该文件头）；③ 运行详情（既有「展开看触发方式/耗时/原文 + 只读执行会话视图」即详情形态，**未单开独立页面**）。所有指标**从 `runs` 派生，不新增存储字段** |
-| FR-5.4 | **RFC 5545 循环规则** | **P1** | ✅  | both     | 支持 `RRULE`（如「每月 1、15、28 日 09:00」）、`valid_from` / `valid_until` 有效期窗口（对齐 WorkBuddy `automations` 表语义）。**2026-10-03 已落**：`TaskSchedule` 加 `rrule` 形态、`TaskConfig` 加 `validFrom`/`validUntil`、降级纯函数 `src/lib/rrule.ts`（含**明确拒绝**不可降级的规则）、同步链路 `computeNextRunMs` 按窗口算 `nextRunAtMs`、表单加「循环规则」档 + **降级结果实时回显**。**未做**：结果回推（FR-5.6）仍缺 **已落地（2026-10-03）**：`TaskSchedule.rule = { kind: 'rrule'; rrule; tz? }`、`TaskConfig.validFrom / validUntil`、降级纯函数 `src/lib/rrule.ts`（能降的降成单条 cron，不能降的**明确拒绝并给出人话原因**）、表单「循环规则」档 + 降级结果实时回显。当时唯一未做的是结果回推，已随 FR-5.6 落地 |
-| FR-5.5 | 自然语言建任务           | P0     | ✅  | both     | 对话内 hover → 创建定时任务（已实现）。**2026-10-03 补完语义推荐调度**：新建任务时从消息正文推断执行频率（`src/lib/scheduleFromText.ts`：「每周一早上9点」→ `0 9 * * 1`、「每个工作日18:00」→ `0 18 * * 1-5`、「每半小时」→ 引擎原生 30 分钟间隔），并在表单顶部说明识别结果。**识别不出就不填**（不猜 —— 自动化是会自动跑起来的东西，猜错的代价远高于「没帮你填」）；多日/工作日这类结构化表达不了的会落到 cron 原文，此时表单**默认展开「高级」**，让用户看见真正生效的那条规则                                            |
+| FR-5.3 | 执行留痕              | P0     | ✅  | both     | `TaskRunRecord` 已有；**2026-10-03 补齐三处缺口**：① 成功率统计（`src/lib/task/taskRunStats.ts` 的 `summarizeRuns`/`summarizeRunsByTask`，运行记录页统计条 + 每条任务卡片上的成功率）；② **失败原因分类**（7 类 + `unknown`，判据取自引擎与客户端**真实会写入的文案**，见该文件头）；③ 运行详情（既有「展开看触发方式/耗时/原文 + 只读执行会话视图」即详情形态，**未单开独立页面**）。所有指标**从 `runs` 派生，不新增存储字段** |
+| FR-5.4 | **RFC 5545 循环规则** | **P1** | ✅  | both     | 支持 `RRULE`（如「每月 1、15、28 日 09:00」）、`valid_from` / `valid_until` 有效期窗口（对齐 WorkBuddy `automations` 表语义）。**2026-10-03 已落**：`TaskSchedule` 加 `rrule` 形态、`TaskConfig` 加 `validFrom`/`validUntil`、降级纯函数 `src/lib/task/rrule.ts`（含**明确拒绝**不可降级的规则）、同步链路 `computeNextRunMs` 按窗口算 `nextRunAtMs`、表单加「循环规则」档 + **降级结果实时回显**。**未做**：结果回推（FR-5.6）仍缺 **已落地（2026-10-03）**：`TaskSchedule.rule = { kind: 'rrule'; rrule; tz? }`、`TaskConfig.validFrom / validUntil`、降级纯函数 `src/lib/task/rrule.ts`（能降的降成单条 cron，不能降的**明确拒绝并给出人话原因**）、表单「循环规则」档 + 降级结果实时回显。当时唯一未做的是结果回推，已随 FR-5.6 落地 |
+| FR-5.5 | 自然语言建任务           | P0     | ✅  | both     | 对话内 hover → 创建定时任务（已实现）。**2026-10-03 补完语义推荐调度**：新建任务时从消息正文推断执行频率（`src/lib/task/scheduleFromText.ts`：「每周一早上9点」→ `0 9 * * 1`、「每个工作日18:00」→ `0 18 * * 1-5`、「每半小时」→ 引擎原生 30 分钟间隔），并在表单顶部说明识别结果。**识别不出就不填**（不猜 —— 自动化是会自动跑起来的东西，猜错的代价远高于「没帮你填」）；多日/工作日这类结构化表达不了的会落到 cron 原文，此时表单**默认展开「高级」**，让用户看见真正生效的那条规则                                            |
 | FR-5.6 | **结果回推渠道**        | **P1** | ✅ | both     | 任务可配置推送到企微 / 微信 / 飞书。**2026-10-03 按路线 C 落地**（为什么不用「纯客户端」的路线 A，见 §15.3）：引擎 `[LOCAL PATCH]` 新增 `payload.delivery`，`run_bound_cron_job` 完成后再经 message bus **另发**一份到配置的目标；执行会话仍绑 `api:cron-{id}`（工作区 / 权限 / 留痕零回归）。**2026-10-05 补 `start` 档位**：在结果之外多推一条「已开始执行」，三档为包含关系（仅失败时 ⊂ 每次执行后 ⊂ 开始时），见 §20.8。**未做**：`milestone`（明确不做，理由见 §20.8.5）、持久化 outbox（第一期由 `ChannelManager._send_with_retry` 的指数退避等价覆盖）                      |
 | FR-5.7 | Webhook / 邮件触发器   | P2     | ⬜  | both     | 除定时外支持外部事件触发（V2）                                                                                     |
 | FR-5.8 | 工作目录上下文           | P1     | ✅ | both     | 任务可绑定工作目录。**2026-10-03 落地，且是纯客户端的**（引擎无需新增任何字段）：`TaskConfig.workdir` → job 的 `originMetadata.workspace_scope.project_path`，而 `originMetadata` 是引擎既有的透传字段，`bound_runner` 会把它原样搬成 cron turn 的 message metadata，引擎在 turn 边界按**会话作用域**解析出这一轮该在哪个目录里跑。表单加「工作目录」（目录选择器 + 绝对路径校验：相对路径会被引擎静默回落默认目录）。⚠️ 硬约束：任务的 origin 渠道必须保持 `api` —— 详见 §15.3                                                                    |
@@ -272,7 +272,7 @@
 | FR-6.1 | 渠道配置与镜像         | P0     | ✅  | both     | 5 渠道（钉钉/飞书/Lark/微信/企微）+ 白名单 + 群策略，镜像进 `config.json`（已实现）                       |
 | FR-6.2 | 扫码接入            | P0     | ✅  | electron | 扫码完成应用创建与凭据回写（已实现）                                                             |
 | FR-6.3 | **结果回推 IM**     | **P0** | ✅  | both     | 任务完成 / 长任务关键节点 → 通过原渠道回推结果；复用 `payload.deliver` 投递字段 **已落地（2026-10-05 补齐档位）**：FR-5.6 按路线 C 落地的 `CronDelivery` / `CronDeliveryTarget` 已把结果推到企微 / 微信 / 飞书渠道，`run_bound_cron_job` 完成后经 message bus 另发一份、出站复用 `_send_with_retry` 的指数退避。**2026-10-05 补 `start` 档位**（「开始时」开跑通知，见 §20.8）。**未做**：`milestone`（明确不做，理由见 §20.8.5）、持久化 outbox（跨重启补投，第一期由退避等价覆盖） |
-| FR-6.4 | **远程派活 → 会话归档** | **P0** | ✅ | both     | IM 指令驱动本地 Agent 执行，执行记录在客户端可见（`channelSessionsStore` 已有数据通道）。**已落地（2026-10-05）**：来源判定收到 `src/lib/channelSession.ts`（单一事实源）；侧栏「助理」按渠道分组 + 渠道筛选（分组键用渠道**原始首段**，未知渠道不再被并进「钉钉」）；IM 会话头部显示「来自 xx」来源标记且**标题只读**（网关标题改了会被下一轮轮询盖回）。详见 §20.7 |
+| FR-6.4 | **远程派活 → 会话归档** | **P0** | ✅ | both     | IM 指令驱动本地 Agent 执行，执行记录在客户端可见（`channelSessionsStore` 已有数据通道）。**已落地（2026-10-05）**：来源判定收到 `src/lib/channel/channelSession.ts`（单一事实源）；侧栏「助理」按渠道分组 + 渠道筛选（分组键用渠道**原始首段**，未知渠道不再被并进「钉钉」）；IM 会话头部显示「来自 xx」来源标记且**标题只读**（网关标题改了会被下一轮轮询盖回）。详见 §20.7 |
 | FR-6.5 | IM 内审批          | P1     | ✅  | both     | 敏感操作可在 IM 里一键批准/拒绝，无需回桌面（对齐 WorkBuddy `Approval`）。**代码已落（V1.7 B3-03，2026-10-18）**：① 推送——`build_bus_progress_callback` 的 `approval_request` 分支以**普通出站消息**下发（不包 `ProgressEvent`，否则被 `send_progress` 静音），正文含工具名 / 参数摘要 / TTL / 短编号，按钮只服务 Telegram/Slack 等支持的渠道，**飞书不渲染按钮**（代码实测）故契约以**文本回复**为准；开关 `channels.<name>.tool_approval: "ask"`（默认 `auto`，不改桌面行为）。② 回调——`security/im_approval.py` 的 `ApprovalInbox` 在 `AgentLoop.run()` 里先于命令分发吸收「允许/拒绝」，走**进程内** `PENDING_APPROVALS.resolve`（不是 `POST /v1/tool-approvals/{id}`：IM 轮次在 gateway 进程，该端点只在 serve 进程）。③ fail-closed——渠道不可用 / 超时 / 重放一律不执行，跨会话不消耗。**2026-10-20 真机闭环（C.3 + C.8）**：飞书侧审批卡文本已生效（用户确认），回「允许」→ 工具执行（`approval-probe.md` 真创建）、回「拒绝」→ 工具未执行（`deny-probe.md` 未创建）；桌面端助理视图同步弹审批卡（贴输入框位置）。期间挖出并修掉两个**零报错的运行时缺陷**：① 运行时渠道名 `feishu.feishu` ≠ 配置段名 `feishu` → 审批开关查表必 miss → 工具无审批直执行（看板 #37，`resolve_channel_tool_approval` 精确优先 + 段名回退）；② 网关路由层「漏 await」→ 审批快照端点恒 500 → 卡片永不出现（已改同步 `def`，AST 判据 12 例）。⚠️ 已知契约差异：**飞书不渲染按钮**（代码实测），故以**文本回复**为契约，`buttons` 只服务 Telegram/Slack 等渠道
 | FR-6.6 | 渠道健康与告警         | P1     | ✅ | both     | **已落地（2026-10-06）**：复用引擎既有 `GET /api/settings/nanobot-features`（`with_channel_runtime_status` 已叠加运行时状态，feishu/lark 按 `instances[].domain` 拆分），由主进程 IPC `nanobot:getChannelRuntimeStatus` 经 `api_token` 鉴权拉取，**零引擎改动**；`channelsStore` 30s 轮询、合并 health/gatewayUp、weixin 掉线按 1/2/4s 退避自动重连（≤3 次）；UI 顶部网关未运行 error Alert + 掉线渠道 warning Alert + 卡片 `ChannelHealthBadge`（在线/连接中/失败/停止/未知）+ 「重新连接」按钮（手动 `syncAll` 重载）。⚠️ 端口必须打 **gateway(9900 WS+HTTP)**，与 bootstrap/WS 桥同源——旧实现错打 serve(18900) 必 `gatewayUp=false`（当日已修复并核对引擎源码）；沙箱无法对真实网关做端到端实证，上线后若取不到状态先查 `config.gateway.port` 是否被改非 9900 |
 
@@ -283,7 +283,7 @@
 | ------ | --------- | ------ | -- | -------- | ---------------------------------------------------------------------------------------------------- |
 | FR-7.1 | 富产物渲染     | P0     | ✅  | both     | html / svg / 图片 / mermaid / 代码 / md / 视频 渲染 + 下载（已实现）                                                |
 | FR-7.2 | 产物索引      | **P0** | ✅  | both     | 产物按会话 / 时间归档可检索（`artifactsStore` 已有）；**补**：独立索引（对齐 WorkBuddy `artifact-index/`），跨会话检索与去重             |
-| FR-7.3 | **文件级回滚** | **P0** | ✅  | electron | 每次写类工具执行前建立快照；可按会话 / 按步回滚到任意 `commitSeq`；实现对齐 WorkBuddy 的 `file-history/` + `*.file-rollback.ndjson` **客户端侧已落地（2026-10-04 核实）**：写前快照 `src/lib/fileBackup.ts`（`snapshotBeforeWrite`）+ 平台抽象 `ElectronFileBackup` / `WebFileBackup`（复用既有 IPC `file-backup:put/get`，**无需重建 cjs**）+ 时间线 key `STORAGE_KEYS.fileBackups`（`nanowork.fileBackups`）已登记进 `electron/storageRoutes.ts`，主进程**已重建 `main.cjs`**；`MemoryService` 五个写入口挂 prebackup，记忆页有「历史快照 / 回滚到此处」。**仍未做**：引擎侧 workspace 文件回滚（nanobot 只读不可改，单列 follow-up）——因此本条标 ✅ 但**仅指客户端写作点** |
+| FR-7.3 | **文件级回滚** | **P0** | ✅  | electron | 每次写类工具执行前建立快照；可按会话 / 按步回滚到任意 `commitSeq`；实现对齐 WorkBuddy 的 `file-history/` + `*.file-rollback.ndjson` **客户端侧已落地（2026-10-04 核实）**：写前快照 `src/lib/artifact/fileBackup.ts`（`snapshotBeforeWrite`）+ 平台抽象 `ElectronFileBackup` / `WebFileBackup`（复用既有 IPC `file-backup:put/get`，**无需重建 cjs**）+ 时间线 key `STORAGE_KEYS.fileBackups`（`nanowork.fileBackups`）已登记进 `electron/storageRoutes.ts`，主进程**已重建 `main.cjs`**；`MemoryService` 五个写入口挂 prebackup，记忆页有「历史快照 / 回滚到此处」。**仍未做**：引擎侧 workspace 文件回滚（nanobot 只读不可改，单列 follow-up）——因此本条标 ✅ 但**仅指客户端写作点** |
 | FR-7.4 | 产物版本      | P1     | ✅  | both     | 同源产物多版本可对比与回退 **已全部落地（2026-10-05 复核更正）**：`artifactsStore` 按内容寻址推进 `version` / `previousVersion` / `versions[]`（`docs/fr-7-4-artifact-version-spec.md`），内容池 `bodies` + 引用 `bySession`，回退＝新开一版不覆盖历史；**UI 侧 `ArtifactPanel` 早有完整入口**（版本历史区 + 预览此版本 + 左右分屏对比 + 回退到此版本，`src/components/artifacts/ArtifactPanel.tsx:694/304/933`），并随独立适配器跨端同步（`src/sync/artifacts.ts`）。⚠️ **旧标注「对比与回退入口未做（2026-10-04 核实）」是错的**——UI 在 2026-09-29（`b71cb3a`）就落了，核实结论晚于代码且未验证，已更正。唯一真实缺口是**这组交互长期没有测试**，见 §20.10 |
 | FR-7.5 | 人机双写      | P2     | ⬜  | both     | 产物内可圈选局部让 AI 改写，改动留版本（V2）                                                                            |
 
@@ -295,11 +295,11 @@
 | FR-8.2 | **工具调用网关（唯一收口）** | **P0** | ✅  | both     | 收口**落点在引擎**（`before_execute_tool` 否决通道 + `POST /v1/tool-approvals/{id}`，见 ADR-021）：所有副作用工具调用必经此裁决，绕过即缺陷。三档决策（`allow` / `sandbox` / `deny`）由纯函数 `decide_tier` 给出并逐条穷举单测；Agent 白名单校验（FR-2.2）、`sandbox` 档（FR-8.3）、决策审计（FR-8.9）均已接线                                                                                                                                                               |
 | FR-8.3 | **运行时硬兜底**       | **P0** | ✅  | both     | 删除类操作改道系统回收站而非真删；回收站失败时 **fail-closed**（报错而非降级为真删）；临时目录例外。**归属由 electron 修正为引擎**：删除发生在引擎进程内（`shell.py` 的 `rm` / `apply_patch` 的写入），Electron 主进程拦不住。落地：`security/trash.py`（回收站纯逻辑 + 批量阈值 + 留痕）+ `delete_file` 工具（唯一删除入口）+ `shell.py::_guard_command` 收口（裸 `rm`/`del`/`Remove-Item`/`unlink` 一律拦下并指回 `delete_file`，临时目录例外）。浏览器端因此**无需**降级——强制点在引擎，Web 与 Electron 同强度                            |
 | FR-8.4 | **默认拒绝写入策略**     | **P0** | ✅ | both     | 白名单制：未在允许列表中的路径默认禁止写入；`.ssh` / `.gnupg` 等凭据目录为 `no_access`（连读也禁止）。**已落地（引擎侧）**：凭据 `no_access` 为**无条件**守卫（读+写、`full` 模式亦不可越过、allow-list 无法覆盖）；写默认拒绝以 `file.default_deny_write` 开关承载。**归属由 electron 修正为引擎**：客户端拦不住工具在引擎进程内的实际读写。**客户端补齐（2026-10-04）**：设置 →「安全」分区可读可写 `tools.file.default_deny_write`（开关 + 草稿保存 + 重启网关），并以**只读清单**展示 `no_access` 凭据名册；详见 §20.6                                                                                                                                                                 |
-| FR-8.5 | 沙箱执行             | P1     | 🟡 | electron | 执行类任务在受限上下文中运行。**2026-10-23 按 V1 口径收口（§11.3.1）**：`agent/tools/sandbox.py` **存在但只有 bwrap 一个后端、仅 Linux、默认关闭**（Windows 无后端，配了只警告 + 裸跑）、「网络出口白名单」**未实现**（只有 SSRF 防护）；真正生效的是五层策略边界——渲染层外壳（`sandbox:true`/`contextIsolation`）、工具网关三档、文件系统（限定模式锁工作区 + full 模式默认拒绝写删 + 凭据目录无条件不可访问 + 回收站）、网络（SSRF）、以及**本机不可用**的操作系统级隔离（Linux bwrap 默认关闭 + Windows 无后端；Job Object 只回收进程树）。本期落地=**边界声明**：`src/lib/sandboxBoundary.ts`（唯一事实来源）+ 设置「安全」分区只读卡片（逐条给「已生效/部分生效/没有」与缺口；**刻意不给开关**，引擎侧没有可开关的 native 沙箱）+ 用例 11 例 + 3 项变异。**剩下的部分改判 V3**（独立用户 + 目录 ACL → V2；gVisor/Firecracker 一次性容器 + 租户网络策略 → V3），本期明确不做 native 沙箱（B5 决策：没有真实诉求就不为对齐而做）
-| FR-8.6 | 数据防泄漏 | P1 | ✅ | both | **2026-10-17 复核拆三件（V1.7 B1-03），三件状态各不相同**：① **记忆可彻底删除** → ✅ 已随 FR-4.5 落地（记忆页可查看 / 编辑 / 删除 / 导出，删除为真实删除）；② **检索前按权限过滤** → ✅ **2026-10-24 随 FR-4.7 落地**：`cloud/app/kb/routes.py::visible_kb_ids()` 先按成员角色算出可见库集合，再 `WHERE kb_id IN (…)` 取候选，**最后**才打分；判据 `test_member_never_sees_admin_only_kb` 用「越权文档写得更相关 + topK=1」，换成「先取全部再过滤」会精确变红。专家绑定走同一函数收窄范围（`kbIds`），越权 id 回 403 而不是静默跳过；③ **提示词注入检测** → ✅ **已落地（2026-10-17，V1.7 B2-02）**：`src/lib/promptInjection.ts` 四类本地规则（指令覆盖 / 角色劫持 / 外泄诱导 / 编码混淆），`Composer` 上方常驻一行提示、**只提示不拦截**（拦错了比不拦更糟），15 条用例（含 6 条「正常提问不误报」）。因此本条**不再计为「V1 整条欠账」**；三件至此全部 ✅（② 随 FR-4.7 落地） |
+| FR-8.5 | 沙箱执行             | P1     | 🟡 | electron | 执行类任务在受限上下文中运行。**2026-10-23 按 V1 口径收口（§11.3.1）**：`agent/tools/sandbox.py` **存在但只有 bwrap 一个后端、仅 Linux、默认关闭**（Windows 无后端，配了只警告 + 裸跑）、「网络出口白名单」**未实现**（只有 SSRF 防护）；真正生效的是五层策略边界——渲染层外壳（`sandbox:true`/`contextIsolation`）、工具网关三档、文件系统（限定模式锁工作区 + full 模式默认拒绝写删 + 凭据目录无条件不可访问 + 回收站）、网络（SSRF）、以及**本机不可用**的操作系统级隔离（Linux bwrap 默认关闭 + Windows 无后端；Job Object 只回收进程树）。本期落地=**边界声明**：`src/lib/core/sandboxBoundary.ts`（唯一事实来源）+ 设置「安全」分区只读卡片（逐条给「已生效/部分生效/没有」与缺口；**刻意不给开关**，引擎侧没有可开关的 native 沙箱）+ 用例 11 例 + 3 项变异。**剩下的部分改判 V3**（独立用户 + 目录 ACL → V2；gVisor/Firecracker 一次性容器 + 租户网络策略 → V3），本期明确不做 native 沙箱（B5 决策：没有真实诉求就不为对齐而做）
+| FR-8.6 | 数据防泄漏 | P1 | ✅ | both | **2026-10-17 复核拆三件（V1.7 B1-03），三件状态各不相同**：① **记忆可彻底删除** → ✅ 已随 FR-4.5 落地（记忆页可查看 / 编辑 / 删除 / 导出，删除为真实删除）；② **检索前按权限过滤** → ✅ **2026-10-24 随 FR-4.7 落地**：`cloud/app/kb/routes.py::visible_kb_ids()` 先按成员角色算出可见库集合，再 `WHERE kb_id IN (…)` 取候选，**最后**才打分；判据 `test_member_never_sees_admin_only_kb` 用「越权文档写得更相关 + topK=1」，换成「先取全部再过滤」会精确变红。专家绑定走同一函数收窄范围（`kbIds`），越权 id 回 403 而不是静默跳过；③ **提示词注入检测** → ✅ **已落地（2026-10-17，V1.7 B2-02）**：`src/lib/prompt/promptInjection.ts` 四类本地规则（指令覆盖 / 角色劫持 / 外泄诱导 / 编码混淆），`Composer` 上方常驻一行提示、**只提示不拦截**（拦错了比不拦更糟），15 条用例（含 6 条「正常提问不误报」）。因此本条**不再计为「V1 整条欠账」**；三件至此全部 ✅（② 随 FR-4.7 落地） |
 | FR-8.7 | 敏感操作审批           | P2     | ⬜  | both     | 外发邮件/消息、删除文件、访问敏感目录、超额 API 调用 → 人审批后执行（V3）                                                                                                                                                                                                                                                                                                                                                    |
 | FR-8.8 | 内容审计             | P2     | ⬜  | both     | 输入输出敏感词/合规扫描，支持自定义规则（V3）                                                                                                                                                                                                                                                                                                                                                                      |
-| FR-8.9 | 审计日志             | P1     | 🟡 | both     | 全量操作留痕（谁/何时/对哪个 Agent/什么指令/什么工具/触达什么数据）；append-only；含命令哈希（对齐 WorkBuddy `audit-log/*.jsonl`）。**已落地（引擎侧）**：`security/audit.py` 在工具执行的唯一收口点写 `audit/tool-gateway.ndjson`，逐行 append-only，含 `timestamp / tool / tier / outcome / approved_by / args / args_digest(sha256) / session_key / channel / approval_mode / agent_id / reason`；写失败静默吞掉（审计不得反向影响执行）。**已落地（客户端，commit `39847f9`）**：`lib/auditLog.ts`（NDJSON 解析/筛选/CSV 导出）、`pages/audit/AuditPage.tsx`（检索窗 + 档位/结果/来源筛选 + CSV 导出）、`platform.auditRead()`（electron 读盘 / web 降级 `exists:false`）、侧边栏「审计」入口与路由；测试 `tests/lib/auditLog.test.ts` 已覆盖。**未做**：非工具类操作（技能启停、配置变更）的留痕——引擎侧目前只审计工具网关这一收口点，需引擎新增 emit 才能闭环「全量」。**2026-10-23 补第二条来源（客户端）**：`src/lib/appAudit.ts`（动作闭集 28 条 + 脱敏 `sanitizeAuditDetail` + 解析/筛选/排序/CSV）+ 平台能力 `auditAppendApp` / `auditReadApp`（Electron 落 `<userData>/audit/app-operations.ndjson`，Web 明确回 `ok:false` 而不是静默）+ 审计页第二档「应用操作」（与工具网关同页两档，各自列与筛选项）。接入的 8 个落点：专家 CRUD/启停、技能安装/卸载/改档、插件装卸/启停/市场安装、连接器 CRUD/启停/凭据写入（只记字段名）、渠道保存/删除/启停、定时任务增删改启停、会话删除、安全策略（默认拒绝写入 / 路径规则）。三条纪律：**只记用户发起的动作**（同步落地走 `setState`，不经 store 动作 → 不会被记成「本机改的」）、**引擎镜像建的任务不记成用户新建**、**写盘失败一律吞**（审计是旁路）。判据 `tests/lib/appAudit.test.ts`（22 例）+ `tests/appAuditWiring.test.ts`（8 例，钉住「动作 → 具体 action id」）+ 3 项变异逐条变红。**2026-10-24 补第三条：引擎侧应用操作**（`nanobot/security/audit.py` 的 `record_app_operation`）。落点 `<data_dir>/audit/app-operations.ndjson`，**与本机那份同一套行格式**（键名 camelCase，`actor` 恒为 `engine`），由引擎在三处写入：`POST /v1/dream/accept|reject`（含 `updated` 计数）、`POST /v1/config/reload`（成功记模型数、失败记原因）、`CronService.reload_jobs()`（记重载后的 job 数——任务被清空时正是最该留痕的场景）。客户端 `auditReadAppEngine()` 读回后与本体记录**合并成一条时间轴**，表里用「来源」列区分本机/引擎；两份文件不合并写入（两个进程各写各的，混写迟早写花），`NANOBOT_APP_AUDIT_LOG` 可重定向、空串即关闭。判据：引擎 `tests/security/test_app_audit.py`(9) + `tests/api/test_app_audit_wiring.py`(3) + `tests/cron/test_cron_reload_audit.py`(2)，客户端 `tests/auditPageAppSources.test.tsx`(2) + `tests/lib/appAudit.test.ts` 的来源/合并三例；4 项变异逐条变红（采纳不记账 / 脱敏失效 / cron 重载不记账 / 页面忽略引擎那份）。**仍未做**：插件启停（引擎侧 `POST /v1/plugins/{name}`）刻意不在引擎重复记——客户端已记一条，两处都记会让一次点击变成两条账 |
+| FR-8.9 | 审计日志             | P1     | 🟡 | both     | 全量操作留痕（谁/何时/对哪个 Agent/什么指令/什么工具/触达什么数据）；append-only；含命令哈希（对齐 WorkBuddy `audit-log/*.jsonl`）。**已落地（引擎侧）**：`security/audit.py` 在工具执行的唯一收口点写 `audit/tool-gateway.ndjson`，逐行 append-only，含 `timestamp / tool / tier / outcome / approved_by / args / args_digest(sha256) / session_key / channel / approval_mode / agent_id / reason`；写失败静默吞掉（审计不得反向影响执行）。**已落地（客户端，commit `39847f9`）**：`lib/audit/auditLog.ts`（NDJSON 解析/筛选/CSV 导出）、`pages/audit/AuditPage.tsx`（检索窗 + 档位/结果/来源筛选 + CSV 导出）、`platform.auditRead()`（electron 读盘 / web 降级 `exists:false`）、侧边栏「审计」入口与路由；测试 `tests/lib/audit/auditLog.test.ts` 已覆盖。**未做**：非工具类操作（技能启停、配置变更）的留痕——引擎侧目前只审计工具网关这一收口点，需引擎新增 emit 才能闭环「全量」。**2026-10-23 补第二条来源（客户端）**：`src/lib/audit/appAudit.ts`（动作闭集 28 条 + 脱敏 `sanitizeAuditDetail` + 解析/筛选/排序/CSV）+ 平台能力 `auditAppendApp` / `auditReadApp`（Electron 落 `<userData>/audit/app-operations.ndjson`，Web 明确回 `ok:false` 而不是静默）+ 审计页第二档「应用操作」（与工具网关同页两档，各自列与筛选项）。接入的 8 个落点：专家 CRUD/启停、技能安装/卸载/改档、插件装卸/启停/市场安装、连接器 CRUD/启停/凭据写入（只记字段名）、渠道保存/删除/启停、定时任务增删改启停、会话删除、安全策略（默认拒绝写入 / 路径规则）。三条纪律：**只记用户发起的动作**（同步落地走 `setState`，不经 store 动作 → 不会被记成「本机改的」）、**引擎镜像建的任务不记成用户新建**、**写盘失败一律吞**（审计是旁路）。判据 `tests/lib/audit/appAudit.test.ts`（22 例）+ `tests/appAuditWiring.test.ts`（8 例，钉住「动作 → 具体 action id」）+ 3 项变异逐条变红。**2026-10-24 补第三条：引擎侧应用操作**（`nanobot/security/audit.py` 的 `record_app_operation`）。落点 `<data_dir>/audit/app-operations.ndjson`，**与本机那份同一套行格式**（键名 camelCase，`actor` 恒为 `engine`），由引擎在三处写入：`POST /v1/dream/accept|reject`（含 `updated` 计数）、`POST /v1/config/reload`（成功记模型数、失败记原因）、`CronService.reload_jobs()`（记重载后的 job 数——任务被清空时正是最该留痕的场景）。客户端 `auditReadAppEngine()` 读回后与本体记录**合并成一条时间轴**，表里用「来源」列区分本机/引擎；两份文件不合并写入（两个进程各写各的，混写迟早写花），`NANOBOT_APP_AUDIT_LOG` 可重定向、空串即关闭。判据：引擎 `tests/security/test_app_audit.py`(9) + `tests/api/test_app_audit_wiring.py`(3) + `tests/cron/test_cron_reload_audit.py`(2)，客户端 `tests/auditPageAppSources.test.tsx`(2) + `tests/lib/audit/appAudit.test.ts` 的来源/合并三例；4 项变异逐条变红（采纳不记账 / 脱敏失效 / cron 重载不记账 / 页面忽略引擎那份）。**仍未做**：插件启停（引擎侧 `POST /v1/plugins/{name}`）刻意不在引擎重复记——客户端已记一条，两处都记会让一次点击变成两条账 |
 
 | FR-8.10 | 窗口安全档位表与 webSecurity 分流 | **P1** | ✅ | electron | 安全从「应用层单点」补成「外壳 + 内容 + 删除」三道的第一道。新增 `electron/windowPreferences.ts`：`createWindowPreferences(kind, opts)` 按角色返回档位（`main` / `first-party` / `guest-popup` / `image-decoder` / `artifact-preview`），**危险档位缺前置条件即 `throw`**（静默返回会让越权窗口静默诞生）。主窗口落 `sandbox:true`；全局 `webSecurity:false` 收敛为**显式认领 + warn**。⚠️ V-2 前置验证实测：引擎网关**不回 CORS 头**，故不能直接恢复 `webSecurity:true`（恢复即主链路断），本轮保留 `false` 但**显式认领**。12 单测 + 变异（throw 改静默返回） |
 | FR-8.11 | 应用数据删除统一走回收站（fail-closed） | P1 | ✅ | electron | `electron/safeDelete.ts` 封 `shell.trashItem`：**失败不降级**（抛错，绝不回落裸 `fs.rm`）+ 必须区分**用户资产**（走回收站）与**运行时缓存**（可直删，但要显式 `runtime: true` 并写日志）。`eventStore` / `pluginPackage` 已改道；5 单测 + fail-closed 变异（加一行「失败则 `fs.rm`」→ 变红） |
@@ -312,20 +312,20 @@
 | ------ | --------- | ------ | -- | -------- | --------------------------------------------------------------------------------------------------------------- |
 | FR-9.1 | 模型目录      | P0     | ✅  | both     | 从网关 `GET /v1/models` 拉取；`modelPresets` + 隐式 `default`（已实现）                                                      |
 | FR-9.2 | 会话级模型覆盖   | P0     | ✅  | both     | 每请求下发模型，网关按请求级解析（已实现）                                                                                           |
-| FR-9.3 | **能力协商**  | **P1** | ✅  | both     | 模型元数据声明 `supportsToolCall` / `supportsImages` / `supportsReasoning`；不具备 tool-call 的模型自动降级为纯对话（禁用工具卡片与 Skill 挂载）。**已落地（2026-10-04）**：字段名叫 `supportsTools` / `supportsVision` / `supportsReasoning`（沿用引擎既有命名，见 `schema.py::ModelPresetConfig`；`supportsReasoning` 为本轮新增）。门控实现在 `src/lib/modelCapability.ts`（纯逻辑）+ `src/hooks/useActiveModelCapabilities.ts`：**技能挂载入口禁用并给出原因**（`ComposerMenu`）、权限弹层显示「已降级为纯对话」且逐条批准置灰、模型对话框里「注入思考强度」由「思考能力」门控。两条关键取舍：① **「查不到 ≠ 不支持」**（Web 端 / 引擎离线 / 手填模型名一律按宽松处理，否则一升级就把所有人的功能禁掉且无报错）；② **视觉能力只提醒不阻止**——`supports_vision` 的引擎默认是 `false`，硬门禁会把所有历史预设的贴图功能一并禁掉 |
-| FR-9.4 | 多供应商与故障转移 | P1     | ✅ | both | provider / fallback 配置（nanobot 侧支持）；前端需展示当前 provider 与回退链。**已落地（2026-10-04）**：设置「模型 → 故障转移」可读可写 `agents.defaults.fallbackModels`（有序回退链：添加预设 / 上移 / 下移 / 移除）与 `providerRetryMode`（标准 / 持久 两档）。纯逻辑在 `src/lib/modelFallbacks.ts`，引擎形状转换在 `electron/modelFallbacksConfig.ts`，界面 `src/components/settings/FailoverCard.tsx`。三条关键设计：① **草稿 + 保存**（每次写入都会重启网关，逐次落盘等于每点一下闪一次）；② 链里引用了**已删除**的预设时**禁用保存**并说明后果——引擎在配置加载时校验回退链，不满足会抛 ValueError，即**整份配置加载失败、网关起不来**，所以主进程在删除 / 改名预设时会同步维护这些引用；③ 内联项（`InlineFallbackConfig`）保真回显与移除，但本轮不提供新建（见 §20.5） |
+| FR-9.3 | **能力协商**  | **P1** | ✅  | both     | 模型元数据声明 `supportsToolCall` / `supportsImages` / `supportsReasoning`；不具备 tool-call 的模型自动降级为纯对话（禁用工具卡片与 Skill 挂载）。**已落地（2026-10-04）**：字段名叫 `supportsTools` / `supportsVision` / `supportsReasoning`（沿用引擎既有命名，见 `schema.py::ModelPresetConfig`；`supportsReasoning` 为本轮新增）。门控实现在 `src/lib/model/modelCapability.ts`（纯逻辑）+ `src/hooks/useActiveModelCapabilities.ts`：**技能挂载入口禁用并给出原因**（`ComposerMenu`）、权限弹层显示「已降级为纯对话」且逐条批准置灰、模型对话框里「注入思考强度」由「思考能力」门控。两条关键取舍：① **「查不到 ≠ 不支持」**（Web 端 / 引擎离线 / 手填模型名一律按宽松处理，否则一升级就把所有人的功能禁掉且无报错）；② **视觉能力只提醒不阻止**——`supports_vision` 的引擎默认是 `false`，硬门禁会把所有历史预设的贴图功能一并禁掉 |
+| FR-9.4 | 多供应商与故障转移 | P1     | ✅ | both | provider / fallback 配置（nanobot 侧支持）；前端需展示当前 provider 与回退链。**已落地（2026-10-04）**：设置「模型 → 故障转移」可读可写 `agents.defaults.fallbackModels`（有序回退链：添加预设 / 上移 / 下移 / 移除）与 `providerRetryMode`（标准 / 持久 两档）。纯逻辑在 `src/lib/model/modelFallbacks.ts`，引擎形状转换在 `electron/modelFallbacksConfig.ts`，界面 `src/components/settings/FailoverCard.tsx`。三条关键设计：① **草稿 + 保存**（每次写入都会重启网关，逐次落盘等于每点一下闪一次）；② 链里引用了**已删除**的预设时**禁用保存**并说明后果——引擎在配置加载时校验回退链，不满足会抛 ValueError，即**整份配置加载失败、网关起不来**，所以主进程在删除 / 改名预设时会同步维护这些引用；③ 内联项（`InlineFallbackConfig`）保真回显与移除，但本轮不提供新建（见 §20.5） |
 | FR-9.5 | 私有模型与内网部署 | P1     | ✅  | both     | OpenAI 兼容 endpoint 可指向内网 vLLM（已支持，需补「完全离线」验收：无外网时全链路可用）                                                         |
 
 ## R10 账户、同步与多端一致
 
 | 编号      | 名称     | 优先级    | 现状 | 环境   | 验收标准                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | ------- | ------ | ------ | -- | ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| FR-10.1 | 同步元数据  | **P1** | ✅  | both | 所有可同步实体带 `id` / `rev` / `updatedAt` / `deletedAt` / `updatedBy`。**已落地（V1 期提前完成，2026-09-25）**：`src/types/sync.ts`（`SyncMeta` / `SyncMetaInput` / `SyncableEntity` / `SyncTombstones`）+ `lib/{syncMeta,syncSelect,syncStamp,deviceId}.ts`；**8 个实体全部接线**（`Agent` / `ExpertGroup` / `TaskConfig` / `MCPConfig` / `ChannelConfig` / `SkillOverrideEntry` / `SessionMeta`(+索引条目) / `Settings`），删除由「摘除数组项」改为**墓碑**（五个 store 拆 `SyncTombstones` 独立表、`channels` 按 `kind` 键控），`Settings` 走字段级排除表（`lib/settingsSync.ts`）。**最后缺口已于 2026-09-27 补齐**：`deleteSession` / `deleteSessions` 改走 **`tombstoneSession(meta)`**（写墓碑 + 覆盖索引条目 + **丢弃 JSONL 正文**，保留 meta 与索引条目），硬删 `removeSession` 只留给「空会话搬迁分片」这类物理移动；三个存储实现（内存参照 / Web 分片 / Electron 主进程）与 `events:tombstone` IPC 全部落地。落地清单与实现偏差见 `architecture-syncmeta.md` §7.1–§7.3 |
+| FR-10.1 | 同步元数据  | **P1** | ✅  | both | 所有可同步实体带 `id` / `rev` / `updatedAt` / `deletedAt` / `updatedBy`。**已落地（V1 期提前完成，2026-09-25）**：`src/types/sync.ts`（`SyncMeta` / `SyncMetaInput` / `SyncableEntity` / `SyncTombstones`）+ `lib/{syncMeta,syncSelect,syncStamp,deviceId}.ts`；**8 个实体全部接线**（`Agent` / `ExpertGroup` / `TaskConfig` / `MCPConfig` / `ChannelConfig` / `SkillOverrideEntry` / `SessionMeta`(+索引条目) / `Settings`），删除由「摘除数组项」改为**墓碑**（五个 store 拆 `SyncTombstones` 独立表、`channels` 按 `kind` 键控），`Settings` 走字段级排除表（`lib/sync/settingsSync.ts`）。**最后缺口已于 2026-09-27 补齐**：`deleteSession` / `deleteSessions` 改走 **`tombstoneSession(meta)`**（写墓碑 + 覆盖索引条目 + **丢弃 JSONL 正文**，保留 meta 与索引条目），硬删 `removeSession` 只留给「空会话搬迁分片」这类物理移动；三个存储实现（内存参照 / Web 分片 / Electron 主进程）与 `events:tombstone` IPC 全部落地。落地清单与实现偏差见 `architecture-syncmeta.md` §7.1–§7.3 |
 | FR-10.2 | 云端账户   | P1     | ✅  | both | 邮箱+密码 + JWT；refresh 轮换；Electron 用系统钥匙串，Web 用 httpOnly Cookie **已落地（2026-10-04 核实，批次 1 + 批次 4）**：服务端 `cloud/app/auth/routes.py` 五端点（register / login / refresh / logout / me）；客户端 `src/sync/syncAccount.ts` 的 `SyncAccount` 持有 refresh token 并负责轮换，`SyncClient` 遇 401 只重试一次、再 401 即判「凭据整体失效」；UI 为 `src/pages/auth/AuthPage.tsx`（登录 / 注册，**不引入全局守卫**——local-first 是本项目的一贯取舍）。access token 落 `platform.storage` 的字符串 JSON（Web 落 localStorage），**刻意不用**凭据保险库：保险库纪律是「值永不回传渲染层」，而同步引擎恰恰在渲染层需要 access token |
 | FR-10.3 | 双向同步   | P1     | ✅  | both | `/api/sync/push` + `/api/sync/pull`；LWW + tombstone（已定设计见 `cross-platform-sync-design.md`） **已落地（2026-10-04 核实，批次 1 + 2 + 4 + 5）**：`POST /api/sync/push` + `GET /api/sync/pull`（`cloud/app/sync/routes.py`，另有 `/reset`），LWW + 墓碑（`SyncTombstones` 独立表，`channels` 按 `kind` 键控）；客户端 `src/sync/SyncClient.ts` 同一对端点 + `src/sync/SyncEngine.ts` 定时/事件驱动；`syncRegistry` 已由「只注册 agents」扩到 **8 个 collection**（agents / expertGroups / tasks / mcp / channels / skillOverrides / settings / sessionMeta）。**验收门禁已自动化而非靠真机**：`tests/sync/integration.twoDevice.test.ts` 真 spawn `uvicorn` + 两套 store 快照 → 双向一致、空闲 `status === synced` 且 `conflict === 0`；`sessionEvents` 走第三类通道（`src/sync/eventStream.ts`，不进 `syncRegistry`——`read()` 是同步的而 `EventStore` 全异步） |
 | FR-10.4 | 离线优先   | P1     | ✅  | both | 无网络时本地照常工作，联网自动合并；状态 `local/syncing/synced/conflict/offline` **已落地（2026-10-04 核实）**：`src/sync/types.ts::SyncStatus` 五态 `local / syncing / synced / conflict / offline` 全部有接线点（`SyncEngine` 未登录与断网各置 `local` / `offline`，推送前 `syncing`，收尾按 `conflictCount` 归 `conflict` 或 `synced`），徽标 `SyncStatusBadge` 落**侧栏底部**而非 TitleBar（后者只在 Electron 渲染）。云端不可用时本地全功能可用这条底线由 `local-first` 守卫守住：未登录时 fetch 调用次数为 0（有断言） |
-| FR-10.5 | 同步范围控制 | P1     | ✅  | both | `settings` 只同步用户偏好，**机器专属字段（网关地址、本地路径）排除在同步负载之外**；**凭据同样不入同步负载**（`MCPConfig.auth` 已在主进程保险库；渠道密钥现为明文落 `channels.json`，**定案不上行**，见 `architecture-syncmeta.md` §5.3） **已落地（2026-10-04 核实，批次 3 + 4）**：`src/lib/settingsSync.ts` 的 `SETTINGS_SYNC_OMIT_KEYS` / `TRANSCRIPTION_SYNC_OMIT_KEYS`（后者剔除 `endpoint` / `apiToken` 这类**机器专属**字段）在 push 组装处生效；渠道凭据已保险库化（`src/lib/channelSecrets.ts` + `electron/channelSecretInjection.ts`，`CHANNEL_SYNC_OMIT_KEYS` 剔除 4 个密钥字段 + 3 个配套 id + 2 个运行时事实，有反向护栏用例），**凭据不上行**；`~/.nanowork/connectors/.credentials.v3.json` 的密钥由 OS 凭据库托管、渲染层只拿 key 名 |
-| FR-10.6 | 数据主权   | P1     | ✅  | both | 一键导出全部数据；彻底删除账户 **已落地（2026-10-04 核实，批次 6a + 6b + 6a 补）**：`GET /api/account/export`（云端副本导出）+ `DELETE /api/account`（事务清 `sync_items` + `sync_events` + `refresh_tokens` + `users`，客户端与 `logout()` 同路径收口）；客户端 `src/lib/accountArchive.ts` 的 `buildArchive` / `parseArchive` / `applyArchive` + 侧栏「账户」分区的**导入归档**按钮（走 `platform.pickFile`，只写回 local 段、未登录亦可点）——原「不提供导入 UI」的已知偏差已闭合；归档 v2 已含工作区记忆与提示词模板 |
+| FR-10.5 | 同步范围控制 | P1     | ✅  | both | `settings` 只同步用户偏好，**机器专属字段（网关地址、本地路径）排除在同步负载之外**；**凭据同样不入同步负载**（`MCPConfig.auth` 已在主进程保险库；渠道密钥现为明文落 `channels.json`，**定案不上行**，见 `architecture-syncmeta.md` §5.3） **已落地（2026-10-04 核实，批次 3 + 4）**：`src/lib/sync/settingsSync.ts` 的 `SETTINGS_SYNC_OMIT_KEYS` / `TRANSCRIPTION_SYNC_OMIT_KEYS`（后者剔除 `endpoint` / `apiToken` 这类**机器专属**字段）在 push 组装处生效；渠道凭据已保险库化（`src/lib/channel/channelSecrets.ts` + `electron/channelSecretInjection.ts`，`CHANNEL_SYNC_OMIT_KEYS` 剔除 4 个密钥字段 + 3 个配套 id + 2 个运行时事实，有反向护栏用例），**凭据不上行**；`~/.nanowork/connectors/.credentials.v3.json` 的密钥由 OS 凭据库托管、渲染层只拿 key 名 |
+| FR-10.6 | 数据主权   | P1     | ✅  | both | 一键导出全部数据；彻底删除账户 **已落地（2026-10-04 核实，批次 6a + 6b + 6a 补）**：`GET /api/account/export`（云端副本导出）+ `DELETE /api/account`（事务清 `sync_items` + `sync_events` + `refresh_tokens` + `users`，客户端与 `logout()` 同路径收口）；客户端 `src/lib/sync/accountArchive.ts` 的 `buildArchive` / `parseArchive` / `applyArchive` + 侧栏「账户」分区的**导入归档**按钮（走 `platform.pickFile`，只写回 local 段、未登录亦可点）——原「不提供导入 UI」的已知偏差已闭合；归档 v2 已含工作区记忆与提示词模板 |
 | FR-10.7 | 端到端加密  | P2     | ⬜  | both | 可选开启；云端只存密文（V2）                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 
 ## R11 可观测性与成本
@@ -339,7 +339,7 @@
 | FR-11.5 | Langfuse 集成 | P2     | ⬜  | electron | 可选接入（nanobot 侧已支持）（V3）                                                  |
 
 | FR-11.6 | 启动性能剖析器 | P1 | ✅ | electron | `electron/startupProfile.ts`，两条纪律：**默认零 I/O**（只有显式开关 `NANOWORK_STARTUP_PROFILE=1` 才加载采集器）+ **独立于业务模块图**（不 import store / config / logger）。四点打点：`app.load→ready` / `window.create→firstPaint` / `serve.spawn→listen` / `gateway.spawn→listen`；区间按**并集**算（并行阶段不会被重复相加 —— 这是最容易算错的地方）。`perf:latency` IPC 落 `session-latency.jsonl`。20 单测 + 变异 |
-| FR-11.7 | 会话性能埋点与自包含报告（★真缺陷已修） | P1 | ✅ | both | 三件：① `src/lib/sseLatency.ts` 量「**首字节 → 首 token**」（`onFirstByte` 与 `onActivity` **必须区分**：响应头到达不算首字节）② `resources/perf-report.html` 自包含报告（断网可渲染，11 条 jsdom **真渲染**用例）③ 用量页「平均首字延迟」（**分母是 `timedRequests` 不是 `requests`**；未测到显示「—」而非「0 ms」）。**真缺陷（2026-10-17 修复）**：`LLMCallRecord` 的 observer 原先只绑在 gateway 启动时那份**静态 provider 快照**上，而桌面真正连的是 `nanobot serve`（自建 `AgentLoop.from_config` → `make_provider`，且交互链路按需构造新 provider）→ `_llm_call_observer` 恒为 `None` → **交互用量与 TTFT 永不落库**。改绑在 `providers/factory.py::make_provider` **构造出口**（`FallbackProvider` 会向 primary 传播，`set_llm_call_observer` 幂等），serve / gateway / preset / override 全路径覆盖。真机判据：跑一轮流式对话后 `llm_calls` 出现 `source='api', stream=1, ttft_ms>0`（实测 5778 / max 12197）。⚠️ `stream` 不是 `/v1/usage` 的聚合维度，加它属另立需求 |
+| FR-11.7 | 会话性能埋点与自包含报告（★真缺陷已修） | P1 | ✅ | both | 三件：① `src/lib/core/sseLatency.ts` 量「**首字节 → 首 token**」（`onFirstByte` 与 `onActivity` **必须区分**：响应头到达不算首字节）② `resources/perf-report.html` 自包含报告（断网可渲染，11 条 jsdom **真渲染**用例）③ 用量页「平均首字延迟」（**分母是 `timedRequests` 不是 `requests`**；未测到显示「—」而非「0 ms」）。**真缺陷（2026-10-17 修复）**：`LLMCallRecord` 的 observer 原先只绑在 gateway 启动时那份**静态 provider 快照**上，而桌面真正连的是 `nanobot serve`（自建 `AgentLoop.from_config` → `make_provider`，且交互链路按需构造新 provider）→ `_llm_call_observer` 恒为 `None` → **交互用量与 TTFT 永不落库**。改绑在 `providers/factory.py::make_provider` **构造出口**（`FallbackProvider` 会向 primary 传播，`set_llm_call_observer` 幂等），serve / gateway / preset / override 全路径覆盖。真机判据：跑一轮流式对话后 `llm_calls` 出现 `source='api', stream=1, ttft_ms>0`（实测 5778 / max 12197）。⚠️ `stream` 不是 `/v1/usage` 的聚合维度，加它属另立需求 |
 | FR-11.8 | 存储卫生：SQLite WAL checkpoint | — | ⬜ **不做** | electron | **前提被实测推翻，本期明确不做**：`-wal` 4.13 MB ≈ 恰好 1000 页 × 4096 B = SQLite 默认 `wal_autocheckpoint` 阈值；引擎（`llm_usage/store.py:189-192`）只设 `journal_mode=WAL`、**没有关** autocheckpoint；PASSIVE checkpoint 会把内容写回主库但**不截断文件**，停在高水位是正常行为；实测 WAL 已回落 52 KB。做跨进程 worker 是给不存在的问题加复杂度，还会与写入者（Python 引擎）争锁；`better-sqlite3` 未安装、Electron 37 的 `node:sqlite` 不可用。**替代口径**：诊断包 `processes.json` 加一项 sqlite 文件尺寸（只读、不争锁，V1.7 B5-02） |
 | FR-11.9 | 诊断包增强：进程维度 + 出口凭据过滤 | P1 | ✅ | electron | ① `processes.json`：本进程 pid/uptime、三个引擎端口的**监听者 pid**、`run/` 状态文件逐份 verdict（四桶模型）② 日志 / 诊断**出口**过一遍内容级凭据过滤（四类模式，保留首 4 尾 4）——只借「过滤位置」的设计，不抄 1.94 MB 的 `log-acl-guard.js`。⚠️ 边界已如实写进 README 与模块注释：**模式匹配覆盖不了长得不像凭据的凭据**，真正的保证仍是「含凭据的文件根本不进包」 |
 
@@ -483,7 +483,7 @@
 >     开发者宿主机上真实的技能目录，断言随本机装了什么而变。
 >   - **子代理同源**：`SubagentManager` 同步接收 `skill_overrides` / `user_skills_dir`。只给主代理套限制、  
 >     子代理仍全量列出，等于给模型开了一条「把被禁的技能交给子代理去用」的旁路。
->   - **客户端三态数据层**：新增 `src/lib/skillOverrides.ts`（与引擎同构的归一与判定函数）、  
+>   - **客户端三态数据层**：新增 `src/lib/agent/skillOverrides.ts`（与引擎同构的归一与判定函数）、  
 >     `Skill.override / scope / allowedTools / userInvocable`、`skillParser` 解析 `allowed-tools` 与  
 >     `user-invocable`（key 正则要支持连字符，否则整行被静默丢掉）；`skillsStore` 持久化版本 v1 → v2，  
 >     老数据的布尔 `enabled` 迁移为 `off` / `on`，**不猜中间档**；`enabled` 收紧为 `override` 的派生值  
@@ -591,7 +591,7 @@
 > - **`FR-2.4`（专家团编排）**：**已 ✅（2026-10-06 落地、2026-10-07 真机验证）**。走方案里的
 >   路径 2（引擎侧编排）：引擎 `agent/expert_group.py` + `loop.py` 接管分支 +
 >   `api/server.py` 接收（JSON/multipart 双路，形状非法一律 400 不静默降级），
->   客户端 `lib/expertGroupRequest.ts` → `ChatRequest.expertGroup` → wire `expert_group`。
+>   客户端 `lib/agent/expertGroupRequest.ts` → `ChatRequest.expertGroup` → wire `expert_group`。
 >   **成员归属（第 3 步）同批落地**：成员生命周期经 `/v1` SSE 出站（`kind: "member"`）
 >   → 事件落盘 → ProcessView 按成员分组渲染。
 >   **落库形态定死**：成员输出不是消息、只随进度事件出站，**只有最终汇总落成一条 assistant 消息**。
@@ -603,7 +603,7 @@
 >   （子代理无回传通道，界面如实只画相位与产出）。
 >   设计见 `docs/design-fr-2-4-expert-orchestration.md` §7。
 >
-> **P1 状态基线（2026-10-17 复核勘误，V1.7 B1-01）**：上一版（2026-10-07）把 `FR-1.7` 会话检索、`FR-7.4` 产物版本列为「未完成（可纯客户端落地）」，但两者分别已于 2026-10-06 / 10-05 转 ✅（`src/lib/sessionSearch.ts`；`src/stores/artifactsStore.ts` 的 `version` / `previousVersion` / `versions`），`FR-6.6` 渠道健康亦已 ✅ —— **照旧表排期会把已完成的活重做一遍**。同次复核还改判三条：`FR-4.4` 个人 / 项目两级已由记忆 v2 落地（只剩组织级 → V3）、`FR-8.6` 拆三件（彻底删除 ✅ / 检索前过滤被知识库阻塞 / 注入检测待做）、`FR-3.9` 只剩两块（见 R3）。
+> **P1 状态基线（2026-10-17 复核勘误，V1.7 B1-01）**：上一版（2026-10-07）把 `FR-1.7` 会话检索、`FR-7.4` 产物版本列为「未完成（可纯客户端落地）」，但两者分别已于 2026-10-06 / 10-05 转 ✅（`src/lib/session/sessionSearch.ts`；`src/stores/artifactsStore.ts` 的 `version` / `previousVersion` / `versions`），`FR-6.6` 渠道健康亦已 ✅ —— **照旧表排期会把已完成的活重做一遍**。同次复核还改判三条：`FR-4.4` 个人 / 项目两级已由记忆 v2 落地（只剩组织级 → V3）、`FR-8.6` 拆三件（彻底删除 ✅ / 检索前过滤被知识库阻塞 / 注入检测待做）、`FR-3.9` 只剩两块（见 R3）。
 >
 > 复核后**真正剩余的 P1** 共 4 条（其余均已 ✅ 或已改判），阻塞点与落点如下：
 >
@@ -858,7 +858,7 @@ src/ai/runtime/
 | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | 6 个文件 `git mv` 进 `nanobotHttp/`（保留历史）       | `chat.ts` / `config.ts` / `channels.ts` / `tasks.ts` / `sseToolCalls.ts` / `artifactExtractor.ts`                                                                  |
 | `src/ai/types.ts` 并入 `runtime/types.ts` 后删除 | 契约层从两个门收敛为一处；`@/ai/types` 全仓 0 引用                                                                                                                                  |
-| 调用点切换                                       | `connectionManager`（持 `AgentRuntime`，惰性取实现）、`sessionsStore`、`lib/memory`、`mcpStore`、`channelsStore`、`tasksStore`、`useVoiceInput`、`lib/attachments`                 |
+| 调用点切换                                       | `connectionManager`（持 `AgentRuntime`，惰性取实现）、`sessionsStore`、`lib/memory/memory`、`mcpStore`、`channelsStore`、`tasksStore`、`useVoiceInput`、`lib/artifact/attachments`                 |
 | 键名归一收口                                      | `codec.ts` 提供 `readStr` / `readBool` / `readStrArray` / `readEnum` / `putIf` / `parseCommand` / `joinCommand`；channels / config 两域不再各写一遍 `allowFrom ?? allow_from` |
 
 **迁移中顺带清掉的死代码与重复实现**（均为 0 引用或同知识抄两遍，删除不改行为）：
@@ -1530,7 +1530,7 @@ extraAllowWrite 且为写操作 → 需确认（**或 full 模式下 allow**）�
 | 层 | 位置 | 值 | 语义 |
 | -- | ---- | -- | ---- |
 | 配置层默认 | `agent/tools/filesystem.py::FileToolsConfig.default_deny_write` | `False` → **`True`** | 用户没配这个键时引擎怎么办 = **产品策略** |
-| 客户端常量 | `src/lib/constants.ts::DEFAULT_DENY_WRITE` | `false` → **`true`** | 界面显示的默认值，**必须与上面逐字一致** |
+| 客户端常量 | `src/lib/core/constants.ts::DEFAULT_DENY_WRITE` | `false` → **`true`** | 界面显示的默认值，**必须与上面逐字一致** |
 | 工具参数默认 | `agent/tools/filesystem.py::_FsTool.__init__(default_deny_write=…)` | **保持 `False`** | 编程式直接构造工具的兜底（upstream 调用方依赖那个语义） |
 
 ⚠️ 后两层**不可互相套用**：配置层是产品策略，参数层是 upstream 兼容边界。
@@ -1615,7 +1615,7 @@ V1 采用**轻量沙箱**，V3 升级为容器级：
 - ⚠️ **没有「网络出口白名单」**：`security/network.py` 提供的是 **SSRF 防护**（默认拦内网/回环、`ssrf_whitelist` 按 CIDR 豁免、DNS 结果固定防重绑定），
   它回答的是「是不是内网地址」，**不是**「这个域名该不该被访问」。下方「网络策略」那段同理（域名黑名单 + 出站记录均未实现）。
 
-**V1 真正生效的五层**（唯一来源是 `src/lib/sandboxBoundary.ts`，设置页「安全」分区逐条渲染，用例 `tests/lib/sandboxBoundary.test.ts` 钉住缺口不得消失）：
+**V1 真正生效的五层**（唯一来源是 `src/lib/core/sandboxBoundary.ts`，设置页「安全」分区逐条渲染，用例 `tests/lib/core/sandboxBoundary.test.ts` 钉住缺口不得消失）：
 
 | 层 | 状态 | 现在真的有 | 恰好缺的那一块 |
 |---|---|---|---|
@@ -1833,7 +1833,7 @@ user-invocable: true              # 是否可由用户直接 / 调用
 
 > 未知 / 拼错的取值一律收敛为 `off`（fail-closed）。覆盖表是*限制性*配置，  
 > 读成 `on` 等于悄悄撤销用户的限制；读成 `off` 只是技能从列表消失，可见且可恢复。  
-> 两侧各有一份同构实现与镜像用例：`src/lib/skillOverrides.ts` ↔ `nanobot/nanobot/agent/skills.py`。
+> 两侧各有一份同构实现与镜像用例：`src/lib/agent/skillOverrides.ts` ↔ `nanobot/nanobot/agent/skills.py`。
 
 ### 12.4.2 落地说明（2026-09-16，FR-3.2）
 
@@ -2125,7 +2125,7 @@ WorkBuddy 的提示词资产是一个 **10 组合（交互模式 × 领域）× 
 {% if Capabilities.multimodal %}  → 多模态能力开关
 ```
 
-> **落地状态（M3 首轮）**：`WorkingMemoryContent` / `UserLocalMemoryContent` / `identityContext` / `ToneStyleContent` / `UserCustomPrompt` / `sessionMode` 六项已落地，但它们**不住在同一个模板里**——客户端按固定段落顺序装配（`lib/promptAssembly.ts`），引擎侧另有一套可外置的 `agent/*.md`。`ProjectMemoryContent` / `OrgMemoryContent` 依赖 FR-4.4（V2/V3），未实现。命名上我们用的是段落 id（`identity` / `memory` / `tone-style` …）而不是 WorkBuddy 的驼峰变量名，语义一一对应。
+> **落地状态（M3 首轮）**：`WorkingMemoryContent` / `UserLocalMemoryContent` / `identityContext` / `ToneStyleContent` / `UserCustomPrompt` / `sessionMode` 六项已落地，但它们**不住在同一个模板里**——客户端按固定段落顺序装配（`lib/prompt/promptAssembly.ts`），引擎侧另有一套可外置的 `agent/*.md`。`ProjectMemoryContent` / `OrgMemoryContent` 依赖 FR-4.4（V2/V3），未实现。命名上我们用的是段落 id（`identity` / `memory` / `tone-style` …）而不是 WorkBuddy 的驼峰变量名，语义一一对应。
 
 ## 13.3 三层上下文注入
 
@@ -2141,7 +2141,7 @@ WorkBuddy 的提示词资产是一个 **10 组合（交互模式 × 领域）× 
 
 特殊模式：`WorkspaceIdentityMode === 'onboarding'` → 读取 `BOOTSTRAP.md` 引导 Agent 完成自我设定，完成后**删除**该文件（WorkBuddy 把它注释为 "your birth certificate"）。这是身份文件的首次生成机制，比要求用户手写 `SOUL.md` 友好得多。
 
-> **落地说明（M3 首轮）**：上面五个标签块已全部落地，但**不共用一个模板**——客户端 `lib/promptAssembly.ts` 按段落顺序拼装，引擎 `agent/context.py` 只负责把三个身份文件合成 `<identity_context>` 那一块（`AGENTS.md` 刻意留在块外）。标签字面量在 `src/lib/constants.ts` 与引擎的 `context.py` 各存一份并相互注明，改任一侧都要同步另一侧——这两份字符串是跨进程契约，不是各自的私有常量。
+> **落地说明（M3 首轮）**：上面五个标签块已全部落地，但**不共用一个模板**——客户端 `lib/prompt/promptAssembly.ts` 按段落顺序拼装，引擎 `agent/context.py` 只负责把三个身份文件合成 `<identity_context>` 那一块（`AGENTS.md` 刻意留在块外）。标签字面量在 `src/lib/core/constants.ts` 与引擎的 `context.py` 各存一份并相互注明，改任一侧都要同步另一侧——这两份字符串是跨进程契约，不是各自的私有常量。
 
 ## 13.4 外置带来的三个能力
 
@@ -2153,10 +2153,10 @@ WorkBuddy 的提示词资产是一个 **10 组合（交互模式 × 领域）× 
 
 | 本条要求                                                                 | 落点                                                                                                                              | 状态 |
 | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- | -- |
-| 模式 × 领域 × 风格矩阵                                                       | 客户端 `lib/promptCatalog.ts`（3 模式 × 3 领域 × 7 风格，内置正文）                                                                             | ✅  |
-| 模板外置不重编译                                                             | 客户端 `lib/promptLibrary.ts` → ① `prompts/<kind>/<key>.md`；引擎 `utils/prompt_templates.py` 白名单模板可被 `<workspace>/prompts/<name>` 覆盖 | ✅  |
+| 模式 × 领域 × 风格矩阵                                                       | 客户端 `lib/prompt/promptCatalog.ts`（3 模式 × 3 领域 × 7 风格，内置正文）                                                                             | ✅  |
+| 模板外置不重编译                                                             | 客户端 `lib/prompt/promptLibrary.ts` → ① `prompts/<kind>/<key>.md`；引擎 `utils/prompt_templates.py` 白名单模板可被 `<workspace>/prompts/<name>` 覆盖 | ✅  |
 | 走坏模板的兜底                                                              | 覆盖为空 / 解析失败 → **回退内置**（fail-open）；UI 上「恢复默认」= 删文件                                                                               | ✅  |
-| 三层上下文注入顺序                                                            | 客户端 `lib/promptAssembly.ts`（`assemblePromptSections`）                                                                           | ✅  |
+| 三层上下文注入顺序                                                            | 客户端 `lib/prompt/promptAssembly.ts`（`assemblePromptSections`）                                                                           | ✅  |
 | `<identity_context>` 单块                                              | 引擎 `agent/context.py` 把 SOUL/IDENTITY/USER 合成**一个**标签块，`AGENTS.md` 留在块外                                                         | ✅  |
 | `BOOTSTRAP.md` 一次性引导                                                 | 非空即引导态；「完成引导」删除；`/persona` 人格页可查看并结束引导                                                                                          | ✅  |
 | 用户自定义指令                                                              | `settings.userCustomPrompt` → `<user_custom_instructions>` 段（设置页可编辑，留空即关闭）                                                      | ✅  |
@@ -2202,7 +2202,7 @@ WorkBuddy 的提示词资产是一个 **10 组合（交互模式 × 领域）× 
 
 现有机制设计良好，予以保留：
 
-- 注入标签：`…`（在 `lib/constants.ts`）
+- 注入标签：`…`（在 `lib/core/constants.ts`）
 - 幂等去重：\`\` 标记，重复内容不重复追加（2026-09-17 起另加**语句级**判定：归一化后相等也算重复，见本节末「语义重复不落盘」）
 - 不污染 `agent.systemPrompt`：记忆只在 `send` / `createSession` 的临时 history 中注入
 - 会话级快照：`session.memory` 缓存 `createSession` 时读取的内容，避免每请求重复 IO；配套 `memoryVersion` + `memoryWorkspaceKey` 做**过期判定**，写入发生后自动重读（见 14.2 的「注入快照必须会失效」）
@@ -2240,7 +2240,7 @@ export interface MemoryService {
 > - **只落了四层里的两层**（L2 用户级 + L3 工作区级），`MemoryScope` 取值为 `'user' | 'workspace'`。`project` / `org` 依赖 FR-4.4，未实现。
 > - **`scope` 是末位可选参数**，不是上面示例的首位：`save(text, scope = 'workspace')`。本服务已有 40+ 处 `save(text)` 调用，把 scope 提到首位会让「改一行实现」变成「改四十个调用点」，收益为零而回归风险不小。语义与本文档一致，只是参数位置不同。
 > - **落点在 ① 而不是 `<workspace>/.nanowork/`**：用户级 → ① `MEMORY.md`；工作区级 → ① `memory/<key>.md`（见 18.2.4）。`<workspace>` 侧留给引擎自己的 `memory/MEMORY.md`（④），两者职责不同，刻意不复用同一路径。
-> - **注入顺序落到装配器**：实际顺序为 `agent-persona → identity → product-identity → tone-style → mode → domain → user-instructions → memory → **memory-write** → skills → local-time`（`lib/promptAssembly.ts`）。其中**身份在记忆之前**是硬约束——记忆块的边界指令写着「以上方系统提示定义的身份为准」，顺序反了那句护栏就指向空处。
+> - **注入顺序落到装配器**：实际顺序为 `agent-persona → identity → product-identity → tone-style → mode → domain → user-instructions → memory → **memory-write** → skills → local-time`（`lib/prompt/promptAssembly.ts`）。其中**身份在记忆之前**是硬约束——记忆块的边界指令写着「以上方系统提示定义的身份为准」，顺序反了那句护栏就指向空处。
 >
 > **记忆链路修复（2026-09-17）**：
 >
@@ -2447,9 +2447,9 @@ return resolve_effective_workspace_scope(...)
 **客户端**
 - `TaskConfig.delivery`（`TaskDelivery`，见 §15.2）+ `toNanobotJob` 写入 `payload.delivery`
   （**缺省不写键**，免得与主进程的幂等合并在「有键但空」与「没键」之间来回抖）。
-- `src/lib/taskDelivery.ts`：会话 key ⇄ 投递目标的**唯一**映射处（key 的**第一个**冒号是分界，
+- `src/lib/task/taskDelivery.ts`：会话 key ⇄ 投递目标的**唯一**映射处（key 的**第一个**冒号是分界，
   会话 id 自身可能含冒号；`unified:default` 给不出目标故不列为选项）；
-  `src/lib/channelLabel.ts` 收拢渠道展示名（原先侧边栏另有一份同义实现，两处必然漂移）。
+  `src/lib/channel/channelLabel.ts` 收拢渠道展示名（原先侧边栏另有一份同义实现，两处必然漂移）。
 - 表单新增「结果推送」区（`src/components/tasks/DeliveryField.tsx`）+ 任务卡片元信息行显示推送摘要。
 
 **仍然未做**（诚实标注）：`milestone` 档位、持久化 outbox（跨重启补投）。另有一条**刻意的**取舍：
@@ -2490,7 +2490,7 @@ return resolve_effective_workspace_scope(...)
 
 ### ✅ 2026-10-03 FR-5.5 补（自然语言 → 调度推荐）已落
 
-新增 `src/lib/scheduleFromText.ts`（纯函数 `inferScheduleFromText`），接在**唯一的**「消息 → 草稿」
+新增 `src/lib/task/scheduleFromText.ts`（纯函数 `inferScheduleFromText`），接在**唯一的**「消息 → 草稿」
 预填点（`buildTaskDraftFromMessage`）上。支持的形态：每(个)工作日 / 每周 X（列举、连写、区间、
 **跨周界绕回**）/ 每月 N 号 / 每天 / 每半小时·每 N 分钟·每 N 小时·每小时·每 N 天·每 N 周；
 时刻支持 `HH:mm`、「N 点[半|一刻|三刻]」、**中文数字**（「三点」「十一点」）与时段补正
@@ -2518,7 +2518,7 @@ return resolve_effective_workspace_scope(...)
 **负数 `BYMONTHDAY`**（月末）、**`INTERVAL>1` 的周/月/年**（「每两周」）与 **`COUNT=`**（次数）。
 这几类**拆任务也解决不了**，只能拒绝。
 
-因此落地口径是（`src/lib/rrule.ts`，纯函数 + 28 例单测）：
+因此落地口径是（`src/lib/task/rrule.ts`，纯函数 + 28 例单测）：
 
 1. **能降级的降成单条** cron；「每 n 天」这类走引擎原生的 `every`（cron 的 `*/n` 在「日」字段是
    按「月内第几天的偏移」算的，跨月会错位）；
@@ -2623,7 +2623,7 @@ export interface ChannelDescriptor {
 > - `artifact-index/` 是**单向镜像**（只有写与删，没有回读）：权威在 store 索引切片，  
 >   因为 Web 端没有文件系统，索引必须两端都能用。
 >
-> `contentHash` 用的是 `sha256:<hex>`（`src/lib/contentHash.ts`），**不是** `workspaceKey.ts`  
+> `contentHash` 用的是 `sha256:<hex>`（`src/lib/core/contentHash.ts`），**不是** `workspaceKey.ts`  
 > 里的 djb2 `hashContent`——后者只用于段键与变更检测。这条是跨批契约：FR-7.3 的  
 > `file-history/<hash>.bak` 与未来的产物同步复用同一个函数（见 6b 规格 §5）。
 
@@ -2650,7 +2650,7 @@ rollbackTo(commitSeq: number): Promise<{ ok: true; restored: string[] } | { ok: 
 
 **降级路径（web）**：无文件系统 → 返回 `{ok:false, error:'文件回滚仅在桌面端可用'}`；UI 隐藏回滚按钮并说明原因。
 
-## 17.3 与现有 `lib/undoStack.ts` 的关系
+## 17.3 与现有 `lib/editor/undoStack.ts` 的关系
 
 `undoStack.ts` 是**输入框文本级撤销**（Composer 的编辑历史），与文件回滚是两件事。两者共存，命名上要区分清楚（建议重命名为 `composerUndoStack.ts`），避免后续维护者混淆。
 
@@ -2735,7 +2735,7 @@ rollbackTo(commitSeq: number): Promise<{ ok: true; restored: string[] } | { ok: 
 | `<workspace>/.nanowork/skills/`                                     | 无（项目级技能未实现）                                                                                                   | ⬜ 待建                   |
 | `<userData>/projects/<slug>/`                                       | ③ 的 `sessions/<workspace_id>/`；渲染层会话暂为 ② `sessions.json`                                                      | ⚠️ 落点与声明不同（D2 落地后迁实体流） |
 | `<userData>/index/sessions.db`                                      | 无；用量数据在 ③ 的 `llm_usage.sqlite3`                                                                               | ⚠️ 落点与声明不同             |
-| `<userData>/file-history/`                                          | 无（`lib/undoStack.ts` 是**输入框草稿**撤销，非文件回滚）                                                                      | ⬜ 待建（FR-7.3）           |
+| `<userData>/file-history/`                                          | 无（`lib/editor/undoStack.ts` 是**输入框草稿**撤销，非文件回滚）                                                                      | ⬜ 待建（FR-7.3）           |
 | `<userData>/artifact-index/` `logs/` `traces/` | ✅ `artifact-index/<id>.json`（FR-7.2 单向镜像）、`logs/<date>/<module>.log`（FR-11.3）、`traces/<pid>/<traceId>.json`（FR-11.2） | ✅ 已落地 |
 | `<userData>/audit-log/` `sync/` | 审计日志在**引擎侧**（`NANOBOT_TOOL_AUDIT_LOG`，见 20.3）；`sync/` 无——M6 的 pull 游标刻意留在内存、事件水位走 `platform.storage` 的 `misc/` 兜底 | ⚠️ 落点与声明不同 |
 
@@ -3190,7 +3190,7 @@ traces/<pid>/<traceId>.json  全链路 trace
 
 ### 20.5.6 门禁与验收
 
-- 纯逻辑 3 个文件 43 例：`tests/lib/modelFallbacks.test.ts`（链的编辑规则与问题分档）、
+- 纯逻辑 3 个文件 43 例：`tests/lib/model/modelFallbacks.test.ts`（链的编辑规则与问题分档）、
   `tests/electron/modelFallbacksConfig.test.ts`（引擎形状互转与引用维护）、
   `tests/modelsStoreFailover.test.ts`（顺序不被归一、桥拒绝时不装作成功）。
 - 界面 18 例（`tests/failoverCard.test.tsx`）：草稿语义、顺序真的会变、阻断态、内联项保真。
@@ -3291,7 +3291,7 @@ tools: { cliApps, imageGeneration, mcpServers, restrictToWorkspace, ssrfWhitelis
 数据通道（`channelSessionsStore` → 网关轮询 → 详情注入）2026-09 就在了，本轮补的是
 **「这条会话从哪来」这件事本身**——来源判定、按渠道筛选、外部来源标记。
 
-### 20.7.1 来源判定的单一事实源是 `src/lib/channelSession.ts`
+### 20.7.1 来源判定的单一事实源是 `src/lib/channel/channelSession.ts`
 
 此前同一个事实散在三处：id 前缀写在 `channelSessionsStore`、`session.channel` 的判空写在
 侧栏的任务列表过滤、图标映射在 `SidebarNav` 与 `ChatPage` 各写了一份（两份同义实现）。
@@ -3353,7 +3353,7 @@ tools: { cliApps, imageGeneration, mcpServers, restrictToWorkspace, ssrfWhitelis
 
 ### 20.7.6 门禁与验收
 
-- 纯逻辑 `tests/lib/channelSession.test.ts` 14 例：判定的边界值（空串 / 全空白 / 只有前缀）、
+- 纯逻辑 `tests/lib/channel/channelSession.test.ts` 14 例：判定的边界值（空串 / 全空白 / 只有前缀）、
   owner 限定形态、未知渠道不自作主张并组、来源文案两个方向。
 - store `tests/sessionUiStoreChannelFilter.test.ts` 4 例：默认全部、可设置可复位、存的是分组键。
 - 侧栏渲染与筛选交互 `tests/channelListFilter.test.tsx` 7 例：筛选条的出现条件（多渠道才出现）、
@@ -3403,7 +3403,7 @@ turn-started 回调 —— 那是另一件事，本轮不做（§20.8.5）。
     queued 记录之后调用；
   - `cron/types.py`：`CronDelivery.on` 的注释改为三档 + `milestone` 未实现的**理由**。
 - **客户端**：`types/task.ts` 抽出 `TaskDeliveryOn`（三档）、`ai/runtime/nanobotHttp/tasks.ts`
-  的 wire 契约同步、`lib/taskDelivery.ts` 的文案改成映射表、`DeliveryField` 第三个 ToggleButton。
+  的 wire 契约同步、`lib/task/taskDelivery.ts` 的文案改成映射表、`DeliveryField` 第三个 ToggleButton。
 
 两处刻意的设计：
 
@@ -3471,7 +3471,7 @@ FR-2.3 把专家定义为「系统提示词 + 知识库绑定 + 工具白名单 
 
 优先级：**会话显式选择 > 专家绑定 > 空**。会话赢，因为那是用户此刻的明确动作；
 专家绑定是「省得每次再选一遍」的默认值，默认值不该盖过当场的选择。
-解析收在 `src/lib/agentBinding.ts` 的 `resolveTurnModel()`，是**逐级回落**：
+解析收在 `src/lib/agent/agentBinding.ts` 的 `resolveTurnModel()`，是**逐级回落**：
 会话选的预设失效时退到专家绑的（如果它还有效），而不是一步掉到网关默认。
 
 ### 20.9.2 ⚠️ 失效预设必须在**下发前**拦掉
@@ -3518,7 +3518,7 @@ PRD 要求内置「招聘 / 法务 / 投研 / 财务 / 写作」，实际长期�
 本轮整体抽成 `src/components/agents/AgentFormDialog.tsx`（取**超集**），两个页面只保留
 `open / editing / onClose / onSave` 四个 prop。顺带收口了两处逐字重复的常量：
 
-- `PLATFORM_LABEL` → `src/lib/imPlatform.ts`（卡片徽标与表单下拉共用，两处定义会导致
+- `PLATFORM_LABEL` → `src/lib/channel/imPlatform.ts`（卡片徽标与表单下拉共用，两处定义会导致
   「同一个渠道在两个页面显示成两个名字」）；
 - 专家表单的草稿初值与 `toggleImBinding` → 组件内部（此前两页各一份）。
 
@@ -3568,13 +3568,13 @@ severity 由 `warning` 降为 `info`）：三模式真的由引擎在服务端�
 - ~~**知识库绑定**：V1 无知识库/RAG 概念，属 M7（V2）。FR-2.3 因此保持 🟡。~~
   **2026-10-24 已落地（M7 客户端 + 每轮检索）**：见 §20.9.9。四类绑定（提示词 / 工具 / 模型 / 知识库）
   至此全部生效，FR-2.3 转 ✅。
-- **FR-2.4 三模式真实执行**：见 §20.9.6（该结论写于 2026-10-05，**已被推翻**）。**2026-10-06 已落地**：引擎侧编排调度（`agent/expert_group.py` + `loop.py` 接管分支 + `api/server.py` 接收 JSON/multipart）+ **客户端接线**（`lib/expertGroupRequest.ts` → `ChatRequest.expertGroup` → wire `expert_group`）+ **成员归属可见**（第 3 步：`kind: "member"` SSE → `expert-group-member` 事件 → ProcessView 按成员分组）。只剩成员用量汇总与「成员内部工具调用不上报」（后者是引擎侧无回传通道的现状），见 design §7。
+- **FR-2.4 三模式真实执行**：见 §20.9.6（该结论写于 2026-10-05，**已被推翻**）。**2026-10-06 已落地**：引擎侧编排调度（`agent/expert_group.py` + `loop.py` 接管分支 + `api/server.py` 接收 JSON/multipart）+ **客户端接线**（`lib/agent/expertGroupRequest.ts` → `ChatRequest.expertGroup` → wire `expert_group`）+ **成员归属可见**（第 3 步：`kind: "member"` SSE → `expert-group-member` 事件 → ProcessView 按成员分组）。只剩成员用量汇总与「成员内部工具调用不上报」（后者是引擎侧无回传通道的现状），见 design §7。
 - **`imBinding` / `avatar` 的消费**：仍是只持久化未消费（`imBinding` 的 UI 自己也写了
   「真实绑定推送依赖 nanobot 运行时」）。
 
 ### 20.9.8 门禁与验收
 
-- 纯逻辑 `tests/lib/agentBinding.test.ts` 12 例：优先级、逐级回落、两个候选都失效、
+- 纯逻辑 `tests/lib/agent/agentBinding.test.ts` 12 例：优先级、逐级回落、两个候选都失效、
   空串与 undefined 同义、`available === null` 不校验、空目录返回 `null` 而非空集。
 - store `tests/agentsStoreModelBinding.test.ts` 6 例：钉住 `createAgent` **白名单构造**
   与 `updateAgent` **展开赋值**两条路径的不对称（漏带字段时只有「新建」会出问题）。
@@ -3591,7 +3591,7 @@ severity 由 `warning` 降为 `info`）：三模式真的由引擎在服务端�
 ### 20.9.9 知识库绑定：每轮预取而不是引擎工具（2026-10-24）
 
 四类绑定里最后落下的一条。落地形态与「给引擎加一个 kb_search 工具」不同，理由写在
-`src/lib/agentKnowledgeTurn.ts` 文件头，这里只记结论与边界。
+`src/lib/agent/agentKnowledgeTurn.ts` 文件头，这里只记结论与边界。
 
 **为什么预取（渲染层）而不是工具（引擎侧）**
 
@@ -3619,10 +3619,10 @@ user-instructions → memory → memory-write → **knowledge** → skills → l
 放在技能之后时，模型读完成段的技能正文才看到资料，引用常被写成「按流程文档」而不落到具体那一条。
 
 **未做（本期边界）**：① 导出专家包不带 `knowledge`（云端 id 到别人机器上必然失效，
-`lib/expertPackage.ts` 是白名单构造，天然不带）；② 检索结果不参与产物/引用登记；
+`lib/agent/expertPackage.ts` 是白名单构造，天然不带）；② 检索结果不参与产物/引用登记；
 ③ 不能在会话里对命中的文档「追问」（无工具形态）。
 
-**门禁**：`tests/lib/agentKnowledge.test.ts`（15）+ `tests/lib/agentKnowledgeTurn.test.ts`（12）
+**门禁**：`tests/lib/agent/agentKnowledge.test.ts`（15）+ `tests/lib/agent/agentKnowledgeTurn.test.ts`（12）
 + `tests/agentKnowledgePicker.test.tsx`（9）+ `tests/agentKnowledgeChip.test.tsx`（3）
 + `tests/promptAssembly.test.ts` 段位 2 例 + `tests/sessionsPromptAssembly.test.ts` 接线 4 例
 + `tests/agentsStoreModelBinding.test.ts` 三条写路径 4 例（含 **`mergeAgents` 漏字段**——
@@ -3720,7 +3720,7 @@ POST /api/sync/push
 | `AgentRuntime`    | `src/ai/runtime/types.ts`                       | 引擎唯一出口（第 8 章）                                  |
 | `EventStore`      | `src/events/store.ts`（入口 `src/events/index.ts`） | 事件追加 / 读取 / 索引（第 9 章）——**已落地**，双实现见 9.6        |
 | `ToolGateway`     | ~~`src/security/toolGateway.ts`~~               | ~~工具唯一收口~~ **已被引擎侧取代**（ADR-021）；保留为 V3 多引擎参考形态 |
-| `MemoryService`   | `src/lib/memory.ts`（升级）                         | 记忆分层读写（第 14 章）                                 |
+| `MemoryService`   | `src/lib/memory/memory.ts`（升级）                         | 记忆分层读写（第 14 章）                                 |
 | `PlatformAdapter` | `src/platform/types.ts`（扩展）                     | 跨端能力唯一收口                                       |
 | `SyncEngine`      | `src/sync/SyncEngine.ts`                        | 同步调度（V1.5）                                     |
 

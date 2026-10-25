@@ -22,7 +22,7 @@ import {
   todayLocalIso,
   USAGE_WINDOWS,
   type UsageWindow,
-} from '@/lib/usageReport';
+} from '@/lib/ui/usageReport';
 import { useUsageStore } from '@/stores/usageStore';
 import { useModelsStore } from '@/stores/modelsStore';
 import {
@@ -31,7 +31,7 @@ import {
   formatUnitPrice,
   resolvePricingFor,
   sumByCurrency,
-} from '@/lib/modelPricing';
+} from '@/lib/model/modelPricing';
 
 /**
  * 用量分区（FR-11.1）：本机 LLM 用量报表。
@@ -99,7 +99,7 @@ export function UsageSection() {
    * 逐模型的成本。**只算配了单价的那些**——没配的按 0 计入会让人以为「都算过了」，
    * 而合计里少了几个模型正是最需要被看见的信息。
    *
-   * 归因口径见 `src/lib/modelPricing.ts` 的文件头：用量表只有 `(provider, model)`
+   * 归因口径见 `src/lib/model/modelPricing.ts` 的文件头：用量表只有 `(provider, model)`
    * 两列，同一个上游模型被多个预设引用时取第一条（不承诺精确归因，已如实说明）。
    */
   const pricedRows = useMemo(

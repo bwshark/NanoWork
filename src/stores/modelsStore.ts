@@ -8,8 +8,8 @@ import type {
   NanobotModelsSnapshot,
   ProviderRetryMode,
 } from '@/platform/types';
-import { DEFAULT_PROVIDER_RETRY_MODE } from '@/lib/modelFallbacks';
-import { normalizePricing, type ModelPricing } from '@/lib/modelPricing';
+import { DEFAULT_PROVIDER_RETRY_MODE } from '@/lib/model/modelFallbacks';
+import { normalizePricing, type ModelPricing } from '@/lib/model/modelPricing';
 import type { ModelInfo } from '@/types';
 import {
   AUTO_PROVIDER_VALUE,
@@ -18,14 +18,14 @@ import {
   modelProviderLabel,
   slugifyProviderKey,
   toProviderConfigKey,
-} from '@/lib/modelProviders';
+} from '@/lib/model/modelProviders';
 import {
   ENGINE_DEFAULT_CAPABILITIES,
   ENGINE_DEFAULT_CONTEXT_WINDOW_TOKENS,
   ENGINE_DEFAULT_MAX_TOKENS,
   ENGINE_DEFAULT_TEMPERATURE,
   normalizeTokenLimit,
-} from '@/lib/modelOptions';
+} from '@/lib/model/modelOptions';
 
 /**
  * 设置页「模型」分区里的一行。

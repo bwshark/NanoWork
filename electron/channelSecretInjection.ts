@@ -3,7 +3,7 @@
  *
  * ## 它补的是什么洞
  *
- * 渲染层持久化时已剥掉密钥（`channelsStore.partialize` + `lib/channelSecrets.ts`），
+ * 渲染层持久化时已剥掉密钥（`channelsStore.partialize` + `lib/channel/channelSecrets.ts`），
  * 于是**应用重启后渲染层手上没有密钥**，它提交给主进程的 `channels` 片段自然也不带。
  * 而 `syncNanobotChannels` 对托管渠道键是**整体替换**语义——照单收下就等于把
  * `config.json` 里的 `clientSecret` / `appSecret` / `token` 一并抹掉，
@@ -38,7 +38,7 @@
  * Electron 运行时，可直接被 vitest 覆盖（对齐 `electron/credentialVault.ts` /
  * `electron/storageRoutes.ts` 的做法），也让「读不到凭据」这条分支测得到。
  */
-import { channelSecretKeys, channelVaultName } from '../src/lib/channelSecrets';
+import { channelSecretKeys, channelVaultName } from '../src/lib/channel/channelSecrets';
 
 /** 保险库条目读取器（主进程传 `credentialVault.read`） */
 export type SecretReader = (name: string) => Promise<Record<string, string>>;

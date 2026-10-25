@@ -110,7 +110,7 @@ defaultProcessOpen(tier, isStreaming, errors) =
 processOpen = searchForcesOpen || (manualProcessOpen ?? defaultProcessOpen(...))
 ```
 
-- `errors` 取 `digestProcess(filteredEvents).errors`（沿用 `src/lib/processDigest.ts`）。
+- `errors` 取 `digestProcess(filteredEvents).errors`（沿用 `src/lib/ui/processDigest.ts`）。
 - `full` 档结束后**保持展开**（这是对本需求「完整过程方便调试」的直接落地，也是本档相对 `key` 的关键差异之一）；用户仍可手动收起。
 
 ### 5.2 优先级（高 → 低）
@@ -264,7 +264,7 @@ processOpen = searchForcesOpen || (manualProcessOpen ?? defaultProcessOpen(...))
 
 **`tests/settingsDialogSections.test.tsx`**：`general` 锚点 `'外观'` 不变 → **无需改动**（选择「通用卡片」而非新分区的直接收益）。
 
-**`tests/lib/processDigest.test.ts`**：`digestProcess` 签名与语义不变 → **无需改动**。新增的档位过滤/聚合属新纯函数，需**新增**测试（QA）。
+**`tests/lib/ui/processDigest.test.ts`**：`digestProcess` 签名与语义不变 → **无需改动**。新增的档位过滤/聚合属新纯函数，需**新增**测试（QA）。
 
 **必须保留的不变量**：交错顺序；只有末尾未闭合思考展开正文、写完即卸载；空事件+空 children 不渲染；过程块占满消息列且无 `max-width`；搜索强制展开与手动优先。
 

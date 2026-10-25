@@ -2,7 +2,7 @@
  * `SyncEngine` 的 C 类资产接线单测（批次 6b，判据 J-8）。
  *
  * 用**假** `FileAssetsAdapter`（本文件只验引擎的接线，资产的合并语义由
- * `tests/sync/fileAssets.test.ts` 与 `tests/lib/memoryMerge.test.ts` 覆盖）：
+ * `tests/sync/fileAssets.test.ts` 与 `tests/lib/memory/memoryMerge.test.ts` 覆盖）：
  *
  * - **hydrate 必须在 pull 之前**——「内容即版本」要先于组装上行负载生效，
  *   挪到 pull 之后 → 本轮 push 用的是上一轮的版本号（红）；

@@ -3,8 +3,8 @@ import type { ExecutionMode } from './event';
 /**
  * 提示词模板外置与身份文件的类型契约（design §13 / §14、FR-4.3）。
  *
- * 约定：本文件只描述数据形状；磁盘读写一律由 `src/lib/promptLibrary.ts` 与
- * `src/lib/identity.ts` 封装（渲染层不直接碰 `platform.storage` 的 key）。
+ * 约定：本文件只描述数据形状；磁盘读写一律由 `src/lib/prompt/promptLibrary.ts` 与
+ * `src/lib/agent/identity.ts` 封装（渲染层不直接碰 `platform.storage` 的 key）。
  */
 
 /** 提示词模板的三个维度（§13.1 矩阵：模式 × 领域 × 风格） */

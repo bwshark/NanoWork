@@ -3,7 +3,7 @@ import {
   isMemoryFileName,
   isWritableMemoryFileName,
   sortMemoryFileNames,
-} from '@/lib/workspaceMemory';
+} from '@/lib/memory/workspaceMemory';
 import {
   appendJsonlLine,
   CURATED_MEMORY_FILE,
@@ -14,9 +14,9 @@ import {
   memoryEntryName,
   splitJsonlLines,
   webMemoryDirKey,
-} from '@/lib/memoryPaths';
-import { workspaceKeyFor } from '@/lib/workspaceKey';
-import { MEMORY_KEY_PREFIX } from '@/lib/constants';
+} from '@/lib/memory/memoryPaths';
+import { workspaceKeyFor } from '@/lib/workspace/workspaceKey';
+import { MEMORY_KEY_PREFIX } from '@/lib/core/constants';
 import type { ArtifactIndexEntry } from '@/types';
 import type {
   ArtifactIndexFiles,

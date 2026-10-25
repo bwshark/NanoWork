@@ -49,21 +49,21 @@ import {
   APP_DISPLAY_NAME,
   APP_DISPLAY_SUB,
   UNBOUND_AGENT_LABEL,
-} from "@/lib/constants";
-import { channelLabel } from "@/lib/channelLabel";
+} from "@/lib/core/constants";
+import { channelLabel } from "@/lib/channel/channelLabel";
 import {
   CHANNEL_SESSION_ID_PREFIX,
   channelGroupKey,
   channelIconKind,
-} from "@/lib/channelSession";
-import { conversationCount, hasConversation } from "@/lib/conversation";
-import { CRON_SESSION_ID_PREFIX } from "@/lib/sessionImport";
-import { filterTasks, isFilterDefault } from "@/lib/taskQuery";
+} from "@/lib/channel/channelSession";
+import { conversationCount, hasConversation } from "@/lib/session/conversation";
+import { CRON_SESSION_ID_PREFIX } from "@/lib/session/sessionImport";
+import { filterTasks, isFilterDefault } from "@/lib/task/taskQuery";
 import {
   DEFAULT_WORKSPACE_LABEL,
   isSameWorkspacePath,
   resolveWorkspaceLabel,
-} from "@/lib/workspaceLabel";
+} from "@/lib/workspace/workspaceLabel";
 import { useSessionsStore } from "@/stores/sessionsStore";
 import { useChannelSessionsStore } from "@/stores/channelSessionsStore";
 import { useSessionUiStore } from "@/stores/sessionUiStore";
@@ -1308,7 +1308,7 @@ function SessionList() {
                     它，「新建任务」会以它为 workdir 开工。
                     与其它目录分组唯一的差别是菜单里没有「重命名」：默认分组的名字由
                     它的语义决定（改设置后名字依然成立），别名会让名字漂移，见
-                    `resolveWorkspaceLabel` 与 `tests/lib/workspaceLabel.test.ts`。
+                    `resolveWorkspaceLabel` 与 `tests/lib/workspace/workspaceLabel.test.ts`。
                     自动任务分组同样展示——它可重命名、可从列表移除，
                     仅「打开文件夹」因无真实目录而不进菜单。 */}
                 {hoveredGroup === g.key && (
@@ -1620,7 +1620,7 @@ function SessionList() {
         {/* 默认工作空间（key=""）不提供「重命名」：分组的名字由它的语义决定——
             组内就是设置里那个默认路径下的任务，用户改了设置之后这个名字依然成立。
             `resolveWorkspaceLabel` 也是刻意让默认名压过别名的，真给了入口只会变成
-            一条「改了没反应」的脏数据（见 `tests/lib/workspaceLabel.test.ts`）。
+            一条「改了没反应」的脏数据（见 `tests/lib/workspace/workspaceLabel.test.ts`）。
             其余分组（含自动任务虚拟分组）都可以重命名。 */}
         {menuGroup && menuGroup.key !== "" && (
           <MenuItem onClick={() => handleGroupAction("rename", groupMenu.key)}>

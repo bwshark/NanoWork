@@ -23,7 +23,7 @@ import {
   skillMetaChipSx,
 } from './skillCardSx';
 import { skillInfoRows } from './skillMeta';
-import { clampLines } from '@/lib/cardSx';
+import { clampLines } from '@/lib/ui/cardSx';
 import type { Skill } from '@/types';
 
 /** 描述超过这个长度才给「展开」——短描述展开没意义，只是多一个可点区域 */

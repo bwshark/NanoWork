@@ -14,13 +14,13 @@
  *
  * ## 为什么放在 sync/ 而不是 lib/
  *
- * `lib/kbClient.ts` 是纯函数模块（不读全局状态，用例可直接注入桩）。让它反过来
+ * `lib/kb/kbClient.ts` 是纯函数模块（不读全局状态，用例可直接注入桩）。让它反过来
  * import `sync/runtime` 会成环（`runtime.ts` 已经 import 了 `createKbGateway`）。
  * 装配层在 sync 侧，方向就只剩 sync → lib 一条。
  */
 
-import { createKbGateway } from '@/lib/kbClient';
-import type { KbGateway } from '@/lib/kbClient';
+import { createKbGateway } from '@/lib/kb/kbClient';
+import type { KbGateway } from '@/lib/kb/kbClient';
 import { resolveSyncBaseUrl } from './baseUrl';
 import { getSyncRuntime } from './runtime';
 

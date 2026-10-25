@@ -30,15 +30,15 @@ import {
 } from "@mui/icons-material";
 import { useNavigate } from "react-router-dom";
 import { platform } from "@/platform";
-import { APP_NAME, ROUTES } from "@/lib/constants";
-import { isEditableTarget } from "@/lib/editableTarget";
-import { activeFilterCount } from "@/lib/taskQuery";
+import { APP_NAME, ROUTES } from "@/lib/core/constants";
+import { isEditableTarget } from "@/lib/editor/editableTarget";
+import { activeFilterCount } from "@/lib/task/taskQuery";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useSessionsStore } from "@/stores/sessionsStore";
 import { useTaskQueryStore } from "@/stores/taskQueryStore";
 import { TaskSearchDialog } from "@/components/tasks/TaskSearchDialog";
 import { TaskFilterPanel } from "@/components/tasks/TaskFilterPanel";
-import { getComposerEdit } from "@/lib/composerEditBridge";
+import { getComposerEdit } from "@/lib/editor/composerEditBridge";
 import type { AppInfo } from "@/platform/types";
 
 /** 自绘菜单的可用键 */

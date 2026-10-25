@@ -16,12 +16,12 @@
 >
 > | 关注点 | 现状所在 |
 > |---|---|
-> | 目录与文件名约定、排序、合并 | `src/lib/workspaceMemory.ts` |
+> | 目录与文件名约定、排序、合并 | `src/lib/memory/workspaceMemory.ts` |
 > | 主进程路径解析与越界校验 | `electron/memoryRoutes.ts` |
 > | 主进程 fs 读写与旧数据懒迁移 | `electron/workspaceMemoryStore.ts` |
 > | 渲染层目录后端（Web 为 localStorage 模拟） | `src/platform/types.ts` 的 `WorkspaceMemoryFiles` |
-> | 记忆服务 | `src/lib/memory.ts` 的 `MemoryServiceImpl` |
-> | 工作目录 → 旧落点 key（仅迁移用） | `src/lib/workspaceKey.ts` |
+> | 记忆服务 | `src/lib/memory/memory.ts` 的 `MemoryServiceImpl` |
+> | 工作目录 → 旧落点 key（仅迁移用） | `src/lib/workspace/workspaceKey.ts` |
 >
 > 没有绑定工作目录的会话（IM 会话、存储设置之前建的旧会话）仍落产品目录下的
 > `~/.nanowork/memory/default/`——没有工作目录就没有「跟着走」的载体。
@@ -34,7 +34,7 @@
 
 ## 1. 实现方案概述
 
-在 `src/lib/memory.ts` 新增一个与平台无关的**记忆服务层**（MemoryService），统一封装读取/写入/追加/摘要逻辑；MemoryState 类型扩充进 `src/types/memory.ts`；`settingsStore` 增加 `memoryEnabled`/`autoSummarize` 开关并持久化；`sessionsStore.createSession` 与 `send` 在拼装 system 消息阶段调用 MemoryService 读取并以标签块注入 system prompt 末尾；UI 侧新增独立「记忆」页（路由 `/memory`）与侧边导航项，设置页追加「记忆」分区，「保存为记忆」作为聊天消息 hover 菜单项，新会话 `ChatHeader` 顶部显示「已加载 N 条记忆」提示条。
+在 `src/lib/memory/memory.ts` 新增一个与平台无关的**记忆服务层**（MemoryService），统一封装读取/写入/追加/摘要逻辑；MemoryState 类型扩充进 `src/types/memory.ts`；`settingsStore` 增加 `memoryEnabled`/`autoSummarize` 开关并持久化；`sessionsStore.createSession` 与 `send` 在拼装 system 消息阶段调用 MemoryService 读取并以标签块注入 system prompt 末尾；UI 侧新增独立「记忆」页（路由 `/memory`）与侧边导航项，设置页追加「记忆」分区，「保存为记忆」作为聊天消息 hover 菜单项，新会话 `ChatHeader` 顶部显示「已加载 N 条记忆」提示条。
 
 > **读取时机（2026-09-17 修订）**：`createSession` 读盘后把结果缓存进 `session.memory`（纯缓存）；`send` 本身**不再读盘**，而是在 `streamAssistantReply` 里**先同步占住流式槽位、再按需刷新过期快照**（异步）。刷新是刷新、装配是装配，两者顺序不可交换——细节见 §4.2 注 1~注 3。
 
@@ -56,10 +56,10 @@
 
 | 路径 | 状态 | 说明 |
 |------|------|------|
-| `src/lib/memory.ts` | **[新]** | MemoryService：读取/写入/追加/摘要/去重，跨端封装 |
+| `src/lib/memory/memory.ts` | **[新]** | MemoryService：读取/写入/追加/摘要/去重，跨端封装 |
 | `src/types/memory.ts` | **[新]** | MemoryState、MemoryMeta 等类型契约 |
 | `src/types/index.ts` | **[改]** | 再导出 memory 类型 |
-| `src/lib/constants.ts` | **[改]** | 增加 `ROUTES.memory` 与 `MEMORY_KEY_PREFIX` 常量（后者现仅用于定位旧落点，2026-09-19 起） |
+| `src/lib/core/constants.ts` | **[改]** | 增加 `ROUTES.memory` 与 `MEMORY_KEY_PREFIX` 常量（后者现仅用于定位旧落点，2026-09-19 起） |
 | `src/stores/settingsStore.ts` | **[改]** | `Settings` 增加 `memoryEnabled`、`autoSummarize` 字段及默认值 |
 | `src/stores/sessionsStore.ts` | **[改]** | `createSession`/`send` 注入记忆；新增 `memoryLoaded` 提示状态 |
 | `src/router/index.tsx` | **[改]** | 注册 `/memory` 路由 |
@@ -262,8 +262,8 @@ MemoryPage 加载 → MemoryService.load() 填入文本框
 
 | 编号 | 任务名 | 源文件 | 依赖 | 优先级 |
 |------|--------|--------|------|--------|
-| **T22** | 记忆类型与常量基础 | `src/types/memory.ts`[新]、`src/types/index.ts`[改]、`src/lib/constants.ts`[改] | — | P0 |
-| **T23** | 记忆服务层 MemoryService | `src/lib/memory.ts`[新] | T22 | P0 |
+| **T22** | 记忆类型与常量基础 | `src/types/memory.ts`[新]、`src/types/index.ts`[改]、`src/lib/core/constants.ts`[改] | — | P0 |
+| **T23** | 记忆服务层 MemoryService | `src/lib/memory/memory.ts`[新] | T22 | P0 |
 | **T24** | Settings 开关与持久化 | `src/stores/settingsStore.ts`[改]、`src/types/settings.ts`[改] | T22 | P0 |
 | **T25** | 会话注入与提示状态 | `src/stores/sessionsStore.ts`[改]、`src/components/MemoryBar.tsx`[新]、`src/pages/chat/ChatHeader.tsx`[改] | T23, T24 | P0 |
 | **T26** | 聊天保存为记忆菜单 | `src/pages/chat/UserMessage.tsx`[改] | T23, T25 | P0 |

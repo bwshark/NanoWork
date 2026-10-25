@@ -1,5 +1,5 @@
 /**
- * 跨会话召回（`src/lib/recall.ts`）。需求 FR-M25 – FR-M30。
+ * 跨会话召回（`src/lib/memory/recall.ts`）。需求 FR-M25 – FR-M30。
  *
  * 按**五阶段契约**组织用例，每一阶段都能独立定位失败：
  *
@@ -26,7 +26,7 @@ import {
   scoreRecallCandidate,
   stableRankRecallCandidates,
   tokenizeRecall,
-} from '../src/lib/recall';
+} from '../src/lib/memory/recall';
 
 const NOW = new Date('2026-10-02T00:00:00Z');
 const SCOPE = 'u_test';

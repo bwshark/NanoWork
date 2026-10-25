@@ -37,7 +37,7 @@ import {
   isMemoryFileName,
   isWritableMemoryFileName,
   sortMemoryFileNames,
-} from '../src/lib/workspaceMemory';
+} from '../src/lib/memory/workspaceMemory';
 import {
   appendJsonlLine,
   isMemoryContentFileName,
@@ -46,7 +46,7 @@ import {
   isWritableMemoryEntryName,
   memoryEntryName,
   splitJsonlLines,
-} from '../src/lib/memoryPaths';
+} from '../src/lib/memory/memoryPaths';
 import {
   resolveLegacyMemoryFile,
   resolveMemoryFile,

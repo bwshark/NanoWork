@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Box, CircularProgress, Typography } from '@mui/material';
 import { ArtifactRenderer } from '@/components/ArtifactRenderer';
-import { isFileArtifact } from '@/lib/fileArtifact';
-import { readLocalTextFile } from '@/lib/localFilePreview';
+import { isFileArtifact } from '@/lib/artifact/fileArtifact';
+import { readLocalTextFile } from '@/lib/artifact/localFilePreview';
 import type { Artifact } from '@/types';
 
 interface ArtifactPreviewBodyProps {

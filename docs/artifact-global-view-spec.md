@@ -39,9 +39,9 @@
 
 | 文件 | 改动 |
 |---|---|
-| `src/lib/artifactIndex.ts` | `FilterOptions` 加 `editedOnly?`；新增 `hasVersionHistory(entry)`；`filterItems` 在 `editedOnly` 时只留 `hasVersionHistory` 为真的项 |
+| `src/lib/artifact/artifactIndex.ts` | `FilterOptions` 加 `editedOnly?`；新增 `hasVersionHistory(entry)`；`filterItems` 在 `editedOnly` 时只留 `hasVersionHistory` 为真的项 |
 | `src/pages/artifacts/ArtifactsPage.tsx` | 加 `editedOnly` state + 「仅编辑过」`ToggleButton`；`filterItems` 传入 `editedOnly`；`renderEntryBar` 在 `version>1` 时加 `vN` Chip |
-| `tests/lib/artifactIndex.test.ts` | `hasVersionHistory` 两例 + `editedOnly` 过滤一例 |
+| `tests/lib/artifact/artifactIndex.test.ts` | `hasVersionHistory` 两例 + `editedOnly` 过滤一例 |
 | `tests/pages/artifactsPage.test.tsx` | 版本徽章显示/不显示两例 + 「仅编辑过」过滤一例 |
 
 ---

@@ -15,13 +15,13 @@ import type { ReactNode } from 'react';
 import { Box, Button, Chip, Menu, MenuItem, ToggleButton, ToggleButtonGroup, Typography } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import { useChannelSessionsStore } from '@/stores/channelSessionsStore';
-import { channelLabel } from '@/lib/channelLabel';
+import { channelLabel } from '@/lib/channel/channelLabel';
 import {
   deliveryOptionLabel,
   deliveryTargetFromSession,
   deliveryTargetKey,
   hasDeliveryTarget,
-} from '@/lib/taskDelivery';
+} from '@/lib/task/taskDelivery';
 import type { TaskDelivery, TaskDeliveryTarget } from '@/types';
 
 /**

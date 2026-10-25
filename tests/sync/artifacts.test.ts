@@ -12,8 +12,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { platform } from '@/platform';
 import { createArtifactsAdapter, ARTIFACT_COLLECTIONS } from '@/sync/artifacts';
 import { useArtifactsStore } from '@/stores/artifactsStore';
-import { contentHash } from '@/lib/contentHash';
-import { artifactContentHash } from '@/lib/artifactIndex';
+import { contentHash } from '@/lib/core/contentHash';
+import { artifactContentHash } from '@/lib/artifact/artifactIndex';
 import type { Artifact } from '@/types';
 import type { SyncChange } from '@/sync/types';
 

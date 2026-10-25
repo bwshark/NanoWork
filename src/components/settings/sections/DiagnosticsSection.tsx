@@ -5,7 +5,7 @@ import DownloadOutlinedIcon from '@mui/icons-material/DownloadOutlined';
 import { SettingsCard, SettingsRow } from '@/components/settings/SettingsPrimitives';
 import { toast } from '@/components/Toast';
 import { platform } from '@/platform';
-import { formatBytes } from '@/lib/fileArtifact';
+import { formatBytes } from '@/lib/artifact/fileArtifact';
 import { DEFAULT_LOG_KEEP_DAYS } from '@/observability/logging';
 import { DEFAULT_TRACE_KEEP_DAYS } from '@/observability/trace';
 import type { DiagnosticsStats } from '@/platform/types';

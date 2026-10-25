@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { platform } from '@/platform';
 import type { NanobotFileToolsPolicy, NanobotPathRule } from '@/platform/types';
-import { recordAppAudit } from '@/lib/appAudit';
+import { recordAppAudit } from '@/lib/audit/appAudit';
 
 /**
  * 引擎写策略（`tools.file.default_deny_write`，FR-8.4）的状态。

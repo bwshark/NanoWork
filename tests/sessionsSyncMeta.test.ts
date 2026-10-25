@@ -21,7 +21,7 @@ import {
   useSettingsStore,
 } from '@/stores/settingsStore';
 import { useStorageInfoStore } from '@/stores/storageInfoStore';
-import { __resetDeviceIdForTest, getDeviceId } from '@/lib/deviceId';
+import { __resetDeviceIdForTest, getDeviceId } from '@/lib/core/deviceId';
 import { waitForSessionWrites } from '@/events';
 import { resetEventStream } from './helpers/eventStream';
 import type { AppInfo, StorageInfo } from '@/platform/types';

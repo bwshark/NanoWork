@@ -24,7 +24,7 @@ import { useArtifactsStore } from '@/stores/artifactsStore';
 import { useExpertGroupsStore } from '@/stores/expertGroupsStore';
 import { useModelsStore } from '@/stores/modelsStore';
 import { NanobotClient } from '@/ai/runtime/nanobotHttp/chat';
-import { buildExpertGroupRequest } from '@/lib/expertGroupRequest';
+import { buildExpertGroupRequest } from '@/lib/agent/expertGroupRequest';
 import { waitForSessionWrites } from '@/events';
 import { resetEventStream } from './helpers/eventStream';
 import type { Agent, ExpertGroup, ModelInfo } from '@/types';

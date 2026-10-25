@@ -42,14 +42,14 @@ import GppMaybeIcon from '@mui/icons-material/GppMaybe';
 import { toast } from '@/components/Toast';
 import { DeliveryField } from '@/components/tasks/DeliveryField';
 import { WorkdirField } from '@/components/tasks/WorkdirField';
-import { isAbsoluteWorkspacePath } from '@/lib/workspaceLabel';
-import { validateCron } from '@/lib/cron';
-import { describeRrule, lowerRrule } from '@/lib/rrule';
+import { isAbsoluteWorkspacePath } from '@/lib/workspace/workspaceLabel';
+import { validateCron } from '@/lib/task/cron';
+import { describeRrule, lowerRrule } from '@/lib/task/rrule';
 import { useAgentsStore } from '@/stores/agentsStore';
 import { useSkillsStore } from '@/stores/skillsStore';
 import { describeModelId, useModelsStore } from '@/stores/modelsStore';
 import type { TaskConfig, TaskDelivery, TaskSchedule, TaskStatus } from '@/types';
-import type { TaskDraft } from '@/lib/taskDraft';
+import type { TaskDraft } from '@/lib/task/taskDraft';
 
 /** 调度类型：周期（daily/weekly/monthly）/ 按间隔 / 单次 */
 type ScheduleMode = 'periodic' | 'interval' | 'once' | 'rrule';
@@ -77,7 +77,7 @@ interface UiState {
   cronOverride: string;
   /**
    * 循环规则原文（FR-5.4）。它是**本层的表达形态**，提交时原样存进
-   * `TaskConfig.schedule`；降级成引擎能跑的 cron / interval 是同步时做的（`src/lib/rrule.ts`）。
+   * `TaskConfig.schedule`；降级成引擎能跑的 cron / interval 是同步时做的（`src/lib/task/rrule.ts`）。
    * 之所以不在这里就降级：用户下次打开表单要看到自己写的那条规则。
    */
   rrule: string;

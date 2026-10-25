@@ -8,7 +8,7 @@ import { selectPendingApproval, useSessionsStore } from '@/stores/sessionsStore'
 import type { PendingApproval } from '@/stores/sessionsStore';
 import type { ApprovalDecision } from '@/ai/runtime/types';
 import { chatColumnSx } from '@/pages/chat/chatColumnSx';
-import { describeApproval } from '@/lib/approvalSummary';
+import { describeApproval } from '@/lib/ui/approvalSummary';
 
 /**
  * 逐条批准卡片（FR-1.5）。

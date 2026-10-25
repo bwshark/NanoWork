@@ -1,14 +1,14 @@
 import { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ROUTES } from '@/lib/constants';
-import { isEditableTarget } from '@/lib/editableTarget';
+import { ROUTES } from '@/lib/core/constants';
+import { isEditableTarget } from '@/lib/editor/editableTarget';
 import {
   GLOBAL_SHORTCUTS,
   conflictsWithTyping,
   matchBinding,
   resolveBinding,
   type ShortcutId,
-} from '@/lib/shortcuts';
+} from '@/lib/editor/shortcuts';
 import { platform } from '@/platform';
 import { useSessionUiStore } from '@/stores/sessionUiStore';
 import { useSessionsStore } from '@/stores/sessionsStore';
@@ -18,7 +18,7 @@ import { useSettingsUiStore } from '@/stores/settingsUiStore';
 /**
  * 全局快捷键派发器。
  *
- * 挂一个窗口级 `keydown` 监听，把事件交给 `lib/shortcuts` 的注册表匹配，
+ * 挂一个窗口级 `keydown` 监听，把事件交给 `lib/editor/shortcuts` 的注册表匹配，
  * 命中就执行对应动作。设计约束：
  *
  * 1. **只处理 `scope: 'global'` 的命令**。输入框内的（发送 / 换行 / 停止生成 / 语音）

@@ -1,5 +1,5 @@
 import { Box, MenuItem, Select, Typography } from '@mui/material';
-import { findSlot, slotsOfKind } from '@/lib/promptCatalog';
+import { findSlot, slotsOfKind } from '@/lib/prompt/promptCatalog';
 
 /**
  * 「工作领域 / 语气风格」选择器（design §13.1 的模式 × 领域 × 风格矩阵）。

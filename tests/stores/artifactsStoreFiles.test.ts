@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { useArtifactsStore } from '@/stores/artifactsStore';
-import { fileArtifactId, findFileArtifact, toFileViews } from '@/lib/fileArtifact';
-import { artifactContentHash } from '@/lib/artifactIndex';
+import { fileArtifactId, findFileArtifact, toFileViews } from '@/lib/artifact/fileArtifact';
+import { artifactContentHash } from '@/lib/artifact/artifactIndex';
 import type { Artifact } from '@/types';
 
 /** 造一条文件产物（`id` 走真实派生规则，保证与运行时一致） */

@@ -7,7 +7,7 @@ import { useSettingsStore } from "@/stores/settingsStore";
 import { applyGatewayEndpointInfo, connectionManager } from "@/ai/connectionManager";
 import { platform } from "@/platform";
 import { nanobotBridge } from "@/platform/nanobotBridge";
-import { DEFAULT_GATEWAY_PORT } from "@/lib/constants";
+import { DEFAULT_GATEWAY_PORT } from "@/lib/core/constants";
 import type { NanobotGatewayInfo } from "@/platform/types";
 
 /**

@@ -15,8 +15,8 @@
  */
 
 import { beforeEach, describe, expect, it } from 'vitest';
-import { MemoryService } from '@/lib/memory';
-import { MEMORY_KEY_PREFIX, USER_MEMORY_KEY } from '@/lib/constants';
+import { MemoryService } from '@/lib/memory/memory';
+import { MEMORY_KEY_PREFIX, USER_MEMORY_KEY } from '@/lib/core/constants';
 
 beforeEach(() => {
   window.localStorage.clear();

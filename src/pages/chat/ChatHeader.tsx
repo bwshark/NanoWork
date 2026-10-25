@@ -19,7 +19,7 @@ import {
   externalSourceHint,
   externalSourceLabel,
   isExternalSession,
-} from "@/lib/channelSession";
+} from "@/lib/channel/channelSession";
 
 /** 会话头部：当前任务名称（可编辑）/ 模型 / 记忆提示 / 消息数 / 会话快捷入口 */
 export function ChatHeader() {

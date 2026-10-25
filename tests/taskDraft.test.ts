@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { Message } from '@/types';
-import { makeTaskName, buildTaskDraftFromMessage, type TaskDraft } from '@/lib/taskDraft';
+import { makeTaskName, buildTaskDraftFromMessage, type TaskDraft } from '@/lib/task/taskDraft';
 
 /** 构造一条最小 Message 用于测试 */
 function msg(content: string): Message {

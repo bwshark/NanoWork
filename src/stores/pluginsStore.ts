@@ -7,11 +7,11 @@ import {
   pluginNameFromEntry,
   referencedCopyPaths,
   withPluginIntent,
-} from '@/lib/pluginIntent';
+} from '@/lib/agent/pluginIntent';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { useSessionsStore } from '@/stores/sessionsStore';
-import { referencedCopyPathsForSessions } from '@/lib/sessionPluginRefs';
-import { recordAppAudit } from '@/lib/appAudit';
+import { referencedCopyPathsForSessions } from '@/lib/agent/sessionPluginRefs';
+import { recordAppAudit } from '@/lib/audit/appAudit';
 import type {
   MarketIndex,
   MarketInstallResult,

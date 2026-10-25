@@ -16,14 +16,14 @@ import PlayCircleOutlineIcon from '@mui/icons-material/PlayCircleOutline';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import { toast } from '@/components/Toast';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
-import { platformMemoryIo, userMemoryRef, workspaceMemoryRef } from '@/lib/memoryPlatformIo';
-import { createMemoryStore, type MemoryStore } from '@/lib/memoryStore';
-import { DEFAULT_DISTILL_POLICY } from '@/lib/memoryDistill';
-import { buildExportBundle, parseExportBundle, serializeExportBundle } from '@/lib/memoryBundle';
+import { platformMemoryIo, userMemoryRef, workspaceMemoryRef } from '@/lib/memory/memoryPlatformIo';
+import { createMemoryStore, type MemoryStore } from '@/lib/memory/memoryStore';
+import { DEFAULT_DISTILL_POLICY } from '@/lib/memory/memoryDistill';
+import { buildExportBundle, parseExportBundle, serializeExportBundle } from '@/lib/memory/memoryBundle';
 import { platform } from '@/platform';
-import { memoryDirDisplayPath } from '@/lib/memoryPaths';
-import { ensureLocalMemoryScope } from '@/lib/memoryPlatformIo';
-import { workspaceIdFor } from '@/lib/memoryPaths';
+import { memoryDirDisplayPath } from '@/lib/memory/memoryPaths';
+import { ensureLocalMemoryScope } from '@/lib/memory/memoryPlatformIo';
+import { workspaceIdFor } from '@/lib/memory/memoryPaths';
 import type { ConflictCase, CuratedEntry, EntryKey } from '@/types';
 
 /**

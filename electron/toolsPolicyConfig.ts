@@ -10,7 +10,7 @@
  */
 
 import type { NanobotFileToolsPolicy, NanobotPathRule } from '../src/platform/types';
-import { DEFAULT_DENY_WRITE } from '../src/lib/constants';
+import { DEFAULT_DENY_WRITE } from '../src/lib/core/constants';
 
 /**
  * 引擎 `FileToolsConfig` 里的字段名。
@@ -60,7 +60,7 @@ export const DEFAULT_PATH_RULES: never[] = [];
  * 界面显示的开关状态会与引擎的实际行为分叉——而分叉的表现是「界面说开着、
  * 引擎却在放行」或反过来，**全程零报错**。
  *
- * **常量的真正定义在 `src/lib/constants.ts`**（渲染层也要读它，而 `src/` 不从
+ * **常量的真正定义在 `src/lib/core/constants.ts`**（渲染层也要读它，而 `src/` 不从
  * `electron/` import）。这里 re-export 是为了保住本模块既有的导出路径——
  * 已有测试与调用方都从 `electron/toolsPolicyConfig` 取。
  */

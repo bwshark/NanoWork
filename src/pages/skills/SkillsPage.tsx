@@ -19,9 +19,9 @@ import { useSkillsStore } from "@/stores/skillsStore";
 import { useSessionsStore } from "@/stores/sessionsStore";
 import { toast } from "@/components/Toast";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
-import { parseSkillFromMarkdown } from "@/lib/skillParser";
+import { parseSkillFromMarkdown } from "@/lib/agent/skillParser";
 import { platform } from "@/platform";
-import { ROUTES } from "@/lib/constants";
+import { ROUTES } from "@/lib/core/constants";
 import { SkillMarketCard } from "@/components/skills/SkillMarketCard";
 import { SkillInstalledCard } from "@/components/skills/SkillInstalledCard";
 import { SkillDetailDialog } from "@/components/skills/SkillDetailDialog";
@@ -34,7 +34,7 @@ import {
   skillTopBarButtonSx,
 } from "@/components/skills/skillCardSx";
 import { orderInstalledSkills } from "@/components/skills/skillMeta";
-import { SKILL_OVERRIDE_OFF, SKILL_OVERRIDE_ON } from "@/lib/skillOverrides";
+import { SKILL_OVERRIDE_OFF, SKILL_OVERRIDE_ON } from "@/lib/agent/skillOverrides";
 import type { Skill, SkillOverride } from "@/types";
 
 /** 安装反馈时长：给「点了有反应」留一个可见的节奏，不做假进度条 */

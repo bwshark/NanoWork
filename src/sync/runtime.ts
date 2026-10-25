@@ -34,9 +34,9 @@ import { useMcpStore } from '@/stores/mcpStore';
 import { useChannelsStore } from '@/stores/channelsStore';
 import { useSkillsStore } from '@/stores/skillsStore';
 import { useSettingsStore } from '@/stores/settingsStore';
-import { APP_AUDIT_LOCAL_ACTOR, setAppAuditActorProvider } from '@/lib/appAudit';
-import { setKnowledgeSearchProvider } from '@/lib/agentKnowledgeTurn';
-import { createKbGateway } from '@/lib/kbClient';
+import { APP_AUDIT_LOCAL_ACTOR, setAppAuditActorProvider } from '@/lib/audit/appAudit';
+import { setKnowledgeSearchProvider } from '@/lib/agent/agentKnowledgeTurn';
+import { createKbGateway } from '@/lib/kb/kbClient';
 import { resolveSyncBaseUrl } from './baseUrl';
 import { useSessionsStore } from '@/stores/sessionsStore';
 import { useArtifactsStore } from '@/stores/artifactsStore';
@@ -174,7 +174,7 @@ export function createSyncRuntime(opts: SyncRuntimeOptions = {}): SyncRuntime {
   /*
    * 把「当前账户」注入审计日志（FR-8.9 应用操作留痕）。
    *
-   * 只有这里知道登录态：`lib/appAudit.ts` 不能直接 import 本模块（本模块订阅了全部
+   * 只有这里知道登录态：`lib/audit/appAudit.ts` 不能直接 import 本模块（本模块订阅了全部
    * store，store 又要用审计 → 直接 import 必成环），所以走一次性注入。
    * provider 每次调用都读实时 session，登录 / 登出后立刻反映，不需要再注册一次。
    */
@@ -184,7 +184,7 @@ export function createSyncRuntime(opts: SyncRuntimeOptions = {}): SyncRuntime {
    * 把「知识库检索」注入会话链路（FR-2.3 第四条 / FR-4.7）。
    *
    * 为什么必须在这里注入：只有本模块同时知道**云端地址**与**当前 token**；而
-   * `lib/agentKnowledgeTurn.ts` 被 `sessionsStore` 使用，反过来 import 本模块就会
+   * `lib/agent/agentKnowledgeTurn.ts` 被 `sessionsStore` 使用，反过来 import 本模块就会
    * 成环（本模块订阅了 sessionsStore）。与上面审计的注入是同一个手法。
    *
    * 三条口径：

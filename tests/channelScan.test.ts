@@ -6,8 +6,8 @@ import {
   nextScanState,
   DEFAULT_POLL_INTERVAL_MS,
   MAX_TRANSPORT_ERRORS,
-} from '@/lib/channelScan';
-import type { ScanEvent, ScanSnapshot } from '@/lib/channelScan';
+} from '@/lib/channel/channelScan';
+import type { ScanEvent, ScanSnapshot } from '@/lib/channel/channelScan';
 import { decodeChannelConnect } from '@/ai/runtime';
 import type { ChannelConnectResult } from '@/ai/runtime';
 import type { ChannelConnectResponse } from '@/platform/types';

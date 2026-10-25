@@ -1,7 +1,7 @@
 ﻿import { create } from 'zustand';
 import { platform } from '@/platform';
-import { PLACEHOLDER_TITLES, STORAGE_KEYS } from '@/lib/constants';
-import { genId } from '@/lib/id';
+import { PLACEHOLDER_TITLES, STORAGE_KEYS } from '@/lib/core/constants';
+import { genId } from '@/lib/core/id';
 import { toast } from '@/components/Toast';
 import { connectionManager } from '@/ai/connectionManager';
 import { getRuntime } from '@/ai/runtime';
@@ -9,9 +9,9 @@ import {
   attachImportedFileArtifacts,
   attachImportedTextArtifacts,
   CRON_SESSION_ID_PREFIX,
-} from '@/lib/sessionImport';
-import { artifactContentHash, hasContentHashInHistory } from '@/lib/artifactIndex';
-import { recordAppAudit } from '@/lib/appAudit';
+} from '@/lib/session/sessionImport';
+import { artifactContentHash, hasContentHashInHistory } from '@/lib/artifact/artifactIndex';
+import { recordAppAudit } from '@/lib/audit/appAudit';
 import {
   createRecorder,
   dropRecorder,
@@ -37,30 +37,30 @@ import { buildTurnTrace } from '@/observability/trace';
 import { log } from '@/observability/logger';
 import type { EventFactory } from '@/events/factory';
 import type { ExecutionMode, SessionEvent, SessionMeta } from '@/types/event';
-import { normalizeMeta, withoutTombstone } from '@/lib/syncMeta';
+import { normalizeMeta, withoutTombstone } from '@/lib/sync/syncMeta';
 import {
   attachmentsToUploadFiles,
   toPersistableAttachment,
-} from '@/lib/attachments';
-import { MemoryService, isEmptySummary } from '@/lib/memory';
-import { isSameMemoryWorkspace } from '@/lib/workspaceMemory';
-import { sessionCreatePatch, sessionDeletePatch, withSessionSync } from '@/lib/sessionSyncMeta';
+} from '@/lib/artifact/attachments';
+import { MemoryService, isEmptySummary } from '@/lib/memory/memory';
+import { isSameMemoryWorkspace } from '@/lib/memory/workspaceMemory';
+import { sessionCreatePatch, sessionDeletePatch, withSessionSync } from '@/lib/session/sessionSyncMeta';
 import {
   MEMORY_WRITE_INSTRUCTION,
   parseMemoryDirectives,
   stripMemoryDirectives,
-} from '@/lib/memoryDirective';
-import { IdentityService } from '@/lib/identity';
-import { PromptLibrary } from '@/lib/promptLibrary';
+} from '@/lib/memory/memoryDirective';
+import { IdentityService } from '@/lib/agent/identity';
+import { PromptLibrary } from '@/lib/prompt/promptLibrary';
 import {
   DEFAULT_PROMPT_DOMAIN,
   DEFAULT_PROMPT_STYLE,
-} from '@/lib/promptCatalog';
-import { assemblePromptSections } from '@/lib/promptAssembly';
-import { availablePresetIds, resolveTurnModel } from '@/lib/agentBinding';
-import { buildExpertGroupRequest } from '@/lib/expertGroupRequest';
-import { knowledgeQueryFrom, normalizeKnowledgeBinding } from '@/lib/agentKnowledge';
-import { resolveKnowledgeSection } from '@/lib/agentKnowledgeTurn';
+} from '@/lib/prompt/promptCatalog';
+import { assemblePromptSections } from '@/lib/prompt/promptAssembly';
+import { availablePresetIds, resolveTurnModel } from '@/lib/agent/agentBinding';
+import { buildExpertGroupRequest } from '@/lib/agent/expertGroupRequest';
+import { knowledgeQueryFrom, normalizeKnowledgeBinding } from '@/lib/agent/agentKnowledge';
+import { resolveKnowledgeSection } from '@/lib/agent/agentKnowledgeTurn';
 import { useAgentsStore } from './agentsStore';
 import { useArtifactsStore } from './artifactsStore';
 import { useExpertGroupsStore } from './expertGroupsStore';
@@ -68,14 +68,14 @@ import { useSettingsStore } from './settingsStore';
 import { resolveDefaultWorkspacePath } from './storageInfoStore';
 import { useSkillsStore } from './skillsStore';
 import { usePluginsStore } from './pluginsStore';
-import { snapshotSessionPluginVersions } from '@/lib/sessionPluginRefs';
+import { snapshotSessionPluginVersions } from '@/lib/agent/sessionPluginRefs';
 import { useModelsStore } from './modelsStore';
 import {
   deletedFilePathFrom,
   deriveFileArtifacts,
   fileArtifactId,
   findFileArtifact,
-} from '@/lib/fileArtifact';
+} from '@/lib/artifact/fileArtifact';
 import type {
   Artifact,
   ArtifactChange,
@@ -401,7 +401,7 @@ interface SessionsState {
    * 专家团成员进度行（FR-2.4）：一次多成员编排里「谁在做什么」。
    *
    * 与工具行不同，**同一成员会有多行**（开始 / 完成 / 失败…），归属靠
-   * `MemberEvent.memberId`；渲染时才按它分组（见 `lib/processDetail.ts`）。
+   * `MemberEvent.memberId`；渲染时才按它分组（见 `lib/ui/processDetail.ts`）。
    * 这里不做聚合：聚合是展示档位的事，落库保持「一个相位一行」的原始事实。
    */
   handleProcessMember: (sessionId: string, messageId: string, ev: ProcessMemberEvent) => void;
@@ -604,7 +604,7 @@ function toMeta(s: Session): SessionMeta {
     createdAt: s.createdAt,
     updatedAt: s.updatedAt,
     // 同步元数据（第 19 章）：`rev` / `updatedBy` 由 `updateSession` 自动维护
-    // （见 `lib/sessionSyncMeta.ts`）；这里是**唯一的落盘出口**，漏掉就等于没记过
+    // （见 `lib/session/sessionSyncMeta.ts`）；这里是**唯一的落盘出口**，漏掉就等于没记过
     rev: s.rev,
     updatedBy: s.updatedBy,
   };
@@ -1021,7 +1021,7 @@ async function streamAssistantReply(
     // 两个候选都要过一遍「预设是否还在目录里」的校验：预设被删/改名后，绑定就成了
     // 一个指向不存在东西的字符串，而引擎收到未知预设**直接报错**——不拦的话，
     // 「设置里删掉一个预设」会表现为「所有绑过它的专家每一轮都发不出去」。
-    // 校验规则与「目录未加载时不校验」的理由见 `lib/agentBinding.ts`。
+    // 校验规则与「目录未加载时不校验」的理由见 `lib/agent/agentBinding.ts`。
     //
     // 用 `getState()` 读一次而不订阅：这是发送动作里的取值，不是渲染依赖。
     model: resolveTurnModel(
@@ -1425,7 +1425,7 @@ export function __resetSedimentForTest(): void {
  * **防污染**（P1）：输入侧只收「用户提问 + 未被中断的助手回答」，输出侧由
  * `MemoryService.summarize` 与 `parseSummary` 拦下系统报错文案——网关在配额 /
  * 鉴权失败时会把错误原文当作正常 content 吐进 SSE 流，通道层面分辨不出，
- * 不设这道防线它就会以「会话摘要」的名义写进长期记忆。详见 src/lib/memory.ts。
+ * 不设这道防线它就会以「会话摘要」的名义写进长期记忆。详见 src/lib/memory/memory.ts。
  *
  * **防重复**：归纳前把已有的长期记忆作为 `knownFacts` 交给模型，要求它只输出
  * 「新增的或发生变化的事实」。靠内容比对去重行不通——同一事实的多种措辞在字符
@@ -1507,7 +1507,7 @@ export const useSessionsStore = create<SessionsState>()(
        * 兜底优先级与召唤逻辑对齐：显式 agentId > 全局活跃专家团 > 全局活跃专家。
        * 专家团绑定仅在其启用且存在启用成员时生效；
        * agentId 取团内首位启用成员作为**团长**——引擎按 mode 派发其余成员
-       *（见 `lib/expertGroupRequest.ts`；团长策略是整团的权限上限）。
+       *（见 `lib/agent/expertGroupRequest.ts`；团长策略是整团的权限上限）。
        */
       const groupsState = useExpertGroupsStore.getState();
       const candidateGroup =
@@ -2087,7 +2087,7 @@ export const useSessionsStore = create<SessionsState>()(
         if (!meta) continue;
         if (!isEventStreamSession(meta)) continue;
         // `messageCount` 来自索引：它是**水合之前**唯一能回答「这条任务有没有
-        // 对话记录」的数据（消息要等点进去才读盘，见 `@/lib/conversation`）。
+        // 对话记录」的数据（消息要等点进去才读盘，见 `@/lib/session/conversation`）。
         // 漏掉它，重启后侧边栏会把所有没点开过的任务当成空会话。
         sessions.push({
           ...metaToSession(meta),
@@ -2339,7 +2339,7 @@ export const useSessionsStore = create<SessionsState>()(
      * 唯一的会话改动入口。
      *
      * 同步元数据（第 19 章）在这里**自动**维护：比较改动前后的「可同步字段」
-     * （白名单见 `lib/sessionSyncMeta.ts`），真的变了才 `rev + 1` 并刷新 `updatedBy`。
+     * （白名单见 `lib/session/sessionSyncMeta.ts`），真的变了才 `rev + 1` 并刷新 `updatedBy`。
      *
      * 为什么放在这里而不是各调用点：本入口有十来个调用方（重命名 / 置顶 / 换模式 /
      * 换模型 / 换工作空间 / 换权限 / 改记忆快照…），逐个手写 `rev` 必然漏，

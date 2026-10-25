@@ -18,22 +18,22 @@ import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
 import InsertDriveFileOutlinedIcon from '@mui/icons-material/InsertDriveFileOutlined';
 import HistoryIcon from '@mui/icons-material/History';
 import RestoreIcon from '@mui/icons-material/Restore';
-import { MemoryService, memoryDiskPath } from '@/lib/memory';
+import { MemoryService, memoryDiskPath } from '@/lib/memory/memory';
 import { FactListView } from '@/pages/memory/FactListView';
 import { UserMemoryEditor } from '@/pages/memory/UserMemoryEditor';
 import { DreamReviewPanel } from '@/pages/memory/DreamReviewPanel';
-import { applyManualMemoryEdit } from '@/lib/memoryEdit';
+import { applyManualMemoryEdit } from '@/lib/memory/memoryEdit';
 import {
   CURATED_MEMORY_FILE,
   dailyMemoryFileName,
   isDailyMemoryFileName,
   sortMemoryFileNames,
-} from '@/lib/workspaceMemory';
-import { dirBasename } from '@/lib/workspaceLabel';
+} from '@/lib/memory/workspaceMemory';
+import { dirBasename } from '@/lib/workspace/workspaceLabel';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { platform } from '@/platform';
 import { toast } from '@/components/Toast';
-import { fileKeyOf, getBackupContent } from '@/lib/fileBackup';
+import { fileKeyOf, getBackupContent } from '@/lib/artifact/fileBackup';
 import { useFileBackupStore, type BackupEntry } from '@/stores/fileBackupStore';
 import type { MemoryScope, MemoryScopeSummary } from '@/types';
 

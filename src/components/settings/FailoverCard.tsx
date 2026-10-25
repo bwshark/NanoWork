@@ -27,7 +27,7 @@ import {
   PROVIDER_RETRY_MODE_OPTIONS,
   providerRetryModeOption,
   removeFallbackAt,
-} from '@/lib/modelFallbacks';
+} from '@/lib/model/modelFallbacks';
 import { useModelsStore } from '@/stores/modelsStore';
 import type { NanobotFallbackCandidate, ProviderRetryMode } from '@/platform/types';
 

@@ -74,7 +74,7 @@ export interface ArtifactIndexEntry {
   messageId?: string;
   type: ArtifactType;
   title?: string;
-  /** 内容寻址：`sha256:<hex>`（UTF-8），见 `src/lib/contentHash.ts` */
+  /** 内容寻址：`sha256:<hex>`（UTF-8），见 `src/lib/core/contentHash.ts` */
   contentHash: string;
   /** 创建时间 ISO 8601 UTC */
   createdAt: string;

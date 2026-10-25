@@ -4,14 +4,14 @@ import { SettingsCard, SettingsRow } from '@/components/settings/SettingsPrimiti
 import { toast } from '@/components/Toast';
 import { useToolsPolicyStore } from '@/stores/toolsPolicyStore';
 import { PathRulesEditor } from '@/components/settings/sections/PathRulesEditor';
-import { DEFAULT_DENY_WRITE } from '@/lib/constants';
+import { DEFAULT_DENY_WRITE } from '@/lib/core/constants';
 import {
   SANDBOX_BOUNDARY_SUMMARY,
   SANDBOX_LAYERS,
   SANDBOX_RISK_NOTE,
   SANDBOX_STATUS_LABELS,
   type SandboxLayerStatus,
-} from '@/lib/sandboxBoundary';
+} from '@/lib/core/sandboxBoundary';
 
 /**
  * 引擎侧的两条硬边界（FR-8.4「默认拒绝写入策略」）。
@@ -217,7 +217,7 @@ export function SecuritySection() {
       {/*
         FR-8.5：沙箱**边界声明**（刻意只读）。
         为什么是只读表而不是开关：引擎侧根本没有 native 沙箱可开关，做一个假开关
-        比不做更糟——用户会以为自己已经隔离了。表的内容来自 `lib/sandboxBoundary.ts`，
+        比不做更糟——用户会以为自己已经隔离了。表的内容来自 `lib/core/sandboxBoundary.ts`，
         界面只渲染，避免文案与事实各说一套。
       */}
       <SettingsCard title="沙箱边界（有哪些隔离，缺什么）" description={SANDBOX_BOUNDARY_SUMMARY}>

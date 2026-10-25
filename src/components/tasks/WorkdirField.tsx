@@ -16,7 +16,7 @@ import ClearIcon from '@mui/icons-material/Clear';
 import { platform } from '@/platform';
 import { useDefaultWorkspacePath } from '@/stores/storageInfoStore';
 import { useSettingsStore } from '@/stores/settingsStore';
-import { DEFAULT_WORKSPACE_LABEL, resolveWorkspaceLabel } from '@/lib/workspaceLabel';
+import { DEFAULT_WORKSPACE_LABEL, resolveWorkspaceLabel } from '@/lib/workspace/workspaceLabel';
 
 export interface WorkdirFieldProps {
   value: string;

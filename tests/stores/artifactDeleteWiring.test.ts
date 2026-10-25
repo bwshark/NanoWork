@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { useSessionsStore } from '@/stores/sessionsStore';
 import { useArtifactsStore } from '@/stores/artifactsStore';
-import { fileArtifactId } from '@/lib/fileArtifact';
+import { fileArtifactId } from '@/lib/artifact/fileArtifact';
 import type { Artifact, Message, Session } from '@/types';
 
 /**

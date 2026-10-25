@@ -1,7 +1,7 @@
 /**
  * 工作区文件记忆（MEMORY.md）类型契约。
  * 对应设计文档 docs/architecture-memory.md §3.1。
- * 注意：这里只描述数据形状，跨端读写一律由 src/lib/memory.ts 的 MemoryService 封装。
+ * 注意：这里只描述数据形状，跨端读写一律由 src/lib/memory/memory.ts 的 MemoryService 封装。
  */
 
 /** 单条记忆块的轻量元信息（仅用于计数/展示，不强制持久化） */
@@ -50,7 +50,7 @@ export type MemoryScope = 'user' | 'workspace';
  * Agent 在回答里声明的「这一条请记住」（`<memory-save>` 块，P2-A）。
  *
  * 它只是**意图**：真正的落盘（时间戳、来源、幂等去重标记）由
- * `MemoryService.append` 统一负责。见 `src/lib/memoryDirective.ts`。
+ * `MemoryService.append` 统一负责。见 `src/lib/memory/memoryDirective.ts`。
  */
 export interface MemoryDirective {
   /** 落到哪一层；省略时按 `workspace` */

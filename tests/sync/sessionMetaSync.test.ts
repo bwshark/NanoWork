@@ -9,7 +9,7 @@
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createDefaultRegistry } from '@/sync/syncRegistry';
-import { SESSION_SYNC_FIELDS } from '@/lib/sessionSyncMeta';
+import { SESSION_SYNC_FIELDS } from '@/lib/session/sessionSyncMeta';
 import { createMemoryEventStore, getEventStore, __setEventStoreForTest } from '@/events';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { useSessionsStore } from '@/stores/sessionsStore';

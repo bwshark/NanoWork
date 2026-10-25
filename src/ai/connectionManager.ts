@@ -2,7 +2,7 @@ import { useSettingsStore } from '@/stores/settingsStore';
 import type { ConnectionStatus as Status } from '@/types';
 import { platform } from '@/platform';
 import { nanobotBridge } from '@/platform/nanobotBridge';
-import { nextGatewayEndpoint } from '@/lib/gatewayEndpoint';
+import { nextGatewayEndpoint } from '@/lib/core/gatewayEndpoint';
 import { getRuntime } from './runtime';
 import type { AgentRuntime } from './runtime/types';
 import type { NanobotGatewayInfo } from '@/platform/types';

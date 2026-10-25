@@ -1,6 +1,6 @@
 import { Alert, Box, Typography } from "@mui/material";
 
-import type { MissingSessionPluginRef } from "@/lib/sessionPluginRefs";
+import type { MissingSessionPluginRef } from "@/lib/agent/sessionPluginRefs";
 
 /**
  * 「会话引用的插件版本本机缺失」的提示条（FR-3.9 ①）。

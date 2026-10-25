@@ -15,7 +15,7 @@
 | 难点 | 思路 |
 |---|---|
 | 档位是「渲染」约束，不是「数据」约束 | **绝不改动 `Message.process`**：档位过滤/聚合发生在「读数据之后、渲染之前」的纯函数里，产出一次性视图模型 |
-| 过滤 + 聚合逻辑散落 JSX 会难以单测 | 全部收进 `src/lib/processDetail.ts`（纯函数、无 React 依赖），组件只消费结果 |
+| 过滤 + 聚合逻辑散落 JSX 会难以单测 | 全部收进 `src/lib/ui/processDetail.ts`（纯函数、无 React 依赖），组件只消费结果 |
 | 三类非关键工具要聚合成一行且保留顺序 | 单遍扫描、遇到「屏障」（思考段 / 关键工具 / running / error）即 flush 当前连续段 |
 | error/running 必须「档位豁免」 | 豁免逻辑写死在纯函数的**唯一一处**（`isRowVisible` / 分段时的优先级），组件不重复判断 |
 | 档位、手动、搜索三方共存 | 沿用既有优先级：`searchForcesOpen > manualProcessOpen > defaultProcessOpen(tier,…)`，只把「默认值」从硬编码 `isStreaming` 换成档位状态机 |
@@ -35,7 +35,7 @@ flowchart LR
     TC["Message.toolCalls: ToolCall[]"]
   end
 
-  subgraph L["纯函数层 src/lib/processDetail.ts（无 React，可单测）"]
+  subgraph L["纯函数层 src/lib/ui/processDetail.ts（无 React，可单测）"]
     BPR["buildProcessRows(events, tier)<br/>→ ProcessViewRow[]"]
     CLC["classifyToolCalls(toolCalls, tier)<br/>→ { pinned, inline }"]
     KEY["isKeyTool(tool)<br/>只读白名单 + fail-open"]
@@ -75,7 +75,7 @@ flowchart LR
 ```
 
 **职责边界（硬约定）**
-- `src/lib/processDetail.ts`：**唯一的**过滤/聚合/文案出处，纯函数。
+- `src/lib/ui/processDetail.ts`：**唯一的**过滤/聚合/文案出处，纯函数。
 - `ProcessView.tsx`：仍只做「按序铺开 + 按 `tier` 决定单行/聚合行呈现」，**自己不做折叠、不设整体限高**（保留现有职责注释）。
 - `AssistantMessage.tsx`：装配层，负责读档位、算展开态、把 H 行上移到折叠区外。
 - 视图模型（`ProcessViewRow` / `AggregateRow`）是**派生产物**，永不进入 `Message.process`。
@@ -88,8 +88,8 @@ flowchart LR
 
 | 文件 | 内容 | 为什么 |
 |---|---|---|
-| `src/lib/processDetail.ts` | 白名单 `isKeyTool`、`buildProcessRows`、`classifyToolCalls`、`formatAggregateSummary` + 视图模型类型 | 过滤/聚合必须纯函数化、可单测；对齐既有 `src/lib/processDigest.ts` 把派生模型放 lib 的先例 |
-| `tests/lib/processDetail.test.ts` | 上述纯函数单测 | 把分类口径与聚合规则钉死（QA 主写，但接口在此固定） |
+| `src/lib/ui/processDetail.ts` | 白名单 `isKeyTool`、`buildProcessRows`、`classifyToolCalls`、`formatAggregateSummary` + 视图模型类型 | 过滤/聚合必须纯函数化、可单测；对齐既有 `src/lib/ui/processDigest.ts` 把派生模型放 lib 的先例 |
+| `tests/lib/ui/processDetail.test.ts` | 上述纯函数单测 | 把分类口径与聚合规则钉死（QA 主写，但接口在此固定） |
 
 #### 2.2 修改
 
@@ -102,7 +102,7 @@ flowchart LR
 | `src/pages/chat/AssistantMessage.tsx` | ① 读 `tier`；② `buildProcessRows`/`classifyToolCalls`；③ 展开态状态机（`defaultProcessOpen`）；④ chevron/可点击性（§5.4）；⑤ 把 H 行（`pinnedToolCalls`）**移到 `Collapse` 之外** | 装配层：档位默认态 + H 行上移 |
 | `src/components/settings/sections/GeneralSection.tsx` | 在「外观」卡片之后新增「对话过程」卡片（`ToggleButtonGroup` 三选一） | PRD §6；不新增分区 id |
 | `tests/chatProcessTimeline.test.tsx` | `ProcessView` 四处用例补 `tier="full"`；`AssistantMessage` 用例按 PRD §10 调整断言 | 必填属性 + 档位默认改观感 |
-| `tests/lib/settingsSync.test.ts` | `fullSettings()` 补 `processDetail`；新增 AC10 断言（同步负载含 `processDetail`） | 字段变必填（编译期）+ 同步契约护栏 |
+| `tests/lib/sync/settingsSync.test.ts` | `fullSettings()` 补 `processDetail`；新增 AC10 断言（同步负载含 `processDetail`） | 字段变必填（编译期）+ 同步契约护栏 |
 | `tests/stores/settingsTranscriptionMigration.test.ts` | `beforeEach` 的 settings 字面量补 `processDetail`；新增 v13 迁移用例 | 编译期 + 迁移新范式 |
 | `tests/stores/settingsWorkspaceGroups.test.ts` | `resetSettings` 的 settings 字面量补 `processDetail` | 字段必填 → 编译期 |
 | `docs/settings-inventory.md` | §2.1 表新增 `processDetail` 一行 | 该文档枚举了 settings 全量字段（维护约定六） |
@@ -111,9 +111,9 @@ flowchart LR
 
 | 文件 | 为什么不改 |
 |---|---|
-| `src/lib/settingsSync.ts` | `processDetail` 是纯偏好、**不进** `SETTINGS_SYNC_OMIT_KEYS`；`pickSyncable` 浅拷贝未被 omit 的键 → 新字段**自动进入**同步负载，无需改代码 |
+| `src/lib/sync/settingsSync.ts` | `processDetail` 是纯偏好、**不进** `SETTINGS_SYNC_OMIT_KEYS`；`pickSyncable` 浅拷贝未被 omit 的键 → 新字段**自动进入**同步负载，无需改代码 |
 | `src/sync/syncRegistry.ts` | `settings` 落地用 `{...state.settings, ...rest}` 浅合并 → 新字段自动落地 |
-| `src/lib/processDigest.ts` | `digestProcess` 签名/语义不变；档位过滤是另一条纯函数 |
+| `src/lib/ui/processDigest.ts` | `digestProcess` 签名/语义不变；档位过滤是另一条纯函数 |
 | `src/types/message.ts` | `Message.process` 是持久化契约，形态不变 |
 | `src/pages/chat/ToolCallCard.tsx` | 见 §3.4 —— 现有「默认收起 + 点击展开」已是 PRD §3.2 G 的「折叠单行（可展开）」，无需改 |
 | `src/components/settings/SettingsDialog.tsx` / `settingsNav.tsx` / `stores/settingsUiStore.ts` | 不新增分区 id → 三处穷尽性检查不动 |
@@ -135,9 +135,9 @@ flowchart LR
 | 类型 | 落点 | 理由 |
 |---|---|---|
 | `ProcessDetailLevel` | `src/types/process.ts` | 档位是 process 域的一等值；`Settings` 也引用它 → 放域类型模块，避免 settings↔process 反向依赖 |
-| `ProcessViewRow` / `AggregateRow` | `src/lib/processDetail.ts` | ① 它是**派生的渲染模型**，put 进 `types/process.ts` 会让它紧挨 `ProcessEvent`，诱使他人误扩 `ProcessEvent` 联合（即误写回持久化契约）；② 对齐既有先例——`src/lib/processDigest.ts` 的 `ProcessDigest` 接口就定义在 lib 内；③ 类型只被「生产它的纯函数」与 `ProcessView` 使用，就近放置最内聚 |
+| `ProcessViewRow` / `AggregateRow` | `src/lib/ui/processDetail.ts` | ① 它是**派生的渲染模型**，put 进 `types/process.ts` 会让它紧挨 `ProcessEvent`，诱使他人误扩 `ProcessEvent` 联合（即误写回持久化契约）；② 对齐既有先例——`src/lib/ui/processDigest.ts` 的 `ProcessDigest` 接口就定义在 lib 内；③ 类型只被「生产它的纯函数」与 `ProcessView` 使用，就近放置最内聚 |
 
-> 说明：团队分工信息里提到「聚合行类型必须定义在 `src/types/process.ts`」。此处按交付要求第 3 项「给出裁决与理由」作出**明确取舍**：放 `src/lib/processDetail.ts`。若评审坚持集中在 `types/process.ts`，只需把 `AggregateRow`/`ProcessViewRow` 两个导出平移到该文件（`ProcessEvent` 联合**保持不变**），其余设计不变——这是一次纯搬迁，不影响任何调用方。
+> 说明：团队分工信息里提到「聚合行类型必须定义在 `src/types/process.ts`」。此处按交付要求第 3 项「给出裁决与理由」作出**明确取舍**：放 `src/lib/ui/processDetail.ts`。若评审坚持集中在 `types/process.ts`，只需把 `AggregateRow`/`ProcessViewRow` 两个导出平移到该文件（`ProcessEvent` 联合**保持不变**），其余设计不变——这是一次纯搬迁，不影响任何调用方。
 
 #### 3.2 类图（Mermaid classDiagram）
 
@@ -232,7 +232,7 @@ classDiagram
   Result1 : 持久化模型 ≠ 渲染视图模型
 ```
 
-#### 3.3 `src/lib/processDetail.ts` 完整导出签名（纯函数，无 React）
+#### 3.3 `src/lib/ui/processDetail.ts` 完整导出签名（纯函数，无 React）
 
 ```ts
 import type { ProcessDetailLevel, ProcessEvent, ProcessToolRow, ToolCall } from '@/types';
@@ -318,7 +318,7 @@ export function ProcessView({
 }: {
   events: ProcessEvent[];
   live: boolean;
-  /** 展示档位（必填）：见 lib/processDetail。不传 tiers 无法决定过滤/聚合。 */
+  /** 展示档位（必填）：见 lib/ui/processDetail。不传 tiers 无法决定过滤/聚合。 */
   tier: ProcessDetailLevel;
   children?: React.ReactNode;
 });
@@ -418,8 +418,8 @@ sequenceDiagram
   participant U as 用户
   participant AM as AssistantMessage
   participant ST as settingsStore / sessionUiStore
-  participant PD as lib/processDetail
-  participant DG as lib/processDigest
+  participant PD as lib/ui/processDetail
+  participant DG as lib/ui/processDigest
   participant PV as ProcessView
 
   Note over AM,PV: 初始渲染（每次 message / tier / isStreaming 变化都重跑）
@@ -525,7 +525,7 @@ AssistantMessage
 
 | ID | 任务名 | 涉及文件 | 依赖 | 优先级 | 完成定义 |
 |---|---|---|---|---|---|
-| **T01** | **档位数据契约与纯函数层** | `src/types/process.ts`、`src/types/settings.ts`、`src/stores/settingsStore.ts`、`src/lib/processDetail.ts`(新)、`tests/lib/processDetail.test.ts`(新)、`tests/lib/settingsSync.test.ts`、`tests/stores/settingsTranscriptionMigration.test.ts`、`tests/stores/settingsWorkspaceGroups.test.ts` | — | P0 | `Settings.processDetail` 存在（默认 `key`）、`normalizeProcessDetail` 兜底 `key`、`version=13` 且 migrate 显式补 v13；`buildProcessRows`/`isKeyTool`/`classifyToolCalls`/`formatAggregateSummary` 纯函数就位并单测通过；`tsc` 全绿（含 3 个测试 fixture 补字段）；`processDetail` 出现在同步负载中 |
+| **T01** | **档位数据契约与纯函数层** | `src/types/process.ts`、`src/types/settings.ts`、`src/stores/settingsStore.ts`、`src/lib/ui/processDetail.ts`(新)、`tests/lib/ui/processDetail.test.ts`(新)、`tests/lib/sync/settingsSync.test.ts`、`tests/stores/settingsTranscriptionMigration.test.ts`、`tests/stores/settingsWorkspaceGroups.test.ts` | — | P0 | `Settings.processDetail` 存在（默认 `key`）、`normalizeProcessDetail` 兜底 `key`、`version=13` 且 migrate 显式补 v13；`buildProcessRows`/`isKeyTool`/`classifyToolCalls`/`formatAggregateSummary` 纯函数就位并单测通过；`tsc` 全绿（含 3 个测试 fixture 补字段）；`processDetail` 出现在同步负载中 |
 | **T02** | **对话渲染契约接入** | `src/pages/chat/ProcessView.tsx`、`src/pages/chat/AssistantMessage.tsx`、`tests/chatProcessTimeline.test.tsx` | T01 | P0 | `ProcessView` 新增必填 `tier` 并渲染聚合行；`AssistantMessage` 落 `defaultProcessOpen` 状态机 + §5.4 chevron + H 行移出折叠区；`tests/chatProcessTimeline.test.tsx` 按 PRD §10 全绿 |
 | **T03** | **「对话过程」设置卡片** | `src/components/settings/sections/GeneralSection.tsx` | T01 | P0 | 「通用」分区「外观」之后新增「对话过程」卡片（`ToggleButtonGroup` 三选一，文案对齐 §6.2），**不新增分区 id**；`settingsDialogSections.test.tsx` 仍绿 |
 | **T04** | **文档同步 + 全量回归** | `docs/settings-inventory.md`、`docs/design-tool-step-detail.md`(本文件) | T01、T02、T03 | P1 | `settings-inventory.md` 补 `processDetail` 行；`tsc` + `vitest` + `build` 三关门禁全绿 |
@@ -534,7 +534,7 @@ AssistantMessage
 
 1. **档位只影响渲染，不影响数据**：`Message.process` / `Message.toolCalls` 形态与内容永不因档位变化。
 2. **聚合行不持久化**：`AggregateRow` 是 `buildProcessRows` 的一次性产物，永不写回 `Message.process`；聚合行展开态是块内本地 `useState`，刷新即丢。
-3. **error/running 豁免唯一实现点**：豁免判断只在 `src/lib/processDetail.ts`（分段优先级 + `isRowVisible` 语义）里写一次；组件不得重复判断。
+3. **error/running 豁免唯一实现点**：豁免判断只在 `src/lib/ui/processDetail.ts`（分段优先级 + `isRowVisible` 语义）里写一次；组件不得重复判断。
 4. **文案常量单一出处**：聚合摘要（`已读取/已浏览/已查找/已搜索`）只由 `formatAggregateSummary` 产出；组件只渲染其返回值。
 5. **失败红字是开关行的常驻项**：`failedSteps = digestProcess(processEvents).errors` 计算口径不变；三档恒显示。
 6. **优先级永不变**：`searchForcesOpen > manualProcessOpen > defaultProcessOpen(tier,isStreaming,errors)`。

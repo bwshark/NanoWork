@@ -61,7 +61,7 @@ interface FileBackupState {
 
 持久化 key：`nanowork.fileBackups`（`STORAGE_KEYS.fileBackups`）。
 
-### 2.3 `src/lib/fileBackup.ts`（封装）
+### 2.3 `src/lib/artifact/fileBackup.ts`（封装）
 
 ```ts
 /** 写前快照：读旧内容 → 内容寻址备份 → 记时间线（最佳努力） */

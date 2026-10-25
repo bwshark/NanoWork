@@ -8,7 +8,7 @@ import type { SyncMetaFields } from './sync';
  * - rrule：RFC 5545 循环规则（FR-5.4）→ **前端降级**为上面三种之一后再下发给引擎
  *
  * ⚠️ `rrule` 是**本层的表达形态**，不是引擎形态：真实调度在 nanobot 的 CronService，
- * 它只认 cron / every / at。降级规则与「哪些规则降不了」见 `src/lib/rrule.ts`。
+ * 它只认 cron / every / at。降级规则与「哪些规则降不了」见 `src/lib/task/rrule.ts`。
  * 之所以不在保存时就把 `rrule` 换成 cron，是为了让用户**看到自己写的那条规则**
  * （`FREQ=MONTHLY;BYMONTHDAY=1,15,28` 比 `0 9 1,15,28 * *` 更接近他的意图）。
  */

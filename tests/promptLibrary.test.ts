@@ -11,8 +11,8 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { PromptLibrary } from '@/lib/promptLibrary';
-import { DEFAULT_PROMPT_STYLE, findSlot, slotsOfKind } from '@/lib/promptCatalog';
+import { PromptLibrary } from '@/lib/prompt/promptLibrary';
+import { DEFAULT_PROMPT_STYLE, findSlot, slotsOfKind } from '@/lib/prompt/promptCatalog';
 import type { PromptSlotKind } from '@/types';
 
 const MODE_ASK: [PromptSlotKind, string] = ['mode', 'ask'];

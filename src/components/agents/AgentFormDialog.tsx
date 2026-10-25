@@ -19,8 +19,8 @@ import {
 import { AgentModelPicker } from '@/components/models/AgentModelPicker';
 import { AgentKnowledgePicker } from '@/components/agents/AgentKnowledgePicker';
 import { PromptProfileFields } from '@/components/prompts/PromptProfileFields';
-import { AGENT_TOOL_CATALOG, AGENT_TOOL_LABELS } from '@/lib/constants';
-import { PLATFORM_LABEL } from '@/lib/imPlatform';
+import { AGENT_TOOL_CATALOG, AGENT_TOOL_LABELS } from '@/lib/core/constants';
+import { PLATFORM_LABEL } from '@/lib/channel/imPlatform';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { useSkillsStore } from '@/stores/skillsStore';
 import type { Agent, IMPlatform } from '@/types';

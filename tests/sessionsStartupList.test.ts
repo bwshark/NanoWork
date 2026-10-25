@@ -17,7 +17,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { useSessionsStore } from '@/stores/sessionsStore';
 import { groupSessionsByWorkdir } from '@/layout/SidebarNav';
-import { hasConversation } from '@/lib/conversation';
+import { hasConversation } from '@/lib/session/conversation';
 import { resetEventStream } from './helpers/eventStream';
 import { msgEvent, sessionMeta, startEvent } from './events/fixtures';
 import type { EventStore } from '@/events';

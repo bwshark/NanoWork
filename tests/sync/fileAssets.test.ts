@@ -14,9 +14,9 @@ import {
   IDENTITY_STORAGE_KEYS,
   PROMPT_KEY_PREFIX,
   USER_MEMORY_KEY,
-} from '@/lib/constants';
-import { PROMPT_SLOTS } from '@/lib/promptCatalog';
-import { hashContent } from '@/lib/workspaceKey';
+} from '@/lib/core/constants';
+import { PROMPT_SLOTS } from '@/lib/prompt/promptCatalog';
+import { hashContent } from '@/lib/workspace/workspaceKey';
 import { createFileAssetsAdapter, FILE_ASSET_COLLECTIONS } from '@/sync/fileAssets';
 import { FILE_ASSETS_STORAGE_KEY } from '@/sync/types';
 import type { SyncChange } from '@/sync/types';

@@ -12,7 +12,7 @@ import { SyncClient } from '@/sync/SyncClient';
 import { SyncEngine, compareVersions, pickWinner } from '@/sync/SyncEngine';
 import { SyncRegistry, createDefaultRegistry } from '@/sync/syncRegistry';
 import { getSyncStatus, resetSyncStatus } from '@/sync/useSyncStatus';
-import { pickSyncable } from '@/lib/syncSelect';
+import { pickSyncable } from '@/lib/sync/syncSelect';
 import { useAgentsStore } from '@/stores/agentsStore';
 import type { SyncAccount } from '@/sync/syncAccount';
 import type { PushConflict, VersionStamp } from '@/sync/types';

@@ -3,7 +3,7 @@ import { Box, Button } from '@mui/material';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import { FileArtifactCard } from './FileArtifactCard';
 import { useArtifactActions } from './useArtifactActions';
-import { changeCountOf, isFileArtifact, summarizeFiles, toFileViews } from '@/lib/fileArtifact';
+import { changeCountOf, isFileArtifact, summarizeFiles, toFileViews } from '@/lib/artifact/fileArtifact';
 import { useArtifactsStore } from '@/stores/artifactsStore';
 import { useSessionUiStore } from '@/stores/sessionUiStore';
 import type { Artifact, Message } from '@/types';

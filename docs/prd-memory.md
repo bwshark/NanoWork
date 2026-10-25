@@ -178,7 +178,7 @@ Agent 在回答末尾写 `<memory-save scope="user|workspace">…</memory-save>`
 3. **出口判定**（`parseSummary`）：整段像系统报错 → 返回两节皆空。
    放在标签切分**之前**：报错文案偶尔粘连半截标签，那种「半截身份」同样是垃圾。
 
-**`looksLikeSystemError` 的判据取舍**（`src/lib/memory.ts`）：要求
+**`looksLikeSystemError` 的判据取舍**（`src/lib/memory/memory.ts`）：要求
 「命中强特征词（`out of quota` / `api key` / `rate limit` / `ECONNREFUSED` …）
 **且** 中文字符占比 < 15%」双重成立。
 

@@ -19,8 +19,8 @@ vi.mock('@/platform', async (importOriginal) => {
 });
 
 import { useArtifactsStore } from '@/stores/artifactsStore';
-import { artifactContentHash } from '@/lib/artifactIndex';
-import { contentHash } from '@/lib/contentHash';
+import { artifactContentHash } from '@/lib/artifact/artifactIndex';
+import { contentHash } from '@/lib/core/contentHash';
 import type { Artifact } from '@/types';
 
 function art(over: Partial<Artifact> & { id: string }): Artifact {

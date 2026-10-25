@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { useTaskQueryStore } from '@/stores/taskQueryStore';
-import { DEFAULT_TASK_FILTERS } from '@/lib/taskQuery';
+import { DEFAULT_TASK_FILTERS } from '@/lib/task/taskQuery';
 
 /** 每个用例前把运行期状态复位（store 不持久化，但模块级单例跨用例共享） */
 function reset() {

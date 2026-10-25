@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Box, Button, Chip, LinearProgress, Typography } from '@mui/material';
 import { SettingsCard } from '@/components/settings/SettingsPrimitives';
 import { toast } from '@/components/Toast';
-import { RELEASES_URL, UPDATE_UNSIGNED_HINT } from '@/lib/constants';
+import { RELEASES_URL, UPDATE_UNSIGNED_HINT } from '@/lib/core/constants';
 import { platform } from '@/platform';
 import type { UpdatePhase, UpdateStatus } from '@/types/update';
 

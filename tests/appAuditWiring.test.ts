@@ -9,7 +9,7 @@ import type { Skill } from '@/types';
 /**
  * FR-8.9 第二条来源的**接线**契约：store 的用户动作必须真的留下一条记录。
  *
- * 为什么单独一组用例：`lib/appAudit.ts` 的纯逻辑全绿**不能**证明接上了线——
+ * 为什么单独一组用例：`lib/audit/appAudit.ts` 的纯逻辑全绿**不能**证明接上了线——
  * 「函数对但没人调」正是本仓反复踩过的静默失效（`hook_manifest` 那次）。
  * 因此这里断言的是「某个具体动作 → 落出某个具体 action id」。
  *

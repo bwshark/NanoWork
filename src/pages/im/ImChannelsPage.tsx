@@ -20,7 +20,7 @@ import LinkOffIcon from "@mui/icons-material/LinkOff";
 import ReplayIcon from "@mui/icons-material/Replay";
 import PersonIcon from "@mui/icons-material/Person";
 import cowAvatar from "@/assets/cow-avatar.png";
-import { CHANNEL_METAS } from "@/lib/channelMeta";
+import { CHANNEL_METAS } from "@/lib/channel/channelMeta";
 import { useChannelsStore } from "@/stores/channelsStore";
 import { ChannelIcon } from "@/components/im/ChannelIcon";
 import { ChannelConfigDialog } from "@/components/im/ChannelConfigDialog";

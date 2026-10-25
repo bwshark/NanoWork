@@ -6,7 +6,7 @@ import {
   PROMPT_KEY_PREFIX,
   STORAGE_KEYS,
   USER_MEMORY_KEY,
-} from '../src/lib/constants';
+} from '../src/lib/core/constants';
 import { CONFLICT_SNAPSHOT_STORAGE_KEY, FILE_ASSETS_STORAGE_KEY } from '../src/sync/types';
 
 /**
@@ -90,7 +90,7 @@ interface FileEntry {
 /**
  * ① 用户资产：跨工作区、跨端，落在 `~/.nanowork/`。
  *
- * key 必须与 `src/lib/constants.ts` 的 `STORAGE_KEYS` 保持一致——这里直接引用
+ * key 必须与 `src/lib/core/constants.ts` 的 `STORAGE_KEYS` 保持一致——这里直接引用
  * 该常量表，就是为了让「加了一个 store 却忘了改主进程」在编译期就暴露。
  *
  * 注：`STORAGE_KEYS.skills` 是技能**索引与启用态**（skillsStore 的持久化），

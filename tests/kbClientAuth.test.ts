@@ -13,8 +13,8 @@
  */
 
 import { describe, expect, it, vi } from 'vitest';
-import { createKbGateway, listMyOrgs } from '@/lib/kbClient';
-import type { KbClientConfig } from '@/lib/kbClient';
+import { createKbGateway, listMyOrgs } from '@/lib/kb/kbClient';
+import type { KbClientConfig } from '@/lib/kb/kbClient';
 
 function jsonResponse(data: unknown, status = 200): Response {
   return {

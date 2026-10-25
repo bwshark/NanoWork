@@ -1,12 +1,12 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { zustandStorage } from '@/platform';
-import { STORAGE_KEYS } from '@/lib/constants';
-import { genId } from '@/lib/id';
-import { ensureMetaList, pickMeta, withTombstone, withoutTombstone } from '@/lib/syncMeta';
-import { metaForDelete, metaForEdit, metaForNew } from '@/lib/syncStamp';
+import { STORAGE_KEYS } from '@/lib/core/constants';
+import { genId } from '@/lib/core/id';
+import { ensureMetaList, pickMeta, withTombstone, withoutTombstone } from '@/lib/sync/syncMeta';
+import { metaForDelete, metaForEdit, metaForNew } from '@/lib/sync/syncStamp';
 import { BUILTIN_AGENTS } from '@/ai/builtinAgents';
-import { changedFieldNames, recordAppAudit } from '@/lib/appAudit';
+import { changedFieldNames, recordAppAudit } from '@/lib/audit/appAudit';
 import type { Agent, SyncTombstones } from '@/types';
 
 interface AgentsState {

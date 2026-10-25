@@ -4,7 +4,7 @@ import { RouterProvider } from 'react-router-dom';
 import { CssBaseline, ThemeProvider } from '@mui/material';
 import { router } from '@/router';
 import { buildMuiTheme } from '@/theme/muiTheme';
-import { applyTheme, useResolvedTheme } from '@/lib/themeMode';
+import { applyTheme, useResolvedTheme } from '@/lib/ui/themeMode';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { startCronMirrorWatcher } from '@/ai/cronMirrorWatcher';
 import { startCronRunsPoller } from '@/ai/cronRunsPoller';

@@ -1,5 +1,5 @@
 ﻿/**
- * 保留、归档与导出（`src/lib/memoryArchive.ts` / `src/lib/memoryBundle.ts`）。需求 FR-M33 / FR-M35。
+ * 保留、归档与导出（`src/lib/memory/memoryArchive.ts` / `src/lib/memory/memoryBundle.ts`）。需求 FR-M33 / FR-M35。
  *
  * 归档这一组要证的是**三个概念没有混在一起**：
  * - `archiveAfterDays`（日志**文件**级，默认 180 天）决定哪些日文件移出扫描范围；
@@ -12,19 +12,19 @@
 
 import { describe, expect, it } from 'vitest';
 import type { AdjudicationEvent, MemoryFact, ProfileState, PreferenceState, CuratedState } from '../src/types';
-import { DEFAULT_ARCHIVE_POLICY, dayOfFactLogFile, listArchivedFactLogs, runArchive } from '../src/lib/memoryArchive';
-import type { MemoryStoreIo } from '../src/lib/memoryStore';
-import { emptyCuratedState } from '../src/lib/memoryDistill';
-import { emptyConflictState } from '../src/lib/memoryAdjudicate';
-import { createMemoryStore } from '../src/lib/memoryStore';
-import { renderCuratedProjection } from '../src/lib/memoryProject';
+import { DEFAULT_ARCHIVE_POLICY, dayOfFactLogFile, listArchivedFactLogs, runArchive } from '../src/lib/memory/memoryArchive';
+import type { MemoryStoreIo } from '../src/lib/memory/memoryStore';
+import { emptyCuratedState } from '../src/lib/memory/memoryDistill';
+import { emptyConflictState } from '../src/lib/memory/memoryAdjudicate';
+import { createMemoryStore } from '../src/lib/memory/memoryStore';
+import { renderCuratedProjection } from '../src/lib/memory/memoryProject';
 import {
   MEMORY_BUNDLE_SCHEMA,
   MemoryBundleError,
   buildExportBundle,
   parseExportBundle,
   serializeExportBundle,
-} from '../src/lib/memoryBundle';
+} from '../src/lib/memory/memoryBundle';
 
 const NOW = new Date('2026-10-02T00:00:00Z');
 

@@ -30,7 +30,7 @@ import {
 } from '../../electron/workspaceMemoryStore';
 import { userMemoryDir } from '../../electron/memoryRoutes';
 import { memoryDir, productDir, type StorageRoots } from '../../electron/storageRoutes';
-import { scopeIdFor } from '../../src/lib/memoryPaths';
+import { scopeIdFor } from '../../src/lib/memory/memoryPaths';
 
 let root = '';
 let workdir = '';

@@ -63,7 +63,7 @@ vi.mock('@/sync', async (importOriginal) => {
 });
 
 import { AccountSection } from '@/components/settings/sections/AccountSection';
-import { buildArchive } from '@/lib/accountArchive';
+import { buildArchive } from '@/lib/sync/accountArchive';
 import { buttonByText, click, flush, mount, unmount } from '../helpers/reactMount';
 
 /** 构造一个合法归档（带两个 local 段 key，模拟真实可导入数据）。 */

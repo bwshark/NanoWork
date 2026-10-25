@@ -4,8 +4,8 @@ import AddIcon from '@mui/icons-material/Add';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import SaveOutlinedIcon from '@mui/icons-material/SaveOutlined';
 import { toast } from '@/components/Toast';
-import { ensureLocalMemoryScope, platformMemoryIo, userMemoryRef } from '@/lib/memoryPlatformIo';
-import { createUserMemoryStore, type UserMemoryStore } from '@/lib/memoryUserStore';
+import { ensureLocalMemoryScope, platformMemoryIo, userMemoryRef } from '@/lib/memory/memoryPlatformIo';
+import { createUserMemoryStore, type UserMemoryStore } from '@/lib/memory/memoryUserStore';
 import { PROFILE_FIELDS, type PreferenceRecord, type ProfileField, type UserProfile } from '@/types';
 
 /**

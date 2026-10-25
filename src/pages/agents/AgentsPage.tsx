@@ -40,8 +40,8 @@ import { AgentFormDialog } from "@/components/agents/AgentFormDialog";
 import { AgentKnowledgeChip } from "@/components/agents/AgentKnowledgeChip";
 import { ExpertPackageImportDialog } from "@/components/agents/ExpertPackageImportDialog";
 import { useExpertPackageExport } from "@/components/agents/useExpertPackageExport";
-import { PLATFORM_LABEL } from "@/lib/imPlatform";
-import { ROUTES } from "@/lib/constants";
+import { PLATFORM_LABEL } from "@/lib/channel/imPlatform";
+import { ROUTES } from "@/lib/core/constants";
 import {
   avatarGlyph,
   cardChipOutlinedSx,
@@ -51,7 +51,7 @@ import {
   clampLines,
   entityAvatarSx,
   hoverCardSx,
-} from "@/lib/cardSx";
+} from "@/lib/ui/cardSx";
 import type { Agent, ExpertGroup, ExpertGroupMode } from "@/types";
 import {
   isBuiltinAgentId,

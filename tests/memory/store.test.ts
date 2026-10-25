@@ -1,5 +1,5 @@
 /**
- * 记忆仓储的持久化与崩溃恢复（`src/lib/memoryStore.ts` + `memoryTransaction.ts`）。
+ * 记忆仓储的持久化与崩溃恢复（`src/lib/memory/memoryStore.ts` + `memoryTransaction.ts`）。
  *
  * ## 为什么用内存假端口而不是真机临时目录
  *
@@ -19,7 +19,7 @@ import type {
   ResolutionIntent,
   TxnPhase,
 } from '../../src/types';
-import { createMemoryStore, type MemoryStoreIo } from '../../src/lib/memoryStore';
+import { createMemoryStore, type MemoryStoreIo } from '../../src/lib/memory/memoryStore';
 import {
   ADJUDICATIONS_FILE,
   CONFLICTS_FILE,
@@ -28,11 +28,11 @@ import {
   DAILY_SUBDIR,
   TRANSACTIONS_FILE,
   dailyFactLogFileName,
-} from '../../src/lib/memoryPaths';
-import { createMemoryFact } from '../../src/lib/memoryFact';
-import { emptyCuratedState } from '../../src/lib/memoryDistill';
-import { emptyConflictState, openConflicts } from '../../src/lib/memoryAdjudicate';
-import { advanceIntent } from '../../src/lib/memoryTransaction';
+} from '../../src/lib/memory/memoryPaths';
+import { createMemoryFact } from '../../src/lib/memory/memoryFact';
+import { emptyCuratedState } from '../../src/lib/memory/memoryDistill';
+import { emptyConflictState, openConflicts } from '../../src/lib/memory/memoryAdjudicate';
+import { advanceIntent } from '../../src/lib/memory/memoryTransaction';
 
 const NOW = new Date('2026-10-02T00:00:00Z');
 const WS = 'w_test';

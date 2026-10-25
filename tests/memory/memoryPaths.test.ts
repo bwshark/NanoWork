@@ -1,5 +1,5 @@
 /**
- * 记忆 v2 的**目录与文件名策略**（`src/lib/memoryPaths.ts`）。
+ * 记忆 v2 的**目录与文件名策略**（`src/lib/memory/memoryPaths.ts`）。
  *
  * 这一层是两端（渲染层 / 主进程）共用的判据，所以它的每条规则都对应一种**真实故障**，
  * 而不是风格偏好。本文件按故障类型组织用例，而不是按函数组织：
@@ -39,7 +39,7 @@ import {
   splitMemoryEntryName,
   webMemoryDirKey,
   workspaceIdFor,
-} from '../../src/lib/memoryPaths';
+} from '../../src/lib/memory/memoryPaths';
 
 describe('文件名合法性：越界与非法字符', () => {
   it('拒绝含路径分隔符的名字（路径穿越的第一步）', () => {

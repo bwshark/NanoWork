@@ -1,7 +1,7 @@
 import { Suspense, lazy } from 'react';
 import type { ComponentType, LazyExoticComponent } from 'react';
 import { createBrowserRouter, Navigate } from 'react-router-dom';
-import { ROUTES } from '@/lib/constants';
+import { ROUTES } from '@/lib/core/constants';
 import { App } from '@/App';
 import { AppLayout } from '@/layout/AppLayout';
 import { RouteFallback } from '@/layout/RouteFallback';

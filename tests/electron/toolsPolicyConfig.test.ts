@@ -47,7 +47,7 @@ describe('FR-8.4 默认值：必须与引擎 schema 逐字一致', () => {
    * 2026-10-21 收口：引擎 `FileToolsConfig.default_deny_write` 从 `False` 改成
    * `True`（PRD §11.2「白名单制：不配即从严」）。
    *
-   * 这个用例存在的理由是：常量在**两侧**各有一份（客户端 `src/lib/constants.ts`
+   * 这个用例存在的理由是：常量在**两侧**各有一份（客户端 `src/lib/core/constants.ts`
    * 与引擎 `nanobot/agent/tools/filesystem.py`），两边不一致时界面显示的开关
    * 状态会与引擎的实际行为分叉——而分叉的表现是「界面说开着、引擎却在放行」，
    * **全程零报错**，靠任何运行期观察都发现不了。

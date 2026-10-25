@@ -2,10 +2,10 @@ import { useAgentsStore } from '@/stores/agentsStore';
 import { useTasksStore } from '@/stores/tasksStore';
 import { toast } from '@/components/Toast';
 import { TaskFormDialog } from '@/components/tasks/TaskFormDialog';
-import { buildTaskDraftFromMessage } from '@/lib/taskDraft';
-import { inferScheduleFromText } from '@/lib/scheduleFromText';
+import { buildTaskDraftFromMessage } from '@/lib/task/taskDraft';
+import { inferScheduleFromText } from '@/lib/task/scheduleFromText';
 import type { Message } from '@/types';
-import type { TaskDraft } from '@/lib/taskDraft';
+import type { TaskDraft } from '@/lib/task/taskDraft';
 
 interface CreateTaskDialogProps {
   open: boolean;

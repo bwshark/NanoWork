@@ -75,8 +75,8 @@
 
 ### 1.2 本项目现状
 
-现状由代码实测得出，**不是文档转述**。涉及文件：`src/lib/memory.ts`（1049 行）、
-`src/lib/workspaceMemory.ts`、`src/lib/memoryMerge.ts`、`src/lib/memoryDirective.ts`、
+现状由代码实测得出，**不是文档转述**。涉及文件：`src/lib/memory/memory.ts`（1049 行）、
+`src/lib/memory/workspaceMemory.ts`、`src/lib/memory/memoryMerge.ts`、`src/lib/memory/memoryDirective.ts`、
 `src/types/memory.ts`、`electron/memoryRoutes.ts`、`electron/workspaceMemoryStore.ts`、
 `src/pages/memory/MemoryPage.tsx`、`src/stores/sessionsStore.ts`。
 

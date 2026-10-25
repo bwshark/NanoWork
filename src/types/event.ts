@@ -482,7 +482,7 @@ export interface SessionMeta {
   /** 同步元数据（第 19 章） */
   rev?: number;
   /**
-   * 最后改动这份元数据的**设备标识**（`lib/deviceId.ts` 的 `currentDeviceId()`）。
+   * 最后改动这份元数据的**设备标识**（`lib/core/deviceId.ts` 的 `currentDeviceId()`）。
    *
    * 老数据（事件化之前写的 meta）没有这个字段，读作空串——空串明确表示「来源未知」，
    * 不要兜底成 `'unknown'`：那会伪装成一台真实设备，多台机器共用同一个值，

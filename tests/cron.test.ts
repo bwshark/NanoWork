@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { validateCron, describeSchedule } from '@/lib/cron';
+import { validateCron, describeSchedule } from '@/lib/task/cron';
 
 describe('validateCron', () => {
   it('合法表达式通过', () => {

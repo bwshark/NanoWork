@@ -26,11 +26,11 @@ import {
   providerOptionLabel,
   slugifyProviderKey,
   toProviderConfigKey,
-} from '@/lib/modelProviders';
+} from '@/lib/model/modelProviders';
 import {
   ENGINE_DEFAULT_CONTEXT_WINDOW_TOKENS,
   ENGINE_DEFAULT_MAX_TOKENS,
-} from '@/lib/modelOptions';
+} from '@/lib/model/modelOptions';
 import {
   buildManaged,
   buildMutation,

@@ -22,7 +22,7 @@ import {
   formatBinding,
   resolveBinding,
   type ShortcutDef,
-} from '@/lib/shortcuts';
+} from '@/lib/editor/shortcuts';
 import { platform } from '@/platform';
 import { useSettingsStore } from '@/stores/settingsStore';
 

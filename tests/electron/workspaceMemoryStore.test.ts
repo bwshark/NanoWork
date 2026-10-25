@@ -23,7 +23,7 @@ import {
 } from '../../electron/workspaceMemoryStore';
 import { resolveLegacyMemoryFile } from '../../electron/memoryRoutes';
 import { memoryDir, type StorageRoots } from '../../electron/storageRoutes';
-import { CURATED_MEMORY_FILE } from '../../src/lib/workspaceMemory';
+import { CURATED_MEMORY_FILE } from '../../src/lib/memory/workspaceMemory';
 
 let root = '';
 /** 当作「用户的工作目录」的临时目录 */

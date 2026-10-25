@@ -9,7 +9,7 @@ import InsertDriveFileIcon from '@mui/icons-material/InsertDriveFile';
 import {
   attachmentPreviewSrc,
   formatBytes,
-} from '@/lib/attachments';
+} from '@/lib/artifact/attachments';
 import type { Attachment, AttachmentKind } from '@/types';
 
 /**

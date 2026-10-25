@@ -105,10 +105,10 @@
 **判据**：payload 里断言 `'runs' in payload === false`；往 `TaskConfig` 加 `runs` 字段后该用例变红。
 
 ### A.3 `mcp` → `src/stores/mcpStore.ts`
-新增到 `src/lib/syncPayloads.ts`（与渠道排除表同处，理由同 syncmeta §7.2）：
+新增到 `src/lib/sync/syncPayloads.ts`（与渠道排除表同处，理由同 syncmeta §7.2）：
 
 ```ts
-// src/lib/syncPayloads.ts（新增）
+// src/lib/sync/syncPayloads.ts（新增）
 export const MCP_SYNC_OMIT_KEYS: readonly string[] = [
   // —— 运行时事实（本机重算，§5.2）——
   'connectionStatus', // 真实握手结果，唯一写入者 testConfig
@@ -149,7 +149,7 @@ export function toMcpSyncPayload(config: MCPConfig): Partial<MCPConfig> {
 | `keyOf` | `(e) => String(e.kind ?? e.id)`（**墓碑记录无 `kind`，只有 `id=kind`**，见下） |
 | `read()` | `state.configs` + `state.tombstones`（**键 = `kind`**） |
 | `apply()` | 见下（需保住本机 `id`） |
-| `payload()` | `toChannelSyncPayload(entity)`（`src/lib/syncPayloads.ts`） |
+| `payload()` | `toChannelSyncPayload(entity)`（`src/lib/sync/syncPayloads.ts`） |
 
 **apply 写法（保住本机 `id`）**——引擎已做 `{...local, ...incoming}` 浅合并，`incoming.id` 是对端随机数，会覆盖本机 `id`：
 ```ts
@@ -200,8 +200,8 @@ apply: (entity) => {
   const overrides = list as unknown as SkillOverrideEntry[];
   useSkillsStore.setState({
     overrides,
-    skills: applyOverrides(s.skills, overrides),   // @/lib/skillOverrideTable
-    pinnedIds: pinnedSkillIds(overrides),          // @/lib/skillOverrideTable
+    skills: applyOverrides(s.skills, overrides),   // @/lib/agent/skillOverrideTable
+    pinnedIds: pinnedSkillIds(overrides),          // @/lib/agent/skillOverrideTable
   });
 },
 ```
@@ -241,7 +241,7 @@ apply: (entity) => {
 - `src/types/channel.ts:28-64` 的 `ChannelConfig` **没有 `instances` 字段**；渠道身份 = `kind`。
 - `src/types/channel.ts:6-9` 说「feishu / lark 二者共用 nanobot `feishu` channel，经 `domain` 区分，**多实例经 `instances` 数组并存**」——但那是 **nanobot 引擎侧**的形状，落到客户端被**拍平成两个独立 `kind`**：`ChannelKind = 'dingtalk' | 'feishu' | 'lark' | 'weixin' | 'wecom'`（`channel.ts:19`）。
 - `src/ai/runtime/nanobotHttp/channels.ts:70` 写出去时 `domain: cfg.kind`；`:191` 读回来时 `domain==='lark' ? 'lark' : 'feishu'`。即**客户端的 one-config-per-kind ↔ 引擎的 instance-per-domain 是一一映射**：`feishu` 卡片 ≡ `domain='feishu'` 的实例，`lark` 卡片 ≡ `domain='lark'` 的实例。
-- `src/lib/channelMeta.ts` 的 `CHANNEL_METAS` 把 `feishu` / `lark` 列为**两个独立 kind**，各自一份表单。
+- `src/lib/channel/channelMeta.ts` 的 `CHANNEL_METAS` 把 `feishu` / `lark` 列为**两个独立 kind**，各自一份表单。
 
 **结论**：客户端**不存在**「一个 `kind` 对应多个实例」的情形（`feishu` 与 `lark` 是两个不同 `kind`，各自一条 store 条目，**不共用**同一个 `channels.feishu.instances[]` 条目）。故 `keyOf = kind` 无互相覆盖风险，**不需要** `kind + domain` 的复合键。
 
@@ -280,7 +280,7 @@ keyOf: (e) => String(e.id ?? SETTINGS_SINGLETON_ID),
 // state 初值
 syncMeta: { rev: 0, updatedAt: '', updatedBy: '', deletedAt: null } as SyncMeta,
 
-// setSettings / setShortcut / resetShortcuts：改动可同步字段 → metaForEdit（@/lib/syncStamp）
+// setSettings / setShortcut / resetShortcuts：改动可同步字段 → metaForEdit（@/lib/sync/syncStamp）
 setSettings: (patch) =>
   set((s) => ({ settings: { ...s.settings, ...patch }, syncMeta: metaForEdit(s.syncMeta) })),
 setShortcut: (id, binding) =>
@@ -613,7 +613,7 @@ void (async () => {
 - 复用 `SettingsPrimitives` 的**视觉件**（`SettingsCard` / `SettingsRow`）保持风格一致（本项目设置区已用这套）；页面外层用 `Box` 居中卡片。
 
 **路由结构改法（先看现状）**：
-- 路由集中在 `src/router/index.tsx`（`createBrowserRouter`，无独立 route 配置文件；`ROUTES` 常量在 `src/lib/constants.ts:79`）。
+- 路由集中在 `src/router/index.tsx`（`createBrowserRouter`，无独立 route 配置文件；`ROUTES` 常量在 `src/lib/core/constants.ts:79`）。
 - **「未登录不拦截本地使用，只收在同步设置入口」的落法**：
   1. **不引入全局路由守卫**——`/chat`、`/agents`… 全部保持免登录；（否则违反 local-first）
   2. `constants.ts` 加 `ROUTES.auth = '/auth'`；
@@ -754,7 +754,7 @@ export function resetStoresEmpty(): void { /* 全部置空（新设备） */ }
 
 | 任务 | 内容 | 依赖 | 优先级 |
 |---|---|---|---|
-| **T01 基础设施/契约修正** | `src/lib/syncPayloads.ts`（+`MCP_SYNC_OMIT_KEYS`/`toMcpSyncPayload`）；`src/sync/SyncEngine.ts`（F 的 `pulled` 语义 + §0.1-C1 自冲突过滤）；`src/lib/constants.ts`（+`ROUTES.auth`）；`src/stores/settingsStore.ts`（+`syncMeta` 切片，v12）；`src/stores/sessionsStore.ts`（+`sessionTombstones` + `applyRemoteSessionMeta`/`applyRemoteSessionTombstone` + `loadSessions` 填充 + 导出 `sessionMetaOf`） | — | P0 |
+| **T01 基础设施/契约修正** | `src/lib/sync/syncPayloads.ts`（+`MCP_SYNC_OMIT_KEYS`/`toMcpSyncPayload`）；`src/sync/SyncEngine.ts`（F 的 `pulled` 语义 + §0.1-C1 自冲突过滤）；`src/lib/core/constants.ts`（+`ROUTES.auth`）；`src/stores/settingsStore.ts`（+`syncMeta` 切片，v12）；`src/stores/sessionsStore.ts`（+`sessionTombstones` + `applyRemoteSessionMeta`/`applyRemoteSessionTombstone` + `loadSessions` 填充 + 导出 `sessionMetaOf`） | — | P0 |
 | **T02 注册表接线** | `src/sync/syncRegistry.ts`（注册 A.1–A.7 共 7 个 spec，含 channels 身份与 settings 单例） | T01 | P0 |
 | **T03 装配与生命周期** | `src/sync/runtime.ts`（`createSyncRuntime` + store 订阅 + suppress/missed + 账户生命周期）；`src/sync/index.ts`（+导出）；`src/App.tsx`（接入 + 顺序 + dispose） | T02 | P0 |
 | **T04 认证 UI** | `src/pages/auth/AuthPage.tsx`；`src/router/index.tsx`（+`/auth`）；`src/components/settings/sections/AccountSection.tsx`；`settingsNav.tsx` / `settingsUiStore.ts` / `SettingsDialog.tsx` 登记 account 分区 | T03 | P0 |

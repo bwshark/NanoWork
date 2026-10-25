@@ -4,10 +4,10 @@ import { Box, ButtonBase, Divider } from '@mui/material';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import AddCommentOutlinedIcon from '@mui/icons-material/AddCommentOutlined';
 import { toast } from '@/components/Toast';
-import { getComposerEdit } from '@/lib/composerEditBridge';
-import { writeRichClipboard } from '@/lib/richClipboard';
+import { getComposerEdit } from '@/lib/editor/composerEditBridge';
+import { writeRichClipboard } from '@/lib/editor/richClipboard';
 import { useSessionUiStore } from '@/stores/sessionUiStore';
-import { clampQuoteText, normalizeQuoteText } from '@/lib/selectionQuote';
+import { clampQuoteText, normalizeQuoteText } from '@/lib/editor/selectionQuote';
 
 /**
  * 消息流里「选中文本」后浮出的操作气泡：**复制** / **添加到对话**。

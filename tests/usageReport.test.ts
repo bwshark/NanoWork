@@ -23,7 +23,7 @@ import {
   sumDays,
   todayLocalIso,
   zeroCounters,
-} from '@/lib/usageReport';
+} from '@/lib/ui/usageReport';
 import type { UsageCounters, UsageDay } from '@/types';
 
 function counters(patch: Partial<UsageCounters> = {}): UsageCounters {

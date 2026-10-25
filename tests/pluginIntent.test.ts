@@ -11,7 +11,7 @@ import {
   referencedCopyPaths,
   sourceFromPath,
   withPluginIntent,
-} from '@/lib/pluginIntent';
+} from '@/lib/agent/pluginIntent';
 import type { InstalledPlugin, PluginEngineIndex, PluginManifest } from '@/types/plugin';
 
 /**

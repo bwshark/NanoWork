@@ -1,9 +1,9 @@
 import { DEFAULT_TRANSCRIPTION, useSettingsStore } from '@/stores/settingsStore';
-import { fetchSSE, readSSEStream, type SSEStreamEnd } from '@/lib/sse';
-import { createSseLatencyTracker, type SessionLatencySample } from '@/lib/sseLatency';
+import { fetchSSE, readSSEStream, type SSEStreamEnd } from '@/lib/core/sse';
+import { createSseLatencyTracker, type SessionLatencySample } from '@/lib/core/sseLatency';
 // MIME 推断统一复用附件模块的扩展名映射表（文档 / 表格 / 幻灯片 / PDF / 文本标记 /
 // 配置日志 / 图片 / 音视频），避免出现「Composer 能选、上传时却退化成 octet-stream」
-import { inferMime } from '@/lib/attachments';
+import { inferMime } from '@/lib/artifact/attachments';
 import type { ModelInfo, ConnectionStatus, UsageStats } from '@/types';
 import type {
   ApprovalDecision,

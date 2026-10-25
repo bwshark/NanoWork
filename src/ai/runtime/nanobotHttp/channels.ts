@@ -20,7 +20,7 @@
  * 不再自行实现 camelCase / snake_case 双写兜底。
  */
 import { platform } from '@/platform';
-import { genId } from '@/lib/id';
+import { genId } from '@/lib/core/id';
 import { putIf, readBool, readEnum, readStr, readStrArray } from '../codec';
 import type { ChannelSyncResult, NanobotChannelsSnapshot } from '@/platform/types';
 import type { ChannelConfig, ChannelKind, GroupPolicy } from '@/types';

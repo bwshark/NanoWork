@@ -1,7 +1,7 @@
 import { Box, Tooltip, Typography } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
 import InsertDriveFileIcon from '@mui/icons-material/InsertDriveFile';
-import { attachmentPreviewSrc, formatBytes } from '@/lib/attachments';
+import { attachmentPreviewSrc, formatBytes } from '@/lib/artifact/attachments';
 import { KIND_ICON, KIND_LABEL } from './AttachmentBar';
 import type { Attachment } from '@/types';
 

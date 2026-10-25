@@ -77,7 +77,7 @@ export interface Agent extends SyncMetaFields {
    *
    * 省略 = 不绑定（跟随会话选择，会话也没选则用网关默认）。
    *
-   * ⚠️ **下发前必须校验预设仍存在**（见 `lib/agentBinding.ts` 的 `resolveTurnModel`）：
+   * ⚠️ **下发前必须校验预设仍存在**（见 `lib/agent/agentBinding.ts` 的 `resolveTurnModel`）：
    * 预设被删或改名后这个字符串就失效了，而引擎收到未知预设会直接报错——
    * 不拦的话，「删掉一个预设」会变成「所有绑过它的专家每一轮都发不出消息」。
    */
@@ -86,7 +86,7 @@ export interface Agent extends SyncMetaFields {
    * 知识库绑定（FR-2.3 第四条，M7）。
    *
    * 省略 = 不绑定（这个专家不查组织资料）。绑定后**每轮自动检索一次**，命中的
-   * 段落以 `<knowledge_context>` 注入本轮 system 段（见 `lib/agentKnowledgeTurn.ts`）。
+   * 段落以 `<knowledge_context>` 注入本轮 system 段（见 `lib/agent/agentKnowledgeTurn.ts`）。
    *
    * ⚠️ 存的是**云端 id**（组织 + 库），换账号 / 换部署后可能指不到东西：
    * 那时云端回 403/404，客户端按「本轮没有资料」降级并在控制台留一行，

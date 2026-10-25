@@ -7,7 +7,7 @@
  * 半夜发消息才发现。所以下面否定用例与肯定用例几乎一比一。
  */
 import { describe, expect, it } from 'vitest';
-import { inferScheduleFromText } from '@/lib/scheduleFromText';
+import { inferScheduleFromText } from '@/lib/task/scheduleFromText';
 
 /** cron 表达式（非 cron 形态返回 null，便于一眼看出「类型就不对」） */
 function expr(text: string): string | null {

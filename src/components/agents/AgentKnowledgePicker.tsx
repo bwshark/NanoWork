@@ -18,7 +18,7 @@ import {
   type KbGateway,
   type KbOrg,
   type KbSummary,
-} from '@/lib/kbClient';
+} from '@/lib/kb/kbClient';
 import { createRuntimeKbGateway } from '@/sync/kbGateway';
 import { useSyncRuntime } from '@/sync/useSyncRuntime';
 import type { AgentKnowledgeBinding } from '@/types';

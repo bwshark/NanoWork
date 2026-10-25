@@ -101,7 +101,7 @@ type SkillOverrideEntry = SyncMeta & {
 「用户偏好」与「本机环境」。要求实现一个纯函数裁剪同步负载：
 
 ```ts
-// src/lib/settingsSync.ts
+// src/lib/sync/settingsSync.ts
 export function toSyncPayload(settings: Settings): Settings;
 ```
 
@@ -129,9 +129,9 @@ export function toSyncPayload(settings: Settings): Settings;
 | 文件 | 内容 | 为什么单独抽 |
 |---|---|---|
 | `src/types/sync.ts` | `SyncMeta` 接口 + `SyncableEntity` 约束类型 | §19.2 给定的四字段目前只以**内联可选字段**的形式散在 `event.ts` 里；抽成单一来源，避免第三个实体再抄一遍 |
-| `src/lib/syncMeta.ts` | 纯函数：`stampCreate(updatedBy)` / `markDirty(meta, updatedBy)` / `markDeleted(meta, updatedBy)` / `isTombstone(meta)` | 与 `storageRoutes.ts` / `skillOverrides.ts` 同一条纪律：**纯逻辑不碰 IO，可真单测**；四个字段一旦各处手写，一定会漂移 |
-| `src/lib/syncSelect.ts` | `liveEntities<T>(list)`（过滤墓碑）、`pickSyncable<T>(entity, omitKeys)`（剔除运行时事实） | 见第五节：墓碑过滤是**必须集中**的一件事 |
-| `src/lib/deviceId.ts` | `getDeviceId()`：Electron 取 `platform.getAppInfo().deviceId`；Web 端见 §六 待确认问题 1 | `updatedBy` 的来源，两侧行为要显式而不是各自 `?? 'unknown'` |
+| `src/lib/sync/syncMeta.ts` | 纯函数：`stampCreate(updatedBy)` / `markDirty(meta, updatedBy)` / `markDeleted(meta, updatedBy)` / `isTombstone(meta)` | 与 `storageRoutes.ts` / `skillOverrides.ts` 同一条纪律：**纯逻辑不碰 IO，可真单测**；四个字段一旦各处手写，一定会漂移 |
+| `src/lib/sync/syncSelect.ts` | `liveEntities<T>(list)`（过滤墓碑）、`pickSyncable<T>(entity, omitKeys)`（剔除运行时事实） | 见第五节：墓碑过滤是**必须集中**的一件事 |
+| `src/lib/core/deviceId.ts` | `getDeviceId()`：Electron 取 `platform.getAppInfo().deviceId`；Web 端见 §六 待确认问题 1 | `updatedBy` 的来源，两侧行为要显式而不是各自 `?? 'unknown'` |
 
 ---
 
@@ -214,9 +214,9 @@ LWW 同步要求删除能被传播，因此必须改为「置 `deletedAt` 并保
 
 | 批次 | 内容 | 完成判据 |
 |---|---|---|
-| **1 地基** | `types/sync.ts` + `lib/syncMeta.ts` + `lib/syncSelect.ts` + `lib/deviceId.ts` + 单测 | ✅ **已完成（2026-09-25，见 §7.1）**：纯函数单测覆盖 `markDirty` 递增、`markDeleted` 幂等、`isTombstone`、`liveEntities` 过滤 |
+| **1 地基** | `types/sync.ts` + `lib/sync/syncMeta.ts` + `lib/sync/syncSelect.ts` + `lib/core/deviceId.ts` + 单测 | ✅ **已完成（2026-09-25，见 §7.1）**：纯函数单测覆盖 `markDirty` 递增、`markDeleted` 幂等、`isTombstone`、`liveEntities` 过滤 |
 | **2 实体接线** | Agent / ExpertGroup / Task / MCP / Channel 五个 store 接线 + Skill 覆盖表抽离 + 各自的 `version` 升版 | ✅ **已完成（2026-09-25，见 §7.2）**：五个 store 各一条「改 → rev+1」「删 → 墓碑且不出现在列表」；Channel 另有「同步负载不含 `clientSecret` / `appSecret` / `botSecret` / `token`」「引擎回读不复活已删渠道」 |
-| **3 会话与设置** | `indexFile` 写入 `rev` / `updatedBy`；`lib/settingsSync.ts` 的 `toSyncPayload(settings)` + 排除表 | ✅ **已完成（2026-09-25，见 §7.3）**：一条「会话重命名后 `rev` 递增」用例（含「没改元数据就不涨版本」三条反向护栏）；一条「同步负载不含 `gatewayEndpoint` / `apiToken`」用例 |
+| **3 会话与设置** | `indexFile` 写入 `rev` / `updatedBy`；`lib/sync/settingsSync.ts` 的 `toSyncPayload(settings)` + 排除表 | ✅ **已完成（2026-09-25，见 §7.3）**：一条「会话重命名后 `rev` 递增」用例（含「没改元数据就不涨版本」三条反向护栏）；一条「同步负载不含 `gatewayEndpoint` / `apiToken`」用例 |
 
 **门禁（沿用 `nanowork-dev-gate`）**：三套 `tsc` 0 错误 → `vitest run --maxWorkers=3` 全绿
 → `vite build --emptyOutDir false` 绿。**动了 `electron/storageRoutes.ts`（新增
@@ -227,8 +227,8 @@ LWW 同步要求删除能被传播，因此必须改为「置 `deletedAt` 并保
 **批次 1（地基）已完成 · 2026-09-25**
 
 落地文件：`src/types/sync.ts`（`SyncMeta` / `SyncMetaInput` / `SyncableEntity`，已在
-`src/types/index.ts` 登记）、`src/lib/syncMeta.ts`、`src/lib/syncSelect.ts`、`src/lib/deviceId.ts`；
-用例 `tests/lib/{syncMeta,syncSelect,deviceId}.test.ts`（36 例）。
+`src/types/index.ts` 登记）、`src/lib/sync/syncMeta.ts`、`src/lib/sync/syncSelect.ts`、`src/lib/core/deviceId.ts`；
+用例 `tests/lib/sync/{syncMeta,syncSelect}.test.ts` 与 `tests/lib/core/deviceId.test.ts`（36 例）。
 
 门禁：三套 `tsc` 0 错误 / `vitest run --maxWorkers=3` **94 文件 1531 用例全绿** /
 `vite build --emptyOutDir false` 24.45s exit=0。**未动 `electron/`，故无需重建 `main.cjs`。**
@@ -269,10 +269,10 @@ LWW 一起归 V1.5 另案。
 | `channelsStore` | `nanowork.channels` | 2 → **3** | 摘除 + 墓碑 | **`kind`** |
 | `skillsStore` | `nanowork.skills` v2 → **3**；新增 `nanowork.skillOverrides` | 3 | 覆盖表无墓碑（值变化） | — |
 
-新增共享件：`src/lib/syncStamp.ts`（store 专用的三个带设备标识的标记入口）、
-`src/lib/skillOverrideTable.ts`（覆盖表的纯函数）、`src/lib/syncPayloads.ts`（云端负载裁剪）。
+新增共享件：`src/lib/sync/syncStamp.ts`（store 专用的三个带设备标识的标记入口）、
+`src/lib/agent/skillOverrideTable.ts`（覆盖表的纯函数）、`src/lib/sync/syncPayloads.ts`（云端负载裁剪）。
 
-用例：`tests/stores/syncMetaWiring.test.ts`（16 例）、`tests/lib/syncPayloads.test.ts`（6 例）。
+用例：`tests/stores/syncMetaWiring.test.ts`（16 例）、`tests/lib/sync/syncPayloads.test.ts`（6 例）。
 
 门禁：三套 `tsc` 0 错误 / `vitest run --maxWorkers=3` **96 文件 1554 用例全绿** /
 `vite build --emptyOutDir false` 23.39s exit=0。**动了 `electron/storageRoutes.ts`
@@ -290,8 +290,8 @@ LWW 一起归 V1.5 另案。
 | §5.1 删除语义 | 「置 `deletedAt` 并保留数组项」，代价是「每一个读取处都要过滤」 | **墓碑拆成独立 `SyncTombstones` 表**，存活数组只含存活条目 | 两个硬约束：① 数组里的墓碑会被**合并函数冲掉**——`agentsStore.refresh()` 走 `mergeAgents(get().agents)`，合并产出只含「内置 + 存活用户条目」，于是每次启动都把墓碑洗净再写回，删除标记活不过一次重启；② UI 读取点实测二十余处，在 selector 里内联过滤每次 store 变动都产出新数组引用，要么给每处补 `useShallow`、要么放任多余重渲染，两条路都要改二十多个文件且漏一处是静默的 |
 | §5.2 墓碑键 | （未提） | `channelsStore` 的墓碑键是 **`kind`** 而不是 `id` | 渠道的实体身份是 `kind`（一卡一配置），而 `id` 是本地随机数且**回读会重新生成**（`fromNanobotChannels` 每次 `genId()`）。按 `id` 键控时回读侧永远匹配不上墓碑——症状是「删掉的渠道下次启动自己回来了」。已用一条「引擎回读不复活已删渠道」用例钉住 |
 | §5.3 凭据排除 | 「`clientSecret` / `appSecret` / `botSecret` / `token` 四个字段进排除表」 | **凭据对成组剔除**：连 `clientId` / `appId` / `botId` 一起剔 | 只剔 secret 会同步出一条「有 id、没密钥」的渠道——看着配好了、实际永远连不上，而界面上看不出差在哪，比什么都不留更难查 |
-| §5.3 适用范围 | （未提） | **引擎负载 ≠ 云端负载**：`channelsStore.syncAll` 提交给引擎的片段**必须带凭据**，§5.3 约束的只是云端同步负载 | 引擎靠凭据连 IM，少一个 `appSecret` 渠道直接不可用。两者字段清单重叠但不相同，故各一处显式声明（`nanobotHttp/channels.ts` / `lib/syncPayloads.ts`），并在两处都写了「别把裁剪套到对面」的注释 |
-| §3.3 落点 | `src/lib/settingsSync.ts` 的 `toSyncPayload` | 先落成 `src/lib/syncPayloads.ts`（渠道），批次 3 的 settings 并入**同一文件** | 两个同构文件（都是「实体 → 可上云负载」）会各自演化，排除表也就有了两个家。放一处，改的人一次只看一张表 |
+| §5.3 适用范围 | （未提） | **引擎负载 ≠ 云端负载**：`channelsStore.syncAll` 提交给引擎的片段**必须带凭据**，§5.3 约束的只是云端同步负载 | 引擎靠凭据连 IM，少一个 `appSecret` 渠道直接不可用。两者字段清单重叠但不相同，故各一处显式声明（`nanobotHttp/channels.ts` / `lib/sync/syncPayloads.ts`），并在两处都写了「别把裁剪套到对面」的注释 |
+| §3.3 落点 | `src/lib/sync/settingsSync.ts` 的 `toSyncPayload` | 先落成 `src/lib/sync/syncPayloads.ts`（渠道），批次 3 的 settings 并入**同一文件** | 两个同构文件（都是「实体 → 可上云负载」）会各自演化，排除表也就有了两个家。放一处，改的人一次只看一张表 |
 
 另有三处 store 内的具体决定（都写进了用例）：
 
@@ -323,15 +323,15 @@ LWW 一起归 V1.5 另案。
 
 | 文件 | 内容 |
 |---|---|
-| `src/lib/sessionSyncMeta.ts`（新增） | 可同步字段白名单 `SESSION_SYNC_FIELDS`（12 个）、`sessionMetaChanged`、`sessionSyncPatch` / `sessionCreatePatch` / `withSessionSync` |
-| `src/lib/settingsSync.ts`（新增） | `toSyncPayload(settings)`、`SETTINGS_SYNC_OMIT_KEYS`、`TRANSCRIPTION_SYNC_OMIT_KEYS`、`SettingsSyncPayload` |
+| `src/lib/session/sessionSyncMeta.ts`（新增） | 可同步字段白名单 `SESSION_SYNC_FIELDS`（12 个）、`sessionMetaChanged`、`sessionSyncPatch` / `sessionCreatePatch` / `withSessionSync` |
+| `src/lib/sync/settingsSync.ts`（新增） | `toSyncPayload(settings)`、`SETTINGS_SYNC_OMIT_KEYS`、`TRANSCRIPTION_SYNC_OMIT_KEYS`、`SettingsSyncPayload` |
 | `src/types/event.ts` | `SessionMeta` / `SessionIndexEntry` 各补 `updatedBy`（**两个都补**，理由见下） |
 | `src/types/session.ts` | `Session` 补 `rev` / `updatedBy`（内联形态） |
 | `src/events/indexFile.ts` | `normalizeSessionMeta` 读 `updatedBy`；`entryFromMeta` / `applyAppend` 透传 |
 | `src/events/project.ts` | `metaToSession` 透传 `rev` / `updatedBy`（回读路径） |
 | `src/stores/sessionsStore.ts` | `toMeta` 透传两个字段；`createSession` 落 `rev = 1`；**`updateSession` 自动维护** |
 
-用例：`tests/lib/sessionSyncMeta.test.ts`（22 例）、`tests/lib/settingsSync.test.ts`（10 例）、
+用例：`tests/lib/session/sessionSyncMeta.test.ts`（22 例）、`tests/lib/sync/settingsSync.test.ts`（10 例）、
 `tests/sessionsSyncMeta.test.ts`（8 例，走真实 store + 内存事件存储的集成链路）。
 
 门禁：三套 `tsc` 0 错误 / `vitest run --maxWorkers=3` **99 文件 1594 用例全绿** /
@@ -343,7 +343,7 @@ LWW 一起归 V1.5 另案。
 |---|---|---|---|
 | §七 批次 3 落点 | `indexFile` 写入 `rev` / `updatedBy`（把「写」放在索引层） | 递增点落在 **`sessionsStore.updateSession`**，`indexFile` 只负责**透传** | 索引是**可再生派生物**，它没有「改过几次」的记忆——重建一次（版本不符 / 文件损坏时会发生）就无从知道该写几。递增必须挂在有状态的地方：渲染层的会话对象。索引只照抄 |
 | §3.1 第 7 行 `markDirty` 调用点 | 列了七个动作名（`renameSession` / `togglePinSession` / `setSessionMode` / …） | **不逐个标记**，而是**比较改动前后的可同步字段**，真的变了才打脏 | 这七个动作＋未来新增的都从 `updateSession` 走。逐个手写必然漏，而漏掉的后果是**静默**的（本地一切正常，换台设备才发现少了一次改动）。自动判定另有一个收益：改**记忆快照**（`loadMemoryInto` 也走 `updateSession`）不会涨版本——否则每开一次会话就涨一版，`rev` 退化成「打开过几次」的计数器 |
-| §3.3 落点 | 同节既写 `src/lib/settingsSync.ts`，§7.2 的表格又写「并入 `syncPayloads.ts` 同一文件」 | **独立成 `src/lib/settingsSync.ts`** | 文档自相矛盾，取 §3.3 的路径。更实际的理由：Settings 的裁剪有一块**嵌套**处理（`transcription` 要保住 `enabled` / `model` / `language`，只剔 `endpoint` / `apiToken`），与 `pickSyncable` 的**顶层**语义不同构；放同一文件会让「两个实体共用一套规则」的错觉更强 |
+| §3.3 落点 | 同节既写 `src/lib/sync/settingsSync.ts`，§7.2 的表格又写「并入 `syncPayloads.ts` 同一文件」 | **独立成 `src/lib/sync/settingsSync.ts`** | 文档自相矛盾，取 §3.3 的路径。更实际的理由：Settings 的裁剪有一块**嵌套**处理（`transcription` 要保住 `enabled` / `model` / `language`，只剔 `endpoint` / `apiToken`），与 `pickSyncable` 的**顶层**语义不同构；放同一文件会让「两个实体共用一套规则」的错觉更强 |
 | §3.3 排除表 | 把 `transcription.endpoint` / `transcription.apiToken` 列为「必须排除」 | 顶层排除表里**没有** `transcription`，它单独走 `TRANSCRIPTION_SYNC_OMIT_KEYS` | `pickSyncable` 只做顶层浅拷贝：在顶层 omit 掉 `transcription` 会连同三个正当偏好一起扔掉（语音开关是跨设备成立的偏好）。而内层字段又不能顶层表达，所以拆两张表 |
 | §5.2 运行时事实 | 只点名 `eventCount` / `lastSeq` / `messageCount` 三个索引计数 | 白名单**额外排除** `streamWorkdir` | 它是「这条会话的记录落在**哪台机器的哪个目录**」——本机事实，且各机路径不同。它与 `workdir` 必须分开看：后者是用户选的语义工作空间（是声明，保留同步），前者是落盘分片（是事实，不上云） |
 
@@ -393,7 +393,7 @@ LWW 一起归 V1.5 另案。
 
 落地清单（12 个文件）：契约 `EventStore.tombstoneSession(meta)` × 3 个实现（内存参照 / Web 分片 /
 Electron 主进程）+ `events:tombstone` IPC 三件套（`electron/main.ts` / `preload.ts` /
-`platform/types.ts`）+ 会话侧 `sessionDeletePatch()`（`lib/sessionSyncMeta.ts`，包 `metaForDelete`
+`platform/types.ts`）+ 会话侧 `sessionDeletePatch()`（`lib/session/sessionSyncMeta.ts`，包 `metaForDelete`
 以保证**墓碑幂等**）+ `sessionsStore` 的 `dropSessionStream` → `tombstoneSessionStream`。
 **动了 `electron/` → 已重建 `main.cjs` + `preload.cjs`**。
 

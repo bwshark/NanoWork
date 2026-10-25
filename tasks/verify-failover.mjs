@@ -3,7 +3,7 @@
  *
  * 与单测的分工：
  * - 纯逻辑（链的编辑规则、引擎两态形状的转换、删除/改名时的引用维护）在
- *   `tests/lib/modelFallbacks.test.ts` 与 `tests/electron/modelFallbacksConfig.test.ts`；
+ *   `tests/lib/model/modelFallbacks.test.ts` 与 `tests/electron/modelFallbacksConfig.test.ts`；
  * - store 语义（顺序不被归一、桥拒绝时不装作成功）在 `tests/modelsStoreFailover.test.ts`；
  * - 这里只钉**只有真机能证明**的几件事：
  *

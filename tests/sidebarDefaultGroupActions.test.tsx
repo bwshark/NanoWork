@@ -17,7 +17,7 @@
  *
  * 唯一与其它分组不同的地方：默认分组**没有**「重命名」。它的名字由语义决定
  * （组内就是设置里那个默认路径下的任务），别名会让名字漂移，
- * 见 `tests/lib/workspaceLabel.test.ts`。
+ * 见 `tests/lib/workspace/workspaceLabel.test.ts`。
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';

@@ -12,7 +12,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { isEditableTarget } from '@/lib/editableTarget';
+import { isEditableTarget } from '@/lib/editor/editableTarget';
 import {
   DEFAULT_BINDINGS,
   SHORTCUTS,
@@ -26,7 +26,7 @@ import {
   resolveBinding,
   type KeyLike,
   type ShortcutId,
-} from '@/lib/shortcuts';
+} from '@/lib/editor/shortcuts';
 import { useSettingsStore } from '@/stores/settingsStore';
 import type { Settings } from '@/types';
 

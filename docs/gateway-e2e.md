@@ -27,7 +27,7 @@ nanobot serve --host 127.0.0.1 --port 18900
 ```
 
 > ⚠️ **端口必须与本项目客户端默认值一致**。客户端默认网关为 **`http://127.0.0.1:18900`**
-> （见 `src/lib/constants.ts`）。若把网关起在别的端口（例如 `8765`），必须在 ConnectionBanner
+> （见 `src/lib/core/constants.ts`）。若把网关起在别的端口（例如 `8765`），必须在 ConnectionBanner
 > 里手改 endpoint，否则连接失败。
 >
 > **为什么不是 nanobot 自带的 `8900`**：Windows 会把成段端口划入保留区间（Hyper-V / WSL 的

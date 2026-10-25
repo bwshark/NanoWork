@@ -26,8 +26,8 @@ import { usePluginsStore } from "@/stores/pluginsStore";
 import { platform } from "@/platform";
 import { toast } from "@/components/Toast";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
-import { marketVersionState } from "@/lib/pluginIntent";
-import { cardChipOutlinedSx, cardStatusChipSx, clampLines, hoverCardSx } from "@/lib/cardSx";
+import { marketVersionState } from "@/lib/agent/pluginIntent";
+import { cardChipOutlinedSx, cardStatusChipSx, clampLines, hoverCardSx } from "@/lib/ui/cardSx";
 import type {
   MarketIndex,
   MarketPackage,

@@ -15,7 +15,7 @@
  * 挂在新分叉上，从而天然支持「从第 N 步重走」。
  */
 
-import { genId as defaultGenId } from '@/lib/id';
+import { genId as defaultGenId } from '@/lib/core/id';
 import type { BaseEvent, EventOfType, EventProvider, EventType, SessionEvent } from '@/types/event';
 
 /** 构造事件时由调用方提供的载荷（去掉所有公共字段） */

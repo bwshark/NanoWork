@@ -23,7 +23,7 @@ import {
   normalizeSkillOverride,
   resolveSkillOverride,
   withEffectiveOverride,
-} from '@/lib/skillOverrides';
+} from '@/lib/agent/skillOverrides';
 import type { Skill, SkillOverride } from '@/types';
 
 function skill(partial: Partial<Skill> & Pick<Skill, 'id'>): Skill {

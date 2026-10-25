@@ -7,7 +7,7 @@
 将 `TasksPage.tsx` 当前内联的「新建/编辑任务」对话框抽取为受控共享组件 `src/components/tasks/TaskFormDialog.tsx`（`initial` + `onSubmit` + `onClose`，字段与校验与现有一致）；聊天侧 `UserMessage`/`AssistantMessage` 经 `MessageStream` 透传 `agentId`，hover 时显示「💾 保存为记忆 / ⏰ 创建定时任务」双按钮，点 ⏰ 经封装组件 `CreateTaskDialog`（复用 `TaskFormDialog`）以消息内容预填表单，确认后写 `tasksStore.addTask` 并 `toast.success`，全程不跳转 `/tasks`。
 
 ## 2. 文件列表及相对路径（标注 [新]/[改]）
-- [新] `src/lib/taskDraft.ts` — 预填辅助：名称生成 + `buildTaskDraftFromMessage`。
+- [新] `src/lib/task/taskDraft.ts` — 预填辅助：名称生成 + `buildTaskDraftFromMessage`。
 - [新] `src/components/tasks/TaskFormDialog.tsx` — 受控共享任务表单（TasksPage 与聊天共用的唯一表单实现）。
 - [新] `src/components/chat/CreateTaskDialog.tsx` — 聊天入口封装：预填 + `addTask` + `toast` 闭环，内部挂载 `TaskFormDialog`。
 - [改] `src/pages/tasks/TasksPage.tsx` — 删除内联 Dialog，改为挂载 `TaskFormDialog`（新建/编辑共用）。
@@ -25,7 +25,7 @@
 /** 表单提交数据：去掉 store 自管的 id / createdAt */
 export type TaskDraft = Omit<TaskConfig, 'id' | 'createdAt'>;
 
-// src/lib/taskDraft.ts [新]
+// src/lib/task/taskDraft.ts [新]
 /** 由消息首行生成任务名：trim 截断 20 字，超长加 '…'（PRD Q5） */
 export function makeTaskName(content: string): string;
 
@@ -86,7 +86,7 @@ interface CreateTaskDialogProps {
 （Mermaid 等价文字时序如上。）
 
 ## 5. 任务列表（有序 · 依赖 · T29 起）
-- **T29** [新] `src/lib/taskDraft.ts`：实现 `makeTaskName`（首行 trim 截断 20 字 + 超长 `…`）、`buildTaskDraftFromMessage(message, agentId)`。定义并导出 `TaskDraft = Omit<TaskConfig,'id'|'createdAt'>`。
+- **T29** [新] `src/lib/task/taskDraft.ts`：实现 `makeTaskName`（首行 trim 截断 20 字 + 超长 `…`）、`buildTaskDraftFromMessage(message, agentId)`。定义并导出 `TaskDraft = Omit<TaskConfig,'id'|'createdAt'>`。
   - 依赖：无（仅依赖既有 `Message`/`TaskConfig`）。
 - **T30** [新] `src/components/tasks/TaskFormDialog.tsx`：受控 Dialog，复用 TasksPage 现有字段（name / schedule 类型 select / interval 分钟数 或 cron expr / 目标 Agent select / prompt 多行）+ 名称非空校验（提交按钮 `disabled={!form.name?.trim()}`）。内部 `form` state 由 `initial` 合并 `EMPTY` 初始化；`open` 或 `initial` 变化时 `useEffect` 重置 form。
   - 依赖：T29。

@@ -9,7 +9,7 @@ import {
   collectSearchRanges,
   paintSearchRanges,
   scrollRangeIntoView,
-} from '@/lib/textHighlight';
+} from '@/lib/session/textHighlight';
 import { skillCardIconButtonSx, skillOverviewSearchSx } from './skillCardSx';
 
 /**
@@ -18,7 +18,7 @@ import { skillCardIconButtonSx, skillOverviewSearchSx } from './skillCardSx';
  * ## 为什么能不改 DOM 就着色
  *
  * 概述正文是 Markdown 渲染结果，在源码字符串层替换会破坏代码块与链接；
- * 所以复用对话内搜索那套 CSS Custom Highlight API（`@/lib/textHighlight`）：
+ * 所以复用对话内搜索那套 CSS Custom Highlight API（`@/lib/session/textHighlight`）：
  * 只登记 `Range` 交浏览器着色，React 的渲染结果一个字节都不动，不存在
  * 「我把节点换了、React 下次 diff 找不到它」的冲突。
  *

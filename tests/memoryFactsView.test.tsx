@@ -19,9 +19,9 @@
 
 import { beforeEach, describe, expect, it } from 'vitest';
 import { FactListView } from '@/pages/memory/FactListView';
-import { platformMemoryIo, workspaceMemoryRef } from '@/lib/memoryPlatformIo';
-import { workspaceIdFor } from '@/lib/memoryPaths';
-import { createMemoryStore } from '@/lib/memoryStore';
+import { platformMemoryIo, workspaceMemoryRef } from '@/lib/memory/memoryPlatformIo';
+import { workspaceIdFor } from '@/lib/memory/memoryPaths';
+import { createMemoryStore } from '@/lib/memory/memoryStore';
 import type { ConflictState, CuratedEntry } from '@/types';
 import { buttonByText, click, flush, mount, unmount } from './helpers/reactMount';
 

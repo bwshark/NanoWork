@@ -31,7 +31,7 @@ vi.mock('@/ai/runtime', () => ({
   }),
 }));
 
-import { STORAGE_KEYS } from '@/lib/constants';
+import { STORAGE_KEYS } from '@/lib/core/constants';
 import { platform } from '@/platform';
 import { SKILLS } from '@/ai/builtinSkills';
 import { useAgentsStore } from '@/stores/agentsStore';

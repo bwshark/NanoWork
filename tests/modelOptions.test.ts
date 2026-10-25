@@ -33,7 +33,7 @@ import {
   formatTokenLimit,
   normalizeTokenLimit,
   parseTokenLimitInput,
-} from '@/lib/modelOptions';
+} from '@/lib/model/modelOptions';
 
 describe('引擎默认值常量：必须与 config/schema.py::ModelPresetConfig 逐字一致', () => {
   it('三个默认值', () => {

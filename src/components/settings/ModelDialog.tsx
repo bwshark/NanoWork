@@ -36,7 +36,7 @@ import {
   providerNeedsApiKey,
   providerOptionLabel,
   slugifyProviderKey,
-} from '@/lib/modelProviders';
+} from '@/lib/model/modelProviders';
 import {
   CONTEXT_WINDOW_OPTIONS,
   DEFAULT_REASONING_EFFORT,
@@ -44,14 +44,14 @@ import {
   TOKEN_DEFAULT_LABEL,
   formatTokenLimit,
   parseTokenLimitInput,
-} from '@/lib/modelOptions';
+} from '@/lib/model/modelOptions';
 import {
   CURRENCY_SYMBOL,
   PRICING_CURRENCIES,
   normalizePricing,
   parsePriceInput,
   type PricingCurrency,
-} from '@/lib/modelPricing';
+} from '@/lib/model/modelPricing';
 import {
   capabilityRowSx,
   checkLabelSx,

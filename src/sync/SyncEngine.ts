@@ -33,7 +33,7 @@
  * 必须得出同一个胜者。`compareVersions` 拆成独立函数，第三级才测得到。
  */
 
-import { isTombstone, tombstoneEntries } from '@/lib/syncMeta';
+import { isTombstone, tombstoneEntries } from '@/lib/sync/syncMeta';
 import { platform } from '@/platform';
 import type { SyncTombstones } from '@/types';
 import type { SessionEvent } from '@/types/event';

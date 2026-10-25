@@ -17,10 +17,10 @@
 
 import { beforeEach, describe, expect, it } from 'vitest';
 import { WebMemoryDirFiles, WebWorkspaceMemoryFiles } from '@/platform/storage.web';
-import { CURATED_MEMORY_FILE, webMemoryDirKey } from '@/lib/memoryPaths';
-import { dailyMemoryFileName } from '@/lib/workspaceMemory';
+import { CURATED_MEMORY_FILE, webMemoryDirKey } from '@/lib/memory/memoryPaths';
+import { dailyMemoryFileName } from '@/lib/memory/workspaceMemory';
 import { WORKSPACE_MEMORY_STORAGE_PREFIX } from '@/platform/storage.web';
-import { workspaceKeyFor } from '@/lib/workspaceKey';
+import { workspaceKeyFor } from '@/lib/workspace/workspaceKey';
 import type { MemoryDirRef } from '@/platform/types';
 
 const REF: MemoryDirRef = { kind: 'workspace', workdir: null };

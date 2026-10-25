@@ -28,7 +28,7 @@ import {
 } from './helpers/reactMount';
 import type { NanobotChannelSessionSummary } from '@/platform/types';
 import type { TaskConfig } from '@/types';
-import type { TaskDraft } from '@/lib/taskDraft';
+import type { TaskDraft } from '@/lib/task/taskDraft';
 
 /** 本地时间 → ISO（与表单里 `dayStartIso` / `dayEndIso` 同口径） */
 const iso = (y: number, m: number, d: number, h = 0, mi = 0, s = 0, ms = 0): string =>

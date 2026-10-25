@@ -11,8 +11,8 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { IdentityService, IDENTITY_FILE_DEFS } from '@/lib/identity';
-import { IDENTITY_STORAGE_KEYS } from '@/lib/constants';
+import { IdentityService, IDENTITY_FILE_DEFS } from '@/lib/agent/identity';
+import { IDENTITY_STORAGE_KEYS } from '@/lib/core/constants';
 import type { IdentityFileKind } from '@/types';
 
 const KINDS: IdentityFileKind[] = ['soul', 'identity', 'user', 'bootstrap'];

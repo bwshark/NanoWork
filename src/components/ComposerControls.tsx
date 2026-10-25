@@ -24,12 +24,12 @@ import {
   DEFAULT_WORKSPACE_LABEL,
   isSameWorkspacePath,
   resolveWorkspaceLabel,
-} from '@/lib/workspaceLabel';
-import { hasConversation } from '@/lib/conversation';
+} from '@/lib/workspace/workspaceLabel';
+import { hasConversation } from '@/lib/session/conversation';
 import { useDefaultWorkspacePath } from '@/stores/storageInfoStore';
 import { getRuntime } from '@/ai/runtime';
 import { useActiveModelCapabilities } from '@/hooks/useActiveModelCapabilities';
-import { degradedNotice } from '@/lib/modelCapability';
+import { degradedNotice } from '@/lib/model/modelCapability';
 import type { ExecutionMode } from '@/types/event';
 
 /**

@@ -17,7 +17,7 @@
  */
 
 import type { ArtifactEvent } from '../types';
-import { genId } from '@/lib/id';
+import { genId } from '@/lib/core/id';
 
 /** 围栏块匹配：```lang\n ... \n``` 或 ```\n ... \n``` */
 const FENCE_RE = /```([a-zA-Z0-9+#-]*)\n([\s\S]*?)```/g;

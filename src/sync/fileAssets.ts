@@ -32,16 +32,16 @@ import {
   IDENTITY_STORAGE_KEYS,
   PROMPT_KEY_PREFIX,
   USER_MEMORY_KEY,
-} from '@/lib/constants';
-import { PROMPT_SLOTS } from '@/lib/promptCatalog';
+} from '@/lib/core/constants';
+import { PROMPT_SLOTS } from '@/lib/prompt/promptCatalog';
 import {
   diffRemovedKeys,
   mergeMemory,
   mergeTombstones,
   parseMemory,
   renderMemory,
-} from '@/lib/memoryMerge';
-import { hashContent } from '@/lib/workspaceKey';
+} from '@/lib/memory/memoryMerge';
+import { hashContent } from '@/lib/workspace/workspaceKey';
 import { compareVersions } from './SyncEngine';
 import { FILE_ASSETS_STORAGE_KEY } from './types';
 import type { SyncChange, VersionStamp } from './types';

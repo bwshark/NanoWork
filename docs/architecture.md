@@ -198,12 +198,44 @@ nanowork/
 │  │  ├─ muiTheme.ts                 # MUI 主题（primary、圆角、字体）
 │  │  └─ index.css                   # Tailwind 指令 + 全局基础样式
 │  │
-│  └─ lib/                           # 工具函数
-│     ├─ sse.ts                      # fetch + ReadableStream 解析 SSE（data:/[DONE]）
-│     ├─ id.ts                       # 生成唯一 id（crypto.randomUUID 封装）
-│     └─ constants.ts                # 路由路径、存储 key、敏感工具集合等常量
+│  └─ lib/                           # 纯逻辑层（按功能域分目录，对外一律 `@/lib/<域>/<文件>`）
+│     ├─ core/                       # 无业务语义的基础设施
+│     │  ├─ constants.ts             # 路由路径、存储 key、敏感工具集合等常量
+│     │  ├─ id.ts                    # 生成唯一 id（crypto.randomUUID 封装）
+│     │  ├─ contentHash.ts           # 内容寻址哈希
+│     │  ├─ semverRange.ts           # 语义化版本解析与区间判定
+│     │  ├─ deviceId.ts              # 设备标识（同步元数据 updatedBy）
+│     │  ├─ gatewayEndpoint.ts       # 本地网关地址解析
+│     │  ├─ sse.ts                   # fetch + ReadableStream 解析 SSE（data:/[DONE]）
+│     │  ├─ sseLatency.ts            # 首字节 → 首 token 埋点
+│     │  ├─ sandboxBoundary.ts       # 沙箱边界事实
+│     │  └─ deepLinkExecutor.ts      # 深链动作执行器
+│     ├─ memory/                     # 记忆全链路（事实/蒸馏/注入/召回/存储）
+│     ├─ agent/                      # 专家、专家团、技能、插件、身份文件
+│     ├─ channel/                    # IM 渠道（展示名/元数据/扫码/凭据/会话/实时过程）
+│     ├─ session/                    # 会话（判据/导入/检索/同步元数据/文本高亮）
+│     ├─ task/                       # 定时任务（cron、RRULE、自然语言调度、检索）
+│     ├─ artifact/                   # 产物与本地文件（索引、回滚、base64、附件）
+│     ├─ kb/                         # 云端知识库客户端与上传
+│     ├─ model/                      # 模型目录、能力协商、回退链、计价
+│     ├─ prompt/                     # 提示词模板库、装配器、注入检测
+│     ├─ sync/                       # 跨端同步的纯元数据与负载裁剪
+│     ├─ workspace/                  # 工作目录标识与展示名
+│     ├─ editor/                     # 输入框、可编辑 DOM、富剪贴板、快捷键、撤销栈
+│     ├─ audit/                      # 工具网关审计与应用内操作审计
+│     └─ ui/                         # 展示层令牌与视图模型（卡片/审批/过程/用量）
 ```
 
+> **`lib/` 内部约束**：只放纯逻辑，不 import store / 页面；目录内互相引用用相对路径
+> （`../core/id`），对外用 `@/lib/<域>/<文件>`。原因是 Electron 主进程会直接
+> import 其中一小撮文件（`constants` / `channelSecrets` / `workspaceKey` / `workspaceMemory` /
+> `memoryPaths` / `modelProviders` / `semverRange` / `workspaceLabel`），
+> 这些文件及其依赖链不能出现 `@/` 别名（esbuild 打包主进程时没有别名）。
+>
+> **单测同构**：`tests/lib/<域>/<文件>.test.ts` 与 `src/lib/<域>/` 一一镜像（`tests/lib/ui/…` 测
+> `src/lib/ui/…`）。没有同名源文件的三个用例按被测模块归域：`avatarPlaceholder` → `ui/`（测
+> `cardSx`）、`processSubagentGroup` → `ui/`（测 `processDetail`/`processDigest`）、
+> `memoryPrebackup` → `memory/`（测 `memory`）。vitest 收集规则是 `tests/**/*.test.ts`，加目录不影响。
 ---
 
 ## 3. 数据结构和接口（TS 类型 + 类图）
@@ -545,10 +577,10 @@ sequenceDiagram
 | T01 | 项目脚手架与跨端构建配置 | `package.json` `vite.config.ts` `tsconfig.json` `tsconfig.node.json` `tailwind.config.js` `postcss.config.js` `index.html` `src/main.tsx` `src/App.tsx` `src/vite-env.d.ts` | — | P0 | `npm run dev` 起 Vite 站点；MUI+Tailwind 可渲染空壳；TS 编译通过。 |
 | T02 | Platform 适配层（storage/env/notification） | `src/platform/index.ts` `types.ts` `env.ts` `storage.web.ts` `storage.electron.ts` `notification.ts` `electron/preload.ts` `electron/electron-env.d.ts` | T01 | P0 | `platform.storage.get/set` Web 走 localStorage、Electron 走 electronAPI；`isElectron()` 正确识别。 |
 | T03 | 全局类型与数据模型 | `src/types/*.ts`（agent/session/message/toolcall/artifact/mcp/task/settings/permission/model + index） | T01 | P0 | 所有类型编译通过；`types/index.ts` 统一导出。 |
-| T04 | aiClient 接口 + nanobotClient（SSE） | `src/ai/types.ts` `nanobotClient.ts` `src/lib/sse.ts` `src/lib/constants.ts` | T03 | P0 | `nanobotClient.sendMessage` 能解析 OpenAI SSE（`data:`/`[DONE]`）并回调 `onToken/onToolCall/onArtifact`；`probe()` 正确。 |
+| T04 | aiClient 接口 + nanobotClient（SSE） | `src/ai/types.ts` `nanobotClient.ts` `src/lib/core/sse.ts` `src/lib/core/constants.ts` | T03 | P0 | `nanobotClient.sendMessage` 能解析 OpenAI SSE（`data:`/`[DONE]`）并回调 `onToken/onToolCall/onArtifact`；`probe()` 正确。 |
 | T05 | 内置技能目录 | `src/ai/builtinSkills.ts` | T03 | P0 | 内置技能元数据（id/名称/能力描述），供技能页与 Agent 绑定。 |
 | T06 | ConnectionManager 与连接状态 | `src/ai/connectionManager.ts` | T04 | P0 | 始终直连：`probe()` 探测网关可达性（connected/offline）；`onChange` 广播状态。 |
-| T07 | Zustand stores 基础设施 + settingsStore | `src/stores/index.ts` `settingsStore.ts` `src/lib/id.ts` | T02,T03 | P0 | store 接 `persist` 中间件（经 platform.storage）；settings 读写并持久化。 |
+| T07 | Zustand stores 基础设施 + settingsStore | `src/stores/index.ts` `settingsStore.ts` `src/lib/core/id.ts` | T02,T03 | P0 | store 接 `persist` 中间件（经 platform.storage）；settings 读写并持久化。 |
 | T08 | 业务 stores（sessions/agents/skills/mcp/tasks/artifacts） | `src/stores/sessionsStore.ts` `agentsStore.ts` `skillsStore.ts` `mcpStore.ts` `tasksStore.ts` `artifactsStore.ts` | T07,T03 | P0 | 各域 CRUD + 持久化；`sessionsStore.send` 接入 ConnectionManager 并分发事件到消息/产物/权限。 |
 | T09 | AppLayout 壳 + SidebarNav + 路由 | `src/layout/AppLayout.tsx` `SidebarNav.tsx` `src/router/index.tsx` | T07,T03 | P0 | 7 路由可达；侧栏导航高亮；内容区 Outlet 渲染。 |
 | T10 | 共享组件（ArtifactRenderer/ConfirmDialog/PermissionDialog/Toast/MarkdownView） | `src/components/*.tsx` | T03 | P0 | MarkdownView 渲染 MD+高亮；ConfirmDialog/PermissionDialog 可复用；Toast 可触发。 |
@@ -653,7 +685,7 @@ typescript@^5.5.0
 
 - nanobot 是 HKUDS 的 Python 自托管 Agent 框架，**不安装进本项目**。
 - 客户端仅通过 HTTP 访问其 OpenAI 兼容 API：`{endpoint}/chat/completions`（SSE 流式）、`/models`。
-- 默认网关地址 `http://127.0.0.1:18900`（gateway 长运行服务）；endpoint 与 apiToken 在设置中可配。**注**：本行原写作 `8765`，2026-09-17 修正为 `8900`，2026-09-21 再迁到 `18900`（`8900` 落在 Windows 保留端口区间内，绑定报 `winerror 10013`；见 `src/lib/constants.ts` 的 `DEFAULT_GATEWAY_PORT`）。
+- 默认网关地址 `http://127.0.0.1:18900`（gateway 长运行服务）；endpoint 与 apiToken 在设置中可配。**注**：本行原写作 `8765`，2026-09-17 修正为 `8900`，2026-09-21 再迁到 `18900`（`8900` 落在 Windows 保留端口区间内，绑定报 `winerror 10013`；见 `src/lib/core/constants.ts` 的 `DEFAULT_GATEWAY_PORT`）。
 - 桌面端主进程（P2 增强）可负责拉起/管理 nanobot 进程，首版渲染层仅做 HTTP 调用。
 
 ---
@@ -662,9 +694,9 @@ typescript@^5.5.0
 
 - **命名规范**
   - 组件/页面：`PascalCase.tsx`；store：`xxxStore.ts`；类型文件：`kebab/小驼峰`，类型名 `PascalCase`。
-  - 常量集中在 `src/lib/constants.ts`：路由路径 `ROUTES`、存储 key 前缀 `STORAGE_KEYS`、敏感工具集合 `SENSITIVE_TOOLS = ['files','shell','network']`。
-  - 唯一 ID：`lib/id.ts` 的 `genId()`（包装 `crypto.randomUUID`）。
-- **目录约定**：`src/` 下按 `platform / types / ai / stores / router / layout / components / pages / theme / lib` 分层；页面代码放 `pages/<域>/`，同域组件就近放该目录。所有环境差异只出现在 `platform/`，渲染层其余处禁止 `import 'electron'`。
+  - 常量集中在 `src/lib/core/constants.ts`：路由路径 `ROUTES`、存储 key 前缀 `STORAGE_KEYS`、敏感工具集合 `SENSITIVE_TOOLS = ['files','shell','network']`。
+  - 唯一 ID：`lib/core/id.ts` 的 `genId()`（包装 `crypto.randomUUID`）。
+- **目录约定**：`src/` 下按 `platform / types / ai / stores / router / layout / components / pages / theme / lib` 分层；页面代码放 `pages/<域>/`，同域组件就近放该目录。`lib/` 内部**按功能域再分一层**（`lib/memory/`、`lib/channel/`、`lib/agent/` …，见 §2 目录结构），不再平铺。所有环境差异只出现在 `platform/`，渲染层其余处禁止 `import 'electron'`。
 - **aiClient 契约**：所有 AI 调用经 `ConnectionManager.getClient()` 拿到的 `AIClient`，禁止页面直接 `new nanobotClient`。事件回调顺序：`onStatus('thinking')` → `onToken*` → `onToolCall*` → `onArtifact*` → `onStatus('done')`/`onDone()`；出错走 `onError`。敏感工具 `sensitive:true` 且 `status:'pending'` 时必须等权限决策再继续。
 - **storage 契约**：统一 `get<T>/set<T>/remove/clear` 异步接口；key 由 `STORAGE_KEYS` 统一；store 通过 `persist` 中间件调用 `platform.storage`，不直接读 localStorage。
 - **错误与加载态**：所有异步用 `try/catch` 经 `Toast` 提示；连接中显示 `ConnectionBanner` + 按钮 loading；SSE 断流可重试（`sessionsStore.retry()`）。

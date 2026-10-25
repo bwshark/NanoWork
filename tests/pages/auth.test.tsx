@@ -70,7 +70,7 @@ vi.mock('@/sync', async (importOriginal) => {
 
 import { AuthPage } from '@/pages/auth/AuthPage';
 import { AccountSection } from '@/components/settings/sections/AccountSection';
-import { ROUTES } from '@/lib/constants';
+import { ROUTES } from '@/lib/core/constants';
 import { SyncAuthError } from '@/sync';
 import { buttonByText, byAria, click, dialogRoot, flush, mount, setInputValue, unmount } from '../helpers/reactMount';
 

@@ -19,8 +19,8 @@ import {
   findSlot,
   slotsOfKind,
   styleKeepsQualityClause,
-} from '@/lib/promptCatalog';
-import { PromptLibrary } from '@/lib/promptLibrary';
+} from '@/lib/prompt/promptCatalog';
+import { PromptLibrary } from '@/lib/prompt/promptLibrary';
 import type { PromptMode } from '@/types';
 
 /** 模式维度的期望取值：与 `ExecutionMode` 同源，改枚举时这里会一起暴露 */

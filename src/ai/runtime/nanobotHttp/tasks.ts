@@ -24,8 +24,8 @@
  * tasksStore 里，属于同一知识的两份实现，现统一收口到本文件。
  */
 import { platform } from '@/platform';
-import { nextCronRunMs } from '@/lib/cron';
-import { lowerRrule } from '@/lib/rrule';
+import { nextCronRunMs } from '@/lib/task/cron';
+import { lowerRrule } from '@/lib/task/rrule';
 import type { RunQuery } from '../types';
 import type { NanobotCronRunRecord, TaskSyncResult } from '@/platform/types';
 import type { TaskConfig, TaskRunRecord, TaskSchedule } from '@/types';

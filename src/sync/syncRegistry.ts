@@ -33,13 +33,13 @@ import { useChannelsStore } from '@/stores/channelsStore';
 import { useSkillsStore } from '@/stores/skillsStore';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { useSessionsStore } from '@/stores/sessionsStore';
-import { genId } from '@/lib/id';
-import { isTombstone, normalizeMeta, withTombstone, withoutTombstone } from '@/lib/syncMeta';
-import { pickSyncable } from '@/lib/syncSelect';
-import { toChannelSyncPayload, toMcpSyncPayload } from '@/lib/syncPayloads';
-import { toSyncPayload } from '@/lib/settingsSync';
-import { pickSyncFields } from '@/lib/sessionSyncMeta';
-import { applyOverrides, pinnedSkillIds } from '@/lib/skillOverrideTable';
+import { genId } from '@/lib/core/id';
+import { isTombstone, normalizeMeta, withTombstone, withoutTombstone } from '@/lib/sync/syncMeta';
+import { pickSyncable } from '@/lib/sync/syncSelect';
+import { toChannelSyncPayload, toMcpSyncPayload } from '@/lib/sync/syncPayloads';
+import { toSyncPayload } from '@/lib/sync/settingsSync';
+import { pickSyncFields } from '@/lib/session/sessionSyncMeta';
+import { applyOverrides, pinnedSkillIds } from '@/lib/agent/skillOverrideTable';
 import type {
   Agent,
   ChannelConfig,
@@ -135,7 +135,7 @@ export const SETTINGS_SINGLETON_ID = 'local';
 /**
  * 组装 `settings` 的同步实体：`id` + **裁剪后的偏好** + 四元数据。
  *
- * `toSyncPayload`（`@/lib/settingsSync`）剔掉本机环境字段（`gatewayEndpoint` /
+ * `toSyncPayload`（`@/lib/sync/settingsSync`）剔掉本机环境字段（`gatewayEndpoint` /
  * `apiToken` / `desktop` / 路径类 / `hiddenSessions`）并内层裁剪 `transcription`，
  * 四元数据来自兄弟切片 `syncMeta`（`Settings` 本身不带 `SyncMeta`，见 settingsStore）。
  */

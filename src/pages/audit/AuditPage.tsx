@@ -32,8 +32,8 @@ import type {
   AuditOutcome,
   AuditRecord,
   AuditTier,
-} from "@/lib/auditLog";
-import type { AppAuditAction, AppAuditFilters, ParsedAppAuditRecord } from "@/lib/appAudit";
+} from "@/lib/audit/auditLog";
+import type { AppAuditAction, AppAuditFilters, ParsedAppAuditRecord } from "@/lib/audit/appAudit";
 import type { AuditLogReadResult } from "@/platform/types";
 import {
   APPROVED_BY_LABELS,
@@ -45,7 +45,7 @@ import {
   filterAuditRecords,
   parseAuditLog,
   sortAuditRecords,
-} from "@/lib/auditLog";
+} from "@/lib/audit/auditLog";
 import {
   APP_AUDIT_ACTION_LABELS,
   APP_AUDIT_OUTCOME_LABELS,
@@ -57,7 +57,7 @@ import {
   mergeAppAuditRecords,
   parseAppAuditLog,
   sortAppAuditRecords,
-} from "@/lib/appAudit";
+} from "@/lib/audit/appAudit";
 import { platform } from "@/platform";
 
 /**

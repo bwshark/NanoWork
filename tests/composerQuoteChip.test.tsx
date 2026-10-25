@@ -27,8 +27,8 @@ import { muiTheme } from '@/theme/muiTheme';
 import { useSessionsStore } from '@/stores/sessionsStore';
 import { useAgentsStore } from '@/stores/agentsStore';
 import { useSessionUiStore } from '@/stores/sessionUiStore';
-import { getComposerEdit, registerComposerEdit } from '@/lib/composerEditBridge';
-import { quoteChipLabel } from '@/lib/selectionQuote';
+import { getComposerEdit, registerComposerEdit } from '@/lib/editor/composerEditBridge';
+import { quoteChipLabel } from '@/lib/editor/selectionQuote';
 import {
   DEFAULT_DESKTOP,
   DEFAULT_TRANSCRIPTION,

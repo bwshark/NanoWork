@@ -7,7 +7,7 @@
  * 用户自定义专家团（source='user'）可任意编辑、删除。
  *
  * 多 Agent 编排（FR-2.4 路径②）由**引擎在服务端**完成：客户端在会话绑定专家团时
- * 下发 `expert_group`（见 `lib/expertGroupRequest.ts`），引擎按 mode 派发成员。
+ * 下发 `expert_group`（见 `lib/agent/expertGroupRequest.ts`），引擎按 mode 派发成员。
  * 本 store 只负责配置的持久化与 UI 展示。
  */
 

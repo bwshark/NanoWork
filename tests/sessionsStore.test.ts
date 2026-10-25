@@ -6,7 +6,7 @@ import { useExpertGroupsStore } from '@/stores/expertGroupsStore';
 import { useArtifactsStore } from '@/stores/artifactsStore';
 import { NanobotClient } from '@/ai/runtime/nanobotHttp/chat';
 import { resetEventStream } from './helpers/eventStream';
-import { cronRecordsToSession } from '@/lib/sessionImport';
+import { cronRecordsToSession } from '@/lib/session/sessionImport';
 import type { ChatHandle, ChatRequest, StreamHandlers } from '@/ai/runtime/types';
 import { DEFAULT_MEMORY_POLICY } from '@/types';
 
@@ -371,7 +371,7 @@ describe('sessionsStore: 会话 CRUD', () => {
 describe('sessionsStore: 记忆注入 (T22~T28)', () => {
   it('createSession 在存在记忆时异步回填 session.memory 并置 memoryLoaded', async () => {
     // 预先写入一条记忆
-    const { MemoryService } = await import('@/lib/memory');
+    const { MemoryService } = await import('@/lib/memory/memory');
     await MemoryService.save('> [2025-01-01T00:00:00.000Z] 来自「测试」\n> 用户偏好中文');
 
     const session = useSessionsStore.getState().createSession('agent-test', '带记忆会话');
@@ -393,7 +393,7 @@ describe('sessionsStore: 记忆注入 (T22~T28)', () => {
   });
 
   it('dismissMemoryBar 关闭提示条', async () => {
-    const { MemoryService } = await import('@/lib/memory');
+    const { MemoryService } = await import('@/lib/memory/memory');
     await MemoryService.save('> [2025-01-01T00:00:00.000Z] 来自「t」\n> 记忆内容');
     useSessionsStore.getState().createSession('agent-test', '会话x');
     await new Promise((r) => setTimeout(r, 50));
@@ -404,7 +404,7 @@ describe('sessionsStore: 记忆注入 (T22~T28)', () => {
 
   it('memoryEnabled=false 时 createSession 不加载记忆', async () => {
     useSettingsStore.getState().setSettings({ memoryEnabled: false });
-    const { MemoryService } = await import('@/lib/memory');
+    const { MemoryService } = await import('@/lib/memory/memory');
     await MemoryService.save('> [2025-01-01T00:00:00.000Z] 来自「t」\n> 不应被加载');
 
     const session = useSessionsStore.getState().createSession('agent-test', '会话y');
@@ -435,7 +435,7 @@ describe('自动沉淀：触发点与作用域分流', () => {
   }
 
   async function stubMemory() {
-    const { MemoryService } = await import('@/lib/memory');
+    const { MemoryService } = await import('@/lib/memory/memory');
     const summarize = vi
       .spyOn(MemoryService, 'summarize')
       .mockResolvedValue({ identity: '明明，中医药背景', task: '决定先修 P0' });
@@ -519,7 +519,7 @@ describe('自动沉淀：触发点与作用域分流', () => {
     await useSessionsStore.getState().send('嗯', s.id);
 
     useSettingsStore.getState().setSettings({ autoSummarize: true });
-    const { MemoryService } = await import('@/lib/memory');
+    const { MemoryService } = await import('@/lib/memory/memory');
     vi.spyOn(MemoryService, 'summarize').mockResolvedValue({ identity: '', task: '' });
     const append = vi.spyOn(MemoryService, 'append').mockResolvedValue('written');
 
@@ -574,7 +574,7 @@ describe('Agent 记忆写入协议', () => {
         return { done: Promise.resolve(), abort: () => {} };
       },
     );
-    const { MemoryService } = await import('@/lib/memory');
+    const { MemoryService } = await import('@/lib/memory/memory');
     const append = vi.spyOn(MemoryService, 'append').mockResolvedValue('written');
     useSettingsStore.getState().setSettings({ autoSummarize: true });
 
@@ -659,7 +659,7 @@ describe('deleteSessions：分组级批量删除', () => {
     useSessionsStore.setState((s) => ({ sessions: [cron, ...s.sessions] }));
 
     useSettingsStore.getState().setSettings({ autoSummarize: true });
-    const { MemoryService } = await import('@/lib/memory');
+    const { MemoryService } = await import('@/lib/memory/memory');
     const spy = vi.spyOn(MemoryService, 'summarize');
 
     useSessionsStore.getState().deleteSessions([cron.id]);
@@ -677,7 +677,7 @@ describe('sessionsStore: 记忆快照失效 (2026-09-17 修复)', () => {
    * 还是几十分钟前的快照。
    */
   it('切回已加载的会话时，若期间有写入则刷新快照', async () => {
-    const { MemoryService } = await import('@/lib/memory');
+    const { MemoryService } = await import('@/lib/memory/memory');
     const s = useSessionsStore.getState().createSession('agent-test', '会话A');
     // 等首轮预热落定（它是 fire-and-forget）。此时记忆为空 → 快照是空串
     await vi.waitFor(() => {
@@ -718,7 +718,7 @@ describe('sessionsStore: 记忆快照失效 (2026-09-17 修复)', () => {
    * 之前）它就会失败——那时槽位要等一个 microtask 才落位。
    */
   it('快照过期需要刷新时，send 仍同步进入流式态', async () => {
-    const { MemoryService } = await import('@/lib/memory');
+    const { MemoryService } = await import('@/lib/memory/memory');
     const s = useSessionsStore.getState().createSession('agent-test', '会话C');
     // 等首轮预热落定——快照带上 memoryVersion 才算「产出过」，此前 isMemorySnapshotStale
     // 一律返回 false（预热在途，不该误判为过期）。

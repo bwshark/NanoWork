@@ -22,9 +22,9 @@ import { Box, Dialog, IconButton, InputBase, Typography } from '@mui/material';
 import SearchIcon from '@mui/icons-material/Search';
 import CloseIcon from '@mui/icons-material/Close';
 import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
-import { searchSessions } from '@/lib/sessionSearch';
-import { DEFAULT_WORKSPACE_LABEL, resolveWorkspaceLabel } from '@/lib/workspaceLabel';
-import { ROUTES } from '@/lib/constants';
+import { searchSessions } from '@/lib/session/sessionSearch';
+import { DEFAULT_WORKSPACE_LABEL, resolveWorkspaceLabel } from '@/lib/workspace/workspaceLabel';
+import { ROUTES } from '@/lib/core/constants';
 import { useTaskQueryStore } from '@/stores/taskQueryStore';
 import { useSessionsStore } from '@/stores/sessionsStore';
 import { useDefaultWorkspacePath } from '@/stores/storageInfoStore';
@@ -47,7 +47,7 @@ export function TaskSearchDialog() {
   const selectSession = useSessionsStore((s) => s.selectSession);
   const workspaceAliases = useSettingsStore((s) => s.settings.workspaceAliases);
   // 搜索结果里的工作空间名与侧边栏分组标题必须同名：同一份解析逻辑，同一份
-  // 「默认工作空间」判定（见 `lib/workspaceLabel`）
+  // 「默认工作空间」判定（见 `lib/workspace/workspaceLabel`）
   const defaultWorkspacePath = useDefaultWorkspacePath();
 
   /** 当前高亮行下标（键盘导航用） */

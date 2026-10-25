@@ -40,7 +40,7 @@ import { promises as fs } from 'node:fs';
 import { basename, isAbsolute, join, resolve, sep } from 'node:path';
 // 版本比较复用既有实现（`semverRange` 是「版本规则的唯一产地」，
 // 主进程的包校验与渲染层的插件卡片都用它；这里再写一份必然漂移）。
-import { compareVersions } from '../src/lib/semverRange';
+import { compareVersions } from '../src/lib/core/semverRange';
 import type {
   MarketGcResult,
   MarketIndex,

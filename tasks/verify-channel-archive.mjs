@@ -2,7 +2,7 @@
  * 真机验证：IM 会话归档（FR-6.4）—— 渠道分组、筛选、外部来源标记。
  *
  * 与单测的分工：
- * - 来源判定与文案在 `tests/lib/channelSession.test.ts`；
+ * - 来源判定与文案在 `tests/lib/channel/channelSession.test.ts`；
  * - 筛选态在 store 而非组件 state，由 `tests/sessionUiStoreChannelFilter.test.ts` 钉；
  * - 侧栏分组与筛选的**渲染与交互**在 `tests/channelListFilter.test.tsx`；
  * - 会话头部标记由 `tests/chatHeaderExternal.test.tsx` 钉。

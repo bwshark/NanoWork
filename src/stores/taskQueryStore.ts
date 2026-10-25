@@ -4,7 +4,7 @@ import {
   type TaskFilters,
   type TaskStatusFilter,
   type TaskTimeFilter,
-} from '@/lib/taskQuery';
+} from '@/lib/task/taskQuery';
 
 /**
  * 窗口标题栏「搜索任务 / 筛选任务」的运行期状态（不持久化）。

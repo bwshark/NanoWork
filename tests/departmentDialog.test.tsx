@@ -13,7 +13,7 @@ import { act } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DepartmentDialog, departmentDepth } from '@/components/knowledge/DepartmentDialog';
 import { toast } from '@/components/Toast';
-import type { KbDepartment, KbGateway } from '@/lib/kbClient';
+import type { KbDepartment, KbGateway } from '@/lib/kb/kbClient';
 import { buttonByText, click, flush, mount, setInputValue, unmount } from './helpers/reactMount';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;

@@ -15,10 +15,10 @@
 
 import { beforeEach, describe, expect, it } from 'vitest';
 import { PersonaPage } from '@/pages/persona/PersonaPage';
-import { IdentityService } from '@/lib/identity';
-import { PromptLibrary } from '@/lib/promptLibrary';
+import { IdentityService } from '@/lib/agent/identity';
+import { PromptLibrary } from '@/lib/prompt/promptLibrary';
 import { platform } from '@/platform';
-import { IDENTITY_STORAGE_KEYS } from '@/lib/constants';
+import { IDENTITY_STORAGE_KEYS } from '@/lib/core/constants';
 import {
   buttonByText,
   byAria,

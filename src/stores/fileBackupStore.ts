@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { zustandStorage } from '@/platform';
-import { STORAGE_KEYS } from '@/lib/constants';
+import { STORAGE_KEYS } from '@/lib/core/constants';
 
 /** 回滚快照的操作类型（仅用于时间线展示，不影响备份本身） */
 export type BackupOp = 'overwrite' | 'append' | 'delete';

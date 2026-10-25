@@ -1,5 +1,5 @@
 /**
- * 人工裁决与事务恢复（`src/lib/memoryAdjudicate.ts`）。
+ * 人工裁决与事务恢复（`src/lib/memory/memoryAdjudicate.ts`）。
  *
  * 这一层保护的是**长期资产**：一条错误的裁决会把错的结论固化下来，而一次损坏的恢复
  * 会把整份记忆变成互相矛盾的状态。测试按设计 §4.4 / §4.5 的契约组织：
@@ -41,8 +41,8 @@ import {
   planRecovery,
   resolveConflict,
   supersedeStaleCases,
-} from '../../src/lib/memoryAdjudicate';
-import { activeOf, isDomainClosed } from '../../src/lib/memoryDistill';
+} from '../../src/lib/memory/memoryAdjudicate';
+import { activeOf, isDomainClosed } from '../../src/lib/memory/memoryDistill';
 
 const NOW = new Date('2026-10-02T00:00:00Z');
 const NOW_ISO = NOW.toISOString();

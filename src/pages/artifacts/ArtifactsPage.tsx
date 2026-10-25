@@ -12,7 +12,7 @@ import {
 } from '@mui/material';
 import SearchIcon from '@mui/icons-material/Search';
 import { ArtifactRenderer } from '@/components/ArtifactRenderer';
-import { ROUTES } from '@/lib/constants';
+import { ROUTES } from '@/lib/core/constants';
 import {
   ARTIFACT_TYPE_LABELS,
   buildIndexEntry,
@@ -20,7 +20,7 @@ import {
   groupByHash,
   sortGroups,
   type ArtifactItem,
-} from '@/lib/artifactIndex';
+} from '@/lib/artifact/artifactIndex';
 import { resolveArtifactContent, useArtifactsStore } from '@/stores/artifactsStore';
 import { useSessionsStore } from '@/stores/sessionsStore';
 import { useSessionUiStore } from '@/stores/sessionUiStore';

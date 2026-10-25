@@ -162,7 +162,7 @@ cd nanobot
 
 | 项 | 值 | 来源 |
 |---|---|---|
-| 客户端默认网关 | `http://127.0.0.1:18900` | `src/lib/constants.ts` 的 `DEFAULT_GATEWAY_PORT` |
+| 客户端默认网关 | `http://127.0.0.1:18900` | `src/lib/core/constants.ts` 的 `DEFAULT_GATEWAY_PORT` |
 | 桌面端自动挑端口 | 首选端口不可用（被占用 / 落在 Windows 保留区间）时顺延探测，并经 `nanobot:gatewayInfo` 同步地址 | `electron/main.ts` 的 `resolveGatewayPort` |
 | 启动网关 | `.\nanobot\nanobot\.venv\Scripts\nanobot.exe serve --config nanowork.config.json --host 127.0.0.1 --port 18900 -v` | 根 `README.md` 第 3.3 节 |
 | 配置文件 | `nanowork.config.json`（**已 gitignore，含密钥**） | 根 `README.md` 第 3.2 节 |

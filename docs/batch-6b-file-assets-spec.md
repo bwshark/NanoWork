@@ -156,7 +156,7 @@ workspaceMemory: { workdir: string | null; files: Record<string, string> } | nul
 本批**不预建 sha256 模块**——没有调用点的工具函数是死代码，而真正的契约是一句约定：
 
 > **内容寻址（`file-history/<hash>.bak`、产物 blob）一律用 `sha256:<hex>`（UTF-8 输入）**。
-> FR-7.3 落地时在 `src/lib/contentHash.ts` 新建它，产物同步将来同理 → 不会出现两套寻址。
+> FR-7.3 落地时在 `src/lib/core/contentHash.ts` 新建它，产物同步将来同理 → 不会出现两套寻址。
 > 它与本批用到的 `hashContent`（djb2）**分工明确、不要混用**：djb2 只用于**段键与变更检测**
 > （短、快、且与既有 `<!-- SUMMARY:<hash> -->` 去重标记逐字节对齐）；sha256 用于**跨端寻址**
 > （抗碰撞、需要在两台机器上独立算出同一个值）。
@@ -167,7 +167,7 @@ workspaceMemory: { workdir: string | null; files: Record<string, string> } | nul
 
 | # | 判据 | 用例 |
 |---|---|---|
-| J-1 | 段落级 LWW：两端各自 append，合并后**两段都在**（并集，不丢） | `tests/lib/memoryMerge.test.ts` |
+| J-1 | 段落级 LWW：两端各自 append，合并后**两段都在**（并集，不丢） | `tests/lib/memory/memoryMerge.test.ts` |
 | J-2 | 同段键冲突：`at` 大者胜；`at` 相同则保留块（块优先于墓碑） | 同上 |
 | J-3 | 删除可传播：A 删某段 → B 合并后该段**不回来**；A 清空 → B 变空 | 同上 |
 | J-4 | 段键稳定性：同内容跨端同键（引用块走 `SUMMARY:` hash，手写块走归一化 hash） | 同上 |
@@ -175,7 +175,7 @@ workspaceMemory: { workdir: string | null; files: Record<string, string> } | nul
 | J-6 | 身份文件文件级 LWW，`BOOTSTRAP` **不进** `collect()` | 同上 |
 | J-7 | 提示词覆盖按 `PROMPT_SLOTS` 枚举，空串（回到默认）能同步 | 同上 |
 | J-8 | 引擎接线：注入适配器后 push 负载含 C 类三条；pull 落地后本机文本 = 合并结果 | `tests/sync/SyncEngine.batch6b.test.ts` |
-| J-9 | 归档含提示词模板 + 工作区记忆；`formatVersion === 2` | `tests/lib/accountArchive.test.ts` |
+| J-9 | 归档含提示词模板 + 工作区记忆；`formatVersion === 2` | `tests/lib/sync/accountArchive.test.ts` |
 | J-10 | 导入：归档的工作区记忆落**本机当前工作区**，不建归档里那个目录 | 同上 |
 | J-11 | J-C3 回归：老客户端（`formatVersion` 上限 1）拒读 v2 归档 | 同上 |
 

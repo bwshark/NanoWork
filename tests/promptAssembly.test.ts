@@ -12,14 +12,14 @@ import {
   PRODUCT_IDENTITY_TEXT,
   assemblePromptSections,
   identityContextBlock,
-} from '@/lib/promptAssembly';
+} from '@/lib/prompt/promptAssembly';
 import {
   IDENTITY_TAG_CLOSE,
   IDENTITY_TAG_OPEN,
   PRODUCT_IDENTITY_TAG_OPEN,
   TONE_STYLE_TAG_OPEN,
   USER_INSTRUCTIONS_TAG_OPEN,
-} from '@/lib/constants';
+} from '@/lib/core/constants';
 
 describe('assemblePromptSections：段序', () => {
   it('完整输入下段序固定', () => {

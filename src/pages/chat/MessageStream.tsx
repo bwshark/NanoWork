@@ -7,12 +7,12 @@ import {
   collectSearchRanges,
   paintSearchRanges,
   scrollRangeIntoView,
-} from '@/lib/textHighlight';
+} from '@/lib/session/textHighlight';
 import {
   clearQuoteHighlights,
   findTextRange,
   paintQuoteHighlights,
-} from '@/lib/selectionQuote';
+} from '@/lib/editor/selectionQuote';
 import { chatColumnSx } from './chatColumnSx';
 import { UserMessage } from './UserMessage';
 import { AssistantMessage } from './AssistantMessage';
@@ -155,7 +155,7 @@ export function MessageStream() {
   // 按引用在**消息 DOM** 上重新找回原文并登记高亮。
   // 刻意不存 DOM 偏移：那是渲染细节，消息一变（流式追加 / 产物挂载 / 档位切换）
   // 就失效，下划线会静默飘到别的字上。改用归一化文本查找，重渲染后依然找得到
-  //（`findTextRange` 的原理见 lib/selectionQuote.ts 文件头）。
+  //（`findTextRange` 的原理见 lib/editor/selectionQuote.ts 文件头）。
   useEffect(() => {
     const root = scrollRef.current;
     if (!root || !activeSessionId) {

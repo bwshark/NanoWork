@@ -19,8 +19,8 @@ import {
   splitRichContent,
   ATT_TOKEN_OPEN,
   ATT_TOKEN_CLOSE,
-} from '@/lib/editableText';
-import { writeRichClipboard } from '@/lib/richClipboard';
+} from '@/lib/editor/editableText';
+import { writeRichClipboard } from '@/lib/editor/richClipboard';
 import { toast } from '@/components/Toast';
 import type { Message } from '@/types';
 

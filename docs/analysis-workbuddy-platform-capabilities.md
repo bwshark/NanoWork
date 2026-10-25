@@ -107,7 +107,7 @@ wb:env:snapshot
 **对比本项目**:
 
 - 本项目 `docs/nanowork-prd-design-v2.md:242` 把 `extensions/` 列为**规划中的「四级扩展生态」**(plugins/skills/connectors/experts/extensions),**零实现**。
-- 现有扩展形态只有插件(`electron/pluginPackage.ts`)、技能(`src/lib/skillParser.ts`)、MCP(`electron/mcpProbe.ts`),都是**进程内**的。
+- 现有扩展形态只有插件(`electron/pluginPackage.ts`)、技能(`src/lib/agent/skillParser.ts`)、MCP(`electron/mcpProbe.ts`),都是**进程内**的。
 - `electron/` 顶层 33 个文件,无任何 fork 服务进程 / MF / extension preload。
 
 **可借鉴的**:不是抄 Module Federation(重、渲染层要改造),而是抄 **「扩展 = 独立 fork 进程 + preload 注入 activate(wb) + 事件订阅面」** 这个模式。对一个"本地优先的 agent 客户端"来说,**进程隔离比 UI 联邦重要得多**——一个扩展崩了不该拖垮主进程。WorkBuddy 自己在 `@tencent/wwapi-electron` 里也是这个思路(`isolation: 'process'`,「把原生 SDK 搬进 utilityProcess worker 做崩溃隔离」)。
@@ -274,7 +274,7 @@ workbuddy-{mode}-{form}-prompt.tpl 的矩阵:
 
 - ✅ 引擎侧 Jinja2 `templates/agent/*.md` + `OVERRIDABLE_TEMPLATES` 白名单(工作区可覆盖 5 个:`identity.md` / `tool_contract.md` / `skills_section.md` / `platform_policy.md` / `subagent_system.md`),坏覆盖 fail-open 回退。
 - ✅ 渲染层 `assemblePromptSections()` 固定 11 段 + `promptCatalog.ts` 槽位(模式×领域×风格)。
-- ✅ 工作区身份四件套 `SOUL.md / IDENTITY.md / USER.md / BOOTSTRAP.md` **完整落地**(`src/lib/identity.ts` + `PersonaPage.tsx`),比 WorkBuddy 展示得更完整。
+- ✅ 工作区身份四件套 `SOUL.md / IDENTITY.md / USER.md / BOOTSTRAP.md` **完整落地**(`src/lib/agent/identity.ts` + `PersonaPage.tsx`),比 WorkBuddy 展示得更完整。
 - ⚠️ 但**风格/语气档没有落成文件**:WorkBuddy 的 `style/*.md` 是 7 个 md 文件,本项目 `promptCatalog` 是渲染层常量。
 
 **可借鉴**:把语气档抽成**用户可编辑的 md 文件**(项目已有 `~/.nanowork/prompts/` 的外置覆盖机制,`promptLibrary.ts` 现在只覆盖 `agent/identity` 等 kind)——**这是低成本高感知的功能**。

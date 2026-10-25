@@ -1,5 +1,5 @@
 import { Box } from '@mui/material';
-import { entityAvatarSx, hashHue } from '@/lib/cardSx';
+import { entityAvatarSx, hashHue } from '@/lib/ui/cardSx';
 
 /**
  * 技能图标。

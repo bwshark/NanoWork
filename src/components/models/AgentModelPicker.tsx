@@ -20,7 +20,7 @@ interface AgentModelPickerProps {
  * **失效项显式画出来并标注**：预设被删 / 改名后，存下来的字符串就不在目录里了。
  * 若只是让它「选不中」，Select 会渲染成空 —— 用户会以为「本来就没绑」，
  * 而实际是「绑了一个已经不存在的东西，本轮会回落到默认模型」
- * （拦截规则见 `lib/agentBinding.ts` 的 `resolveTurnModel`）。
+ * （拦截规则见 `lib/agent/agentBinding.ts` 的 `resolveTurnModel`）。
  */
 export function AgentModelPicker({ value, onChange }: AgentModelPickerProps) {
   const models = useModelsStore((s) => s.models);

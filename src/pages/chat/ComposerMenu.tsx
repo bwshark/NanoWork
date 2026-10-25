@@ -32,9 +32,9 @@ import LinkIcon from "@mui/icons-material/Link";
 import { useAgentsStore } from "@/stores/agentsStore";
 import { useSkillsStore } from "@/stores/skillsStore";
 import { useMcpStore } from "@/stores/mcpStore";
-import { ATTACHMENT_ACCEPT } from "@/lib/attachments";
-import { parseSkillFromMarkdown } from "@/lib/skillParser";
-import { ROUTES } from "@/lib/constants";
+import { ATTACHMENT_ACCEPT } from "@/lib/artifact/attachments";
+import { parseSkillFromMarkdown } from "@/lib/agent/skillParser";
+import { ROUTES } from "@/lib/core/constants";
 import { toast } from "@/components/Toast";
 
 interface ComposerMenuProps {

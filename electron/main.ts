@@ -78,8 +78,8 @@ import type {
 } from '../src/platform/types';
 // 运行时值（不是 type-only）：供应商目录同时被渲染层（下拉）与这里（连接测试的
 // 默认地址、自定义供应商名冲突检测）消费，必须共用一份，否则两处迟早漂移。
-import { isBuiltinProvider, findModelProvider } from '../src/lib/modelProviders';
-import { channelVaultName } from '../src/lib/channelSecrets';
+import { isBuiltinProvider, findModelProvider } from '../src/lib/model/modelProviders';
+import { channelVaultName } from '../src/lib/channel/channelSecrets';
 import {
   DEVICE_ID_STORAGE_KEY,
   knownRouteFiles,
@@ -894,8 +894,8 @@ let lastNanobotConfigPath: string | undefined;
 /**
  * 首选网关端口。
  *
- * ⚠️ **与 `src/lib/constants.ts` 的 `DEFAULT_GATEWAY_PORT` 是同一份事实的两处镜像**：
- * 主进程与渲染层是两个 bundle，主进程 import `src/lib/constants.ts` 会牵进 `@/` 别名
+ * ⚠️ **与 `src/lib/core/constants.ts` 的 `DEFAULT_GATEWAY_PORT` 是同一份事实的两处镜像**：
+ * 主进程与渲染层是两个 bundle，主进程 import `src/lib/core/constants.ts` 会牵进 `@/` 别名
  * （esbuild 未配该别名）。改端口时两处一起改，与 `APP_VERSION` 同一套约定。
  * 取值理由见 constants.ts 的同名常量注释。
  */
@@ -2280,7 +2280,7 @@ async function syncNanobotChannels(channelsJson: string): Promise<ChannelSyncRes
       typeof parsed.channels === 'object' && parsed.channels !== null ? parsed.channels : parsed
     ) as Record<string, unknown>;
     /*
-     * 渲染层提交的片段**不含密钥**（凭据已迁加密保险库，见 lib/channelSecrets.ts）：
+     * 渲染层提交的片段**不含密钥**（凭据已迁加密保险库，见 lib/channel/channelSecrets.ts）：
      * 合并前必须先按名字从保险库回补，否则整体替换语义会把 config.json 里的凭据抹掉
      * ——渠道直接不可用，而界面上一切显示正常（最难自查的一类）。
      * 密钥只回主进程、不回渲染层，同 injectConnectorSecrets 的口径。
@@ -3426,7 +3426,7 @@ ipcMain.handle('storage:clear', async () => {
 // —— 工作区记忆桥（路径解析见 memoryRoutes.ts，IO 见 workspaceMemoryStore.ts）——
 // 与 `fs:writeTextFile` 是两条**不同能力**的通道：那条只放行 home / userData /
 // `~/.nanowork` 三个根，这条落在用户自己的工作目录里，所以文件名白名单卡得更死
-// （只有 `MEMORY.md` 与 `YYYY-MM-DD.md`，见 src/lib/workspaceMemory.ts）。
+// （只有 `MEMORY.md` 与 `YYYY-MM-DD.md`，见 src/lib/memory/workspaceMemory.ts）。
 //
 // 渲染层传「工作目录 + 单段文件名」，路径拼接与越界校验全在主进程：
 // `<workdir>/.nanowork/memory/` 的拼法跨平台不同（分隔符、大小写、UNC），
@@ -5160,7 +5160,7 @@ ipcMain.handle('nanobot:deleteCronHistory', async (_e, taskId: string) => {
 /**
  * 简易 YAML frontmatter 解析：仅取顶层 key 与 metadata.xxx。
  *
- * 必须与渲染层 `src/lib/skillParser.ts` 的解析规则保持一致（含
+ * 必须与渲染层 `src/lib/agent/skillParser.ts` 的解析规则保持一致（含
  * 「key 允许连字符」「块状列表拼回同一 key」两条）——同一份 SKILL.md
  * 在主进程与渲染层被解析成不同的 `allowed-tools`，是最难定位的一类不一致。
  */

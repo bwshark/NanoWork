@@ -26,7 +26,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { mapRecordsToMessages, recordReasoning } from '@/lib/sessionImport';
+import { mapRecordsToMessages, recordReasoning } from '@/lib/session/sessionImport';
 import type { ProcessEvent } from '@/types';
 
 const KEY = 'feishu.feishu:ou_xxx';

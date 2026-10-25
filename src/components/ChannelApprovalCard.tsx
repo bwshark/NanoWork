@@ -25,7 +25,7 @@
 import { useEffect } from 'react';
 import { ApprovalCardBody } from '@/components/ApprovalCard';
 import { useChannelApprovalsStore } from '@/stores/channelApprovalsStore';
-import { channelChatId } from '@/lib/channelSession';
+import { channelChatId } from '@/lib/channel/channelSession';
 import type { ApprovalDecision } from '@/types';
 
 /**

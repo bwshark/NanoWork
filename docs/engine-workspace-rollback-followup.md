@@ -12,7 +12,7 @@
 
 | 写点 | 归属 | 回滚现状 |
 |---|---|---|
-| 客户端记忆（`MEMORY.md` / 工作区记忆目录） | 客户端 `MemoryService` | ✅ FR-7.3 已落（`src/lib/fileBackup.ts` + 平台 `FileBackup`） |
+| 客户端记忆（`MEMORY.md` / 工作区记忆目录） | 客户端 `MemoryService` | ✅ FR-7.3 已落（`src/lib/artifact/fileBackup.ts` + 平台 `FileBackup`） |
 | 引擎 workspace 文件（用户工作区里的任意文件，经 `shell.py` / `apply_patch` 写入） | **nanobot 引擎进程内** | ⬜ 本 follow-up，待引擎可写 |
 
 记忆回滚与文件回滚**是两套独立链路**：记忆走客户端 `MemoryService` 的五个写入口挂
@@ -22,7 +22,7 @@
 ## 2. 设计要点（待实现，供开工参考）
 
 1. **落点**：复用 FR-7.3 的 `file-history/<hash>.bak` blob 形态（已是跨批契约，
-   `sha256:<hex>` 由 `src/lib/contentHash.ts` 产出），**不要**另起一套哈希方案。
+   `sha256:<hex>` 由 `src/lib/core/contentHash.ts` 产出），**不要**另起一套哈希方案。
 2. **写前快照**：在引擎写工具执行**前**对目标文件做快照（内容哈希命中则跳过，避免重复
    存储），时间线元数据与记忆回滚同构（`fileBackups` 风格）。
 3. **回滚动作**：引擎暴露「回滚到某快照」工具 / 事件，由客户端 UI 触发（类比 FR-7.3 的

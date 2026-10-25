@@ -1,5 +1,5 @@
 /**
- * 有界注入（`src/lib/memoryInjection.ts`）。需求 FR-M10 / NFR-M6。
+ * 有界注入（`src/lib/memory/memoryInjection.ts`）。需求 FR-M10 / NFR-M6。
  *
  * 这一层要证的是三件事，每件都对应 v1 的一个真实缺陷：
  *
@@ -19,8 +19,8 @@ import {
   composeInjectionSections,
   profileToLines,
   provenanceLine,
-} from '../../src/lib/memoryInjection';
-import { INJECTION_HEADINGS } from '../../src/lib/memoryInjectionContract';
+} from '../../src/lib/memory/memoryInjection';
+import { INJECTION_HEADINGS } from '../../src/lib/memory/memoryInjectionContract';
 
 const OLD = '2026-08-23T00:00:00.000Z';
 const RECENT = '2026-10-01T00:00:00.000Z';

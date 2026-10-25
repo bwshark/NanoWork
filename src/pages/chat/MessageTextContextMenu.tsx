@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { toast } from '@/components/Toast';
-import { writeRichClipboard } from '@/lib/richClipboard';
-import { clampQuoteText } from '@/lib/selectionQuote';
+import { writeRichClipboard } from '@/lib/editor/richClipboard';
+import { clampQuoteText } from '@/lib/editor/selectionQuote';
 import { ComposerContextMenu } from './ComposerContextMenu';
 
 /**

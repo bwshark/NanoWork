@@ -141,7 +141,7 @@ def expired_tombstone_ids(rows, *, now, ttl_days=TOMBSTONE_TTL_DAYS) -> list[str
 B 再 `pull` → **B 侧该条目仍是删除态**（`deletedAt` 非空），且 B 再 push 自己的墓碑不会让它变回存活。
 > 这条直接对应 m6 §七 的完成判据「GC 后 pull 不复活已删条目」。
 
-### 2.4 客户端：归档（`src/lib/accountArchive.ts`）
+### 2.4 客户端：归档（`src/lib/sync/accountArchive.ts`）
 
 **纯函数 + IO 注入**（与 `syncMeta.ts` / `channelSecrets.ts` 同一条纪律：纯逻辑不碰 IO，因而可真单测）。
 
@@ -161,18 +161,18 @@ export function archiveFileName(now: Date): string;            // nanowork-expor
 - 归档里的 `local` 段逐 key 存**原始字符串**（`platform.storage.get<string>(key)` 拿到的就是它），
   **不再解析**——解析再序列化会改变字节，往返就不再无损。
 
-**判据 J-C1**：`tests/lib/accountArchive.test.ts`「往返无损」
+**判据 J-C1**：`tests/lib/sync/accountArchive.test.ts`「往返无损」
 —— 给一组假 key/value（含一段带换行与 CJK 的文本、一段 JSON 文本）→ `buildArchive` → `JSON.stringify` →
 `parseArchive` → `applyArchive` 到内存 writer → **每个 key 的字符串与原始逐字节相同**。
 
-**判据 J-C2**：`tests/lib/accountArchive.test.ts`「非法输入被拒」
+**判据 J-C2**：`tests/lib/sync/accountArchive.test.ts`「非法输入被拒」
 —— `parseArchive('{}')` / `parseArchive('not json')` / `parseArchive` 一个 `format` 不对的对象
 → 抛 `ArchiveParseError`（**不返回半个归档**，否则导入会写坏一半存储）。
 
-**判据 J-C3**：`tests/lib/accountArchive.test.ts`「formatVersion 高于本端时拒绝」
+**判据 J-C3**：`tests/lib/sync/accountArchive.test.ts`「formatVersion 高于本端时拒绝」
 —— 若 6b 之后加了字段，老客户端导入新归档必须**明确报错**而不是静默丢字段。
 
-**判据 J-C4**：`tests/lib/accountArchive.test.ts`「云端段可缺省」
+**判据 J-C4**：`tests/lib/sync/accountArchive.test.ts`「云端段可缺省」
 —— 未登录导出的归档 `cloud: null`，`parseArchive` 仍然通过（离线也必须能导出）。
 
 ### 2.5 客户端：删账户
@@ -247,7 +247,7 @@ export function archiveFileName(now: Date): string;            // nanowork-expor
 - `cloud/app/sync/routes.py`（`push` 入口顺路 GC）
 
 **客户端（新增 1）**
-- `src/lib/accountArchive.ts`
+- `src/lib/sync/accountArchive.ts`
 
 **客户端（修改 6）**
 - `src/sync/types.ts`（`CONFLICT_SNAPSHOT_STORAGE_KEY`、云端导出/删除的类型）
@@ -258,7 +258,7 @@ export function archiveFileName(now: Date): string;            // nanowork-expor
 - `electron/storageRoutes.ts`（登记 `nanowork.sync.conflict`）
 
 **测试（新增 3、修改 1）**
-- `tests/lib/accountArchive.test.ts`（新）
+- `tests/lib/sync/accountArchive.test.ts`（新）
 - `tests/sync/conflictSnapshot.test.ts`（新）
 - `tests/sync/syncAccount.test.ts`（改：J-D1/J-D2）
 - `tests/pages/auth.test.tsx`（改：J-F1~F3，替换批次 4 的 disabled 占位断言）

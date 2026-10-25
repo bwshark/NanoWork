@@ -45,7 +45,7 @@ export type AttachmentKind = 'image' | 'document' | 'text' | 'video' | 'audio' |
  * 字段分两层：
  * - 元信息（id/name/size/mime/kind）始终随会话持久化，保证刷新后气泡仍能看到「发过什么」；
  * - 内容（previewUrl / dataUrl）按体积阈值裁剪后再落库，避免撑爆本地存储
- *   （见 `@/lib/attachments` 的 toPersistableAttachment）。
+ *   （见 `@/lib/artifact/attachments` 的 toPersistableAttachment）。
  */
 export interface Attachment {
   id: string;

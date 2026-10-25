@@ -336,7 +336,7 @@ $ARGUMENTS
 | Hook 钩子         | `nanobot/agent/hook.py` + `turn_hooks.py` + `hooks/`                              | ✅ 15 个生命周期点、`before_execute_tool` 可否决、Composite fail-open/fail-closed 双轨 |
 | Tool 工具         | `nanobot/agent/tools/loader.py` + `entry_points("nanobot.tools")`                 | ✅ 含外部声明式注册                                                               |
 | Prompt(引擎)      | `nanobot/utils/prompt_templates.py` Jinja2 + `OVERRIDABLE_TEMPLATES` 白名单          | ✅ 工作区可覆盖代理层模板                                                            |
-| Prompt(渲染层)     | `src/lib/promptAssembly.ts` 11 段 + `promptCatalog.ts` 槽位 + `~/.nanowork/prompts/` | ✅                                                                        |
+| Prompt(渲染层)     | `src/lib/prompt/promptAssembly.ts` 11 段 + `promptCatalog.ts` 槽位 + `~/.nanowork/prompts/` | ✅                                                                        |
 
 **本项目不是"没有插件机制",而是插件机制只覆盖了"技能 + MCP"两个面。**
 

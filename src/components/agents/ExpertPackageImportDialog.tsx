@@ -12,8 +12,8 @@ import {
 } from "@mui/material";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "@/components/Toast";
-import { planExpertImport } from "@/lib/expertPackage";
-import { readExpertPackageFile } from "@/lib/expertPackageIo";
+import { planExpertImport } from "@/lib/agent/expertPackage";
+import { readExpertPackageFile } from "@/lib/agent/expertPackageIo";
 import { useAgentsStore } from "@/stores/agentsStore";
 import { useModelsStore } from "@/stores/modelsStore";
 import { useSkillsStore } from "@/stores/skillsStore";

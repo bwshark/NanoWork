@@ -12,9 +12,9 @@
 
 import { beforeEach, describe, expect, it } from 'vitest';
 import { UserMemoryEditor } from '@/pages/memory/UserMemoryEditor';
-import { ensureLocalMemoryScope, platformMemoryIo, userMemoryRef } from '@/lib/memoryPlatformIo';
-import { createUserMemoryStore } from '@/lib/memoryUserStore';
-import { PREFERENCES_FILE, PROFILE_FILE } from '@/lib/memoryPaths';
+import { ensureLocalMemoryScope, platformMemoryIo, userMemoryRef } from '@/lib/memory/memoryPlatformIo';
+import { createUserMemoryStore } from '@/lib/memory/memoryUserStore';
+import { PREFERENCES_FILE, PROFILE_FILE } from '@/lib/memory/memoryPaths';
 import type { PreferenceState, ProfileState } from '@/types';
 import { buttonByText, click, flush, mount, unmount } from './helpers/reactMount';
 

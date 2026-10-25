@@ -72,7 +72,7 @@ export interface Session {
    * 它是**声明**不是缓存——跨设备同步（在 `SESSION_SYNC_FIELDS` 白名单里），
    * 用来回答两件本机磁盘答不了的事：① 换台机器 GC 时，别把「别的设备上的会话
    * 正在用的那一版」当旧副本删掉；② 本机装的版本与这个会话当初用的不同时，
-   * 界面能如实说出来（见 `lib/sessionPluginRefs.ts`）。
+   * 界面能如实说出来（见 `lib/agent/sessionPluginRefs.ts`）。
    *
    * 只在建会话时快照一次，之后不随本机装了什么而漂移：它记的是历史事实。
    */
@@ -91,7 +91,7 @@ export interface Session {
    *
    * `undefined` = **未知**（不是从索引来的会话：`openExternal` 注入的外部会话、
    * 新建但没落过盘的会话），此时退回 `messages.length`。判定一律走
-   * `@/lib/conversation` 的 `hasConversation` / `conversationCount`，别在各处自己拼。
+   * `@/lib/session/conversation` 的 `hasConversation` / `conversationCount`，别在各处自己拼。
    */
   messageCount?: number;
   /** 敏感操作权限决策记录（FR-009） */
@@ -132,7 +132,7 @@ export interface Session {
    * 没有可留墓碑的载体；`deletedAt` 因此只在读取侧容错（见 `normalizeSessionMeta`），
    * 写入侧不做（`docs/architecture-syncmeta.md` §7.3 记了原因）。
    *
-   * 递增由 `updateSession` 自动完成（见 `lib/sessionSyncMeta.ts`），
+   * 递增由 `updateSession` 自动完成（见 `lib/session/sessionSyncMeta.ts`），
    * **不要在调用点手写 `rev`**。
    */
   rev?: number;

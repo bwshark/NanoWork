@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { Outlet, useNavigate } from 'react-router-dom';
 import { ToastContainer } from '@/components/Toast';
-import { ROUTES } from '@/lib/constants';
+import { ROUTES } from '@/lib/core/constants';
 import { connectionManager } from '@/ai/connectionManager';
 import { platform } from '@/platform';
 import { useSkillsStore } from '@/stores/skillsStore';
@@ -12,11 +12,11 @@ import { useChannelSessionsStore } from '@/stores/channelSessionsStore';
 import { useMcpStore } from '@/stores/mcpStore';
 import { useSessionsStore } from '@/stores/sessionsStore';
 import { useStorageInfoStore } from '@/stores/storageInfoStore';
-import { PromptLibrary } from '@/lib/promptLibrary';
-import { createDeepLinkExecutor } from '@/lib/deepLinkExecutor';
+import { PromptLibrary } from '@/lib/prompt/promptLibrary';
+import { createDeepLinkExecutor } from '@/lib/core/deepLinkExecutor';
 import { log } from '@/observability/logger';
-import { IdentityService } from '@/lib/identity';
-import { getDeviceId } from '@/lib/deviceId';
+import { IdentityService } from '@/lib/agent/identity';
+import { getDeviceId } from '@/lib/core/deviceId';
 import { disposeSyncRuntime, initSyncRuntime } from '@/sync';
 import type { SyncRuntime } from '@/sync';
 

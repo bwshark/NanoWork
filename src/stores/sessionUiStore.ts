@@ -1,6 +1,6 @@
 import { create } from 'zustand';
-import { genId } from '@/lib/id';
-import type { QuoteRef } from '@/lib/selectionQuote';
+import { genId } from '@/lib/core/id';
+import type { QuoteRef } from '@/lib/editor/selectionQuote';
 
 /**
  * 会话级辅助功能的 UI 状态（非持久化，仅运行期）。

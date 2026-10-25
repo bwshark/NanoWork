@@ -13,7 +13,7 @@ import {
   createDeepLinkExecutor,
   deepLinkSessionTitle,
   type DeepLinkExecutorDeps,
-} from '@/lib/deepLinkExecutor';
+} from '@/lib/core/deepLinkExecutor';
 import {
   DEEP_LINK_PROMPT_KEY,
   readDeepLinkPrompt,

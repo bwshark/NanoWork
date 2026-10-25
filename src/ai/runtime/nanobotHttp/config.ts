@@ -18,7 +18,7 @@
  * 下载片段文件供用户手动合并。两条路径都在 platform 层，本模块不分支。
  */
 import { platform } from '@/platform';
-import { genId } from '@/lib/id';
+import { genId } from '@/lib/core/id';
 import { joinCommand, parseCommand, readStr } from '../codec';
 import type { SyncResult } from '../types';
 import type { MCPConfig } from '@/types';

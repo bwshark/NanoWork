@@ -7,11 +7,11 @@ import CheckIcon from '@mui/icons-material/Check';
 import { useNavigate } from 'react-router-dom';
 import { platform } from '@/platform';
 import { toast } from '@/components/Toast';
-import { ROUTES } from '@/lib/constants';
+import { ROUTES } from '@/lib/core/constants';
 import {
   SKILL_OVERRIDES,
   resolveSkillOverride,
-} from '@/lib/skillOverrides';
+} from '@/lib/agent/skillOverrides';
 import {
   SKILL_OVERRIDE_MENU_LABEL,
   overrideToast,

@@ -38,7 +38,7 @@ import {
   clampLines,
   hoverCardSx,
   iconTileSx,
-} from "@/lib/cardSx";
+} from "@/lib/ui/cardSx";
 import {
   isBuiltinMcpId,
   type MCPConfig,

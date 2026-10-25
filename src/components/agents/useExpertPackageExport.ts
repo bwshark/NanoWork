@@ -1,7 +1,7 @@
 import { useCallback } from "react";
 import { toast } from "@/components/Toast";
 import { platform } from "@/platform";
-import { exportExpertPackageFile } from "@/lib/expertPackageIo";
+import { exportExpertPackageFile } from "@/lib/agent/expertPackageIo";
 import { useSkillsStore } from "@/stores/skillsStore";
 import type { Agent } from "@/types";
 

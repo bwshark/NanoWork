@@ -29,9 +29,9 @@ import {
   type HeroSkill,
 } from "./heroPresets";
 import { toast } from "@/components/Toast";
-import { hasConversation } from "@/lib/conversation";
-import { watchChannelTurn } from "@/lib/channelTurnLive";
-import { channelChatId } from "@/lib/channelSession";
+import { hasConversation } from "@/lib/session/conversation";
+import { watchChannelTurn } from "@/lib/channel/channelTurnLive";
+import { channelChatId } from "@/lib/channel/channelSession";
 import { platform } from "@/platform";
 import { useSessionsStore } from "@/stores/sessionsStore";
 

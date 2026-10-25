@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { parseSkillFromMarkdown } from '@/lib/skillParser';
+import { parseSkillFromMarkdown } from '@/lib/agent/skillParser';
 
 const BODY = '正文：步骤与校验方式。';
 

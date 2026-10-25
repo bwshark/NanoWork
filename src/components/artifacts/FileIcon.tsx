@@ -1,5 +1,5 @@
 import { Box } from '@mui/material';
-import { badgeForFileName, toneForFileName, type FileTone } from '@/lib/fileArtifact';
+import { badgeForFileName, toneForFileName, type FileTone } from '@/lib/artifact/fileArtifact';
 
 /**
  * 角标色调 → 底色 / 字色。

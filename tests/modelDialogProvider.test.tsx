@@ -28,12 +28,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react';
 import { ThemeProvider } from '@mui/material';
 import { ModelDialog } from '@/components/settings/ModelDialog';
-import { MODEL_PROVIDERS } from '@/lib/modelProviders';
+import { MODEL_PROVIDERS } from '@/lib/model/modelProviders';
 import {
   CONTEXT_WINDOW_OPTIONS,
   MAX_TOKENS_OPTIONS,
   TOKEN_DEFAULT_LABEL,
-} from '@/lib/modelOptions';
+} from '@/lib/model/modelOptions';
 import type { ManagedModel, ModelFormValue } from '@/stores/modelsStore';
 import type { ModelProbeResult } from '@/platform/types';
 import { muiTheme } from '@/theme/muiTheme';

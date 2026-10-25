@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { SENSITIVE_TOOLS, isSensitiveTool } from '@/lib/constants';
+import { SENSITIVE_TOOLS, isSensitiveTool } from '@/lib/core/constants';
 
 /**
  * 覆盖 PRD FR-009 权限门控的判定基础：

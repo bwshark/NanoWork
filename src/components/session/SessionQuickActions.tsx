@@ -11,7 +11,7 @@ import {
 import SearchIcon from '@mui/icons-material/Search';
 import HistoryIcon from '@mui/icons-material/History';
 import ViewSidebarIcon from '@mui/icons-material/ViewSidebar';
-import { ROUTES } from '@/lib/constants';
+import { ROUTES } from '@/lib/core/constants';
 import { useSessionsStore } from '@/stores/sessionsStore';
 import { useSessionUiStore } from '@/stores/sessionUiStore';
 import type { Message } from '@/types';

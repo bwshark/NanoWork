@@ -1,5 +1,5 @@
 ﻿/**
- * 「手编 `MEMORY.md` 算权威」的完整链路（`src/lib/memoryManual.ts` + `src/lib/memoryEdit.ts`）。
+ * 「手编 `MEMORY.md` 算权威」的完整链路（`src/lib/memory/memoryManual.ts` + `src/lib/memory/memoryEdit.ts`）。
  *
  * 这组用例要证的是**一条用户看得见的行为**：
  *
@@ -18,9 +18,9 @@ import {
   extractNewManualParagraphs,
   isEligibleManualParagraph,
   manualParagraphToFactInput,
-} from '../src/lib/memoryManual';
-import { applyManualMemoryEdit, workspaceStoreFor } from '../src/lib/memoryEdit';
-import { platformMemoryIo, workspaceMemoryRef } from '../src/lib/memoryPlatformIo';
+} from '../src/lib/memory/memoryManual';
+import { applyManualMemoryEdit, workspaceStoreFor } from '../src/lib/memory/memoryEdit';
+import { platformMemoryIo, workspaceMemoryRef } from '../src/lib/memory/memoryPlatformIo';
 import type { CuratedEntry } from '../src/types';
 
 const NOW = new Date('2026-10-02T00:00:00Z');

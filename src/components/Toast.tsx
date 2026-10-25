@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { Alert, Stack } from '@mui/material';
-import { genId } from '@/lib/id';
+import { genId } from '@/lib/core/id';
 
 type Severity = 'info' | 'success' | 'error' | 'warning';
 

@@ -1,6 +1,6 @@
 ﻿import { beforeEach, describe, expect, it } from 'vitest';
 import { DEFAULT_TRANSCRIPTION, DEFAULT_DESKTOP, useSettingsStore } from '@/stores/settingsStore';
-import { DEFAULT_GATEWAY, STORAGE_KEYS } from '@/lib/constants';
+import { DEFAULT_GATEWAY, STORAGE_KEYS } from '@/lib/core/constants';
 import { DEFAULT_MEMORY_POLICY } from '@/types';
 
 /**

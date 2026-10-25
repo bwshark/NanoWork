@@ -6,13 +6,13 @@ import SmartToyIcon from '@mui/icons-material/SmartToy';
 import { MarkdownView } from '@/components/MarkdownView';
 import { REASONING_MD_SX, ReasoningBlock } from './ReasoningBlock';
 import { describeTool } from './toolDescribe';
-import { buildProcessRows } from '@/lib/processDetail';
+import { buildProcessRows } from '@/lib/ui/processDetail';
 import type {
   AggregateRow,
   MemberGroupRow,
   ProcessViewRow,
   SubagentGroupRow,
-} from '@/lib/processDetail';
+} from '@/lib/ui/processDetail';
 import type { ProcessDetailLevel, ProcessEvent, ProcessToolRow } from '@/types';
 
 /**

@@ -5,10 +5,10 @@ import {
   DEFAULT_GATEWAY,
   DEFAULT_STATUS,
   STORAGE_KEYS,
-} from '@/lib/constants';
-import { DEFAULT_BINDINGS, DEFAULT_WAKE_ACCELERATOR } from '@/lib/shortcuts';
-import type { ShortcutId } from '@/lib/shortcuts';
-import { metaForEdit } from '@/lib/syncStamp';
+} from '@/lib/core/constants';
+import { DEFAULT_BINDINGS, DEFAULT_WAKE_ACCELERATOR } from '@/lib/editor/shortcuts';
+import type { ShortcutId } from '@/lib/editor/shortcuts';
+import { metaForEdit } from '@/lib/sync/syncStamp';
 import type {
   ConnectionStatus,
   DesktopConfig,
@@ -105,7 +105,7 @@ export const DEFAULT_DESKTOP: DesktopConfig = {
   // 默认关闭窗口 → 隐藏到托盘（微信/钉钉式后台常驻），符合"运行在后台"的预期
   closeToTray: true,
   // 默认唤起快捷键：Ctrl+Alt+S（S = nanowork）。
-  // 字面量取自 `lib/shortcuts` 的 `DEFAULT_WAKE_ACCELERATOR`——注册表里
+  // 字面量取自 `lib/editor/shortcuts` 的 `DEFAULT_WAKE_ACCELERATOR`——注册表里
   // 「唤起/隐藏主窗口」那一行也用它，两处共用同一份事实才不会改一处漏一处。
   hotkey: DEFAULT_WAKE_ACCELERATOR,
   openAtLogin: false,

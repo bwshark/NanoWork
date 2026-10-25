@@ -14,8 +14,8 @@
  * 3. tasksStore.addTask 对带 id 写入本身做幂等合并（第三道闸）。
  */
 
-import { validateCron } from '@/lib/cron';
-import { makeTaskName } from '@/lib/taskDraft';
+import { validateCron } from '@/lib/task/cron';
+import { makeTaskName } from '@/lib/task/taskDraft';
 import { useTasksStore } from '@/stores/tasksStore';
 import type { TaskConfig, TaskSchedule } from '@/types';
 

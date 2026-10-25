@@ -13,13 +13,13 @@ import { useMemo, type ReactNode } from 'react';
 import { Box, Divider, MenuItem, Popover, Typography } from '@mui/material';
 import FilterAltOutlinedIcon from '@mui/icons-material/FilterAltOutlined';
 import CheckIcon from '@mui/icons-material/Check';
-import { TASK_STATUS_OPTIONS, TASK_TIME_OPTIONS } from '@/lib/taskQuery';
+import { TASK_STATUS_OPTIONS, TASK_TIME_OPTIONS } from '@/lib/task/taskQuery';
 import {
   DEFAULT_WORKSPACE_LABEL,
   isSameWorkspacePath,
   resolveWorkspaceLabel,
-} from '@/lib/workspaceLabel';
-import { UNBOUND_AGENT_LABEL } from '@/lib/constants';
+} from '@/lib/workspace/workspaceLabel';
+import { UNBOUND_AGENT_LABEL } from '@/lib/core/constants';
 import { useTaskQueryStore } from '@/stores/taskQueryStore';
 import { useSessionsStore } from '@/stores/sessionsStore';
 import { useAgentsStore } from '@/stores/agentsStore';

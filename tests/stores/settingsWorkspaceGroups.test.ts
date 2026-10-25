@@ -4,7 +4,7 @@ import {
   DEFAULT_TRANSCRIPTION,
   useSettingsStore,
 } from '@/stores/settingsStore';
-import { DEFAULT_GATEWAY } from '@/lib/constants';
+import { DEFAULT_GATEWAY } from '@/lib/core/constants';
 import { DEFAULT_MEMORY_POLICY } from '@/types';
 
 /**

@@ -13,7 +13,7 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { __setRuntimeForTest } from '@/ai/runtime';
-import { emptyUsageStats, type UsageWindow } from '@/lib/usageReport';
+import { emptyUsageStats, type UsageWindow } from '@/lib/ui/usageReport';
 import { useUsageStore } from '@/stores/usageStore';
 import type { AgentRuntime } from '@/ai/runtime/types';
 import type { UsageStats } from '@/types';

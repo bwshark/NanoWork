@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { Navigate } from 'react-router-dom';
-import { ROUTES } from '@/lib/constants';
+import { ROUTES } from '@/lib/core/constants';
 import { useSettingsUiStore } from '@/stores/settingsUiStore';
 
 /**

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { platform } from '@/platform';
-import { STORAGE_KEYS } from '@/lib/constants';
+import { STORAGE_KEYS } from '@/lib/core/constants';
 import { useChannelsStore } from '@/stores/channelsStore';
 import {
   buildNanobotChannelsFragment,

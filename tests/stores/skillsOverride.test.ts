@@ -12,7 +12,7 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { platform } from '@/platform';
-import { STORAGE_KEYS } from '@/lib/constants';
+import { STORAGE_KEYS } from '@/lib/core/constants';
 import { useSkillsStore } from '@/stores/skillsStore';
 import { SKILLS } from '@/ai/builtinSkills';
 import type { Skill } from '@/types';

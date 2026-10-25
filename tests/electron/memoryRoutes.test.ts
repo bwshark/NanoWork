@@ -22,12 +22,12 @@ import {
   resolveWorkspaceMemoryDir,
 } from '../../electron/memoryRoutes';
 import { memoryDir, productDir, type StorageRoots } from '../../electron/storageRoutes';
-import { workspaceKeyFor } from '../../src/lib/workspaceKey';
+import { workspaceKeyFor } from '../../src/lib/workspace/workspaceKey';
 import {
   CURATED_MEMORY_FILE,
   WORKSPACE_MEMORY_DIR,
   WORKSPACE_MEMORY_SUBDIR,
-} from '../../src/lib/workspaceMemory';
+} from '../../src/lib/memory/workspaceMemory';
 
 const HOME = resolve('/tmp/nw-home');
 const USER_DATA = resolve('/tmp/nw-userdata');

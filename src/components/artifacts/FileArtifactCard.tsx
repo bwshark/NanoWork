@@ -4,7 +4,7 @@ import FolderOpenIcon from '@mui/icons-material/FolderOpen';
 import NorthEastIcon from '@mui/icons-material/NorthEast';
 import { FileIcon } from './FileIcon';
 import type { ArtifactActions } from './useArtifactActions';
-import { formatBytes } from '@/lib/fileArtifact';
+import { formatBytes } from '@/lib/artifact/fileArtifact';
 import type { Artifact } from '@/types';
 
 interface FileArtifactCardProps {

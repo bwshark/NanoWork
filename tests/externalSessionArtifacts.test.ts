@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { useSessionsStore } from '@/stores/sessionsStore';
 import { resolveArtifactContent, useArtifactsStore } from '@/stores/artifactsStore';
-import { mapRecordsToMessages } from '@/lib/sessionImport';
-import { fileArtifactId } from '@/lib/fileArtifact';
+import { mapRecordsToMessages } from '@/lib/session/sessionImport';
+import { fileArtifactId } from '@/lib/artifact/fileArtifact';
 import type { Message, Session } from '@/types';
 
 /**

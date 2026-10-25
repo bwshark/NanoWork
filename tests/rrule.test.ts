@@ -1,5 +1,5 @@
 /**
- * RRULE 降级（`src/lib/rrule.ts`，FR-5.4）。
+ * RRULE 降级（`src/lib/task/rrule.ts`，FR-5.4）。
  *
  * 这组用例守的是**时间语义**，写错了不会崩、只会「在错误的时间跑」或「永不跑」：
  * 1. **降级矩阵**：能表达的要降成**正确**的 cron / interval（不是「差不多」的）；
@@ -12,7 +12,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { describeRrule, lowerRrule, parseRrule } from '../src/lib/rrule';
+import { describeRrule, lowerRrule, parseRrule } from '../src/lib/task/rrule';
 
 /** 降级成功时取 cron 表达式（失败即抛，避免用例里散落类型收窄） */
 function cron(rrule: string): string {

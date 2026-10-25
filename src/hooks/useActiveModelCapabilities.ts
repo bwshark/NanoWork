@@ -2,7 +2,7 @@ import { useEffect, useMemo } from 'react';
 import {
   resolveModelCapabilities,
   type ResolvedCapabilities,
-} from '@/lib/modelCapability';
+} from '@/lib/model/modelCapability';
 import { useModelsStore } from '@/stores/modelsStore';
 import { useSessionsStore } from '@/stores/sessionsStore';
 

@@ -13,7 +13,7 @@
  */
 
 import type { ToolCallEvent } from '../types';
-import { isSensitiveTool } from '@/lib/constants';
+import { isSensitiveTool } from '@/lib/core/constants';
 
 /** 流式累计的单个工具调用中间态（按 index 拼接） */
 interface PartialToolCall {

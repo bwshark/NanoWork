@@ -1,17 +1,17 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { platform, zustandStorage } from '@/platform';
-import { STORAGE_KEYS } from '@/lib/constants';
-import { genId } from '@/lib/id';
+import { STORAGE_KEYS } from '@/lib/core/constants';
+import { genId } from '@/lib/core/id';
 import {
   channelSecretKeysByKind,
   channelVaultName,
   pickChannelSecrets,
   stripChannelSecrets,
-} from '@/lib/channelSecrets';
-import { ensureMetaList, withTombstone, withoutTombstone } from '@/lib/syncMeta';
-import { metaForDelete, metaForEdit, metaForNew } from '@/lib/syncStamp';
-import { changedFieldNames, recordAppAudit } from '@/lib/appAudit';
+} from '@/lib/channel/channelSecrets';
+import { ensureMetaList, withTombstone, withoutTombstone } from '@/lib/sync/syncMeta';
+import { metaForDelete, metaForEdit, metaForNew } from '@/lib/sync/syncStamp';
+import { changedFieldNames, recordAppAudit } from '@/lib/audit/appAudit';
 import { getRuntime, type SyncResult } from '@/ai/runtime';
 import type { ChannelRuntimeHealth, CredentialVaultStatus, SecretWriteResult } from '@/platform/types';
 import type { ChannelConfig, ChannelKind, SyncTombstones } from '@/types';
@@ -28,7 +28,7 @@ import type { ChannelConfig, ChannelKind, SyncTombstones } from '@/types';
  * 渠道密钥（`clientSecret` / `appSecret` / `botSecret` / `token`）**不再明文落
  * `channels.json`**——持久化时由 `partialize` 剥掉，值交给主进程加密保险库
  * （`~/.nanowork/connectors/.credentials.v3.json`，经 `platform.secrets*`，
- * 命名与归属见 `lib/channelSecrets.ts`）。
+ * 命名与归属见 `lib/channel/channelSecrets.ts`）。
  *
  * 三条随之而来的约束，缺一条就会出现「配置看着对、渠道连不上」：
  *
@@ -374,7 +374,7 @@ export const useChannelsStore = create<ChannelsState>()(
           /*
            * ⚠️ 提交给**引擎**的负载必须带凭据——引擎要靠它连 IM。
            * 「凭据不上行」那条定案（architecture-syncmeta §5.3）约束的是**云端同步**
-           * 负载，不是这里；两者别混。云端负载的裁剪在 `lib/syncPayloads.ts`。
+           * 负载，不是这里；两者别混。云端负载的裁剪在 `lib/sync/syncPayloads.ts`。
            *
            * `configs` 天生只含存活条目，所以被删渠道不会再被写回引擎配置。
            */

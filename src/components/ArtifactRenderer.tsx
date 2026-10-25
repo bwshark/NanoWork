@@ -4,7 +4,7 @@ import { Box, Button, Paper, useTheme } from '@mui/material';
 import DownloadIcon from '@mui/icons-material/Download';
 import { CodeBlockView } from './CodeBlockView';
 import type { Artifact } from '@/types';
-import { isHtmlArtifact } from '@/lib/fileArtifact';
+import { isHtmlArtifact } from '@/lib/artifact/fileArtifact';
 import { MarkdownView } from './MarkdownView';
 import { ARTIFACT_PREVIEW_CSP } from './artifacts/artifactCsp';
 

@@ -16,10 +16,10 @@
 
 | 关注点 | 现状所在 | 现状形态 |
 |---|---|---|
-| 记忆服务 | `src/lib/memory.ts`（1049 行） | `MemoryServiceImpl` 单例；`load` / `save` / `clear` / `append` / `listFiles` / `readFile` / `writeFile` / `removeFile` / `loadForInjection` / `composeMemoryForInjection` / `wrapForInjection` / `summarize` / `countEntries` / `writeVersion` |
-| 目录约定 | `src/lib/workspaceMemory.ts` | `MEMORY.md` + `YYYY-MM-DD.md`；`sortMemoryFileNames` / `mergeMemoryFiles` / `isMemoryFile(Name)` / `isWritableMemoryFileName` / `dailyMemoryFileName` |
-| 段落 LWW | `src/lib/memoryMerge.ts` | `splitBlocks` / `blockKey` / `parseMemory` / `renderMemory` / `mergeMemory` / `diffRemovedKeys`（同步用，段级 2P-Set + 墓碑） |
-| Agent 写入协议 | `src/lib/memoryDirective.ts` | `<memory-save scope="user\|workspace">` 解析 / 剥离 / `MEMORY_WRITE_INSTRUCTION` |
+| 记忆服务 | `src/lib/memory/memory.ts`（1049 行） | `MemoryServiceImpl` 单例；`load` / `save` / `clear` / `append` / `listFiles` / `readFile` / `writeFile` / `removeFile` / `loadForInjection` / `composeMemoryForInjection` / `wrapForInjection` / `summarize` / `countEntries` / `writeVersion` |
+| 目录约定 | `src/lib/memory/workspaceMemory.ts` | `MEMORY.md` + `YYYY-MM-DD.md`；`sortMemoryFileNames` / `mergeMemoryFiles` / `isMemoryFile(Name)` / `isWritableMemoryFileName` / `dailyMemoryFileName` |
+| 段落 LWW | `src/lib/memory/memoryMerge.ts` | `splitBlocks` / `blockKey` / `parseMemory` / `renderMemory` / `mergeMemory` / `diffRemovedKeys`（同步用，段级 2P-Set + 墓碑） |
+| Agent 写入协议 | `src/lib/memory/memoryDirective.ts` | `<memory-save scope="user\|workspace">` 解析 / 剥离 / `MEMORY_WRITE_INSTRUCTION` |
 | 类型 | `src/types/memory.ts` | `MemoryMeta` / `MemoryState` / `MemoryScope` / `MemoryDirective` / `MemoryScopeSummary` / `MemoryAppendOptions` |
 | 平台契约 | `src/platform/types.ts:462` `WorkspaceMemoryFiles` | `list` / `read` / `write` / `remove` / `removeAll` / `migrateLegacy`——**按 `workdir` 定位一个目录** |
 | 主进程 | `electron/memoryRoutes.ts`、`electron/workspaceMemoryStore.ts` | 路径解析（`resolveWorkspaceMemoryDir` / `resolveMemoryFile` / `resolveLegacyMemoryFile`）+ fs（`listMemoryFiles` / `readMemoryFile` / `writeMemoryFile` / `removeMemoryFile` / `clearMemoryFiles` / `migrateLegacyMemory`） |
@@ -27,7 +27,7 @@
 | 自动沉淀 | `src/stores/sessionsStore.ts:1147` `sedimentSession` | 触发点 `deleteSession(s)` / `createSession` 补触发 |
 | UI | `src/pages/memory/MemoryPage.tsx`、`src/components/settings/sections/MemorySection.tsx`、`src/components/MemoryBar.tsx` | 文件编辑器形态（作用域切换 + 文件切换 + 编辑/导出/清空/回滚） |
 | 开关 | `src/types/settings.ts:51,53`、`src/stores/settingsStore.ts:127,135`（persist `version: 13`） | `memoryEnabled` / `autoSummarize`，默认 `true` |
-| 段落常量 | `src/lib/constants.ts:176,179,182,212` | `MEMORY_KEY_PREFIX` / `MEMORY_TAG_OPEN` / `MEMORY_TAG_CLOSE` / `USER_MEMORY_KEY` |
+| 段落常量 | `src/lib/core/constants.ts:176,179,182,212` | `MEMORY_KEY_PREFIX` / `MEMORY_TAG_OPEN` / `MEMORY_TAG_CLOSE` / `USER_MEMORY_KEY` |
 | 事件存储 | `src/events/store.ts`（`EventStore`）、`src/events/project.ts`（`activePath` / `projectMessages`）、`src/events/index.ts`（`getEventStore()`） | 召回语料的唯一来源 |
 | 测试 | `tests/memoryService.test.ts`(721) 等 **9 个文件约 1900 行** | 回归底线，**不得删改语义** |
 
@@ -54,7 +54,7 @@
 | `MEMORY.md` 作为可重建投影 | §4.6 `renderCuratedProjection` | FR-M10 |
 | s11 Profile（字段级 patch） | §4.7 `profile.json` + `updateProfile` | FR-M20 |
 | s11 Preference（key + expiry + provenance） | §4.7 `preferences.json` + `setPreference` | FR-M21 – FR-M24 |
-| s12 `RecallQuery/Candidate/Score/Hit/Result` | §4.8 `src/lib/recall.ts`（**实施时合成单文件**，见 §13.1 的落地偏差） | FR-M25 – FR-M30 |
+| s12 `RecallQuery/Candidate/Score/Hit/Result` | §4.8 `src/lib/memory/recall.ts`（**实施时合成单文件**，见 §13.1 的落地偏差） | FR-M25 – FR-M30 |
 | 有界注入（精简 MEMORY.md + 最近 ≤6 条） | §4.6 `buildInjectionBlock` + 预算裁剪 | FR-M10, FR-M29 |
 | 治理（查看/编辑/删除/关闭、冲突待审、30 天清理） | §4.9 `/memory` 页事实视图 + 保留策略 | FR-M31 – FR-M36 |
 
@@ -317,14 +317,14 @@ export function distillFacts(
 | 3 | `lastSeen` / `firstSeen` 推导 | `firstSeen = min(evidence.observedAt)`、`lastSeen = max(evidence.observedAt)`。**不是 `now`**：用 `now` 会让 FR-M6 幂等破产，且 FR-M8 门槛③（候选严格晚于 active.lastSeen）会**随时间自己变严**，同一条事实今天不能替代、明天就能，行为不可复现。另：`factId` 的哈希**必须含 `evidence`**（实施时踩到的真实 bug）——否则「同一分钟里从两个不同来源确认同一件事」会得到同一个 id，被当成一条事实，于是替代门槛的「独立事实数 ≥ 2」**永远凑不够**，报告里只看到 `skipped` 而看不出原因 |
 | 4 | `createMemoryFact` 的「缺省 `now`」与「纯函数」矛盾 | 函数签名显式带 `now: Date`；**校验本身不读时钟**。「缺省当前时间」的便利只存在于**调用侧 wrapper**（`appendFact`），不在纯函数里 |
 | 5 | `setPreference` 的 `updatedAt?: string` 缺省 | 同上：`setPreference(state, key, value, opts, now)` 显式传 `now`；`opts.updatedAt` 缺省时取 `now`，但**由参数传入** |
-| 6 | 跨时区落哪个日文件 | `dailyMemoryFileName` 用**本地时间**（`src/lib/workspaceMemory.ts:104-111`，v1 的刻意选择：文件名要对得上用户心里的「今天」），而 `observedAt` 存 UTC。两者并存是**有意的**，代价是「同一 UTC 时刻在不同时区落到不同日文件」。因此**读取侧不得假设 `daily/<某一天>.jsonl` 就是全部**——`loadFacts(since)` 一律枚举日期文件（按名升序）后过滤 `observedAt`，写入侧才用本地日名 |
+| 6 | 跨时区落哪个日文件 | `dailyMemoryFileName` 用**本地时间**（`src/lib/memory/workspaceMemory.ts:104-111`，v1 的刻意选择：文件名要对得上用户心里的「今天」），而 `observedAt` 存 UTC。两者并存是**有意的**，代价是「同一 UTC 时刻在不同时区落到不同日文件」。因此**读取侧不得假设 `daily/<某一天>.jsonl` 就是全部**——`loadFacts(since)` 一律枚举日期文件（按名升序）后过滤 `observedAt`，写入侧才用本地日名 |
 | 7 | **写入按哪个日名分片**（2026-10-02 实施时定稿） | 事实落进**它自己 `observedAt` 那一天**的日文件（`dailyFactLogFileName(fact.observedAt)`），**不是**写入时刻那一天。理由有二：① 一条三年前的决策仍应落在它发生那天的日志里，而不是「今天」——否则「回溯补录一条旧事实」会把历史搅乱；② 去重因此只需查那**一个**文件（同一 `factId` 必然同 `observedAt`、必然同日），而按「最近 N 天」扫窗口会把老事实整个漏出扫描范围，让「同一事实重复写入」永远判不出来——这是实施时踩到并修掉的一个真实 bug |
 
-**排序比较一律用 `<`**（沿用 `src/lib/workspaceMemory.ts:134-138` 的理由）：`importance DESC → lastSeen DESC → entryKey ASC`（§4.6 裁剪）与 `memoryId ASC`（§4.8 排序）中所有字符串比较都用 `<`，**禁用 `localeCompare`**——中文环境下按读音排序会把一致的结果变成随 locale 变化的结果。
+**排序比较一律用 `<`**（沿用 `src/lib/memory/workspaceMemory.ts:134-138` 的理由）：`importance DESC → lastSeen DESC → entryKey ASC`（§4.6 裁剪）与 `memoryId ASC`（§4.8 排序）中所有字符串比较都用 `<`，**禁用 `localeCompare`**——中文环境下按读音排序会把一致的结果变成随 locale 变化的结果。
 
-**复用判据的模块归属**（NFR-M1）：`looksLikeSystemError` 现在住在 `src/lib/memory.ts:175-181`，而该文件 `import` 了 `@/platform` 与 `@/ai/connectionManager`（`:1-2`）——把事实校验放进那个模块就违反「纯函数、无 platform、无 IO」。故实施时把它（连同 `normalizeForDedup` / `parseEntryBodies` / `cjkRatio` 等判据）**搬到纯模块**（`src/lib/memory/detect.ts`），`src/lib/memory.ts` 转出保持既有引用可用。
+**复用判据的模块归属**（NFR-M1）：`looksLikeSystemError` 现在住在 `src/lib/memory/memory.ts:175-181`，而该文件 `import` 了 `@/platform` 与 `@/ai/connectionManager`（`:1-2`）——把事实校验放进那个模块就违反「纯函数、无 platform、无 IO」。故实施时把它（连同 `normalizeForDedup` / `parseEntryBodies` / `cjkRatio` 等判据）**搬到纯模块**（`src/lib/memory/detect.ts`），`src/lib/memory/memory.ts` 转出保持既有引用可用。
 
-**`hashContent` 的位宽**（修正）：它是 32 位 djb2、最多 **8** 个 hex（`src/lib/workspaceKey.ts:30-36`），不是原设计写的「前 16 位」。故 `workspaceId` / `scope-id` / `factId` / `conflictId` 的实际形态是 `w_<8hex>`、`u_<8hex>`、`f_<8hex>` 等——**不要写成 16 位**（会以为存在一个不存在的长度）。8 hex 的碰撞面在「单工作区数千条事实」规模下可接受；若将来要更宽，做法是**换一个哈希函数**（`hashContent` 加宽）而不是拼接两个 8 位（那会破坏「同内容同值」）。
+**`hashContent` 的位宽**（修正）：它是 32 位 djb2、最多 **8** 个 hex（`src/lib/workspace/workspaceKey.ts:30-36`），不是原设计写的「前 16 位」。故 `workspaceId` / `scope-id` / `factId` / `conflictId` 的实际形态是 `w_<8hex>`、`u_<8hex>`、`f_<8hex>` 等——**不要写成 16 位**（会以为存在一个不存在的长度）。8 hex 的碰撞面在「单工作区数千条事实」规模下可接受；若将来要更宽，做法是**换一个哈希函数**（`hashContent` 加宽）而不是拼接两个 8 位（那会破坏「同内容同值」）。
 
 ### 4.4 冲突与人工裁决
 
@@ -515,9 +515,9 @@ export async function buildInjectionBlock(
 > ⚠️ **唯一的包裹点（2026-10-02 修正）**：`buildInjectionBlock().text` 返回**未包裹的正文**（即下面的
 > `【用户级记忆…】` / `【工作区记忆…】` 两段），**不含** `<!-- MEMORY -->`、`<!-- /MEMORY -->` 与护栏句。
 > 包裹由**调用方唯一一次**调 `MemoryService.wrapForInjection(text)` 完成（现有调用点在
-> `src/stores/sessionsStore.ts:738-741`，`src/lib/memory.ts:938-942` 自己补标签 + 护栏句）。
+> `src/stores/sessionsStore.ts:738-741`，`src/lib/memory/memory.ts:938-942` 自己补标签 + 护栏句）。
 > 若按「块形态图里画着标签」照字面实现，会出现**双重包裹 + 双份护栏句**，并破坏
-> `extractFromInjection`（`src/lib/memory.ts:948-961`）与 `constants.ts:190` 的约定。
+> `extractFromInjection`（`src/lib/memory/memory.ts:948-961`）与 `constants.ts:190` 的约定。
 
 下面画的是**最终注入到 system 段的完整形态**（标签与护栏句来自 `wrapForInjection`，不是 `buildInjectionBlock` 的产物）：
 
@@ -898,7 +898,7 @@ restart（恢复）
 | `src/lib/memory/adjudicate.ts` | `resolveConflict` 的**校验与状态推演**（纯函数）+ 协调层 |
 | `src/lib/memory/store.ts` | `MemoryStore`：持久化边界（唯一碰 `platform.memoryFiles` 的地方）、懒迁移、缓存 |
 | `src/lib/memory/legacy.ts` | v1 Markdown / 单文件用户记忆 → legacy fact / profile 的**只读**投影 |
-| `src/lib/memory/index.ts` | 对外门面（`MemoryService` 从 `src/lib/memory.ts` 迁移到此，`src/lib/memory.ts` 变转出壳） |
+| `src/lib/memory/index.ts` | 对外门面（`MemoryService` 从 `src/lib/memory/memory.ts` 迁移到此，`src/lib/memory/memory.ts` 变转出壳） |
 | `src/lib/recall/{types,normalize,candidate,score,rank,engine,render,source}.ts` | 召回五阶段 |
 | `src/components/memory/{FactListView,ConflictQueue,MemoryFileEditor,BudgetBar}.tsx` | 记忆页三视图 |
 
@@ -906,8 +906,8 @@ restart（恢复）
 
 | 路径 | 改动 | 注意 |
 |---|---|---|
-| `src/lib/memory.ts` | 变为**转出壳**（re-export `src/lib/memory/*`），保持既有 import 路径可用 | 40+ 调用点零改动；`MemoryService` 单例语义不变 |
-| `src/lib/workspaceMemory.ts` | 保留既有函数；新增 `isCuratedJsonFileName` / `isFactJsonlFileName` / 子目录常量 | 不改既有导出语义 |
+| `src/lib/memory/memory.ts` | 变为**转出壳**（re-export `src/lib/memory/*`），保持既有 import 路径可用 | 40+ 调用点零改动；`MemoryService` 单例语义不变 |
+| `src/lib/memory/workspaceMemory.ts` | 保留既有函数；新增 `isCuratedJsonFileName` / `isFactJsonlFileName` / 子目录常量 | 不改既有导出语义 |
 | `src/platform/types.ts` | 新增 `MemoryFiles` + `MemoryStoreRef`；`WorkspaceMemoryFiles` 标 `@deprecated`；**同一处还有 bridge 接口**（`memoryListFiles` / `memoryReadFile` / `memoryWriteFile` / `memoryRemoveFile` / `memoryRemoveAll` / `memoryMigrateLegacy`，见 :1047-1062）需按新契约扩签名 | 漏掉 bridge 接口这层，渲染层编译不过而设计上看不出来 |
 | `src/platform/index.ts`、`src/platform/storage.web.ts`、`src/platform/storage.electron.ts`、`src/platform/nanobotBridge.ts` | 提供 `memoryFiles` 新实现（Web 用 `localStorage` 前缀模拟目录；Electron 走 bridge） | `nanobotBridge.ts` 是**被忽略的一层**：它把 `window.nanobot` 桥成平台方法。只改 `main.ts` / `preload.ts` 会漏它 |
 | `electron/memoryRoutes.ts` | 新增 `resolveUserMemoryDir(ref)` / `resolveMemorySubdir`；`resolveMemoryFile` 支持 ref + subdir | 越界校验与 `lstat` 口径不变 |
@@ -918,14 +918,14 @@ restart（恢复）
 | `src/components/settings/sections/AccountSection.tsx` | 账户导出/导入（`ArchiveWorkspaceMemory`，:65-79 / :243-249）目前**平铺收集工作区记忆**；新 canonical 文件（`curated.json` / `conflicts.json` / `daily/*.jsonl` / `archive/*`）与用户级新目录都会被**静默漏掉**，必须纳入「哪些文件属于记忆」的清单 | 漏掉不会报错，只会让导出的 bundle 缺内容——典型的静默数据缺口 |
 | `electron/eventRoutes.ts` | 召回语料适配器复用既有按分片解析目录的逻辑（`cwdSlug`，:90-109 / :134-141），**只读**，无需改动；此处登记是为了说明 `source.ts` 依赖它而不是自己拼路径 | — |
 | `src/types/settings.ts`、`src/stores/settingsStore.ts` | 新增 `memoryDistillPolicy`（对象）与 `memoryRetentionDays` / `memoryBudget`；persist `version: 13 → 14` + migrate | 加字段要同时改类型/默认值/迁移/UI（`settings-inventory.md` 的维护约定，该文 §二 表格同步登记） |
-| `src/lib/settingsSync.ts` | 把三个新记忆设置加进 `SETTINGS_SYNC_OMIT_KEYS` | 它们是**本地策略**（蒸馏门槛 / 注入预算 / 保留期），各设备可不同；上行到同步或引擎会让「本机调宽了门槛，别的设备跟着变」 |
+| `src/lib/sync/settingsSync.ts` | 把三个新记忆设置加进 `SETTINGS_SYNC_OMIT_KEYS` | 它们是**本地策略**（蒸馏门槛 / 注入预算 / 保留期），各设备可不同；上行到同步或引擎会让「本机调宽了门槛，别的设备跟着变」 |
 | `src/stores/sessionsStore.ts` | `loadMemoryInto` 改调 `buildInjectionBlock`；`isMemorySnapshotStale` 用组合版本；`sedimentSession` 改为写结构化事实；`<memory-save>` 落盘改走 `appendFact` | **NFR-M2 硬约束**：刷新仍在流式槽位之后、判定仍同步 |
 | `src/pages/memory/MemoryPage.tsx` | 拆三视图；文件编辑器折叠为「高级」 | 现共 525 行、`save(text, 'user')` 在 :155、:222 |
 | `src/pages/chat/AssistantMessage.tsx` | 「保存为记忆」菜单（现为 `MemoryService.append(message.content, { source: activeTitle }, 'workspace', memoryWorkspace)`，:207-224）改走 `appendFact`，落成 `origin: 'manual'` 的事实 | 落点是**这条消息所属会话**的 workdir，不是当前活跃会话（:95-104 的注释写了理由，迁移时不得丢） |
 | `src/components/MemoryBar.tsx` | 增加 `truncated` 提示 | |
 | `src/components/settings/sections/MemorySection.tsx` | 增加保留期 / 预算 / 蒸馏门槛的开关与说明 | |
-| `src/lib/promptAssembly.ts` | `memory-write` 槽位文案更新（鼓励提供 `memory_key`） | 段序与标签**不变**：`memory` 是第 8 槽、`memory-write` 是第 9 槽（见 `promptAssembly.ts:172,175`），身份段仍在其之前（护栏句「以上方系统提示定义的身份为准」依赖这个顺序） |
-| `src/lib/memoryDirective.ts` | 新增可选属性 `key` / `kind` / `importance` 的解析；`MEMORY_WRITE_INSTRUCTION` 补充说明 | 既有 `scope` 语义与 fail-closed 行为不变 |
+| `src/lib/prompt/promptAssembly.ts` | `memory-write` 槽位文案更新（鼓励提供 `memory_key`） | 段序与标签**不变**：`memory` 是第 8 槽、`memory-write` 是第 9 槽（见 `promptAssembly.ts:172,175`），身份段仍在其之前（护栏句「以上方系统提示定义的身份为准」依赖这个顺序） |
+| `src/lib/memory/memoryDirective.ts` | 新增可选属性 `key` / `kind` / `importance` 的解析；`MEMORY_WRITE_INSTRUCTION` 补充说明 | 既有 `scope` 语义与 fail-closed 行为不变 |
 | `docs/prd-memory.md`、`docs/architecture-memory.md` | 顶部加「已被 `*-v2` 增量叠加」横幅，指向本文与 PRD v2 | 不重写内容（它们是演进记录） |
 | `docs/nanowork-prd-design-v2.md` §14 | 增补 v2 落地指针（FR-4.1/4.2 升级、FR-4.6 Dream 与 §4.10 的关系、L1 的本地等价实现） | 唯一事实源的维护 |
 
@@ -992,7 +992,7 @@ writeVersion(): number;   // 组合值：`${userVersion}:${workspaceVersion}` �
 | 场景 | 处置 |
 |---|---|
 | v1 `MEMORY.md` + `YYYY-MM-DD.md` | 继续读（§4.2）；投影为 legacy fact 参与展示与冲突检测，**并且继续参与注入**（作为工作区侧最低优先级段落，与最近事实共享 `workspaceChars` 预算——见 §4.6 的「legacy 段落必须继续进 prompt」）；**不改写原文** |
-| v1 单文件用户记忆 `~/.nanowork/MEMORY.md`（storage key `nanowork.userMemory`） | ⚠️ **不得改名、不得清空**（2026-10-02 对抗性核验修正）。该 key **已经在同步边界内**：`src/sync/fileAssets.ts:76-80` 把 `USER_MEMORY_KEY` 注册为**段落级** C 类资产 `memoryUser`（`paragraphLevel: true`）。一旦把它改名成 `.migrated`，`platform.storage.get(USER_MEMORY_KEY)` 变空 → `hydrate()` 走「内容变了」分支（`fileAssets.ts:272-287`）→ `diffRemovedKeys` 为**上次已知的全部段落**生成墓碑（`mergeTombstones`，配 `src/lib/memoryMerge.ts:253`）→ `collect()` 上行 → 其他设备 `apply()` 按墓碑**删掉这些段落**。这不是「本机迁移」，是**跨设备的用户记忆清空**。<br>**正确处置**：① 原文件**原地保留**为 legacy 只读源（内容不动、key 不动，继续参与注入，理由同工作区级）；② 新目录另起（`~/.nanowork/user-memory/<scope-id>/`）；③ 若要退役 `memoryUser` 资产，必须作为**独立的、需要跨端协商的一次性动作**（先升 `schema` 版本、两端都识别后再停采），**不在本迁移里做** |
+| v1 单文件用户记忆 `~/.nanowork/MEMORY.md`（storage key `nanowork.userMemory`） | ⚠️ **不得改名、不得清空**（2026-10-02 对抗性核验修正）。该 key **已经在同步边界内**：`src/sync/fileAssets.ts:76-80` 把 `USER_MEMORY_KEY` 注册为**段落级** C 类资产 `memoryUser`（`paragraphLevel: true`）。一旦把它改名成 `.migrated`，`platform.storage.get(USER_MEMORY_KEY)` 变空 → `hydrate()` 走「内容变了」分支（`fileAssets.ts:272-287`）→ `diffRemovedKeys` 为**上次已知的全部段落**生成墓碑（`mergeTombstones`，配 `src/lib/memory/memoryMerge.ts:253`）→ `collect()` 上行 → 其他设备 `apply()` 按墓碑**删掉这些段落**。这不是「本机迁移」，是**跨设备的用户记忆清空**。<br>**正确处置**：① 原文件**原地保留**为 legacy 只读源（内容不动、key 不动，继续参与注入，理由同工作区级）；② 新目录另起（`~/.nanowork/user-memory/<scope-id>/`）；③ 若要退役 `memoryUser` 资产，必须作为**独立的、需要跨端协商的一次性动作**（先升 `schema` 版本、两端都识别后再停采），**不在本迁移里做** |
 | §10 的「未接线」表述 | 修正：用户级记忆**已经在同步边界内**（`memoryUser`）。v2 的 canonical 文件（`daily/*.jsonl`、`curated.json`、`conflicts.json`、两个 journal）**不在**任何 collection 里，即**不上行、不从云端落地**。Phase 5 要做的不是「接线」，而是「用证据流替换段落并集」——见 §10（已改写） |
 | v1 段落级 LWW（`memoryMerge.ts`，同步用） | **保留**。它服务的是 `memoryUser` 的段落并集（今天就在跑），与本文的「事实冲突域」是两件事：前者解决「两台设备各改了一个段落」，后者解决「同一问题有两个答案」 |
 | v1 的 9 个记忆测试文件 | **门禁要求是「全绿」，但**「不删不改语义」这个措辞**站不住**（2026-10-02 修正）。至少两处断言必须按新语义更新，实施时必须点名处理：<br>① `tests/electron/workspaceMemoryStore.test.ts:87-93` 断言根目录的 `index.json` **不被列成记忆**——与 §5.2「读取宽：任意合法单段 `.md`/`.json`/`.jsonl`」冲突，需按白名单细化（`index.json` 保持被排除）；<br>② `tests/memoryService.test.ts:410` 断言 `memoryDiskPath('user', null) === '~/.nanowork/MEMORY.md'`——用户级落点变更为目录后必须改期望值。<br>另有 `tests/memoryService.test.ts:697-721`（`writeVersion` 单调/不递增）与 `tests/sessionsStore.test.ts:704-737`（用户级写入必须使快照过期 + `send` 仍同步进槽位）受 §7.4 组合版本影响，需按新语义复核。**其余用例保持原断言语义** |
@@ -1113,12 +1113,12 @@ writeVersion(): number;   // 组合值：`${userVersion}:${workspaceVersion}` �
 `electron/eventStore.ts:23-29`），无一处用 `@/`。共用 `src/lib/memory/paths.ts` 时必须沿用相对路径，
 否则 `npm run build:electron` 的 esbuild 解析会失败。
 
-**（5）`src/lib/memory.ts` 与 `src/lib/memory/` 并存时的解析优先级**
+**（5）`src/lib/memory/memory.ts` 与 `src/lib/memory/` 并存时的解析优先级**
 
-`moduleResolution: "bundler"` 下 `@/lib/memory` **优先解析到文件** `src/lib/memory.ts`，目录
+`moduleResolution: "bundler"` 下 `@/lib/memory/memory` **优先解析到文件** `src/lib/memory/memory.ts`，目录
 `src/lib/memory/index.ts` 只在该文件不存在时生效。因此：
 
-- 门面单例留在 `src/lib/memory/index.ts`，`src/lib/memory.ts` 改为**显式子路径再导出**
+- 门面单例留在 `src/lib/memory/index.ts`，`src/lib/memory/memory.ts` 改为**显式子路径再导出**
   （`export * from './memory/store'` 等，不用裸 `./memory`）；
 - `src/lib/memory/**` 内部模块**禁止反向 import 门面**（会成环）；
 - M0-08 必须加一条 import 解析断言（`tests/memory/facade.test.ts`），否则「改了半天没生效」。
@@ -1135,8 +1135,8 @@ writeVersion(): number;   // 组合值：`${userVersion}:${workspaceVersion}` �
 
 | 设计里写的 | 实际落成 | 为什么 |
 |---|---|---|
-| `src/lib/memory/*` 目录 + `memory.ts` 转出壳 | 全部落在 `src/lib/` 顶层（`memoryFact.ts` / `memoryDistill.ts` / `memoryAdjudicate.ts` / `memoryStore.ts` / …），**未建目录** | `moduleResolution: "bundler"` 下 `@/lib/memory` 会优先解析到**文件** `memory.ts`，与目录 `memory/` 同名（设计 §13.1(5) 记的正是这个坑）。与其做一次 40+ 调用点的搬迁，不如换个文件名——零风险且同样清晰 |
-| `src/lib/recall/{types,normalize,candidate,score,rank,engine,render,source}.ts` 八个文件 | 合成两个：`src/lib/recall.ts`（五阶段）+ `src/lib/recallCorpus.ts`（语料适配器） | 八个小文件在一个 400 行的模块里制造的是导航成本而不是边界；阶段边界已经由**导出的函数**与结构化类型表达清楚 |
+| `src/lib/memory/*` 目录 + `memory.ts` 转出壳 | 全部落在 `src/lib/` 顶层（`memoryFact.ts` / `memoryDistill.ts` / `memoryAdjudicate.ts` / `memoryStore.ts` / …），**未建目录** | `moduleResolution: "bundler"` 下 `@/lib/memory/memory` 会优先解析到**文件** `memory.ts`，与目录 `memory/` 同名（设计 §13.1(5) 记的正是这个坑）。与其做一次 40+ 调用点的搬迁，不如换个文件名——零风险且同样清晰 |
+| `src/lib/recall/{types,normalize,candidate,score,rank,engine,render,source}.ts` 八个文件 | 合成两个：`src/lib/memory/recall.ts`（五阶段）+ `src/lib/memory/recallCorpus.ts`（语料适配器） | 八个小文件在一个 400 行的模块里制造的是导航成本而不是边界；阶段边界已经由**导出的函数**与结构化类型表达清楚 |
 | `memoryProject.ts` 在 §7.1 只做投影渲染 | 同时被 `memoryEdit.ts` 与 `memoryStore` 的调用方复用 | 见下面的「投影渲染器不能省」 |
 | `MemoryStore` 构造即 `recover()` | 显式 `await store.recover(now)`，且在 `resolve()` 前也会跑一次 | 异步构造会引入启动期竞态（设计 §4.5 已记）；`resolve` 前跑一次是为了不让未完成的事务干扰用户正在做的裁决 |
 

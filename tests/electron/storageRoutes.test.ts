@@ -21,8 +21,8 @@ import {
   PROMPT_KEY_PREFIX,
   STORAGE_KEYS,
   USER_MEMORY_KEY,
-} from '@/lib/constants';
-import { LOCAL_MEMORY_SCOPE_KEY } from '@/lib/memoryPlatformIo';
+} from '@/lib/core/constants';
+import { LOCAL_MEMORY_SCOPE_KEY } from '@/lib/memory/memoryPlatformIo';
 
 /**
  * 持久化落点路由单测。
@@ -114,7 +114,7 @@ describe('resolveRoute：落点归属', () => {
     expect(serializeRouteValue(scope, route)).toBe(scope);
 
     // 渲染层用的是同一个常量：这条断言把「key 定义在哪」也钉住——
-    // 本次事故的成因正是它在 `memoryPlatformIo.ts` 里就地定义，绕开了本表的不变量
+    // 本次事故的成因正是它在 `memory/memoryPlatformIo.ts` 里就地定义，绕开了本表的不变量
     expect(LOCAL_MEMORY_SCOPE_KEY).toBe(STORAGE_KEYS.localMemoryScope);
   });
 

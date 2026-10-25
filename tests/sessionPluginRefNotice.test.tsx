@@ -11,7 +11,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { SessionPluginRefNotice } from "@/pages/plugins/SessionPluginRefNotice";
 import { muiTheme } from "@/theme/muiTheme";
-import type { MissingSessionPluginRef } from "@/lib/sessionPluginRefs";
+import type { MissingSessionPluginRef } from "@/lib/agent/sessionPluginRefs";
 import { mount, unmount } from "./helpers/reactMount";
 
 afterEach(() => unmount());

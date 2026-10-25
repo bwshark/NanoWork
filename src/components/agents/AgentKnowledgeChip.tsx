@@ -1,5 +1,5 @@
 import { Chip, Tooltip } from '@mui/material';
-import { cardChipOutlinedSx } from '@/lib/cardSx';
+import { cardChipOutlinedSx } from '@/lib/ui/cardSx';
 import type { AgentKnowledgeBinding } from '@/types';
 
 /**

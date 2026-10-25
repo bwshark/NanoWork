@@ -21,7 +21,7 @@ import {
   type KbDepartment,
   type KbDepartmentMember,
   type KbGateway,
-} from "@/lib/kbClient";
+} from "@/lib/kb/kbClient";
 
 /**
  * 部门管理（FR-12.2 / FR-4.7）：建树、改名、删除、加人减人。

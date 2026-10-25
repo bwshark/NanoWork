@@ -2,7 +2,7 @@
  * modelsStore 的回退链那一半（FR-9.4）。
  *
  * 纯逻辑（链的编辑规则、引擎形状的转换）分别在
- * `tests/lib/modelFallbacks.test.ts` 与 `tests/electron/modelFallbacksConfig.test.ts` 里锁。
+ * `tests/lib/model/modelFallbacks.test.ts` 与 `tests/electron/modelFallbacksConfig.test.ts` 里锁。
  * 这里只锁**store 这一层的两件事**：
  *
  * 1. **顺序不能被归一**：`buildManaged` 会给预设表排序（默认排最前），那套规则套到

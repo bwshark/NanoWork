@@ -1,5 +1,5 @@
 /**
- * 运行留痕统计与失败分类（`src/lib/taskRunStats.ts`，FR-5.3）。
+ * 运行留痕统计与失败分类（`src/lib/task/taskRunStats.ts`，FR-5.3）。
  *
  * 两条纪律各有一组用例守着：
  * 1. **分类判据取自真实文案**——引擎写入的两位固定文案、客户端的中文提示都进用例；
@@ -14,7 +14,7 @@ import {
   formatSuccessRate,
   summarizeRuns,
   summarizeRunsByTask,
-} from '../src/lib/taskRunStats';
+} from '../src/lib/task/taskRunStats';
 import type { TaskRunRecord } from '../src/types';
 
 function run(over: Partial<TaskRunRecord>): TaskRunRecord {

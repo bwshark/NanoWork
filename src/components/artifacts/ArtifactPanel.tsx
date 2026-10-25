@@ -41,15 +41,15 @@ import { WebFrame, WebUrlBar, toFileUrl, urlHostLabel } from './WebTabView';
 import type { WebTab } from './WebTabView';
 import { useArtifactActions } from './useArtifactActions';
 import { toast } from '@/components/Toast';
-import { UNBOUND_AGENT_LABEL } from '@/lib/constants';
-import { changeCountOf, formatBytes, isFileArtifact, isHtmlArtifact } from '@/lib/fileArtifact';
+import { UNBOUND_AGENT_LABEL } from '@/lib/core/constants';
+import { changeCountOf, formatBytes, isFileArtifact, isHtmlArtifact } from '@/lib/artifact/fileArtifact';
 import { useSessionsStore } from '@/stores/sessionsStore';
 import { useAgentsStore } from '@/stores/agentsStore';
 import { useArtifactsStore, resolveArtifactContent } from '@/stores/artifactsStore';
 import { useSessionUiStore } from '@/stores/sessionUiStore';
 import { useDefaultWorkspacePath } from '@/stores/storageInfoStore';
 import { platform } from '@/platform';
-import { ARTIFACT_TYPE_LABELS } from '@/lib/artifactIndex';
+import { ARTIFACT_TYPE_LABELS } from '@/lib/artifact/artifactIndex';
 import type { Artifact, ArtifactType } from '@/types';
 
 /** 列表态宽度（与左侧 240px 侧栏对称，主内容区仍保有足够空间） */

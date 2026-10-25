@@ -13,7 +13,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { act } from 'react';
 import { ShortcutsSection } from '@/components/settings/sections/ShortcutsSection';
-import { SHORTCUTS } from '@/lib/shortcuts';
+import { SHORTCUTS } from '@/lib/editor/shortcuts';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { byAria, buttonByText, flush, mount, setInputValue, unmount } from './helpers/reactMount';
 

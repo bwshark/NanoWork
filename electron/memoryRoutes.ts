@@ -4,15 +4,15 @@ import {
   WORKSPACE_MEMORY_DIR,
   WORKSPACE_MEMORY_SUBDIR,
   isMemoryFileName,
-} from '../src/lib/workspaceMemory';
+} from '../src/lib/memory/workspaceMemory';
 import {
   READABLE_SUBDIRS,
   USER_MEMORY_DIR,
   isMemoryFileName as isMemoryFileNameV2,
   isMemorySubdirName,
   scopeIdFor,
-} from '../src/lib/memoryPaths';
-import { DEFAULT_WORKSPACE_KEY, workspaceKeyFor } from '../src/lib/workspaceKey';
+} from '../src/lib/memory/memoryPaths';
+import { DEFAULT_WORKSPACE_KEY, workspaceKeyFor } from '../src/lib/workspace/workspaceKey';
 import { memoryDir, productDir, type StorageRoots } from './storageRoutes';
 
 /**
@@ -116,11 +116,11 @@ export function resolveCuratedMemoryFile(
 /**
  * 写入用的文件名白名单（`MEMORY.md` / 日期文件）。
  *
- * **实现在 `src/lib/workspaceMemory.ts`**，这里只做转出：Web 端有同一条边界，
+ * **实现在 `src/lib/memory/workspaceMemory.ts`**，这里只做转出：Web 端有同一条边界，
  * 而 Web 端 import 不到主进程（那是 `node:path` 世界）。两端共用一个判据，
  * 才不会出现「界面上能存、Electron 上存不了」这类只在某一端复现的差异。
  */
-export { isWritableMemoryFileName } from '../src/lib/workspaceMemory';
+export { isWritableMemoryFileName } from '../src/lib/memory/workspaceMemory';
 
 // —— 记忆 v2 的路径解析（两类存储根 + 子目录） ——
 

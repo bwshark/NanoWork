@@ -22,9 +22,9 @@ import EditIcon from '@mui/icons-material/Edit';
 import RestartAltIcon from '@mui/icons-material/RestartAlt';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import RocketLaunchIcon from '@mui/icons-material/RocketLaunch';
-import { IdentityService } from '@/lib/identity';
-import { PromptLibrary } from '@/lib/promptLibrary';
-import { QUALITY_CLAUSE_MARKER, styleKeepsQualityClause } from '@/lib/promptCatalog';
+import { IdentityService } from '@/lib/agent/identity';
+import { PromptLibrary } from '@/lib/prompt/promptLibrary';
+import { QUALITY_CLAUSE_MARKER, styleKeepsQualityClause } from '@/lib/prompt/promptCatalog';
 import { toast } from '@/components/Toast';
 import type {
   IdentityFileKind,

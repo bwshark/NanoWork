@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { getRuntime } from '@/ai/runtime';
-import { emptyUsageStats, USAGE_WINDOWS, type UsageWindow } from '@/lib/usageReport';
+import { emptyUsageStats, USAGE_WINDOWS, type UsageWindow } from '@/lib/ui/usageReport';
 import type { UsageStats } from '@/types';
 
 /**

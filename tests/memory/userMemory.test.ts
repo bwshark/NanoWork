@@ -1,5 +1,5 @@
 /**
- * 用户级两契约：Profile 与 Preference（`src/lib/memoryUser.ts`）。
+ * 用户级两契约：Profile 与 Preference（`src/lib/memory/memoryUser.ts`）。
  *
  * 需求 FR-M20 – FR-M24。测试按**契约**组织，每条都对应一种真实故障：
  *
@@ -29,7 +29,7 @@ import {
   setPreference,
   validatePreferenceState,
   validateProfileState,
-} from '../../src/lib/memoryUser';
+} from '../../src/lib/memory/memoryUser';
 
 const NOW = new Date('2026-10-02T00:00:00Z');
 const SCOPE = 'u_testscope';

@@ -39,7 +39,7 @@ import { useSessionUiStore } from "@/stores/sessionUiStore";
 import { ComposerMenu } from "./ComposerMenu";
 import { ComposerContextMenu } from "./ComposerContextMenu";
 import { InjectionNotice } from "@/components/composer/InjectionNotice";
-import { detectPromptInjection } from "@/lib/promptInjection";
+import { detectPromptInjection } from "@/lib/prompt/promptInjection";
 import { chatColumnSx } from "./chatColumnSx";
 import { ComposerControls } from "@/components/ComposerControls";
 import { InlineAttachmentChip } from "@/components/composer/InlineAttachmentChip";
@@ -53,19 +53,19 @@ import {
 } from "@/components/composer/FileReferencePicker";
 import { useVoiceInput, formatDuration } from "@/hooks/useVoiceInput";
 import { useActiveModelCapabilities } from "@/hooks/useActiveModelCapabilities";
-import { shortDegradedReason, visionNotice } from "@/lib/modelCapability";
+import { shortDegradedReason, visionNotice } from "@/lib/model/modelCapability";
 import {
   MAX_ATTACHMENT_COUNT,
   fileToAttachment,
   formatBytes,
   rehydrateAttachment,
   revokeAttachmentPreview,
-} from "@/lib/attachments";
-import { genId } from "@/lib/id";
-import { buildQuotedMessage, quoteChipLabel } from "@/lib/selectionQuote";
-import { avatarGlyph, entityAvatarSx } from "@/lib/cardSx";
+} from "@/lib/artifact/attachments";
+import { genId } from "@/lib/core/id";
+import { buildQuotedMessage, quoteChipLabel } from "@/lib/editor/selectionQuote";
+import { avatarGlyph, entityAvatarSx } from "@/lib/ui/cardSx";
 // 触发符判定是纯函数，已抽到 lib 便于单测；此处再导出一次，保持旧引用路径可用
-import { detectTrigger, type TriggerState } from "@/lib/composerTrigger";
+import { detectTrigger, type TriggerState } from "@/lib/editor/composerTrigger";
 import {
   extractEditableText,
   extractEditableRichText,
@@ -87,10 +87,10 @@ import {
   collectChipSpans,
   type EditSnapshot,
   RICH_CLIP_MIME,
-} from "@/lib/editableText";
-import { peekRichPayload, writeRichClipboard } from "@/lib/richClipboard";
-import { registerComposerEdit } from "@/lib/composerEditBridge";
-import { matchBinding, resolveBinding } from "@/lib/shortcuts";
+} from "@/lib/editor/editableText";
+import { peekRichPayload, writeRichClipboard } from "@/lib/editor/richClipboard";
+import { registerComposerEdit } from "@/lib/editor/composerEditBridge";
+import { matchBinding, resolveBinding } from "@/lib/editor/shortcuts";
 import {
   createUndoStack,
   pushSnapshot,
@@ -100,11 +100,11 @@ import {
   canRedo,
   resetStack,
   type UndoStack,
-} from "@/lib/undoStack";
+} from "@/lib/editor/undoStack";
 import { toast } from "@/components/Toast";
 import type { Attachment, AttachmentKind } from "@/types";
 
-export { detectTrigger, type TriggerState } from "@/lib/composerTrigger";
+export { detectTrigger, type TriggerState } from "@/lib/editor/composerTrigger";
 
 /** 父组件可调用的输入框命令式 API（如点击提示词标签后聚焦输入框） */
 export interface ComposerApi {
@@ -479,7 +479,7 @@ export function Composer({
     attachmentsRef.current = attachments;
   }, [attachments]);
 
-  // —— 撤销 / 重做（快照式，见 src/lib/undoStack.ts 的选型说明）——
+  // —— 撤销 / 重做（快照式，见 src/lib/editor/undoStack.ts 的选型说明）——
   /**
    * 一个快照 = DOM 结构 + 附件状态。
    * 附件数组存引用即可：`Attachment` 创建后不再修改，且**删除附件时不立即释放
@@ -970,7 +970,7 @@ export function Composer({
     const rich =
       root && payload.length > 0 ? extractEditableRichText(root) : undefined;
     // 引用块拼在待发文本之前（引用在前、输入在后）。拼接规则只此一处
-    //（lib/selectionQuote.buildQuotedMessage），别在这里另拼一套。
+    //（lib/editor/selectionQuote.buildQuotedMessage），别在这里另拼一套。
     const outgoing = buildQuotedMessage(text, sessionQuotes);
     if (root) clearEditableContent(root);
     emitText("");

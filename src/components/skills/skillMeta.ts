@@ -1,12 +1,12 @@
 import type { Skill, SkillOverride, SkillScope } from '@/types';
-import { APP_DISPLAY_NAME } from '@/lib/constants';
+import { APP_DISPLAY_NAME } from '@/lib/core/constants';
 import {
   SKILL_OVERRIDE_OFF,
   SKILL_OVERRIDE_ON,
   SKILL_OVERRIDE_USER_INVOCABLE_ONLY,
   isSkillListedToModel,
   resolveSkillOverride,
-} from '@/lib/skillOverrides';
+} from '@/lib/agent/skillOverrides';
 
 /**
  * 技能页的展示派生值与小助手。
@@ -141,7 +141,7 @@ export function skillMenuOrigin(context: 'card' | 'window'): {
 /**
  * ⋯ 菜单里三档的**行文案**（顺序即 `SKILL_OVERRIDES`：完全启用 → 仅手动 → 停用）。
  *
- * 与 `@/lib/skillOverrides` 的 `SKILL_OVERRIDE_META` 分工不同：那一份是
+ * 与 `@/lib/agent/skillOverrides` 的 `SKILL_OVERRIDE_META` 分工不同：那一份是
  * 「档位名 + 一句解释」，给任何提到档位的地方用；这一份只服务菜单行 ——
  * 括号里补上该档的**实际后果**（模型可见 / 模型不可见 / 都不可用），
  * 因为「完全启用」和「仅手动调用」这两个词本身差在哪并不自解释。

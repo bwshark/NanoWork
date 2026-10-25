@@ -6,8 +6,8 @@ import { ArtifactsPage } from '@/pages/artifacts/ArtifactsPage';
 import { useArtifactsStore } from '@/stores/artifactsStore';
 import { useSessionsStore } from '@/stores/sessionsStore';
 import { useSessionUiStore } from '@/stores/sessionUiStore';
-import { artifactContentHash, buildIndexEntry } from '@/lib/artifactIndex';
-import { contentHash } from '@/lib/contentHash';
+import { artifactContentHash, buildIndexEntry } from '@/lib/artifact/artifactIndex';
+import { contentHash } from '@/lib/core/contentHash';
 import type { Artifact, ArtifactIndexEntry } from '@/types';
 
 function art(over: Partial<Artifact> & { id: string }): Artifact {

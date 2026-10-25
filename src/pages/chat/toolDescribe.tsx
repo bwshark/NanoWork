@@ -9,7 +9,7 @@ import SearchIcon from '@mui/icons-material/Search';
 import TerminalIcon from '@mui/icons-material/Terminal';
 import TravelExploreIcon from '@mui/icons-material/TravelExplore';
 import VisibilityIcon from '@mui/icons-material/Visibility';
-import { DELETE_FILE_TOOLS } from '@/lib/fileArtifact';
+import { DELETE_FILE_TOOLS } from '@/lib/artifact/fileArtifact';
 import type { ProcessToolRow } from '@/types';
 
 /**

@@ -20,7 +20,7 @@ import StarBorderIcon from '@mui/icons-material/StarBorder';
 import { SettingsCard, SettingsRow } from '@/components/settings/SettingsPrimitives';
 import { ModelDialog } from '@/components/settings/ModelDialog';
 import { FailoverCard } from '@/components/settings/FailoverCard';
-import { chainedPresetNames } from '@/lib/modelFallbacks';
+import { chainedPresetNames } from '@/lib/model/modelFallbacks';
 import { toast } from '@/components/Toast';
 import {
   useModelsStore,

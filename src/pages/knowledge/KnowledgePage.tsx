@@ -33,7 +33,7 @@ import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 import SearchIcon from "@mui/icons-material/Search";
 import AddIcon from "@mui/icons-material/Add";
-import { ROUTES } from "@/lib/constants";
+import { ROUTES } from "@/lib/core/constants";
 import { toast } from "@/components/Toast";
 import {
   KB_DUPLICATE_STATUS,
@@ -49,11 +49,11 @@ import {
   type KbRetrievalInfo,
   type KbSearchHit,
   type KbSummary,
-} from "@/lib/kbClient";
-import { describeRetrieval } from "@/lib/kbRetrievalCaption";
+} from "@/lib/kb/kbClient";
+import { describeRetrieval } from "@/lib/kb/kbRetrievalCaption";
 import { DepartmentDialog } from "@/components/knowledge/DepartmentDialog";
-import { KB_UPLOAD_ACCEPT, kindLabel, precheckUpload } from "@/lib/kbUpload";
-import { readFileAsBase64 } from "@/lib/fileBase64";
+import { KB_UPLOAD_ACCEPT, kindLabel, precheckUpload } from "@/lib/kb/kbUpload";
+import { readFileAsBase64 } from "@/lib/artifact/fileBase64";
 import { createRuntimeKbGateway } from "@/sync/kbGateway";
 import { useSyncRuntime } from "@/sync/useSyncRuntime";
 

@@ -32,7 +32,7 @@ import {
   DEFAULT_TRANSCRIPTION,
   DEFAULT_DESKTOP,
 } from '@/stores/settingsStore';
-import { _clearForTest, stashRichPayload } from '@/lib/richClipboard';
+import { _clearForTest, stashRichPayload } from '@/lib/editor/richClipboard';
 import { resetEventStream } from './helpers/eventStream';
 import { click, mount, unmount } from './helpers/reactMount';
 import { DEFAULT_MEMORY_POLICY } from '@/types';

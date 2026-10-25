@@ -20,7 +20,7 @@
  * - **文件型资产**（记忆 / 身份文件 / 提示词覆盖 / 插件包）：它们的「版本」是文件
  *   `mtime` 或段落时间，塞进实体元数据没有承载者，属 V1.5 另案。
  * - **运行时事实字段**（`MCPConfig.status` / `ChannelConfig.syncStatus` / 索引的
- *   `eventCount`）：本机重算，同步过去只会得到假状态，见 `lib/syncSelect.ts`。
+ *   `eventCount`）：本机重算，同步过去只会得到假状态，见 `lib/sync/syncSelect.ts`。
  */
 
 /**
@@ -45,7 +45,7 @@ export interface SyncMeta {
   rev: number;
   /** 最后修改时间（ISO 8601） */
   updatedAt: string;
-  /** 最后修改者的设备标识，见 `lib/deviceId.ts` */
+  /** 最后修改者的设备标识，见 `lib/core/deviceId.ts` */
   updatedBy: string;
   /** 删除时间；`null` = 存活 */
   deletedAt: string | null;

@@ -18,7 +18,7 @@ import { click, mount, unmount } from '../helpers/reactMount';
 import { ArtifactPanel } from '@/components/artifacts/ArtifactPanel';
 import { useArtifactsStore } from '@/stores/artifactsStore';
 import { useSessionUiStore } from '@/stores/sessionUiStore';
-import { fileArtifactId } from '@/lib/fileArtifact';
+import { fileArtifactId } from '@/lib/artifact/fileArtifact';
 
 const SESSION = 's1';
 const PATH = 'D:/aa/report.md';

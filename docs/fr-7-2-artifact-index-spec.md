@@ -14,7 +14,7 @@
 
 | PRD FR-7.2 要求 | 现状 | 差距 |
 |---|---|---|
-| `contentHash: "sha256:..."` | ❌ 无。只有 `hashContent`（djb2，`src/lib/workspaceKey.ts`） | 缺内容寻址 |
+| `contentHash: "sha256:..."` | ❌ 无。只有 `hashContent`（djb2，`src/lib/workspace/workspaceKey.ts`） | 缺内容寻址 |
 | `artifact-index/<id>.json` | ❌ 目录不存在 | 缺独立索引落点 |
 | 跨会话检索 | ❌ `ArtifactsPage` 仅 42 行纯列表，标题还挂「（P2）」 | 缺检索 |
 | 同内容不重复入库 | ❌ 只按 `id` 去重、且仅同会话内（`artifactsStore.ts:23`） | 缺去重 |
@@ -29,7 +29,7 @@
 | # | 决策点 | 裁决 | 理由 |
 |---|---|---|---|
 | D1 | 索引落点 | **store 索引切片为权威（两端可用）+ Electron 额外镜像 `artifact-index/<id>.json`**；**内容本体不动** | 内容本体已内联在**消息**里（`sessionsStore.handleArtifact` → `updateMessage` 加 `artifacts`）并进事件流。做「内容池按 hash 去重 + 索引存引用」要同时改 `ArtifactRenderer` 的取内容方式与 `ArtifactEvent` 形态，风险与工作量都不成比例。镜像则把 PRD 要的同构落点先建起来 |
-| D2 | `contentHash` 算法 | **新建 `src/lib/contentHash.ts`，`contentHash(text) → 'sha256:<hex>'**，输入按 UTF-8 编码 | 6b 规格 §5 已把这条定为**跨批契约**：FR-7.3 的 `file-history/<hash>.bak` 与未来产物同步复用同一函数，避免出现两套寻址 |
+| D2 | `contentHash` 算法 | **新建 `src/lib/core/contentHash.ts`，`contentHash(text) → 'sha256:<hex>'**，输入按 UTF-8 编码 | 6b 规格 §5 已把这条定为**跨批契约**：FR-7.3 的 `file-history/<hash>.bak` 与未来产物同步复用同一函数，避免出现两套寻址 |
 | D3 | 为什么必须**同步** | 渲染层拿不到 `node:crypto`；`crypto.subtle.digest` 是**异步**的，而入库点 `recordArtifact` 是同步 reducer。故用**纯 TS 同步实现**（标准 SHA-256，约 70 行），两端逐字节一致 | 「异步 hash」会把同步 store 拖成异步，牵动所有调用方 |
 | D4 | 与 djb2 的分工 | **`hashContent`（djb2）不得用于内容寻址**。djb2 只用于段键与变更检测（6b 用的 `<!-- SUMMARY:<hash> -->` 去重标记与它逐字节对齐） | 6b 规格 §5 明令两者分工，混用会出现「短 hash 冒充内容地址」 |
 | D5 | `ArtifactEvent.path` | **本期不启用**。该字段注释已写「artifact-index 落地后启用；V1 不使用」，启用它 = 内容外置到文件 = D1 排除项 | 启用后事件流里的产物只剩引用，重放投影需要能读回文件，Web 端还得降级——不是本批能收住的 |
@@ -42,7 +42,7 @@
 
 ## 2. 数据模型
 
-### 2.1 `src/lib/contentHash.ts`
+### 2.1 `src/lib/core/contentHash.ts`
 
 ```ts
 /** 内容寻址哈希：`sha256:<hex>`，输入按 UTF-8 编码。同步、纯函数、不 import platform。 */
@@ -134,8 +134,8 @@ storage 契约表达不了「一个目录、若干文件」）。Electron 端新
 
 | 关注点 | 落点 | 说明 |
 |---|---|---|
-| 工具白名单 | `lib/fileArtifact.ts` 的 `DELETE_FILE_TOOLS` | 与 `FILE_WRITE_TOOLS` **分列**：写工具产出、删除工具收回，方向相反，合成一张表会让删除被当成「零产出的写调用」吞掉 |
-| 路径提取 | `lib/fileArtifact.ts` 的 `deletedFilePathFrom(tool, args)` | 非删除工具 / 缺 `path` 返回 `undefined`，调用方据此跳过 |
+| 工具白名单 | `lib/artifact/fileArtifact.ts` 的 `DELETE_FILE_TOOLS` | 与 `FILE_WRITE_TOOLS` **分列**：写工具产出、删除工具收回，方向相反，合成一张表会让删除被当成「零产出的写调用」吞掉 |
+| 路径提取 | `lib/artifact/fileArtifact.ts` 的 `deletedFilePathFrom(tool, args)` | 非删除工具 / 缺 `path` 返回 `undefined`，调用方据此跳过 |
 | 接线 | `sessionsStore.handleProcessTool`（`phase === 'end'` 分支内） | **收回优先于登记**；先摘消息上的 `artifacts` 引用，再 `removeArtifacts` |
 | 摘除 | `artifactsStore.removeArtifacts(ids)` | 摘 `bySession` 引用 + 摘 `index` + 写 `indexTombstones`；**`bodies` 不清**（同 hash 可能被别的产物引用） |
 

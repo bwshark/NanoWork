@@ -35,7 +35,7 @@ import type { MemberEventPhase, SubagentEventPhase } from '@/types/process';
 import type { PluginEngineIndex } from '@/types/plugin';
 // 首字延迟采样（FR-11.7）：纯客户端测量值的形状，与引擎 wire 格式无关，
 // 故可以直接从 `@/lib` 引类型（不违反「契约层不得出现引擎特有字段」）。
-import type { SessionLatencySample } from '@/lib/sseLatency';
+import type { SessionLatencySample } from '@/lib/core/sseLatency';
 
 // 领域类型（模型目录 / 连接状态 / 运行记录）由 `@/types` 定义，
 // 这里仅做转出，使调用方「只 import 一处」即可拿到完整契约面。
@@ -309,7 +309,7 @@ export interface StreamHandlers {
    * 专家团成员进度（FR-2.4 第 3 步）：一次多成员编排里「谁在做什么」。
    *
    * 只在会话绑定了专家团且引擎真的派了成员时触发；单成员团由客户端直接不下发
-   * （见 `lib/expertGroupRequest.ts`），因此这里不会收到无意义的单成员事件。
+   * （见 `lib/agent/expertGroupRequest.ts`），因此这里不会收到无意义的单成员事件。
    */
   onProcessMember?(ev: ProcessMemberEvent): void;
   /**

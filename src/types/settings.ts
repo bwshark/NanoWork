@@ -6,9 +6,9 @@ export type ConnectionStatus = 'connected' | 'offline';
 import type { DesktopConfig } from '../platform/types';
 export type { DesktopConfig };
 
-// 快捷键 id 的联合类型是「有哪些命令」的唯一事实源，定义在 lib/shortcuts；
+// 快捷键 id 的联合类型是「有哪些命令」的唯一事实源，定义在 lib/editor/shortcuts；
 // 这里只做类型引用，键位默认值与匹配逻辑都不落在 types 层
-import type { ShortcutId } from '../lib/shortcuts';
+import type { ShortcutId } from '../lib/editor/shortcuts';
 
 // 过程展示档位是 process 域的一等值（定义在 types/process）；Settings 直接引用它，
 // 避免 settings↔process 之间出现反向依赖。
@@ -153,7 +153,7 @@ export interface Settings {
   hiddenSessions?: string[];
   // —— 快捷键（设置弹窗「快捷键」分区）——
   /**
-   * 用户改键覆盖表：`ShortcutId → 键位串`（格式见 `lib/shortcuts` 的文件头注释）。
+   * 用户改键覆盖表：`ShortcutId → 键位串`（格式见 `lib/editor/shortcuts` 的文件头注释）。
    *
    * **只存与默认值不同的项**，因此「表里没有」= 用默认键位，而 `''` 是另一个语义：
    * 用户显式清除该绑定（禁用）。两者不能合并——若用「表里没有」表示禁用，

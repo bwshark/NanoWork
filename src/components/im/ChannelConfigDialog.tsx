@@ -15,13 +15,13 @@ import {
   TextField,
   Typography,
 } from '@mui/material';
-import { getChannelMeta } from '@/lib/channelMeta';
+import { getChannelMeta } from '@/lib/channel/channelMeta';
 import { useChannelsStore } from '@/stores/channelsStore';
 import { toast } from '@/components/Toast';
 import { platform } from '@/platform';
 import { ChannelScanPanel } from '@/components/im/ChannelScanPanel';
 import type { ChannelConfig, ChannelKind } from '@/types';
-import type { ChannelFieldMeta } from '@/lib/channelMeta';
+import type { ChannelFieldMeta } from '@/lib/channel/channelMeta';
 
 /**
  * IM 频道配置弹窗。

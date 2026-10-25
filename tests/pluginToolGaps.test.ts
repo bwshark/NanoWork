@@ -3,7 +3,7 @@ import {
   agentBlocksTool,
   computePluginToolGaps,
   type PluginToolGap,
-} from '../src/lib/pluginToolGaps';
+} from '../src/lib/agent/pluginToolGaps';
 
 describe('agentBlocksTool', () => {
   it('allow=undefined（未声明限制）→ 放行全部，包括任何声明工具', () => {

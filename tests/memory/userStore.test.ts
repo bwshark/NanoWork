@@ -1,5 +1,5 @@
 /**
- * 用户级仓储（`src/lib/memoryUserStore.ts`）。需求 FR-M20 – FR-M24。
+ * 用户级仓储（`src/lib/memory/memoryUserStore.ts`）。需求 FR-M20 – FR-M24。
  *
  * 与 `store.test.ts` 同一套内存假端口，因为这里要验的是**落盘与投影**：
  *
@@ -11,14 +11,14 @@
 
 import { describe, expect, it } from 'vitest';
 import type { PreferenceState, ProfileState } from '../../src/types';
-import { createUserMemoryStore } from '../../src/lib/memoryUserStore';
-import type { MemoryStoreIo } from '../../src/lib/memoryStore';
+import { createUserMemoryStore } from '../../src/lib/memory/memoryUserStore';
+import type { MemoryStoreIo } from '../../src/lib/memory/memoryStore';
 import {
   CURATED_MEMORY_FILE,
   PREFERENCES_FILE,
   PROFILE_FILE,
   USER_PROFILE_PROJECTION_FILE,
-} from '../../src/lib/memoryPaths';
+} from '../../src/lib/memory/memoryPaths';
 
 const NOW = new Date('2026-10-02T00:00:00Z');
 const SCOPE = 'u_testscope';

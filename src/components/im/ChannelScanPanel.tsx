@@ -3,8 +3,8 @@ import { Box, Button, CircularProgress, TextField, Typography } from '@mui/mater
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import { QRCodeSVG } from 'qrcode.react';
-import { getChannelMeta } from '@/lib/channelMeta';
-import { useChannelScan } from '@/lib/channelScan';
+import { getChannelMeta } from '@/lib/channel/channelMeta';
+import { useChannelScan } from '@/lib/channel/channelScan';
 import type { ChannelKind } from '@/types';
 
 /**

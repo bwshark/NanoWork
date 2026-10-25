@@ -43,7 +43,7 @@ import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { TaskFormDialog } from "@/components/tasks/TaskFormDialog";
 import { MarkdownView } from "@/components/MarkdownView";
 import { platform } from "@/platform";
-import { describeSchedule, describeValidity, nextCronRunMs } from "@/lib/cron";
+import { describeSchedule, describeValidity, nextCronRunMs } from "@/lib/task/cron";
 import {
   RUN_FAILURE_LABELS,
   classifyRunFailure,
@@ -51,15 +51,15 @@ import {
   summarizeRuns,
   summarizeRunsByTask,
   type RunStats,
-} from "@/lib/taskRunStats";
-import { describeDelivery } from "@/lib/taskDelivery";
-import { describeTaskWorkdir } from "@/lib/taskWorkdir";
+} from "@/lib/task/taskRunStats";
+import { describeDelivery } from "@/lib/task/taskDelivery";
+import { describeTaskWorkdir } from "@/lib/task/taskWorkdir";
 import { useDefaultWorkspacePath } from "@/stores/storageInfoStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { toast } from "@/components/Toast";
-import { ROUTES } from "@/lib/constants";
+import { ROUTES } from "@/lib/core/constants";
 import type { TaskConfig, TaskRunRecord } from "@/types";
-import type { TaskDraft } from "@/lib/taskDraft";
+import type { TaskDraft } from "@/lib/task/taskDraft";
 
 interface AutomationTemplate {
   name: string;

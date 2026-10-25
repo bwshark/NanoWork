@@ -5,8 +5,8 @@ import { MessageArtifacts } from '@/components/artifacts/MessageArtifacts';
 import { ArtifactPanel } from '@/components/artifacts/ArtifactPanel';
 import { useArtifactsStore } from '@/stores/artifactsStore';
 import { useSessionUiStore } from '@/stores/sessionUiStore';
-import { buildIndexEntry } from '@/lib/artifactIndex';
-import { fileArtifactId } from '@/lib/fileArtifact';
+import { buildIndexEntry } from '@/lib/artifact/artifactIndex';
+import { fileArtifactId } from '@/lib/artifact/fileArtifact';
 import type { Artifact, ArtifactIndexEntry, Message } from '@/types';
 
 /** 造一条文件产物 + 对应索引条目（模拟「已入库」的会话状态） */

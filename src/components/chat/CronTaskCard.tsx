@@ -19,8 +19,8 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import PauseCircleOutlineIcon from '@mui/icons-material/PauseCircleOutline';
 import ScheduleIcon from '@mui/icons-material/Schedule';
 import { cronToolArgsToTaskDraft, parseCronJobId } from '@/ai/cronTaskMirror';
-import { describeSchedule } from '@/lib/cron';
-import { ROUTES } from '@/lib/constants';
+import { describeSchedule } from '@/lib/task/cron';
+import { ROUTES } from '@/lib/core/constants';
 import { useTasksStore } from '@/stores/tasksStore';
 import type { ProcessToolRow } from '@/types';
 

@@ -1,5 +1,5 @@
 ﻿/**
- * 蒸馏引擎（`src/lib/memoryDistill.ts`）。
+ * 蒸馏引擎（`src/lib/memory/memoryDistill.ts`）。
  *
  * 这是整个记忆 v2 的**核心增量**，也是「与 WorkBuddy 一样」的主体。测试按**契约**组织：
  *
@@ -26,8 +26,8 @@ import {
   passesPromotionGate,
   revisionsOf,
   validateCuratedState,
-} from '../../src/lib/memoryDistill';
-import { createMemoryFact } from '../../src/lib/memoryFact';
+} from '../../src/lib/memory/memoryDistill';
+import { createMemoryFact } from '../../src/lib/memory/memoryFact';
 
 const NOW = new Date('2026-10-02T00:00:00Z');
 const NOW_ISO = NOW.toISOString();

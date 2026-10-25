@@ -2,13 +2,13 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { platform } from '@/platform';
 import { zustandStorage } from '@/platform';
-import { STORAGE_KEYS } from '@/lib/constants';
+import { STORAGE_KEYS } from '@/lib/core/constants';
 import { SKILLS } from '@/ai/builtinSkills';
 import {
   buildOverrideMap,
   resolveSkillOverride,
   withEffectiveOverride,
-} from '@/lib/skillOverrides';
+} from '@/lib/agent/skillOverrides';
 import {
   applyOverrides,
   dropOverride,
@@ -16,9 +16,9 @@ import {
   findOverride,
   pinnedSkillIds,
   upsertOverride,
-} from '@/lib/skillOverrideTable';
-import { metaForEdit, metaForNew } from '@/lib/syncStamp';
-import { recordAppAudit } from '@/lib/appAudit';
+} from '@/lib/agent/skillOverrideTable';
+import { metaForEdit, metaForNew } from '@/lib/sync/syncStamp';
+import { recordAppAudit } from '@/lib/audit/appAudit';
 import type { Skill, SkillOverride, SkillOverrideEntry } from '@/types';
 
 interface SkillsState {

@@ -19,20 +19,20 @@ import { useSkillsStore } from '@/stores/skillsStore';
 import { NanobotClient } from '@/ai/runtime/nanobotHttp/chat';
 import { waitForSessionWrites } from '@/events';
 import { resetEventStream } from './helpers/eventStream';
-import { MemoryService } from '@/lib/memory';
-import { PromptLibrary } from '@/lib/promptLibrary';
-import { IdentityService } from '@/lib/identity';
+import { MemoryService } from '@/lib/memory/memory';
+import { PromptLibrary } from '@/lib/prompt/promptLibrary';
+import { IdentityService } from '@/lib/agent/identity';
 import {
   IDENTITY_TAG_OPEN,
   PRODUCT_IDENTITY_TAG_OPEN,
   TONE_STYLE_TAG_OPEN,
   USER_INSTRUCTIONS_TAG_OPEN,
-} from '@/lib/constants';
+} from '@/lib/core/constants';
 import type { Agent, Skill } from '@/types';
 import type { ChatHandle, ChatRequest, StreamHandlers } from '@/ai/runtime/types';
 import { DEFAULT_MEMORY_POLICY } from '@/types';
-import { setKnowledgeSearchProvider } from '@/lib/agentKnowledgeTurn';
-import { KNOWLEDGE_TAG_OPEN } from '@/lib/constants';
+import { setKnowledgeSearchProvider } from '@/lib/agent/agentKnowledgeTurn';
+import { KNOWLEDGE_TAG_OPEN } from '@/lib/core/constants';
 
 let captured: ChatRequest[] = [];
 

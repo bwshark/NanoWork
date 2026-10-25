@@ -26,8 +26,8 @@ import { useChannelSessionsStore } from '@/stores/channelSessionsStore';
 import {
   resetChannelTurnWatchesForTest,
   watchChannelTurn,
-} from '@/lib/channelTurnLive';
-import { setChannelTurnWatching } from '@/lib/channelTurnLiveState';
+} from '@/lib/channel/channelTurnLive';
+import { setChannelTurnWatching } from '@/lib/channel/channelTurnLiveState';
 import type { ChannelTurnProgress, ChannelTurnProgressEvent } from '@/platform/types';
 
 const SESSION_ID = 'nb:feishu.feishu:oc_v3_abc123';

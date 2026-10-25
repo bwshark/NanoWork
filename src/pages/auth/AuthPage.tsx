@@ -14,7 +14,7 @@ import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import { useNavigate } from 'react-router-dom';
 import { LogoIcon } from '@/components/LogoIcon';
 import { SettingsCard } from '@/components/settings/SettingsPrimitives';
-import { APP_DISPLAY_NAME, APP_DISPLAY_SUB, ROUTES } from '@/lib/constants';
+import { APP_DISPLAY_NAME, APP_DISPLAY_SUB, ROUTES } from '@/lib/core/constants';
 import { getSyncRuntime, initSyncRuntime, resolveSyncBaseUrl, SyncAuthError } from '@/sync';
 
 /**

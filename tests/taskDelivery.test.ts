@@ -12,7 +12,7 @@ import {
   deliveryTargetKey,
   describeDelivery,
   hasDeliveryTarget,
-} from '@/lib/taskDelivery';
+} from '@/lib/task/taskDelivery';
 import type { NanobotChannelSessionSummary } from '@/platform/types';
 import type { TaskDelivery } from '@/types';
 

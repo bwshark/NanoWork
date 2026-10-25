@@ -19,7 +19,7 @@ import { SkillActionMenu } from './SkillActionMenu';
 import { OverviewSearch } from './OverviewSearch';
 import { MarkdownView } from '@/components/MarkdownView';
 import { toast } from '@/components/Toast';
-import { clampLines } from '@/lib/cardSx';
+import { clampLines } from '@/lib/ui/cardSx';
 import {
   skillHintTooltipSx,
   skillInfoGridRowSx,
@@ -46,7 +46,7 @@ import {
   overrideToast,
   skillInfoRows,
 } from './skillMeta';
-import { SKILL_OVERRIDE_OFF, resolveSkillOverride } from '@/lib/skillOverrides';
+import { SKILL_OVERRIDE_OFF, resolveSkillOverride } from '@/lib/agent/skillOverrides';
 import type { Skill, SkillOverride } from '@/types';
 
 /** 描述超过这个长度才给「展开」：短描述展开没意义，只是多一个可点区域 */

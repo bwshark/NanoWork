@@ -46,7 +46,7 @@ const api: ElectronAPI = {
   // —— 工作区记忆目录（`<workdir>/.nanowork/memory/`）——
   // 与 `writeTextFile` 是两条**不同能力**的通道：那条只放行 home / userData /
   // ~/.nanowork，这条落在用户的工作目录里，因此文件名白名单卡得更死
-  // （只有 MEMORY.md 与 YYYY-MM-DD.md，见 src/lib/workspaceMemory.ts）。
+  // （只有 MEMORY.md 与 YYYY-MM-DD.md，见 src/lib/memory/workspaceMemory.ts）。
   memoryListFiles: (workdir: string | null) => ipcRenderer.invoke('memory:list', workdir),
   memoryReadFile: (workdir: string | null, name: string) =>
     ipcRenderer.invoke('memory:read', workdir, name),

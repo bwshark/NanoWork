@@ -17,7 +17,7 @@
 | 引擎只有**匿名子代理**：`spawn` 工具的入参是 `task / label / temperature / wait`，**没有人设、没有工具策略** | `nanobot/nanobot/agent/tools/spawn.py` |
 | 子代理人设由**固定模板**构造，函数签名里没有 agent 概念 | `agent/subagent.py:570` 的 `_build_subagent_prompt(workspace)` → `templates/agent/subagent_system.md` |
 | 引擎的 `agent_id`（请求参数）**只用于工具策略**，不是人设路由 | `api/server.py`、`security/workspace_access.py` |
-| 「带人设的专家」完全由**客户端**拼提示词实现（`assemblePromptSections` 的 agent-persona 段）+ 下发 `tool_allow`/`tool_deny` | `src/lib/promptAssembly.ts`、`sessionsStore.send` |
+| 「带人设的专家」完全由**客户端**拼提示词实现（`assemblePromptSections` 的 agent-persona 段）+ 下发 `tool_allow`/`tool_deny` | `src/lib/prompt/promptAssembly.ts`、`sessionsStore.send` |
 | 已知缺陷：`/v1` 链路下 `spawn(wait=false)` 的**结果必然丢失**——根因是 **serve 进程没有 inbound 消费者**（见 §7.0 更正），不是跨进程 | `OVERVIEW.md` |
 | `ProcessEvent` 无成员字段 → 「谁在跑」连数据源都没有 | `src/types/process.ts` |
 
@@ -231,7 +231,7 @@
 | 落点 | 改动 |
 | --- | --- |
 | `src/ai/runtime/types.ts` | 契约类型 `ExpertGroupMember` / `ExpertGroupRequest`（camelCase）+ `ChatRequest.expertGroup?` |
-| `src/lib/expertGroupRequest.ts`（新） | `buildExpertGroupRequest(group, agents, availablePresetIds)`：过滤已删/停用成员、逐字段映射、按预设有效性决定成员模型下发、**成员数 < 2 返回 `undefined`** |
+| `src/lib/agent/expertGroupRequest.ts`（新） | `buildExpertGroupRequest(group, agents, availablePresetIds)`：过滤已删/停用成员、逐字段映射、按预设有效性决定成员模型下发、**成员数 < 2 返回 `undefined`** |
 | `src/ai/runtime/nanobotHttp/chat.ts` | `expertGroupWire()`：camelCase → `expert_group`（`system_prompt` / `tool_allow` …）；JSON body 与 multipart（JSON 串）两路都带 |
 | `src/stores/sessionsStore.ts` | `streamAssistantReply` 由 `session.groupId` 解析团并塞进 `ChatRequest` |
 
@@ -349,9 +349,9 @@ INFO    | Running inline subagent [c4757fe9]: expert-group:探针     ← lead �
 | `src/types/event.ts` + `events/{factory,project}.ts` | 新增事件 `expert-group-member`。**必须落盘**：打开会话时消息由事件流重建，只改内存会「刷新后成员归属凭空消失」，而实时那一轮看起来完全正常 |
 | `src/ai/runtime/types.ts` + `nanobotHttp/chat.ts` | 契约 `ProcessMemberEvent` + `onProcessMember`；相位走**白名单映射**，未知相位**忽略**而不是猜（猜错会把「团长在汇总」显示成「成员开始执行」） |
 | `src/stores/sessionsStore.ts` | `handleProcessMember`：闭合思考段 → 记事件 → 更新 `Message.process`；行 id 取**落盘事件 id**，让实时与重放两条路径的 key 一致 |
-| `src/lib/processDetail.ts` | `MemberGroupRow` + **跨事件分组**；`result` 档只留失败成员 |
+| `src/lib/ui/processDetail.ts` | `MemberGroupRow` + **跨事件分组**；`result` 档只留失败成员 |
 | `src/pages/chat/ProcessView.tsx` | 成员组行：成员名 + 状态 + 按需展开的产出/计划；**失败原因不折叠** |
-| `src/lib/processDigest.ts` | 署名头步数**按成员计，不按相位计**（相位相加会让「3 个成员的团」显示成「8 步」） |
+| `src/lib/ui/processDigest.ts` | 署名头步数**按成员计，不按相位计**（相位相加会让「3 个成员的团」显示成「8 步」） |
 
 **几条定死的展示口径**（都不会报错、只会显示错话，故每条都有用例）：
 
@@ -369,5 +369,5 @@ INFO    | Running inline subagent [c4757fe9]: expert-group:探针     ← lead �
 
 **验收**：ProcessView 能标出「成员 A / 成员 B」，且事件不串。覆盖：
 `nanobot/tests/test_api_stream.py`（引擎真的发出来了）、`tests/gateway.integration.test.ts`（相位映射）、
-`tests/lib/processDetail.test.ts` + `tests/chatProcessTimeline.test.tsx`（分组与渲染）、
+`tests/lib/ui/processDetail.test.ts` + `tests/chatProcessTimeline.test.tsx`（分组与渲染）、
 `tests/events/equivalence.test.ts`（刷新前后逐字段一致）。

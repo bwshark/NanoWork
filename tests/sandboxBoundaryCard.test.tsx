@@ -9,7 +9,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { platform } from '@/platform';
 import { SecuritySection } from '@/components/settings/sections/SecuritySection';
-import { SANDBOX_LAYERS } from '@/lib/sandboxBoundary';
+import { SANDBOX_LAYERS } from '@/lib/core/sandboxBoundary';
 import { useToolsPolicyStore } from '@/stores/toolsPolicyStore';
 import { flush, mount, unmount } from './helpers/reactMount';
 

@@ -20,24 +20,24 @@ import ExtensionOutlinedIcon from "@mui/icons-material/ExtensionOutlined";
 import { usePluginsStore } from "@/stores/pluginsStore";
 import { useSessionsStore } from "@/stores/sessionsStore";
 import { useAgentsStore } from "@/stores/agentsStore";
-import { collectMissingSessionPluginRefs } from "@/lib/sessionPluginRefs";
+import { collectMissingSessionPluginRefs } from "@/lib/agent/sessionPluginRefs";
 import { SessionPluginRefNotice } from "./SessionPluginRefNotice";
-import { computePluginToolGaps } from "@/lib/pluginToolGaps";
+import { computePluginToolGaps } from "@/lib/agent/pluginToolGaps";
 import {
   describePluginHookTooltip,
   pluginHookChip,
-} from "@/lib/pluginHooks";
+} from "@/lib/agent/pluginHooks";
 import { platform } from "@/platform";
 import { toast } from "@/components/Toast";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
-import { PLUGIN_DRIFT_NOTICE, describePluginSource } from "@/lib/pluginIntent";
+import { PLUGIN_DRIFT_NOTICE, describePluginSource } from "@/lib/agent/pluginIntent";
 import {
   cardChipOutlinedSx,
   cardStatusChipSx,
   clampLines,
   hoverCardSx,
   iconTileSx,
-} from "@/lib/cardSx";
+} from "@/lib/ui/cardSx";
 import { PluginMarketSection } from "./PluginMarketSection";
 import type { PluginView } from "@/types/plugin";
 

@@ -474,10 +474,10 @@ export async function uninstallPluginPackage(pluginsRoot: string, name: string):
 // 版本
 // ---------------------------------------------------------------------------
 
-// 版本解析与区间判定**实现在渲染层的纯模块** `src/lib/semverRange.ts`：
+// 版本解析与区间判定**实现在渲染层的纯模块** `src/lib/core/semverRange.ts`：
 // 同一套规则还要被插件卡片（界面侧「这个包能不能用」）用到，写两份必然漂移，
 // 症状是「装的时候说可以，界面上说不兼容」。这里只做再导出。
-export { compareVersions, parseVersion, satisfiesRange } from '../src/lib/semverRange';
+export { compareVersions, parseVersion, satisfiesRange } from '../src/lib/core/semverRange';
 
 /** 当前 `pluginsRoot` 下某个包名对应的目录是否已被占用 */
 export async function isPluginInstalled(pluginsRoot: string, name: string): Promise<boolean> {

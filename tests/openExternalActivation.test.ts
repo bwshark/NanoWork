@@ -31,7 +31,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { useSessionsStore } from '@/stores/sessionsStore';
-import { STORAGE_KEYS } from '@/lib/constants';
+import { STORAGE_KEYS } from '@/lib/core/constants';
 import type { Session } from '@/types';
 
 const TARGET = 'deep-link-target';

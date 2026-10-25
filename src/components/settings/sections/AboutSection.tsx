@@ -4,7 +4,7 @@ import { SettingsCard, SettingsRow } from '@/components/settings/SettingsPrimiti
 import { EngineSelfCheckCard } from '@/components/settings/sections/EngineSelfCheckCard';
 import { UpdateCard } from '@/components/settings/sections/UpdateCard';
 import { toast } from '@/components/Toast';
-import { APP_DISPLAY_NAME, APP_DISPLAY_SUB, APP_NAME, APP_VERSION } from '@/lib/constants';
+import { APP_DISPLAY_NAME, APP_DISPLAY_SUB, APP_NAME, APP_VERSION } from '@/lib/core/constants';
 import { platform } from '@/platform';
 import type { AppInfo } from '@/platform/types';
 

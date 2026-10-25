@@ -14,7 +14,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { groupSessionsByWorkdir } from '@/layout/SidebarNav';
-import { DEFAULT_WORKSPACE_LABEL } from '@/lib/workspaceLabel';
+import { DEFAULT_WORKSPACE_LABEL } from '@/lib/workspace/workspaceLabel';
 import type { Session } from '@/types';
 
 const DEFAULT_DIR = 'C:\\Users\\tester\\NanoWork';
@@ -122,7 +122,7 @@ describe('groupSessionsByWorkdir：默认工作空间是一个语义分组', () 
  * 相反的一条：**工作空间下没有对话记录就不显示这个分组**——空分组会给用户一个点进去
  * 什么都没有的入口，比「分组消失」更容易误解成数据丢了。故补组逻辑连同参数一并移除。
  *
- * 「谁算有对话记录」的判据在 `@/lib/conversation`（不能只看 `messages.length`，
+ * 「谁算有对话记录」的判据在 `@/lib/session/conversation`（不能只看 `messages.length`，
  * 消息是按需水合的），组合行为见 `tests/sessionsStartupList.test.ts`。
  */
 describe('groupSessionsByWorkdir：没有任务的工作空间不成组', () => {

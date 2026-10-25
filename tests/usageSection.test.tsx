@@ -16,7 +16,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { __setRuntimeForTest } from '@/ai/runtime';
 import { UsageSection } from '@/components/settings/sections/UsageSection';
-import { emptyUsageStats, todayLocalIso, zeroCounters } from '@/lib/usageReport';
+import { emptyUsageStats, todayLocalIso, zeroCounters } from '@/lib/ui/usageReport';
 import { useUsageStore } from '@/stores/usageStore';
 import { useModelsStore, type ManagedModel } from '@/stores/modelsStore';
 import type { AgentRuntime } from '@/ai/runtime/types';

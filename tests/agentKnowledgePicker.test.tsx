@@ -13,7 +13,7 @@ import { useState } from 'react';
 import { act } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AgentKnowledgePicker } from '@/components/agents/AgentKnowledgePicker';
-import type { KbGateway } from '@/lib/kbClient';
+import type { KbGateway } from '@/lib/kb/kbClient';
 import type { AgentKnowledgeBinding } from '@/types';
 import { buttonByText, click, flush, mount, unmount } from './helpers/reactMount';
 

@@ -98,7 +98,7 @@ export const TRACE_FIELD_MAX_CHARS = 4000;
 /**
  * 抽 `len` 位小写十六进制（traceId 32 位、spanId 24 位，对齐 WorkBuddy 观感）。
  *
- * ⚠️ 这里**刻意不 import `@/lib/id`**：本模块要能被主进程（esbuild `--format=cjs`、
+ * ⚠️ 这里**刻意不 import `@/lib/core/id`**：本模块要能被主进程（esbuild `--format=cjs`、
  * 无 `@` 别名）以**值**的形式引入。esbuild 只擦得掉 `import type`，值引入会让
  * `main.cjs` 直接构建不出来（同 `src/sync/baseUrl.ts` 的注释所述）。
  */

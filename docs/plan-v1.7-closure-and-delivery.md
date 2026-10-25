@@ -29,13 +29,13 @@ V1.6 把「运行期工程」补齐了，但 **V1 本身仍未整体收口**（`
 | 批次 | 状态 | 日期 | 证据 |
 |---|---|---|---|
 | **B1 判据与文档收口** | ✅ **已完成（7/7）** | 2026-10-17 | **B1-01**：v2 §6 的 P1 基线表整块重写为「复核后真正剩余的 P1 共 4 条」并逐条给阻塞点与落点；`docs/README.md` §九 看板新增 **#35**（与 #34 同源的状态滞后，第二次发生）。**B1-02**：`FR-4.4` ⬜→🟡，写明「个人 / 项目两级已由记忆 v2 落地（`memoryPaths.ts` 两类根 + `workspaceIdFor` / `scopeIdFor`），只剩组织级 → V3」，**本轮零代码改动**。**B1-03**：`FR-8.6` 拆三件（彻底删除 ✅ / 检索前过滤被知识库阻塞 / 注入检测待做）并注明「不再计为整条欠账」。**B1-04**：`FR-3.9` 收窄为两块并给 ② 的降级口径。**B1-05**：**19 条 FR**（R13 全量 6 + R3 5 + R8 4 + R11 4）并入 v2 第 3 章，**新开 R13 域**并进域总览表；顺带校准「原文称 24 条 / 实为 19 条」的计数口径（v1.6 §〇 加勘误行）。**B1-06**：`OVERVIEW.md` 全篇重写（V1 收口口径、V1.6/V1.7 进度、已实现能力按域、遗留风险 10 条）。**B1-07**：本文件已登记进 `docs/README.md` §三。**门禁实测（零代码改动，用于确认基线）**：三套 `tsc` 均 0 错误；`CODEBUDDY_SAFE_DELETE_ENABLED=0 npm run build` **退出码 0**（24.43s）；首屏 `modulepreload` 0.61 MB / 合计 1.16 MB（两条预算内）；`vitest` **226 文件 3409 用例**中 **2 个红均已定位为夹具/环境类**（同步集成用例并发下健康检查超时、`fileBackup` 用例断言与 `list()` 契约冲突的确定性 flaky），证据见 `OVERVIEW.md` §2.1 —— **两条噪声建议在 B2 一并修掉** |
-| **B2 客户端补完** | ✅ **已完成（3/3 + 2 处门禁噪声）** | 2026-10-17 | **B2-01**：会话版本引用集进同步负载——`Session.pluginVersions` / `SessionMeta.pluginVersions` 声明字段 + `src/lib/sessionPluginRefs.ts`（快照 / 解析 / GC 保护集，纯函数）+ 白名单 `pluginVersions`（**对象按内容比**，否则每轮发送都涨 `rev`）+ `toMeta` / `toMetaFromEntity` / `metaToSession` / `deriveMetaFromEvents` 往返 + `collectCache` 的引用集改为 **本机生效副本 ∪ 会话引用集**（换机 GC 不再删掉别的设备正在用的那一版）。**B2-02**：`src/lib/promptInjection.ts` 四类规则（指令覆盖 / 角色劫持 / 外泄诱导 / 编码混淆）+ `components/composer/InjectionNotice.tsx`，`Composer` 上方常驻提示、**只提示不拦截**；规则按「动作 + 对象」收紧，6 条「正常提问不误报」用例钉住误报率。**B2-03**：占位本就确定（`hashHue`），本轮补 `helperText` 写明「云端头像未接入」+ 9 条用例**锁定确定性**（同名同色同字；URL 头像退回名称首字），**不新增任何网络请求**。**门禁噪声（2 处，均非回归）**：① `fileBackupStore` 的 `BackupEntry` 加单调 `seq`，`list()` 改「`at` 倒序 → `seq` 倒序」的**全序**（同毫秒也确定），用例改为按契约断言「最新在前」；② 两个同步集成用例的健康检查与 `beforeAll` 超时 20s → 90s（全量并发下 uvicorn 首次 import 可被拖过 20s，单跑只要 2.9s）。**门禁**：三套 `tsc` 0 错误；全量 `vitest --maxWorkers=3` **229 文件 / 3454 用例 exit=0**（此前的两处红全消）；`CODEBUDDY_SAFE_DELETE_ENABLED=0 npm run build` exit=0；`electron/main.cjs` / `preload.cjs` 已重建（`indexFile.ts` 被主进程打包，改它必须重建）。**变异验证 3 项**：白名单去掉 `pluginVersions` → 4 条红；去掉 `seq` 兜底 → 2 条红；去掉中文指令覆盖规则 → 1 条红 |
+| **B2 客户端补完** | ✅ **已完成（3/3 + 2 处门禁噪声）** | 2026-10-17 | **B2-01**：会话版本引用集进同步负载——`Session.pluginVersions` / `SessionMeta.pluginVersions` 声明字段 + `src/lib/agent/sessionPluginRefs.ts`（快照 / 解析 / GC 保护集，纯函数）+ 白名单 `pluginVersions`（**对象按内容比**，否则每轮发送都涨 `rev`）+ `toMeta` / `toMetaFromEntity` / `metaToSession` / `deriveMetaFromEvents` 往返 + `collectCache` 的引用集改为 **本机生效副本 ∪ 会话引用集**（换机 GC 不再删掉别的设备正在用的那一版）。**B2-02**：`src/lib/prompt/promptInjection.ts` 四类规则（指令覆盖 / 角色劫持 / 外泄诱导 / 编码混淆）+ `components/composer/InjectionNotice.tsx`，`Composer` 上方常驻提示、**只提示不拦截**；规则按「动作 + 对象」收紧，6 条「正常提问不误报」用例钉住误报率。**B2-03**：占位本就确定（`hashHue`），本轮补 `helperText` 写明「云端头像未接入」+ 9 条用例**锁定确定性**（同名同色同字；URL 头像退回名称首字），**不新增任何网络请求**。**门禁噪声（2 处，均非回归）**：① `fileBackupStore` 的 `BackupEntry` 加单调 `seq`，`list()` 改「`at` 倒序 → `seq` 倒序」的**全序**（同毫秒也确定），用例改为按契约断言「最新在前」；② 两个同步集成用例的健康检查与 `beforeAll` 超时 20s → 90s（全量并发下 uvicorn 首次 import 可被拖过 20s，单跑只要 2.9s）。**门禁**：三套 `tsc` 0 错误；全量 `vitest --maxWorkers=3` **229 文件 / 3454 用例 exit=0**（此前的两处红全消）；`CODEBUDDY_SAFE_DELETE_ENABLED=0 npm run build` exit=0；`electron/main.cjs` / `preload.cjs` 已重建（`indexFile.ts` 被主进程打包，改它必须重建）。**变异验证 3 项**：白名单去掉 `pluginVersions` → 4 条红；去掉 `seq` 兜底 → 2 条红；去掉中文指令覆盖规则 → 1 条红 |
 | **引擎统一收尾** | ✅ **已完成** | 2026-10-17 | 用户决策「统一到本仓 study 副本，桌面也跑本仓」。`$APPDATA/nanowork/nanowork.nanobot.json` 由坏掉的 `{}`（带 BOM→`JSON.parse` 抛错→fallback 到本仓 exe）改为显式 `{bin: study exe, host:127.0.0.1, port:8900}`（无 BOM）。study 引擎已自洽：`gitstore.py` 含 FileLock、`nanobot.exe` 启动器指向本仓 venv（`nanobot_ai 0.3.0` 已装）、`nanobot --version`→v0.3.0。凭据走环境变量 `DASHSCOPE_API_KEY`（两份 `nanowork.config.json` 均无内联密钥）→ 统一不丢凭据。本机无 codes 应用 userData（codes 副本未被使用），备份在 `codes/nanobot/.local-backup-eng-20261017_204905/`。B3 引擎改动落 study 即可，不再强制双副本同步 |
 | B3 引擎侧三件 | 🟡 **B3-01 / B3-02 已于 2026-10-23 真机验收通过**；B3-03 待飞书凭据 | 2026-10-23 | 三件代码均已落并有用例。**本轮真机（agnes-3.0-flash 通道）**：B3-01 子代理委派 6 条判据全过（结果回注 391、SSE `started→done`、三条权限单调递减含对照）；B3-02 Dream 闸门 11 条全过（采纳只写变化项 / 丢弃逐字节不变 / 三件套基线不被提前改动）+ 回退开关 2 条（关闸门后无候选且文件被直落改写）。脚本 `tasks/verify-b3-real.py`，证据 `tasks/evidence/b3-*.json`。**2026-10-23 补记**：B3-03 已于 **2026-10-20 真机闭环**（飞书审批卡文本生效、允许→工具执行、拒绝→未执行、桌面端同步弹卡，见 §九 看板 #37 与附录 C.3/C.8），期间修掉两处零报错缺陷（运行时渠道名 ≠ 配置段名导致审批开关查表 miss；网关路由漏 `await` 导致快照端点恒 500）。**B3 三件至此全部落地并通过真机** |
 | B4 交付闭环 | ✅ 全部完成（B4-01 自动更新 / B4-02 深链 / B4-03 运行时自助安装 / B4-04 反馈包） | 2026-10-18 | B4-01 发布源 GitHub Releases（真机发版需 `GH_TOKEN`），B4-04 诊断含启动剖析+延迟摘要+脱敏清单可见，B4-03 一键修复状态机已落（仅当解释器/导入失败时出按钮） |
 | B5 数据驱动决策 | ✅ 已完成（4 项决策记录，均带数字） | 2026-10-18 | B5-01 关掉 CLI 预热池（首字延迟 p50 5s/p95 47s 由远端 LLM 主导，引擎启动 4.4s 已被 app 启动并行预热覆盖）；B5-02 采纳只读 sqlite 尺寸监控、拒绝跨进程 checkpoint（引擎确有 `llm_usage.sqlite3` 180KB）；B5-03 维持自助安装（本机自检 3/3 通过，未触发 <70% 阈值）；B5-04 续挂口袋清单（现有 `taskkill /T` 回收有效、无真实诉求） |
 
-> **B1 过程中额外发现（已记录，未擅自扩范围）**：① `vite build` 不带 `CODEBUDDY_SAFE_DELETE_ENABLED=0` 会被安全删除守卫拦在 `emptyDir(dist)`，报错栈看着像构建坏了 —— 已写进 `OVERVIEW.md` §5.2 的提醒。② `tests/lib/fileBackup.test.ts` 的 `append / delete` 用例断言的是**插入序**，而 `list()` 的契约是**最新在前**，两次快照跨毫秒时必然红（4 次重跑 2 红 2 绿）。这是**夹具与契约冲突**，不是产品缺陷，但会让每次全量门禁掷硬币。**修法建议**：给时间线条目加单调 `seq`，`list()` 改成「`at` 倒序 → `seq` 倒序」的全序（同毫秒也有确定顺序），用例随契约断言 —— 顺带消掉 UI 侧真实存在的不确定性；只改用例（断言集合）是次选。排入 B2 收尾。
+> **B1 过程中额外发现（已记录，未擅自扩范围）**：① `vite build` 不带 `CODEBUDDY_SAFE_DELETE_ENABLED=0` 会被安全删除守卫拦在 `emptyDir(dist)`，报错栈看着像构建坏了 —— 已写进 `OVERVIEW.md` §5.2 的提醒。② `tests/lib/artifact/fileBackup.test.ts` 的 `append / delete` 用例断言的是**插入序**，而 `list()` 的契约是**最新在前**，两次快照跨毫秒时必然红（4 次重跑 2 红 2 绿）。这是**夹具与契约冲突**，不是产品缺陷，但会让每次全量门禁掷硬币。**修法建议**：给时间线条目加单调 `seq`，`list()` 改成「`at` 倒序 → `seq` 倒序」的全序（同毫秒也有确定顺序），用例随契约断言 —— 顺带消掉 UI 侧真实存在的不确定性；只改用例（断言集合）是次选。排入 B2 收尾。
 
 ---
 
@@ -46,11 +46,11 @@ V1.6 把「运行期工程」补齐了，但 **V1 本身仍未整体收口**（`
 | FR | 文档口径 | 代码实测 | 结论 |
 |---|---|---|---|
 | **FR-2.5** 子 Agent 委派 | P1 ⬜ | 引擎**能力已在**：`agent/subagent.py` + `agent/loop.py:425` `self.subagents = SubagentManager(...)`；`loop.py:212` 有 `_subagent_tools_config()` | **真待办**。缺的不是「能不能派生」，而是三件事：① 权限**单调递减**是否真成立（子工具集 ⊆ 父工具集，需实测 `_subagent_tools_config` 与父 `tool_allow/tool_deny` 的关系）② `/v1` 链路下 `spawn(wait=false)` 结果必丢（已定位，需改走 `run_inline`）③ 客户端看不见子代理（ProcessView 无分组） |
-| **FR-3.9** 扩展态同步边界 | P1 🟡 | 启用态已同步（`src/lib/settingsSync.ts` 把 `enabledPlugins` 列为保留）；版本引用集只服务本机 GC（`src/stores/pluginsStore.ts`） | **真待办，但只剩两块**：① 会话版本引用集**进同步负载**（当前不跨端）② 专家头像走**账户级命名空间**（现仅 `Agent.avatar?: string` 本地字段）。②依赖云端资产，本期可降级为「确定性占位 + 降级说明」 |
-| **FR-4.4** 记忆分级与命名空间 | P1 ⬜ | **个人 / 项目两级已由记忆 v2 落地**：`src/lib/memoryPaths.ts` 的 `USER_MEMORY_DIR`（`~/.nanowork/user-memory/u_<hash>/`）与工作区根（`<wd>/.nanowork/memory/`），隔离键 `workspaceIdFor()` / `scopeIdFor()` | **改判，不是开发任务**。三级里「个人 / 项目」已 ✅，只剩「组织」——而组织级记忆必须有租户/组织模型（V3）。本期只做**状态勘误**，不写代码 |
+| **FR-3.9** 扩展态同步边界 | P1 🟡 | 启用态已同步（`src/lib/sync/settingsSync.ts` 把 `enabledPlugins` 列为保留）；版本引用集只服务本机 GC（`src/stores/pluginsStore.ts`） | **真待办，但只剩两块**：① 会话版本引用集**进同步负载**（当前不跨端）② 专家头像走**账户级命名空间**（现仅 `Agent.avatar?: string` 本地字段）。②依赖云端资产，本期可降级为「确定性占位 + 降级说明」 |
+| **FR-4.4** 记忆分级与命名空间 | P1 ⬜ | **个人 / 项目两级已由记忆 v2 落地**：`src/lib/memory/memoryPaths.ts` 的 `USER_MEMORY_DIR`（`~/.nanowork/user-memory/u_<hash>/`）与工作区根（`<wd>/.nanowork/memory/`），隔离键 `workspaceIdFor()` / `scopeIdFor()` | **改判，不是开发任务**。三级里「个人 / 项目」已 ✅，只剩「组织」——而组织级记忆必须有租户/组织模型（V3）。本期只做**状态勘误**，不写代码 |
 | **FR-4.6** Dream 双阶段记忆 | P1 ⬜ | 引擎 Dream **已在跑**：`agent/memory.py:82` `.dream_cursor`、`:410` 读 cursor 判「有没有新东西要合并」、`:511` `dream_prompt_file`；`llm_usage` 里 `source='dream'` 有真实流量 | **真待办**。缺的是文档要求的那半句——「**合并产物需用户可审查后才生效**」：现在是无闸门直落，缺候选暂存 + 审查 UI。⚠️ 落点需实测（Dream 是直写 `memory/MEMORY.md` 还是经工具写） |
 | **FR-6.5** IM 内审批 | P1 ⬜ | 审批**回传端点已有**：`api/server.py:866` / `:1111` `POST /v1/tool-approvals/{id}`；渠道**发送能力已有**：`channels/*/runtime.py` 各家都有 `async def send(OutboundMessage)` | **真待办**。缺引擎侧「把审批请求变成渠道卡片 + 收回调」这一段；桌面权限弹窗不受影响（两条路并存） |
-| **FR-8.5** 沙箱执行 | P1 🟡 | electron 侧已由 v1.6 `FR-8.10`（`electron/windowPreferences.ts` 档位表）补；引擎侧 Windows 沙箱仍缺 | ✅ **边界声明已落（2026-10-23）**：`src/lib/sandboxBoundary.ts` 是唯一事实来源（五层 × 已生效/部分生效/没有 + 逐条缺口），设置「安全」分区只读卡片渲染，**不给开关**（引擎侧没有可开关的 native 沙箱）；v2 §11.3.1 补落地表与两处事实纠正（`agent/tools/sandbox.py` 只有 bwrap 后端、仅 Linux、默认关闭 → Windows 裸跑；无域名出口白名单）。判据 11 例 + 3 项变异。剩余 OS 级隔离改判 V2/V3，不做 native 沙箱（见 B5） |
+| **FR-8.5** 沙箱执行 | P1 🟡 | electron 侧已由 v1.6 `FR-8.10`（`electron/windowPreferences.ts` 档位表）补；引擎侧 Windows 沙箱仍缺 | ✅ **边界声明已落（2026-10-23）**：`src/lib/core/sandboxBoundary.ts` 是唯一事实来源（五层 × 已生效/部分生效/没有 + 逐条缺口），设置「安全」分区只读卡片渲染，**不给开关**（引擎侧没有可开关的 native 沙箱）；v2 §11.3.1 补落地表与两处事实纠正（`agent/tools/sandbox.py` 只有 bwrap 后端、仅 Linux、默认关闭 → Windows 裸跑；无域名出口白名单）。判据 11 例 + 3 项变异。剩余 OS 级隔离改判 V2/V3，不做 native 沙箱（见 B5） |
 | **FR-8.6** 数据防泄漏 | P1 ⬜ | 三件里：① 「记忆可彻底删除」**已随 FR-4.5 ✅**（真实删除）② 「检索前按权限过滤」被知识库阻塞（无知识库＝无检索）③ 「提示词注入检测」**全仓零命中** | **部分待办**：只剩③可做，①②改判（② → V2 知识库，① → 已落） |
 
 > 复核依据：`grep` 全仓 + 逐文件读。**未做**：FR-2.5 的子代理权限关系、FR-4.6 的 Dream 写入落点——两者在 B3 开工第一步用「跑一轮 + 查盘」实测，不靠读代码推断（项目已有「别从 grep 推断序列化」的教训）。
@@ -59,7 +59,7 @@ V1.6 把「运行期工程」补齐了，但 **V1 本身仍未整体收口**（`
 
 | # | 偏差 | 后果 |
 |---|---|---|
-| 1 | `nanowork-prd-design-v2.md` §6 的「P1 状态基线（2026-10-07）」表把 `FR-1.7` 会话检索、`FR-7.4` 产物版本列为「未完成（可纯客户端落地）」，但两者分别已于 2026-10-06 / 10-05 转 ✅（代码：`src/lib/sessionSearch.ts`、`src/stores/artifactsStore.ts:101` 的 `versions` / `previousVersion`） | 照表排期 = 重做已完成的活 |
+| 1 | `nanowork-prd-design-v2.md` §6 的「P1 状态基线（2026-10-07）」表把 `FR-1.7` 会话检索、`FR-7.4` 产物版本列为「未完成（可纯客户端落地）」，但两者分别已于 2026-10-06 / 10-05 转 ✅（代码：`src/lib/session/sessionSearch.ts`、`src/stores/artifactsStore.ts:101` 的 `versions` / `previousVersion`） | 照表排期 = 重做已完成的活 |
 | 2 | `FR-4.4` 标 ⬜ 但两级已落；`FR-8.6` 标 ⬜ 但三件里两件已落/被阻塞 | 把「改判」当成「开发」，虚增规模；也让真正的缺口（Dream 闸门、IM 审批）被埋没 |
 | 3 | v1.6 的 19 条新增 FR 尚未并入 v2 第 3 章（R3 / R8 / R11 / R13），`OVERVIEW.md` 仍是 2026-09-17 口径 | 下一轮做「阶段盘点」时又得从 `docs/` 里翻增量文档 |
 
@@ -92,7 +92,7 @@ V1.6 把「运行期工程」补齐了，但 **V1 本身仍未整体收口**（`
 | 任务号 | 任务 | 需求 | 落点 | DoD |
 |---|---|---|---|---|
 | B2-01 | 会话的**插件版本引用集**进同步负载：让「A 设备装的是 v0.1.9、B 设备是 v0.1.10」在 pull 后能被发现并按引用集解析 | FR-3.9 ① | `src/types/session*` + `src/sync/*` + `src/stores/pluginsStore.ts` | 两端同步后，同一会话解析到同一版本；**不得**把包本体上行（包本体仍各设备自装）；旧负载缺字段时按「无引用集」放行，不报错 |
-| B2-02 | 提示词注入检测：本地规则识别 + 命中打标 + UI 提示（不阻断） | FR-8.6 ③ | 新增 `src/lib/promptInjection.ts`（纯函数）+ 输入区/记忆页展示 | 至少覆盖四类：指令覆盖（"ignore previous" / "忽略以上"）、角色劫持、外泄诱导（读 `.env` / 密钥路径）、编码混淆（base64/零宽字符）。**命中只提示不拦截**（拦错了比不拦更糟）；规则集可单测、可扩展 |
+| B2-02 | 提示词注入检测：本地规则识别 + 命中打标 + UI 提示（不阻断） | FR-8.6 ③ | 新增 `src/lib/prompt/promptInjection.ts`（纯函数）+ 输入区/记忆页展示 | 至少覆盖四类：指令覆盖（"ignore previous" / "忽略以上"）、角色劫持、外泄诱导（读 `.env` / 密钥路径）、编码混淆（base64/零宽字符）。**命中只提示不拦截**（拦错了比不拦更糟）；规则集可单测、可扩展 |
 | B2-03 | 专家头像降级口径落地：无账户命名空间时给出**确定性**占位（同 Agent 同色同字），并在专家编辑页说明「云端头像未接入」 | FR-3.9 ② | `src/types/agent.ts` / 专家编辑页 | 同一 Agent 在两端占位一致（同 hash 同输出）；不新增网络请求 |
 
 **变异验证**（改回旧写法必须变红）：
@@ -462,7 +462,7 @@ B1 ──┬─→ B2 ────────────────┐
 ### C.9 10-20 追加的桌面端 IM 审批卡（2026-10-20 真机验收通过）
 > 场景：飞书发「创建文件」→ 飞书侧收到审批文本卡 → **桌面端助理视图输入框位置同步弹出审批卡** → 点「允许本次」→ 工具真的执行。
 > 判据：引擎 `tests/gateway/test_health_route_contract.py`（12 例）+ `test_approvals_route_e2e.py`（7 例）；
-> 客户端 `tests/channelApprovalCard.test.tsx` + `tests/electron/channelApprovals.test.ts` + `tests/lib/channelSession.test.ts`（44 例）。
+> 客户端 `tests/channelApprovalCard.test.tsx` + `tests/electron/channelApprovals.test.ts` + `tests/lib/channel/channelSession.test.ts`（44 例）。
 
 - [x] 飞书侧审批文本卡送达（`cardkit:card:write` 只影响流式卡片，审批卡走普通出站文本）
 - [x] 桌面端助理视图弹出审批卡，**贴底**（与任务视图同位置）：`top:726 / bottom:900`；截图 `docs/evidence/approval-card-ui.png`
@@ -481,7 +481,7 @@ B1 ──┬─→ B2 ────────────────┐
 
 - [x] 引擎**配置层**默认 `True`（`FileToolsConfig.default_deny_write`）+ `create()` 的 getattr 兜底改 fail-closed
 - [x] 引擎**参数层**默认保持 `False`（`_FsTool.__init__`）—— upstream 兼容边界，**刻意与配置层相反**
-- [x] 客户端常量下沉到 `src/lib/constants.ts::DEFAULT_DENY_WRITE`（单一事实源）+ `electron/toolsPolicyConfig.ts` 反向 import 并 re-export
+- [x] 客户端常量下沉到 `src/lib/core/constants.ts::DEFAULT_DENY_WRITE`（单一事实源）+ `electron/toolsPolicyConfig.ts` 反向 import 并 re-export
 - [x] `SecuritySection.tsx` 兜底改 `?? DEFAULT_DENY_WRITE`；开关 hint 讲清「只影响 full 模式」「删除同样受限」「读不受影响」「pathRules 是唯一放行出口」
 - [x] 本机配置 `nanowork.config.json`：`defaultDenyWrite: true` + `pathRules` 加一条 `C:/Users/xinmi/NanoWork`（read/write/delete 全 allow）
 - [x] PRD 同步：§11.2.1「待定（需产品决策）」→「已决策」+ 三层默认值表；§20.6.6「不改默认值到 True」→ 划掉并说明代价与出口；§11.2.2「默认关闭」→「默认开启」

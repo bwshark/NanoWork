@@ -8,7 +8,7 @@
  *    —— 那就显示一个用户没做过的设置。
  */
 import { describe, expect, it } from 'vitest';
-import { describeTaskWorkdir } from '@/lib/taskWorkdir';
+import { describeTaskWorkdir } from '@/lib/task/taskWorkdir';
 
 describe('describeTaskWorkdir：任务卡片上的工作目录摘要', () => {
   it('未绑定（undefined / 空串 / 纯空白）都不出这一行', () => {

@@ -117,7 +117,7 @@ vi.mock('@/platform', async (importOriginal) => {
 });
 
 import { AccountEntry, maskAccountLabel } from '@/components/AccountEntry';
-import { FEEDBACK_URL, ROUTES } from '@/lib/constants';
+import { FEEDBACK_URL, ROUTES } from '@/lib/core/constants';
 import { useSettingsUiStore } from '@/stores/settingsUiStore';
 import { byAria, click, flush, mount, unmount } from '../helpers/reactMount';
 

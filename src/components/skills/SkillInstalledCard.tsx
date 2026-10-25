@@ -19,7 +19,7 @@ import {
   SKILL_OVERRIDE_OFF,
   SKILL_OVERRIDE_USER_INVOCABLE_ONLY,
   resolveSkillOverride,
-} from '@/lib/skillOverrides';
+} from '@/lib/agent/skillOverrides';
 import {
   autoTriggerHint,
   isAutoTriggerOn,

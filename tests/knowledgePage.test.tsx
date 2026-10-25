@@ -13,7 +13,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { KnowledgePage } from '@/pages/knowledge/KnowledgePage';
 import { toast } from '@/components/Toast';
-import type { KbGateway } from '@/lib/kbClient';
+import type { KbGateway } from '@/lib/kb/kbClient';
 import {
   buttonByText,
   click,

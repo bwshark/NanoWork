@@ -1,12 +1,12 @@
 import { create } from 'zustand';
 import { platform } from '@/platform';
-import { mapRecordsToMessages, toIso } from '@/lib/sessionImport';
+import { mapRecordsToMessages, toIso } from '@/lib/session/sessionImport';
 import {
   CHANNEL_SESSION_ID_PREFIX,
   channelSessionKey,
   isExternalSession,
-} from '@/lib/channelSession';
-import { isChannelTurnWatching } from '@/lib/channelTurnLiveState';
+} from '@/lib/channel/channelSession';
+import { isChannelTurnWatching } from '@/lib/channel/channelTurnLiveState';
 import { useSessionsStore } from './sessionsStore';
 import type { NanobotChannelSessionDetail, NanobotChannelSessionSummary } from '@/platform/types';
 import type { Session } from '@/types';

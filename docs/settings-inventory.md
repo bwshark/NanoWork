@@ -8,7 +8,7 @@
 > 安全中心`、`关于`）。
 >
 > 代码落点：`src/types/settings.ts`（类型）、`src/stores/settingsStore.ts`（默认值 + 迁移）、
-> `src/lib/constants.ts`（`STORAGE_KEYS` / 路由 / 常量）、`electron/storageRoutes.ts`（key → 文件路由）、
+> `src/lib/core/constants.ts`（`STORAGE_KEYS` / 路由 / 常量）、`electron/storageRoutes.ts`（key → 文件路由）、
 > `src/components/settings/`（设置弹窗 UI）。
 
 ---
@@ -66,7 +66,7 @@
 | `''` | 用户显式清除 = 禁用该快捷键 | 这是用户的主动决定，必须与「没设置过」区分开 |
 | 自定义键位串 | 覆盖默认 | 写入与默认**相同**的值会被 `setShortcut` 归一化成删除表项，避免表里留下一条挡住未来默认值的记录 |
 
-键位串的格式、默认值、匹配规则全部收口在 `src/lib/shortcuts.ts`（注册表 + 纯函数），
+键位串的格式、默认值、匹配规则全部收口在 `src/lib/editor/shortcuts.ts`（注册表 + 纯函数），
 界面与派发器都只读它——见 `docs/architecture-shortcuts.md`。
 
 ### 2.2 其它持久化 key（**不是** `settings.json`）
@@ -122,7 +122,7 @@
 
 | # | 候选 | 现状（硬编码点） | 建议落点 | 理由 |
 |---|---|---|---|---|
-| 1 | **引擎端口族**：serve `18900`（首选，可自动顺延）/ gateway health `18790` / 频道 WS `9900` | `src/lib/constants.ts` `DEFAULT_GATEWAY_PORT`；`electron/main.ts` 同名镜像常量（serve 端口、`isPortInUse(18790)`、WS 9900）多处字面量 | ③ 引擎配置目录 + 「连接与模型 · 高级」 | 端口冲突是本地部署最常见的故障，现在只能改代码重打包。⚠️ 2026-09-21 已加**主进程自动顺延 + 地址协商**（`resolveGatewayPort` + `nanobot:gatewayInfo`）：首选端口被占用或落在 Windows 保留区间（`winerror 10013`）时会自动换端口并同步界面地址 |
+| 1 | **引擎端口族**：serve `18900`（首选，可自动顺延）/ gateway health `18790` / 频道 WS `9900` | `src/lib/core/constants.ts` `DEFAULT_GATEWAY_PORT`；`electron/main.ts` 同名镜像常量（serve 端口、`isPortInUse(18790)`、WS 9900）多处字面量 | ③ 引擎配置目录 + 「连接与模型 · 高级」 | 端口冲突是本地部署最常见的故障，现在只能改代码重打包。⚠️ 2026-09-21 已加**主进程自动顺延 + 地址协商**（`resolveGatewayPort` + `nanobot:gatewayInfo`）：首选端口被占用或落在 Windows 保留区间（`winerror 10013`）时会自动换端口并同步界面地址 |
 | 2 | **网络代理**（直连 / 系统代理 / 手动） | 无（Electron 用默认会话网络栈） | ④ → 主进程 `session.setProxy` | WorkBuddy「通用 · 网络代理」直接对应；企业网下是刚需 |
 | 3 | **客户端通知开关 + 提示音** | `src/platform/notification.ts` 只暴露 `notify()`，无开关 | ① `settings.json` | 现状无法静音；WorkBuddy 有「客户端通知 / 通知提示音」两项 |
 | 4 | **新任务默认权限策略**（完全访问 / 逐条批准） | 新会话靠**继承当前会话**，无全局默认 | ① `settings.json` | 「每次新建都要重设一遍」是当前明确的操作负担 |
@@ -134,8 +134,8 @@
 | 5 | **界面语言** | 文案全量硬编码中文 | ① 新 `i18n` 命名空间 | WorkBuddy「通用 · 语言」；现阶段只需接一个 `zh-CN` 字典并留出 `en` 结构 |
 | 6 | **字体大小 / 界面密度** | 基准 `fontSize: 14` 写死在 `muiTheme` | ① + 主题工厂接参 | WorkBuddy「通用 · 字体大小」；对长文阅读场景影响明显 |
 | 7 | **侧边栏宽度 / 会话列表密度** | `SidebarNav` 内 `width: 240` 字面量 | ① `settings.json` | 与 6 同属「布局偏好」，一起做才有意义 |
-| 8 | **大附件处理阈值** | `src/lib/attachments.ts` `PERSIST_DATAURL_LIMIT = 512 * 1024` | ① `settings.json` | 阈值决定「内联持久化」还是「只留路径」，与用户机器性能相关 |
-| 9 | **编辑器撤销栈深度** | `src/lib/undoStack.ts` `limit = 50` | ① `settings.json`（或保持常量） | 影响内存占用与「回退够不够久」的体感 |
+| 8 | **大附件处理阈值** | `src/lib/artifact/attachments.ts` `PERSIST_DATAURL_LIMIT = 512 * 1024` | ① `settings.json` | 阈值决定「内联持久化」还是「只留路径」，与用户机器性能相关 |
+| 9 | **编辑器撤销栈深度** | `src/lib/editor/undoStack.ts` `limit = 50` | ① `settings.json`（或保持常量） | 影响内存占用与「回退够不够久」的体感 |
 
 ### P2 —— 建议随功能实现一并外置（现在没有对应功能，不要先造开关）
 

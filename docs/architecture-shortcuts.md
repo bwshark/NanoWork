@@ -2,7 +2,7 @@
 
 > 状态：V1 增量文档。收口目标：并入 v2 交互章节。
 >
-> 相关代码：`src/lib/shortcuts.ts`（注册表与纯函数）、`src/lib/editableTarget.ts`、
+> 相关代码：`src/lib/editor/shortcuts.ts`（注册表与纯函数）、`src/lib/editor/editableTarget.ts`、
 > `src/hooks/useGlobalShortcuts.ts`、`src/hooks/useDesktopConfig.ts`、
 > `src/components/settings/sections/ShortcutsSection.tsx`、`src/components/HotkeyInput.tsx`。
 
@@ -23,8 +23,8 @@
 ## 2. 分层
 
 ```
-lib/shortcuts.ts          注册表 + 键位串解析/匹配/格式化      ← 唯一事实源（纯逻辑，无 DOM）
-lib/editableTarget.ts     焦点是否在输入控件里                 ← 唯一使用 DOM 的判断
+lib/editor/shortcuts.ts          注册表 + 键位串解析/匹配/格式化      ← 唯一事实源（纯逻辑，无 DOM）
+lib/editor/editableTarget.ts     焦点是否在输入控件里                 ← 唯一使用 DOM 的判断
 hooks/useGlobalShortcuts  窗口级 keydown 派发（scope=global）
 Composer.handleInputKeyDown  输入框内处理（scope=composer）
 Electron 主进程 globalShortcut  系统级热键（scope=desktop）
@@ -35,12 +35,12 @@ ShortcutsSection          改键界面（读注册表渲染，不写死任何键
 **只有注册表知道「有哪些命令、默认键位是什么」**。界面、派发器、输入框都从它读，
 没有任何一处再写一遍键位字面量。
 
-### 为什么要让 `lib/shortcuts.ts` 保持零 DOM 依赖
+### 为什么要让 `lib/editor/shortcuts.ts` 保持零 DOM 依赖
 
-它会被非渲染层的编译单元间接引用到：`electron/storageRoutes.ts → lib/constants → types/settings → types`。
+它会被非渲染层的编译单元间接引用到：`electron/storageRoutes.ts → lib/core/constants → types/settings → types`。
 electron 的 `tsconfig.node.json` 的 `lib` 只有 `ES2023`，**不加载 DOM 类型库**——
 一旦这个文件里出现 `HTMLElement` / `EventTarget`，主进程的类型检查就会直接报错。
-所以 `isEditableTarget`（唯一需要 DOM 的判断）被拆到 `lib/editableTarget.ts`：
+所以 `isEditableTarget`（唯一需要 DOM 的判断）被拆到 `lib/editor/editableTarget.ts`：
 只有渲染层会引它，主进程那条链不会碰到。
 
 这条约束不是洁癖：它同时消掉了 `TitleBar` 与派发器里两份重复的「可编辑」判断。
@@ -140,7 +140,7 @@ WorkBuddy 的快捷键表里有「放大/缩小/重置内容字号」三条。�
    界面、搜索、恢复默认、冲突检查都会自动跟上。
 2. **默认键位不得重复**（`tests/shortcuts.test.ts` 有断言）。
    重复意味着「按下后只有先匹配到的那条生效」，另一条永远沉默。
-3. **`lib/shortcuts.ts` 里不得出现 DOM 类型**（见 §2），否则主进程类型检查会挂。
+3. **`lib/editor/shortcuts.ts` 里不得出现 DOM 类型**（见 §2），否则主进程类型检查会挂。
 4. **改键后必须立即生效**，不允许重启或重新挂载组件才生效——
    键位在事件回调里现取，`tests/globalShortcuts.test.tsx` 锁这一条。
 5. **「恢复默认」是删除表项**，不是把默认值写回表里。

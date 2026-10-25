@@ -21,7 +21,7 @@
  */
 
 import type { UsageCounters, UsageDay, UsageProviderRow, UsageStats } from '@/types';
-import { emptyUsageStats } from '@/lib/usageReport';
+import { emptyUsageStats } from '@/lib/ui/usageReport';
 import { isAbortError } from './httpError';
 
 /**
@@ -45,7 +45,7 @@ const DEFAULT_USAGE_TIMEOUT_MS = 8000;
 /**
  * 读取失败时的空报表。
  *
- * 形状只有一份（`@/lib/usageReport`）：这里再写一遍的话，将来给报表加字段时
+ * 形状只有一份（`@/lib/ui/usageReport`）：这里再写一遍的话，将来给报表加字段时
  * 必然漏改一处，而漏掉的那个字段会让 UI 读到 `undefined` 并渲染出 `NaN`。
  */
 function emptyStats(error?: string): UsageStats {

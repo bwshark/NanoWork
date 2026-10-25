@@ -274,7 +274,7 @@ describe('事件投影等价性：实时增量视图 ≡ 批量重放投影', ()
     const assistant = replayed.messages.find((m) => m.role === 'assistant')!;
     expect(assistant.content).toBe('这是回答。');
     // 穷举四类过程行（含 FR-2.4 成员与 FR-2.5 子代理）。落库保持「一个相位一行」的
-    // 原始事实，按成员 / 子代理分组是渲染时的事（见 `lib/processDetail.ts`）
+    // 原始事实，按成员 / 子代理分组是渲染时的事（见 `lib/ui/processDetail.ts`）
     // ——所以这里能看到两行成员与三行子代理。
     expect(
       assistant.process?.map((p) =>

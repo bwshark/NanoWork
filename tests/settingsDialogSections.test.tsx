@@ -21,7 +21,7 @@ import { platform } from '@/platform';
 import { SettingsDialog } from '@/components/settings/SettingsDialog';
 import { SETTINGS_NAV_ITEMS } from '@/components/settings/settingsNav';
 import { __setRuntimeForTest } from '@/ai/runtime';
-import { emptyUsageStats } from '@/lib/usageReport';
+import { emptyUsageStats } from '@/lib/ui/usageReport';
 import { useSettingsUiStore } from '@/stores/settingsUiStore';
 import { useUsageStore } from '@/stores/usageStore';
 import type { AgentRuntime } from '@/ai/runtime/types';

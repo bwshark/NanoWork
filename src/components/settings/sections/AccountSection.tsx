@@ -5,7 +5,7 @@ import { useNavigate } from 'react-router-dom';
 import { SettingsCard, SettingsRow } from '@/components/settings/SettingsPrimitives';
 import { SyncStatusIndicator } from '@/components/SyncStatus';
 import { toast } from '@/components/Toast';
-import { ROUTES } from '@/lib/constants';
+import { ROUTES } from '@/lib/core/constants';
 import { platform } from '@/platform';
 import {
   ARCHIVE_LOCAL_KEYS,
@@ -13,9 +13,9 @@ import {
   applyArchive,
   buildArchive,
   parseArchive,
-} from '@/lib/accountArchive';
-import type { ArchiveWorkspaceMemory } from '@/lib/accountArchive';
-import { MemoryService } from '@/lib/memory';
+} from '@/lib/sync/accountArchive';
+import type { ArchiveWorkspaceMemory } from '@/lib/sync/accountArchive';
+import { MemoryService } from '@/lib/memory/memory';
 import type { SessionMeta, SessionEvent } from '@/types/event';
 import { getEventStore } from '@/events';
 import { isEventStreamSession, toMetaFromEntity, useSessionsStore } from '@/stores/sessionsStore';

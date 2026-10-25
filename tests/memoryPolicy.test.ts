@@ -1,5 +1,5 @@
 ﻿/**
- * 记忆 v2 的**可配置策略**（`src/lib/memoryPolicy.ts` + `src/types/memory.ts` 的归一化）。
+ * 记忆 v2 的**可配置策略**（`src/lib/memory/memoryPolicy.ts` + `src/types/memory.ts` 的归一化）。
  * 需求 FR-M5 / FR-M10 / FR-M33；计划任务 M0-09 / M2-10。
  *
  * ## 这组用例守的是什么
@@ -20,9 +20,9 @@ import {
   MEMORY_POLICY_LIMITS,
   normalizeMemoryPolicy,
 } from '../src/types';
-import { resolveMemoryPolicy } from '../src/lib/memoryPolicy';
-import { DEFAULT_DISTILL_POLICY } from '../src/lib/memoryDistill';
-import { buildInjectionBlock } from '../src/lib/memoryInjection';
+import { resolveMemoryPolicy } from '../src/lib/memory/memoryPolicy';
+import { DEFAULT_DISTILL_POLICY } from '../src/lib/memory/memoryDistill';
+import { buildInjectionBlock } from '../src/lib/memory/memoryInjection';
 import type { CuratedEntry, EntryKey } from '../src/types';
 
 describe('归一化：逐字段类型 + 区间双检查', () => {

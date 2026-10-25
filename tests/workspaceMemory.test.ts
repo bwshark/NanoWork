@@ -1,5 +1,5 @@
 /**
- * 工作区记忆的**目录约定**纯逻辑（`src/lib/workspaceMemory.ts`）。
+ * 工作区记忆的**目录约定**纯逻辑（`src/lib/memory/workspaceMemory.ts`）。
  *
  * 这个文件守的是三方（渲染层 / 主进程 / Web 端）共用的那几条判据。它们此前各写
  * 一遍、各自漂移，症状是「界面上列得出这个文件、磁盘上却读不到」。所以这里把每条
@@ -19,7 +19,7 @@ import {
   workspaceMemoryDirPath,
   WORKSPACE_MEMORY_DIR,
   WORKSPACE_MEMORY_SUBDIR,
-} from '@/lib/workspaceMemory';
+} from '@/lib/memory/workspaceMemory';
 
 describe('isMemoryFileName：读侧白名单（比写侧宽松）', () => {
   it('接受精炼记忆、日期文件与用户手写的 .md', () => {

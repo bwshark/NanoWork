@@ -1,9 +1,9 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { platform, zustandStorage } from '@/platform';
-import { STORAGE_KEYS } from '@/lib/constants';
-import { artifactContentHash, buildIndexEntry } from '@/lib/artifactIndex';
-import { isFileArtifact } from '@/lib/fileArtifact';
+import { STORAGE_KEYS } from '@/lib/core/constants';
+import { artifactContentHash, buildIndexEntry } from '@/lib/artifact/artifactIndex';
+import { isFileArtifact } from '@/lib/artifact/fileArtifact';
 import type { Artifact, ArtifactIndexEntry, ArtifactVersionMeta, SyncTombstones } from '@/types';
 
 interface ArtifactsState {

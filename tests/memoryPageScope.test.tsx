@@ -19,8 +19,8 @@
 
 import { beforeEach, describe, expect, it } from 'vitest';
 import { MemoryPage } from '@/pages/memory/MemoryPage';
-import { MemoryService } from '@/lib/memory';
-import { CURATED_MEMORY_FILE, dailyMemoryFileName } from '@/lib/workspaceMemory';
+import { MemoryService } from '@/lib/memory/memory';
+import { CURATED_MEMORY_FILE, dailyMemoryFileName } from '@/lib/memory/workspaceMemory';
 import {
   buttonByText,
   click,

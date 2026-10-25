@@ -23,7 +23,7 @@ import type {
 } from '@/types/event';
 import type { LogLevel, LogModule } from '@/observability/logging';
 import type { TraceFile } from '@/observability/trace';
-import type { SessionLatencySample } from '@/lib/sseLatency';
+import type { SessionLatencySample } from '@/lib/core/sseLatency';
 import type { EngineInstallState, EngineSelfCheckReport } from '@/types/engine';
 import type { DeepLinkAction } from '@/types/deepLink';
 import type { UpdateStatus } from '@/types/update';
@@ -231,7 +231,7 @@ export interface TaskSyncResult {
  *
  * 与引擎 `ModelPricing` 同形（camelCase 侧）。`cacheReadPerMillion` 允许缺省，
  * 语义是「用户没填」→ 客户端按输入单价计；**不是** 0（0 = 缓存免费，另一个方向的错）。
- * 归一化在 `src/lib/modelPricing.ts::normalizePricing`，UI 不要直接读这里的裸值。
+ * 归一化在 `src/lib/model/modelPricing.ts::normalizePricing`，UI 不要直接读这里的裸值。
  */
 export interface NanobotModelPricing {
   inputPerMillion?: number;
@@ -810,7 +810,7 @@ export type MemoryDirRef =
  * 记忆目录后端的**v2 能力**（子目录 / 原子替换 / JSONL 追行）。
  *
  * 与 `WorkspaceMemoryFiles` 的关系：后者是 v1 的根级读写面，继续保留以兼容既有调用点与
- * 测试；本接口补齐 v2 需要的三类能力。两者共用 `src/lib/memoryPaths.ts` 的文件名策略，
+ * 测试；本接口补齐 v2 需要的三类能力。两者共用 `src/lib/memory/memoryPaths.ts` 的文件名策略，
  * 差异只在能力面，不在语义。
  */
 export interface MemoryDirFiles {
@@ -942,7 +942,7 @@ export interface PlatformAdapter {
    *
    * 与 `memoryFiles` **刻意分开两个属性**：v1 面同时被 Electron 的 `memory:*` IPC 与
    * Web 的 `nanowork.wsmem.*` key 承载，v2 面另走一组 IPC 与 `nanowork.mem2.*` key
-   * （理由见 `src/lib/memoryPaths.ts` 的 `webMemoryDirKey`）。合成一个对象会让
+   * （理由见 `src/lib/memory/memoryPaths.ts` 的 `webMemoryDirKey`）。合成一个对象会让
    * 「v1 面写、v2 面读」这类不一致有机会发生，且要动 v1 的既有测试。
    */
   memoryDirs: MemoryDirFiles;
@@ -1465,7 +1465,7 @@ export interface PlatformAdapter {
    *   localStorage 审计**（同一个功能在两端留痕语义不同，比没有更误导）。
    *
    * 传入的是**已序列化的单行 JSON**（不含换行）：序列化与脱敏都在渲染层
-   * `lib/appAudit.ts` 完成，主进程只做形态校验与 append，不解释字段。
+   * `lib/audit/appAudit.ts` 完成，主进程只做形态校验与 append，不解释字段。
    */
   auditAppendApp(lines: string[]): Promise<AuditAppendResult>;
   /** 读取应用操作审计日志（形状与 `auditRead()` 一致，便于同一套解析与展示）。 */
@@ -1707,7 +1707,7 @@ export interface ElectronAPI {
   // 与上面那批的关系：上面是 v1 的「工作区根目录 + 单段文件名」形态，继续保留以兼容
   // 既有调用点与测试；这一批是 v2 需要的额外能力：`MemoryDirRef` 化（工作区级 /
   // 用户级两类存储根）、子目录（`daily/`、`archive/`）、原子替换、单行追加。
-  // 名字与子目录一律走 `src/lib/memoryPaths.ts` 的白名单（两端同一份）。
+  // 名字与子目录一律走 `src/lib/memory/memoryPaths.ts` 的白名单（两端同一份）。
   /** 列出某个记忆目录（可带子目录）里的文件名 */
   memoryListDir(dirRef: MemoryDirRef, subdir?: string): Promise<string[]>;
   /** 读取单个文件（可带子目录）；不存在返回 null */

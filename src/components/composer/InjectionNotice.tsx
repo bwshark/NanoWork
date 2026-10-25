@@ -1,6 +1,6 @@
 import { Box, Typography } from "@mui/material";
 import WarningAmberIcon from "@mui/icons-material/WarningAmber";
-import { summarizeInjectionHits, type InjectionHit } from "@/lib/promptInjection";
+import { summarizeInjectionHits, type InjectionHit } from "@/lib/prompt/promptInjection";
 
 /**
  * 提示词注入提示（FR-8.6 ③）——**只提示，不拦发送**。

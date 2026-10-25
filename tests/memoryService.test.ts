@@ -1,11 +1,11 @@
 ﻿import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { MemoryService, isEmptySummary, looksLikeSystemError, memoryDiskPath, normalizeForDedup, parseEntryBodies, parseSummary, workspaceKeyFor } from '@/lib/memory';
-import { parseMemoryDirectives, stripMemoryDirectives } from '@/lib/memoryDirective';
+import { MemoryService, isEmptySummary, looksLikeSystemError, memoryDiskPath, normalizeForDedup, parseEntryBodies, parseSummary, workspaceKeyFor } from '@/lib/memory/memory';
+import { parseMemoryDirectives, stripMemoryDirectives } from '@/lib/memory/memoryDirective';
 import { useSettingsStore, DEFAULT_TRANSCRIPTION, DEFAULT_DESKTOP } from '@/stores/settingsStore';
 import { NanobotClient } from '@/ai/runtime/nanobotHttp/chat';
-import { MEMORY_KEY_PREFIX } from '@/lib/constants';
+import { MEMORY_KEY_PREFIX } from '@/lib/core/constants';
 import { WORKSPACE_MEMORY_STORAGE_PREFIX } from '@/platform/storage.web';
-import { webMemoryDirKey } from '@/lib/memoryPaths';
+import { webMemoryDirKey } from '@/lib/memory/memoryPaths';
 import { platform } from '@/platform';
 import { DEFAULT_MEMORY_POLICY } from '@/types';
 
