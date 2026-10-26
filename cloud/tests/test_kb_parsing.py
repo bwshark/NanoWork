@@ -156,6 +156,93 @@ def test_docx_paragraphs_soft_breaks_and_table_warning() -> None:
     assert any("表格" in warning for warning in parsed.warnings)
 
 
+def test_docx_nested_table_is_flattened_in_cell_and_reported() -> None:
+    """单元格里再嵌一张表：GFM 没有嵌套语法。
+
+    硬塞进外层单元格会破坏整张表；直接跳过则内容**整体消失**（连占位都没有，
+    比图片更隐蔽）。折中是压成一行：格与格用 ` | `、行与行用 `；`，两个边界都留着。
+    """
+    nested = (
+        "<w:tbl><w:tr>"
+        "<w:tc><w:p><w:r><w:t>Q1</w:t></w:r></w:p></w:tc>"
+        "<w:tc><w:p><w:r><w:t>300</w:t></w:r></w:p></w:tc>"
+        "</w:tr><w:tr>"
+        "<w:tc><w:p><w:r><w:t>Q2</w:t></w:r></w:p></w:tc>"
+        "<w:tc><w:p><w:r><w:t>400</w:t></w:r></w:p></w:tc>"
+        "</w:tr></w:tbl>"
+    )
+    body = (
+        "<w:tbl>"
+        "<w:tr><w:tc><w:p><w:r><w:t>季度</w:t></w:r></w:p></w:tc>"
+        "<w:tc><w:p><w:r><w:t>明细</w:t></w:r></w:p></w:tc></w:tr>"
+        f"<w:tr><w:tc><w:p><w:r><w:t>上半年</w:t></w:r></w:p></w:tc><w:tc>{nested}</w:tc></w:tr>"
+        "</w:tbl>"
+    )
+    xml = (
+        f'<?xml version="1.0" encoding="UTF-8"?>'
+        f'<w:document xmlns:w="{W}"><w:body>{body}</w:body></w:document>'
+    )
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as zf:
+        zf.writestr("word/document.xml", xml)
+
+    parsed = parse_document("台账.docx", buffer.getvalue())
+
+    # 外层表还是表：`|` 被转义，所以内层压出来的那串字不会把行切断
+    assert "| 上半年 | Q1 \\| 300；Q2 \\| 400 |" in parsed.text
+    assert any("嵌在单元格里" in warning for warning in parsed.warnings)
+
+
+def test_docx_textbox_fallback_is_not_read_twice() -> None:
+    """Word 给文本框/形状写两份内容（`mc:Choice` + `mc:Fallback`），只能读一份。
+
+    两份文字一模一样，`iter()` 会把它们都读一遍 —— 正文里出现「标注文字标注文字」，
+    同一张图也被抽两遍（两个占位、库里两张一模一样的图）。
+    内容一点没少，只是每处都多了一遍，所以最难被发现。
+    """
+    mc = "http://schemas.openxmlformats.org/markup-compatibility/2006"
+    same = (
+        '<w:r><w:t>标注文字</w:t></w:r>'
+        '<w:r><w:drawing><wp:inline><wp:docPr id="1" name="图1" descr="标注图"/>'
+        '<a:graphic><a:graphicData><a:blip r:embed="rId7"/></a:graphicData></a:graphic>'
+        "</wp:inline></w:drawing></w:r>"
+    )
+    body = (
+        "<w:p><mc:AlternateContent>"
+        f'<mc:Choice Requires="wps">{same}</mc:Choice>'
+        f"<mc:Fallback>{same}</mc:Fallback>"
+        "</mc:AlternateContent></w:p>"
+    )
+    document = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
+        'xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" '
+        'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" '
+        'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" '
+        f'xmlns:mc="{mc}" mc:Ignorable="wps">'
+        f"<w:body>{body}</w:body></w:document>"
+    )
+    rels = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId7" '
+        'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" '
+        'Target="media/image1.png"/></Relationships>'
+    )
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as zf:
+        zf.writestr("word/document.xml", document)
+        zf.writestr("word/_rels/document.xml.rels", rels)
+        zf.writestr("word/media/image1.png", b"\x89PNG\r\n\x1a\n0000")
+
+    parsed = parse_document("标注.docx", buffer.getvalue())
+
+    assert parsed.text.count("标注文字") == 1
+    assert len(parsed.images) == 1
+    assert parsed.text.count("asset-index:0") == 1
+    assert "asset-index:1" not in parsed.text
+
+
 def test_docx_without_document_xml_is_rejected() -> None:
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w") as zf:

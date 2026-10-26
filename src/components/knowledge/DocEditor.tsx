@@ -38,6 +38,7 @@ import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import AddIcon from "@mui/icons-material/Add";
 import { htmlToMarkdown, markdownToHtml } from "@/lib/kb/richText";
 import { docTableSx } from "@/components/knowledge/docTableSx";
+import { docFigureSx } from "@/components/knowledge/docFigureSx";
 
 /**
  * 文档正文编辑器（contentEditable + 选区浮动工具条 + 块把手）。
@@ -165,6 +166,10 @@ export const DocEditor = forwardRef<DocEditorHandle, DocEditorProps>(function Do
    *
    * 只用「上次记下的」会插错位置 —— 上一轮记的是**更早**的选区，
    * 于是「先粘贴的图」会跑到「后选的文件」后面，顺序反了。
+   *
+   * 插进去的是 `<figure><img><figcaption>` 而不是裸 `<img>`：图注是图片**唯一的
+   * 检索信号**，藏在 `alt` 里等于让用户看不见自己「已经写过图注」。默认用文件名
+   * （服务端给的 alt）当图注，用户想改就直接点那行字改。
    */
   const insertImage = useCallback(
     (blobUrl: string, alt: string) => {
@@ -183,11 +188,13 @@ export const DocEditor = forwardRef<DocEditorHandle, DocEditorProps>(function Do
       } else {
         editor.focus();
       }
+      const caption = escapeAttr(alt);
       // eslint-disable-next-line deprecation/deprecation
       document.execCommand(
         'insertHTML',
         false,
-        `<img src="${escapeAttr(blobUrl)}" alt="${escapeAttr(alt)}">`,
+        `<figure><img src="${escapeAttr(blobUrl)}" alt="${caption}">` +
+          `<figcaption>${caption}</figcaption></figure>`,
       );
       sync();
     },
@@ -420,6 +427,8 @@ export const DocEditor = forwardRef<DocEditorHandle, DocEditorProps>(function Do
           // 表格：全局 reset 把 border-collapse 也去掉了，不写回来就是一堆没有边框的
           // 文字块 —— 用户完全看不出那是张表。样式与阅读端共用一份，避免只改一处。
           ...docTableSx('&'),
+          // 图片 + 图注：图注是正文里的一行字（可编辑），样式与阅读端共用一份
+          ...docFigureSx('&'),
           // 图片：不加 max-width 的话大图会横向撑破抽屉。
           // ⚠️ 圆角写**字符串**：`sx` 里的数字会按 spacing 换算（`4` 实测变成 40px）
           '& img': { maxWidth: '100%', height: 'auto', borderRadius: '6px', my: 0.5 },

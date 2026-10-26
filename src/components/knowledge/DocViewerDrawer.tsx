@@ -308,7 +308,7 @@ export function DocViewerDrawer({
         <Box sx={{ px: { xs: 2.5, sm: 4.5 }, pt: 2, flexShrink: 0 }}>
           <Typography sx={{ fontSize: 11.5, color: "text.secondary" }} data-testid="kb-doc-view-meta">
             {meta}
-            {updated !== "" ? ` · ${updated}更新` : ""} · 正文由入库时的分块拼回，原排版与图片不在其中
+            {updated !== "" ? ` · ${updated}更新` : ""} · 正文由入库时的分块拼回，原文件的排版与分页不在其中
           </Typography>
         </Box>
 
@@ -399,8 +399,9 @@ export function DocViewerDrawer({
                     },
                   }}
                 >
-                  {/* 知识库的图片是 blob 地址（<img> 不能带票）→ 放行 */}
-                  <MarkdownView content={content} allowBlobUrls />
+                  {/* 知识库的图片是 blob 地址（<img> 不能带票）→ 放行；
+                      图注显示在图片下方（编辑器里那行字的同一份内容） */}
+                  <MarkdownView content={content} allowBlobUrls showImageCaptions />
                 </Box>
               )}
             </Box>
@@ -424,8 +425,8 @@ export function DocViewerDrawer({
         <Box sx={{ px: { xs: 2.5, sm: 4.5 }, py: 1, flexShrink: 0 }}>
           <Typography sx={{ fontSize: 11, color: "text.secondary" }}>
             {canEdit
-              ? "⌘/Ctrl + S 保存。改正文会重新切块并重建索引，所以检索到的永远是最新版本。"
-              : "只有团队管理员可以编辑正文。要改内容请联系管理员，或用「上传文件」重新入库一篇。"}
+              ? "⌘/Ctrl + S 保存。图片下方那行图注可以直接改 —— 它是这张图参与检索的全部内容。保存后会重新切块并重建索引。"
+              : "只有团队管理员可以编辑正文（含图片下方的图注）。要改内容请联系管理员，或用「上传文件」重新入库一篇。"}
           </Typography>
         </Box>
       </Stack>

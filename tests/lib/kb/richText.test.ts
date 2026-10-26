@@ -192,6 +192,55 @@ describe('图片', () => {
   });
 });
 
+describe('图注（图片下方那行可编辑的字）', () => {
+  it('独占一行的图片变成 figure + figcaption（alt 里藏着等于用户看不见）', () => {
+    const html = markdownToHtml('![系统架构](asset:abc)');
+
+    expect(html).toContain('<figure>');
+    expect(html).toContain('<figcaption>系统架构</figcaption>');
+    // alt 仍然写：figure 被浏览器拆掉时图注还能留住
+    expect(html).toContain('alt="系统架构"');
+  });
+
+  it('改过 figcaption 之后以图注为准（alt 只是打开时的快照）', () => {
+    const html =
+      '<figure><img src="asset:1" alt="旧图注"><figcaption>新写的图注</figcaption></figure>';
+
+    expect(htmlToMarkdown(html)).toBe('![新写的图注](asset:1)');
+  });
+
+  it('句子中间的图片不变成 figure（那里没有「下方」这个位置）', () => {
+    const html = markdownToHtml('看图 ![a](asset:1) 就懂');
+
+    expect(html).not.toContain('figure');
+    expect(htmlToMarkdown(html)).toBe('看图 ![a](asset:1) 就懂');
+  });
+
+  it('图注里的方括号转义后往返不破（未转义的 ] 会提前结束 alt）', () => {
+    const markdown = '![图 1\\] 架构](asset:abc)';
+
+    expect(roundTrip(markdown)).toBe(markdown);
+    // 编辑器里给人看的是没转义的那句
+    expect(markdownToHtml(markdown)).toContain('<figcaption>图 1] 架构</figcaption>');
+  });
+
+  it('空图注往返后仍是空的（占位提示只走 CSS，不落进正文）', () => {
+    expect(roundTrip('![](asset:abc)')).toBe('![](asset:abc)');
+  });
+
+  it('图注里回车产生的 div 之间补空格（不然后两行粘成一个词）', () => {
+    const html = '<figure><img src="asset:1"><figcaption><div>第一行</div><div>第二行</div></figcaption></figure>';
+
+    expect(htmlToMarkdown(html)).toBe('![第一行 第二行](asset:1)');
+  });
+
+  it('图被删掉但图注还在时，那段字留成普通段落（不静默吞掉用户打的字）', () => {
+    const html = '<figure><figcaption>只剩说明</figcaption></figure>';
+
+    expect(htmlToMarkdown(html)).toBe('只剩说明');
+  });
+});
+
 describe('countChars', () => {
   it('不数空白（与列表页的字数口径一致）', () => {
     expect(countChars('一 二\n三')).toBe(3);

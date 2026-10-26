@@ -95,6 +95,20 @@ def test_table_to_records_skips_empty_cells() -> None:
     assert tables.table_to_records(table) == "姓名: 张三; 在职: 是"
 
 
+def test_table_to_records_strips_image_refs_but_keeps_caption() -> None:
+    """格子里的图片：`asset:<id>` 是随机 hex（纯噪声），图注才是可检索的内容。
+
+    docx 的表格单元格里放截图是真实写法（台账、流程图的「图示」列）。不剥的话，
+    同一张图在正文一处、表格里一处会以两种完全不同的文本进向量。
+    """
+    table = f"{HEADER}\n{SEPARATOR}\n| 张三 | ![审批流程图](asset:a1b2c3) | 是 |"
+
+    projected = tables.table_to_records(table)
+
+    assert projected == "姓名: 张三; 年龄: 审批流程图; 在职: 是"
+    assert "asset:" not in projected
+
+
 def test_projection_makes_column_names_searchable() -> None:
     """**整件事的理由就在这一条。**
 

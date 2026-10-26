@@ -30,17 +30,41 @@ ASSET_SCHEME = "asset:"
 #: 解析阶段的占位（第几张图）。
 PENDING_SCHEME = "asset-index:"
 
+#: 图注段：允许出现**转义**的 `]` / `[` / `\`。
+#:
+#: Markdown 的 alt 以第一个未转义的 `]` 结束，所以 `![图 1\] 架构](asset:x)` 是
+#: 合法写法。图注从「解析时自动取」变成「用户手打」之后，带 `]` 的图注（`[草稿]`、
+#: `图 1]`）就不再是理论情况了 —— 用一个只认 `[^\]]*` 的正则，会把这些引用整条
+#: 认不出来，症状是「补了图注，保存后图片变成坏图、图注也没参与检索」。
+_CAPTION = r"((?:[^\]\\]|\\.)*)"
+
 #: `![图注](asset:<id>)`
-_ASSET_REF = re.compile(r"!\[([^\]]*)\]\(asset:([A-Za-z0-9_-]+)\)")
+_ASSET_REF = re.compile(r"!\[" + _CAPTION + r"\]\(asset:([A-Za-z0-9_-]+)\)")
 
 #: `![图注](asset-index:<n>)`
-_PENDING_REF = re.compile(r"!\[([^\]]*)\]\(asset-index:(\d+)\)")
+_PENDING_REF = re.compile(r"!\[" + _CAPTION + r"\]\(asset-index:(\d+)\)")
 
 #: 两种形态都要剥：`asset:<id>`（入库后）与 `asset-index:<n>`（入库前）。
 #:
 #: 判重要在**存图之前**算（那时正文里还是 `asset-index:`），而检索投影要在
 #: **入库之后**算（那时是 `asset:`）—— 一个函数同时认两种，调用点才不会写错。
-_ASSET_REF_ANY = re.compile(r"!\[([^\]]*)\]\((?:asset|asset-index):[A-Za-z0-9_-]+\)")
+_ASSET_REF_ANY = re.compile(r"!\[" + _CAPTION + r"\]\((?:asset|asset-index):[A-Za-z0-9_-]+\)")
+
+#: 图注里的转义还原（`\]` → `]`）。只有这三对是 `_escape_alt` 会产出的。
+_UNESCAPE: tuple[tuple[str, str], ...] = (("\\]", "]"), ("\\[", "["), ("\\\\", "\\"))
+
+
+def unescape_caption(text: str) -> str:
+    """图注里的 Markdown 转义 → 原字符。
+
+    两处要用（**不能合并**，方向不同）：`strip_asset_refs` 要还原文案（检索与判重
+    用的是人话，不是 Markdown 源码），而 `replace_pending_refs` 必须原样保留 ——
+    它写回的是正文，转义丢了就等于把引用改坏了。
+    """
+    for escaped, plain in _UNESCAPE:
+        text = text.replace(escaped, plain)
+    return text
+
 
 #: 可返回给浏览器的图片类型。**白名单里没有 SVG**。
 #:
@@ -108,8 +132,11 @@ def strip_asset_refs(text: str) -> str:
        带着 id 算摘要就永远判不出重复 —— 「同一份资料只入一次库」这条约定会失效。
     2. **检索投影**：图片本体不进向量，`asset:xxxx` 里的噪声更不该进。
        剩下的图注文字才是这张图在检索里的全部内容。
+
+    图注里的转义在此还原：检索与判重吃的是**人话**，`图 1\\] 架构` 里的反斜杠
+    会切成两个不同的词，让同一张图的图注判不出重复。
     """
-    return _ASSET_REF_ANY.sub(lambda match: match.group(1), text)
+    return _ASSET_REF_ANY.sub(lambda match: unescape_caption(match.group(1)), text)
 
 
 def replace_pending_refs(text: str, asset_ids: list[str]) -> str:

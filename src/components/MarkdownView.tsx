@@ -38,9 +38,14 @@ interface MarkdownViewProps {
    * 拽回首屏静态图。真正的判断留在 `markdown/MarkdownRenderer` 内部。
    */
   allowBlobUrls?: boolean;
+  /**
+   * 在图片下方显示一行图注（取 `alt`）。知识库文档打开：图注是图片唯一的检索信号，
+   * 不显示等于让阅读的人以为这张图没有说明。
+   */
+  showImageCaptions?: boolean;
 }
 
-export function MarkdownView({ content, sx, allowBlobUrls }: MarkdownViewProps) {
+export function MarkdownView({ content, sx, allowBlobUrls, showImageCaptions }: MarkdownViewProps) {
   return (
     <Suspense
       fallback={
@@ -49,7 +54,12 @@ export function MarkdownView({ content, sx, allowBlobUrls }: MarkdownViewProps) 
         </Box>
       }
     >
-      <MarkdownRenderer content={content} sx={sx} allowBlobUrls={allowBlobUrls} />
+      <MarkdownRenderer
+        content={content}
+        sx={sx}
+        allowBlobUrls={allowBlobUrls}
+        showImageCaptions={showImageCaptions}
+      />
     </Suspense>
   );
 }

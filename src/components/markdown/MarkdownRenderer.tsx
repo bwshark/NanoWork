@@ -3,6 +3,7 @@ import remarkGfm from 'remark-gfm';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { Link, Box } from '@mui/material';
+import { FIGURE_CAPTION_FONT_SIZE } from '@/components/knowledge/docFigureSx';
 
 /**
  * 需要 `markdown` 分包（react-markdown + remark-gfm + react-syntax-highlighter，
@@ -58,6 +59,14 @@ interface MarkdownRendererProps {
    * 在别处 import 它（哪怕只是 import 一个函数）会把它拽回首屏静态图。
    */
   allowBlobUrls?: boolean;
+  /**
+   * 在图片下方显示一行图注（取 `alt`）。
+   *
+   * 只有知识库文档打开：那里的 `![图注](asset:<id>)` 是有语义的图注，而且图注是
+   * 图片**唯一的检索信号**，不显示等于让阅读的人以为这张图没有说明。对话消息里的
+   * 图片（`alt` 多半是空或文件名）不显示 —— 那会变成一行莫名其妙的字。
+   */
+  showImageCaptions?: boolean;
 }
 
 /** 只额外放行 `blob:`，其余交给 react-markdown 的默认实现。 */
@@ -68,7 +77,12 @@ const allowBlobUrl = (url: string): string =>
  * Markdown 渲染封装：GFM 表格 + 代码高亮。
  * 链接强制新窗口打开；代码块使用 react-syntax-highlighter。
  */
-export function MarkdownRenderer({ content, sx, allowBlobUrls }: MarkdownRendererProps) {
+export function MarkdownRenderer({
+  content,
+  sx,
+  allowBlobUrls,
+  showImageCaptions,
+}: MarkdownRendererProps) {
   return (
     <Box className="md-body" sx={sx}>
       <ReactMarkdown
@@ -78,6 +92,46 @@ export function MarkdownRenderer({ content, sx, allowBlobUrls }: MarkdownRendere
           a: ({ node, ...props }: any) => (
             <Link href={props.href} target="_blank" rel="noopener noreferrer" {...props} />
           ),
+          /**
+           * 图片 + 图注。
+           *
+           * 用 `<span>`（display:block）包而不是 `<figure>`：react-markdown 把图片放在
+           * `<p>` 里，`<figure>` 嵌在 `<p>` 里是非法结构，浏览器解析时会把它拆出来 ——
+           * 于是图注在有些地方显示、有些地方丢失，症状极难复现。
+           */
+          img: ({ node, alt, ...props }: any) => {
+            const caption = typeof alt === 'string' ? alt.trim() : '';
+            if (!showImageCaptions || caption === '') {
+              return <img alt={alt} {...props} />;
+            }
+            return (
+              <Box component="span" sx={{ display: 'block', my: 2, textAlign: 'center' }}>
+                <img
+                  alt={alt}
+                  {...props}
+                  style={{
+                    maxWidth: '100%',
+                    height: 'auto',
+                    borderRadius: 6,
+                    display: 'block',
+                    margin: '0 auto',
+                  }}
+                />
+                <Box
+                  component="span"
+                  sx={{
+                    display: 'block',
+                    mt: 0.75,
+                    fontSize: FIGURE_CAPTION_FONT_SIZE,
+                    lineHeight: 1.7,
+                    color: 'text.secondary',
+                  }}
+                >
+                  {caption}
+                </Box>
+              </Box>
+            );
+          },
           pre: ({ children }: any) => <>{children}</>,
           code: ({ node, className, children, ...rest }: any) => {
             const match = /language-(\w+)/.exec(className || '');

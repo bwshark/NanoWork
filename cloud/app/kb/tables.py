@@ -23,6 +23,8 @@ from __future__ import annotations
 
 import re
 
+from app.kb.assets import strip_asset_refs
+
 #: 转义后的管道。用常量而不是到处写 `"\\|"`，少一处写错就是少一格。
 ESCAPED_PIPE = "\\|"
 
@@ -133,6 +135,13 @@ def table_to_records(text: str) -> str:
     也就不需要迁移、不会有第二份数据、不会两份不同步。
 
     没有数据行（只有表头）时返回原文：那时表头本身就是全部可检索内容。
+
+    ## 格子里可能是图片
+
+    表格单元格里放图片是真实写法（台账截图、示意图），占位形如
+    `![图注](asset:<id>)`。投影时必须走 `strip_asset_refs`：`asset:<id>` 是纯噪声
+    （一串随机 hex，还会稀释长度归一化），而**图注**是这张图唯一的检索内容。
+    不剥的话，同一张图在「正文一处 + 表格里一处」会以两种完全不同的文本进向量。
     """
     lines = [line for line in text.split("\n") if line.strip()]
     if len(lines) < 3:
@@ -142,7 +151,8 @@ def table_to_records(text: str) -> str:
     records: list[str] = []
     for line in lines[2:]:
         pairs: list[str] = []
-        for index, value in enumerate(split_row(line)):
+        for index, raw in enumerate(split_row(line)):
+            value = strip_asset_refs(raw).strip()
             if value == "":
                 continue
             name = header[index] if index < len(header) else ""

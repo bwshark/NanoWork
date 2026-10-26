@@ -15,7 +15,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.db import engine
-from app.kb.assets import collect_asset_ids, strip_asset_refs
+from app.kb.assets import collect_asset_ids, replace_pending_refs, strip_asset_refs
 from app.kb.chunking import retrieval_text
 from app.kb.parsing import parse_document
 from tests.conftest import auth_headers
@@ -32,15 +32,22 @@ _NS_A = "http://schemas.openxmlformats.org/drawingml/2006/main"
 _NS_R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 
 
-def make_docx_with_image(caption: str = "系统架构图", text: str = "下面是架构图：") -> bytes:
-    """造一份「一段文字 + 一张图」的 docx。"""
+def make_docx_with_image(
+    caption: str = "系统架构图",
+    text: str = "下面是架构图：",
+    name: str = "图1",
+) -> bytes:
+    """造一份「一段文字 + 一张图」的 docx。
+
+    `name` 是 Word 给图的内部名（默认自动编号「图1」），`caption` 是替代文字（`descr`）。
+    """
     document = (
         f'<?xml version="1.0" encoding="UTF-8"?>'
         f'<w:document xmlns:w="{_NS_W}" xmlns:wp="{_NS_WP}" xmlns:a="{_NS_A}" xmlns:r="{_NS_R}">'
         f"<w:body>"
         f"<w:p><w:r><w:t>{text}</w:t></w:r></w:p>"
         f"<w:p><w:r><w:drawing><wp:inline>"
-        f'<wp:docPr id="1" name="图1" descr="{caption}"/>'
+        f'<wp:docPr id="1" name="{name}" descr="{caption}"/>'
         f"<a:graphic><a:graphicData>"
         f'<a:blip r:embed="rId7"/>'
         f"</a:graphicData></a:graphic>"
@@ -78,15 +85,93 @@ def test_docx_image_is_extracted_with_caption() -> None:
     assert "asset-index:0" in parsed.text
 
 
-def test_image_without_caption_falls_back_to_name() -> None:
-    """没有 alt 的图退回文件名（`wp:docPr@name`）—— 总比空强。
+def test_auto_picture_name_is_not_used_as_caption() -> None:
+    """没有替代文字时**不拿自动名兜底**：`图1` / `picture 7` 是软件起的编号。
 
-    空的图注 = 这张图在检索里完全隐形；文件名至少常常带点信息。
+    原来「总比空强」的判断是错的 —— 图注会**显示在图片下方**并进检索，
+    `picture 7` 那种编号既不是说明、又是英文噪声。空图注 + 一条可操作提示更好。
     """
     parsed = parse_document("架构.docx", make_docx_with_image(caption="", text="看图"))
 
     assert len(parsed.images) == 1
-    assert parsed.images[0].alt == "图1"
+    assert parsed.images[0].alt == ""
+    # 「这张图现在搜不到，去哪补」要说出来
+    assert any("没有图注" in item for item in parsed.warnings)
+
+
+def test_handwritten_picture_name_is_still_used() -> None:
+    """作者手写过的 `name`（不是自动编号）依然当图注 —— 它是人写的。"""
+    parsed = parse_document("架构.docx", make_docx_with_image(caption="", name="系统架构总览"))
+
+    assert parsed.images[0].alt == "系统架构总览"
+
+
+def test_caption_with_bracket_survives_parse_and_replace() -> None:
+    """图注里带 `]`（`图 1] 架构`）不能被截断。
+
+    图注现在是用户手打的一行字，`[草稿]`、`图 1]` 这类写法随时会出现；
+    引用一旦在 `]` 处被截断，入库时换不到真实 id —— 症状是「改完图注保存，图片坏了」。
+    """
+    parsed = parse_document("架构.docx", make_docx_with_image(caption="图 1] 架构"))
+
+    # 写进正文时 `]` 被转义（Markdown 的 alt 以未转义的 `]` 结束）
+    assert "图 1\\] 架构" in parsed.text
+    # 整条引用仍然认得出来 → 能换成真实 id
+    replaced = replace_pending_refs(parsed.text, ["abc123"])
+    assert "![图 1\\] 架构](asset:abc123)" in replaced
+    # 检索/判重看到的是还原后的**人话**
+    assert strip_asset_refs(replaced).endswith("图 1] 架构")
+
+
+def make_docx_with_table_image(caption: str = "审批流程图") -> bytes:
+    """造一份 `w:tbl` 里嵌图片的 docx（台账的「图示」列就是这么写的）。"""
+    cell_image = (
+        '<w:drawing><wp:inline><wp:docPr id="2" name="图2" '
+        f'descr="{caption}"/><a:graphic><a:graphicData>'
+        '<a:blip r:embed="rId7"/></a:graphicData></a:graphic></wp:inline></w:drawing>'
+    )
+    document = (
+        f'<?xml version="1.0" encoding="UTF-8"?>'
+        f'<w:document xmlns:w="{_NS_W}" xmlns:wp="{_NS_WP}" xmlns:a="{_NS_A}" xmlns:r="{_NS_R}">'
+        "<w:body><w:tbl>"
+        "<w:tr><w:tc><w:p><w:r><w:t>步骤</w:t></w:r></w:p></w:tc>"
+        "<w:tc><w:p><w:r><w:t>图示</w:t></w:r></w:p></w:tc></w:tr>"
+        "<w:tr><w:tc><w:p><w:r><w:t>审批</w:t></w:r></w:p></w:tc>"
+        f"<w:tc><w:p><w:r>{cell_image}</w:r></w:p></w:tc></w:tr>"
+        "</w:tbl></w:body></w:document>"
+    )
+    relationships = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId7" '
+        'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" '
+        'Target="media/image1.png"/>'
+        "</Relationships>"
+    )
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("word/document.xml", document)
+        archive.writestr("word/_rels/document.xml.rels", relationships)
+        archive.writestr("word/media/image1.png", PNG_1X1)
+    return buffer.getvalue()
+
+
+def test_image_inside_table_cell_is_extracted() -> None:
+    """表格单元格里的图**不能静默消失**。
+
+    原来只读 `w:t`，那一格里的图连占位都没有 —— 图和图注一起丢掉，界面上却看不出
+    任何异常（文档照样入库、照样能搜到别的字）。现在占位落在单元格里，
+    检索投影会把它剥成图注（`图示: 审批流程图`）。
+    """
+    parsed = parse_document("台账.docx", make_docx_with_table_image("审批流程图"))
+
+    assert len(parsed.images) == 1
+    assert parsed.images[0].alt == "审批流程图"
+    table_block = next(part for part in parsed.text.split("\n\n") if "| 步骤 |" in part)
+    assert "![审批流程图](asset-index:0)" in table_block
+    # 投影：图注留下、asset 引用剥掉
+    assert "图示: 审批流程图" in retrieval_text(table_block)
+    assert "asset-index" not in retrieval_text(table_block)
 
 
 # —— 入库 ——

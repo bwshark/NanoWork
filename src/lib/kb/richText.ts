@@ -23,6 +23,14 @@
  * 子集之外的东西**原样保留为文本**，不做"猜你想表达什么"的转换：编辑器不该在
  * 用户不知情的情况下改写他没动过的内容。
  *
+ * ## 图片为什么渲染成 `<figure>`
+ *
+ * 图注（`![图注](asset:<id>)` 里的那一段）在纯 Markdown 里是**看不见的** ——
+ * 它藏在 `alt` 里，只有读屏软件、加载失败和检索能读到。而图注是图片**唯一的检索
+ * 信号**（图片本体不进切块、不进向量），用户必须看得见、改得动。所以独占一行的
+ * 图片在这里变成 `<figure><img><figcaption>`：正文里多出一行可编辑的字，
+ * 序列化时以 `figcaption` 为准（`alt` 只是兜底，见 `figureToBlock`）。
+ *
  * ## 表格为什么必须在这里（不加就是静默丢数据）
  *
  * `contentEditable` 里 `<table>` 是浏览器一等的可编辑结构：从 `.docx` 解析出来的、
@@ -71,6 +79,25 @@ function escapeHtml(text: string): string {
 /** 属性值只需补引号：文本已经过 `escapeHtml`，再转一次 `&` 会变成 `&amp;amp;`。 */
 function attrValue(value: string): string {
   return value.replace(/"/g, '&quot;');
+}
+
+/**
+ * 图注 → Markdown 的 alt 段：转义 `\` `[` `]`。
+ *
+ * `]` 会提前结束 alt，`[` 会让嵌套的 `![` 被当成新图片，`\` 是转义符本身 ——
+ * 三个都必须处理，否则「图注里写了个方括号」这一条就能把整条引用改成坏图。
+ * 与服务端的 `parsing._escape_alt` 保持一致（同一个格式，两处要写同一套规则）。
+ */
+function escapeCaption(caption: string): string {
+  return caption.replace(/\\/g, '\\\\').replace(/\[/g, '\\[').replace(/]/g, '\\]');
+}
+
+/** `escapeCaption` 的逆运算（读回 Markdown 时用）。 */
+function unescapeCaption(caption: string): string {
+  return caption
+    .replace(/\\\]/g, ']')
+    .replace(/\\\[/g, '[')
+    .replace(/\\\\/g, '\\');
 }
 
 /**
@@ -151,9 +178,15 @@ function inlineToHtml(text: string): string {
     // 下划线在 Markdown 里没有语法，用 HTML 标签表达（编辑器也是这么产出的）
     .replace(/&lt;u&gt;([\s\S]+?)&lt;\/u&gt;/g, '<u>$1</u>')
     // 图片必须在链接**之前**：先跑链接的话 `![a](b)` 会变成 `!<a ...>a</a>`
-    .replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (match, alt: string, src: string) =>
-      // `data:` = base64 内嵌图：不进 DOM（进了就会被存回 Markdown，把块撑爆）
-      src.startsWith('data:') ? '' : `<img src="${attrValue(src)}" alt="${attrValue(alt)}">`,
+    // 注意这里 `text` 已经被 `escapeHtml` 过一次，所以 src / 图注都**不要**再转义
+    // （再转一次 `&` 会变成 `&amp;amp;`，图片地址带查询串时直接失效）
+    .replace(
+      /!\[((?:[^\]\\]|\\.)*)\]\(([^)\s]+)\)/g,
+      (match, rawCaption: string, src: string) =>
+        // `data:` = base64 内嵌图：不进 DOM（进了就会被存回 Markdown，把块撑爆）
+        src.startsWith('data:')
+          ? ''
+          : `<img src="${attrValue(src)}" alt="${attrValue(unescapeCaption(rawCaption))}">`,
     )
     .replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>');
 
@@ -161,6 +194,32 @@ function inlineToHtml(text: string): string {
     const code = codes[Number(index)] ?? '';
     return `<code>${escapeHtml(code)}</code>`;
   });
+}
+
+/**
+ * Markdown 图片 → `<figure>`（图片 + 一行**可编辑的图注**）。
+ *
+ * ## 为什么不是裸 `<img alt="...">`
+ *
+ * `alt` 只在图片加载失败、读屏软件、以及检索时可见 —— 用户根本看不出自己「已经
+ * 写过图注」，更没法改。而图注是图片**唯一的检索信号**（图片本体不进切块、不进
+ * 向量），所以它必须是正文里一行看得见、点得进去的字。
+ *
+ * ## 为什么 alt 仍然要写
+ *
+ * 图注与 alt 是同一份内容的两处落点：
+ * - `figcaption` 给人改（编辑时可见）；
+ * - `alt` 给「figure 被浏览器拆掉」这种情况兜底（粘贴、拖拽、某些 execCommand
+ *   都会把结构打散），也让导出 .md 后别的渲染器还能显示图注。
+ *
+ * 序列化时**以 figcaption 为准**（见 `figureToBlock`）：用户改的是它。
+ */
+function figureHtml(src: string, caption: string): string {
+  const safe = escapeHtml(caption);
+  return (
+    `<figure><img src="${attrValue(escapeHtml(src))}" alt="${attrValue(safe)}">` +
+    `<figcaption>${safe}</figcaption></figure>`
+  );
 }
 
 /**
@@ -230,6 +289,20 @@ export function markdownToHtml(markdown: string): string {
     if (heading) {
       const level = heading[1].length;
       html.push(`<h${level}>${inlineToHtml(heading[2])}</h${level}>`);
+      index += 1;
+      continue;
+    }
+
+    // 独占一行的图片 → `<figure>`：图注是图片下方那行**可编辑**的字。
+    //
+    // 只认「这一行只有一个图片」，不认「句子中间夹一张图」：后者没有「下方」这个
+    // 位置，硬塞一个 figcaption 会把一句话劈成两半。多图同行同理（会得到两个
+    // figure，序列化回来变成两个块 —— 用户没动过的东西不该被改写）。
+    const imageOnly = /^!\[((?:[^\]\\]|\\.)*)\]\(([^)\s]+)\)$/.exec(line.trim());
+    if (imageOnly) {
+      if (!imageOnly[2].startsWith('data:')) {
+        html.push(figureHtml(imageOnly[2], unescapeCaption(imageOnly[1])));
+      }
       index += 1;
       continue;
     }
@@ -323,7 +396,7 @@ function inlineToMarkdown(node: Node): string {
       // `data:` 丢弃而不是保留：base64 写进 Markdown 会把整块文本撑到几十万字，
       // 切块与检索当场失效（用户看到的是「保存后文档体积暴涨、搜不到内容」）
       if (src === '' || src.startsWith('data:')) return '';
-      return `![${alt}](${src})`;
+      return `![${escapeCaption(alt)}](${src})`;
     }
     default:
       // span / font / 未知行内元素：只保留文字（浏览器会塞各种样式壳子进来）
@@ -408,15 +481,44 @@ function tableToBlock(table: HTMLElement): string[] {
   return [line(header), separator, ...parsed.slice(1).map(line)];
 }
 
-/** `<figure>` → 图片行。caption 与 alt 只保一个（caption 优先，它是人写的图注）。 */
+/**
+ * 图注文本：块级子元素（回车会插 `<div>`、软回车是 `<br>`）之间补一个空格。
+ *
+ * 直接取 `textContent` 会让「第一行 / 第二行」粘成「第一行第二行」，
+ * 而 `innerText` 依赖排版（jsdom 里没有实现，用例会拿到 undefined）——
+ * 所以手动在块边界插空格。
+ */
+function captionText(node: HTMLElement | null): string {
+  if (!node) return '';
+  const clone = node.cloneNode(true) as HTMLElement;
+  for (const br of Array.from(clone.querySelectorAll('br'))) br.replaceWith(' ');
+  for (const block of Array.from(clone.querySelectorAll('div, p'))) block.append(' ');
+  return (clone.textContent ?? '').replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * `<figure>` → 图片行。
+ *
+ * **图注优先，且「有 figcaption 就以它为准（哪怕它是空的）」**：
+ * `figcaption` 是用户改的那份（看得见、点得进去），`alt` 只是打开文档那一刻的快照。
+ * 反过来先取 alt，症状是「图注改完保存又变回原样」—— 而且用户完全看不出是哪一步
+ * 把字吃掉的。
+ *
+ * 空图注也**不能**退回 alt：用户把说明删干净了，保存后它又冒出来，是同一种症状。
+ * `alt` 只在**根本没有 figcaption 元素**时兜底（粘贴进来的 `<figure>` 可能只有 alt）。
+ */
 function figureToBlock(figure: HTMLElement): string[][] {
   const image = figure.querySelector('img');
-  if (!image) return [];
+  const node = figure.querySelector('figcaption');
+  const caption = node ? captionText(node) : (image?.getAttribute('alt') ?? '').trim();
+  if (!image) {
+    // 只剩图注、没有图了（回车把 figure 拆开，或用户删掉了图）：把那段文字当普通
+    // 段落留下。直接丢块等于「用户打的字没了」，而且没有任何提示。
+    return caption === '' ? [] : [[caption]];
+  }
   const src = image.getAttribute('src') ?? '';
   if (src === '' || src.startsWith('data:')) return [];
-  const alt = (image.getAttribute('alt') ?? '').trim();
-  const caption = (figure.querySelector('figcaption')?.textContent ?? '').trim();
-  return [[`![${alt || caption}](${src})`]];
+  return [[`![${escapeCaption(caption)}](${src})`]];
 }
 
 /**

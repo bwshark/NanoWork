@@ -62,3 +62,15 @@ describe('restoreAssetRefs', () => {
     expect(restored).toBe('![x](asset:bbb)');
   });
 });
+
+describe('图注里的转义（图注改成手打之后才出现的形态）', () => {
+  it('`\\]` 不会提前结束 alt：整条引用照样换得出来', () => {
+    // 源码里是 `![草稿\] 一版](asset:aaa)` —— 图注里带方括号是完全合法的写法
+    const markdown = '![草稿\\] 一版](asset:aaa)';
+
+    expect(collectAssetIds(markdown)).toEqual(['aaa']);
+    const result = replaceAssetRefs(markdown, () => 'blob:http://x/1');
+    expect(result.text).toBe('![草稿\\] 一版](blob:http://x/1)');
+    expect(restoreAssetRefs(result.text, result.map)).toBe(markdown);
+  });
+});
