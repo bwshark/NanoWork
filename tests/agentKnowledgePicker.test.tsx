@@ -39,10 +39,13 @@ function makeGateway(overrides: Partial<KbGateway> = {}): KbGateway {
     listKbs: vi.fn().mockResolvedValue({ ok: true, data: [KB1, KB2] }),
     createKb: vi.fn(),
     listDocuments: vi.fn().mockResolvedValue({ ok: true, data: [] }),
+    fetchAsset: vi.fn(),
+    uploadAsset: vi.fn(),
     getDocument: vi.fn(),
     uploadDocument: vi.fn(),
     uploadFile: vi.fn(),
     renameDocument: vi.fn(),
+    updateDocument: vi.fn(),
     deleteDocument: vi.fn(),
     search: vi.fn(),
     // 选择器本身不用这两个（它们是知识库页的能力），但网关类型要求齐全

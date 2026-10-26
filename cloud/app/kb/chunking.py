@@ -13,6 +13,9 @@
 
 from __future__ import annotations
 
+from app.kb import tables
+from app.kb.assets import strip_asset_refs
+
 #: 单块上限（字符）。800 是「一段话 + 少量上下文」的量级；
 #: 太小会让一段话碎成三块、检索时三块都排在前面互相挤占名额。
 MAX_CHUNK_CHARS = 800
@@ -58,10 +61,15 @@ def chunk_text(
         if not paragraph:
             continue
         if len(paragraph) > max_chars:
-            # 先把攒着的吐出去，再硬切这一大段（顺序不能反，否则块序会乱）
+            # 先把攒着的吐出去，再切这一大段（顺序不能反，否则块序会乱）
             if buffer:
                 chunks.append(buffer)
                 buffer = ""
+            if tables.is_table_block(paragraph):
+                # 表格不能按字符硬切：切口会落在某一行中间，切出来的两块既不是
+                # 合法 Markdown，也读不出那一格属于哪个字段。改成按行分组 + 复制表头。
+                chunks.extend(tables.split_table_block(paragraph, max_chars))
+                continue
             chunks.extend(_hard_split(paragraph, max_chars, overlap))
             continue
         if not buffer:
@@ -95,8 +103,14 @@ def join_chunks(chunks: list[str], *, min_overlap: int = 40) -> str:
     """
     if not chunks:
         return ""
+
     out = chunks[0]
     for chunk in chunks[1:]:
+        merged = _merge_table_continuation(out, chunk)
+        if merged is not None:
+            out = merged
+            continue
+
         overlap = 0
         for size in range(min(len(out), len(chunk)), min_overlap - 1, -1):
             if out.endswith(chunk[:size]):
@@ -110,3 +124,67 @@ def join_chunks(chunks: list[str], *, min_overlap: int = 40) -> str:
         # 多出一个段落边界，而原文那里并没有分段）
         out = f"{out}{tail}" if overlap else f"{out}\n\n{tail}"
     return out
+
+
+def _merge_table_continuation(previous: str, chunk: str) -> str | None:
+    """相邻两块是**同一张表**的续块时，拼回一个表；否则返回 `None`。
+
+    `split_table_block` 给每一块都复制了表头。拼回去必须**去掉后一块的表头**、
+    用单个换行接上 —— 直接 `\n\n` 拼的话，详情页会把一个长表格显示成 N 张表，
+    每张都带一遍表头（用户会以为原文就是好几个小表）。
+
+    判据：后一块是表格，且前一块末尾那段连续表格行的**前两行**与后一块的表头逐字相同。
+    也就是「这份表头是我们复制出来的」，不是作者自己写了两张一样的表。
+    """
+    if not tables.is_table_block(chunk):
+        return None
+
+    chunk_lines = [line for line in chunk.split("\n") if line.strip()]
+    if len(chunk_lines) < 3:
+        # 只有表头没有数据行：不是续块
+        return None
+
+    previous_lines = [line for line in previous.split("\n") if line.strip()]
+    # 从后往前找到前一块里最后一个表格段的起点
+    start = len(previous_lines)
+    while start > 0 and previous_lines[start - 1].lstrip().startswith("|"):
+        start -= 1
+    if start == len(previous_lines):
+        return None
+    if previous_lines[start : start + 2] != chunk_lines[:2]:
+        return None
+
+    return f"{previous}\n" + "\n".join(chunk_lines[2:])
+
+
+def retrieval_text(chunk: str) -> str:
+    """块的**检索投影**：落库的规范表示（GFM 表格）→ 检索/向量化用的纯文本。
+
+    ⚠️ **embedding 与词法排序都必须走这里。** 只改一处的话，两路打分看的不是同一份
+    文本，混合排序会把同一个块排出两个位置（也会让「建索引时算的」和「查询时算的」
+    不是一回事）。
+
+    投影刻意**不落库**：`KbChunk.text` 同时是详情页拼回正文的来源，
+    存投影会让表格显示成一堆 `姓名: 张三`。纯函数、开销可忽略，用的那一刻算。
+
+    ## 为什么按 `\n\n` 逐段投影，而不是「整块是表格才投影」
+
+    这是**真机上才会暴露**的一个坑：短文档的标题、段落、表格一共才几百字，
+    装箱时会全部装进**同一个块**，于是「整块是表格」永远不成立 —— 投影在最常见的
+    情况下一次都没生效过，界面上却看不出任何异常。
+
+    表格块内部只有单 `\n`（GFM 的表格行），所以 `split("\n\n")` 不会切开表格；
+    非表格部分原样返回，`"\n\n".join(split("\n\n"))` 恒等于原文。
+
+    ## 图片为什么也要剥
+
+    `![图注](asset:<id>)` 里唯一有检索价值的是**图注**；`asset:<id>` 是纯噪声
+    （一串随机 hex，还会稀释长度归一化）。图片本体**根本不该进向量** ——
+    几十 KB 的二进制进文本会让整个块的语义彻底失真。
+    """
+    parts = chunk.split("\n\n")
+    projected = [
+        tables.table_to_records(part) if tables.is_table_block(part) else strip_asset_refs(part)
+        for part in parts
+    ]
+    return "\n\n".join(projected)

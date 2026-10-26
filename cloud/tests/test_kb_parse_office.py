@@ -122,11 +122,12 @@ def test_xlsx_rows_and_sheet_names() -> None:
 
     assert parsed.kind == "xlsx"
     assert "【工作表：制度】" in parsed.text
-    # 一行一段、单元格用「 | 」分隔
-    assert "差旅制度 | 报销流程：走财务邮箱" in parsed.text
-    assert "第二条 | 补充说明" in parsed.text
-    # 丢结构是真丢信息，必须说出来
-    assert any("行列结构不保留" in item for item in parsed.warnings)
+    # 行列结构**保住**了：第一行当表头，其余是数据行（GFM 表格必须要有表头）
+    assert "| 差旅制度 | 报销流程：走财务邮箱 |" in parsed.text
+    assert "| --- | --- |" in parsed.text
+    assert "| 第二条 | 补充说明 |" in parsed.text
+    # 「第一行当表头」是一个**假设**（台账的第一行未必是列名），必须说出来
+    assert any("第一行当作表头" in item for item in parsed.warnings)
 
 
 def test_xlsx_second_sheet_is_included_with_its_own_name() -> None:
@@ -258,7 +259,7 @@ def test_upload_xlsx_is_searchable(client: TestClient) -> None:
     body = resp.json()
     assert body["kind"] == "xlsx"
     assert body["title"] == "制度台账"
-    assert any("行列结构" in item for item in body["warnings"])
+    assert any("第一行当作表头" in item for item in body["warnings"])
 
     hits = client.post(
         f"/api/orgs/{org['id']}/search",

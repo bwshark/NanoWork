@@ -1,4 +1,4 @@
-import ReactMarkdown from 'react-markdown';
+import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
@@ -46,17 +46,34 @@ export function CodeBlock({ language, source }: { language?: string; source: str
 interface MarkdownRendererProps {
   content: string;
   sx?: object;
+  /**
+   * 放行 `blob:` 图片地址。
+   *
+   * react-markdown 默认的 `urlTransform` 只放行已知协议，`blob:` 会被清空
+   * （图片变成空 src，整个 src 是空的）。知识库的图片正是 `blob:` 地址 ——
+   * `<img>` 不能带 Authorization 头，所以由 JS 取回字节后换成 blob 地址。
+   *
+   * 安全：只**额外**放行 `blob:`，其余仍走默认实现（`javascript:` 之类照样被拦）。
+   * ⚠️ 这个判断必须留在本模块里 —— `react-markdown` 是 772KB 的懒加载边界，
+   * 在别处 import 它（哪怕只是 import 一个函数）会把它拽回首屏静态图。
+   */
+  allowBlobUrls?: boolean;
 }
+
+/** 只额外放行 `blob:`，其余交给 react-markdown 的默认实现。 */
+const allowBlobUrl = (url: string): string =>
+  url.startsWith('blob:') ? url : defaultUrlTransform(url);
 
 /**
  * Markdown 渲染封装：GFM 表格 + 代码高亮。
  * 链接强制新窗口打开；代码块使用 react-syntax-highlighter。
  */
-export function MarkdownRenderer({ content, sx }: MarkdownRendererProps) {
+export function MarkdownRenderer({ content, sx, allowBlobUrls }: MarkdownRendererProps) {
   return (
     <Box className="md-body" sx={sx}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
+        urlTransform={allowBlobUrls ? allowBlobUrl : undefined}
         components={{
           a: ({ node, ...props }: any) => (
             <Link href={props.href} target="_blank" rel="noopener noreferrer" {...props} />

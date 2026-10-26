@@ -15,10 +15,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from datetime import timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel, Field
 from sqlmodel import Session, select
 
@@ -26,11 +27,18 @@ from app.auth.deps import current_user
 from app.auth.models import User
 from app.auth.security import new_user_id
 from app.db import get_session
-from app.kb.chunking import chunk_text, join_chunks
+from app.kb.assets import (
+    collect_asset_ids,
+    replace_pending_refs,
+    sniff_mime,
+    strip_asset_refs,
+)
+from app.kb.chunking import chunk_text, join_chunks, retrieval_text
 from app.kb.digest import digest_of
 from app.kb.embedding import resolve_embedder
 from app.kb.models import (
     DEFAULT_ALLOWED_ROLES,
+    KbAsset,
     KbChunk,
     KbDocument,
     KnowledgeBase,
@@ -38,7 +46,13 @@ from app.kb.models import (
     roles_from_json,
     roles_to_json,
 )
-from app.kb.parsing import ParseError, decode_base64, default_title, parse_document
+from app.kb.parsing import (
+    ParsedImage,
+    ParseError,
+    decode_base64,
+    default_title,
+    parse_document,
+)
 from app.kb.retrieval import ScoredChunk, hybrid_rank, rank_by_vectors, rank_chunks
 from app.kb.vectors import (
     count_vectors_by_doc,
@@ -80,6 +94,9 @@ def _purge_document(session: Session, doc: KbDocument) -> None:
     delete_vectors_for_doc(session, doc_id=doc.id)
     for chunk in session.exec(select(KbChunk).where(KbChunk.doc_id == doc.id)).all():
         session.delete(chunk)
+    # 图片跟着文档一起清（软删进回收站时**不清** —— 恢复后图片还得能用）
+    for asset in session.exec(select(KbAsset).where(KbAsset.doc_id == doc.id)).all():
+        session.delete(asset)
     session.delete(doc)
 
 
@@ -153,10 +170,36 @@ class UploadFileRequest(BaseModel):
     title: str | None = Field(default=None, max_length=200)
 
 
-class RenameDocumentRequest(BaseModel):
-    """改标题。上限 200 与服务端截断一致，超了不报错而是截断（标题不是数据）。"""
+class UploadAssetRequest(BaseModel):
+    """上传一张图片（base64）。粘贴截图、选文件走的是同一个接口。"""
 
-    title: str = Field(min_length=1, max_length=255)
+    filename: str = Field(default="", max_length=255)
+    contentBase64: str = Field(min_length=1)
+
+
+class AssetView(BaseModel):
+    """一张已入库的图片。
+
+    `alt` 是图注 —— **它唯一的检索信号**（图片本体不进切块、不进向量），
+    所以服务端给一个默认值（文件名去扩展名），用户之后可以改。
+    """
+
+    id: str
+    mime: str
+    bytesLen: int = 0
+    alt: str = ""
+
+
+class UpdateDocumentRequest(BaseModel):
+    """改标题 / 改正文。**两个字段都可选：传了才改。**
+
+    标题上限 200 与服务端截断一致（超了不报错而是截断——标题不是数据）。
+    正文没有长度上限检查：`chunk_text` 会把空正文挡成 422，超长正文按块切，
+    真正的上限是前端编辑器的体验（几十万字的东西不该在浏览器里编辑）。
+    """
+
+    title: str | None = Field(default=None, min_length=1, max_length=255)
+    content: str | None = None
 
 
 class DocumentView(BaseModel):
@@ -259,7 +302,10 @@ def _embed_chunks(session: Session, embedder: object, chunks: list[KbChunk]) -> 
     """
     if not chunks:
         return 0, ""
-    texts = [chunk.text for chunk in chunks]
+    # 投影后再向量化：表格块要变成「列名: 值」才能把表头词带进向量。
+    # ⚠️ 必须与 `_rank_candidates` 里的词法投影用**同一个** `retrieval_text`，
+    # 否则索引时算的和查询时算的不是一回事，混合排序会把同一个块排出两个位置。
+    texts = [retrieval_text(chunk.text) for chunk in chunks]
     try:
         vectors = embedder.embed(texts)  # type: ignore[attr-defined]
     except Exception as error:  # noqa: BLE001 —— 见 docstring
@@ -406,8 +452,65 @@ def _backfill_hashes(session: Session, kb_id: str) -> int:
     return len(legacy)
 
 
+def _asset_alt(filename: str) -> str:
+    """图片的默认图注 = 文件名去扩展名。
+
+    图注是这张图**唯一的检索信号**，空的就等于这张图在检索里隐形。
+    文件名至少常常带点信息（「架构图」「截图」）。
+    """
+    name = filename.strip().replace("\\", "/").rsplit("/", 1)[-1]
+    dot = name.rfind(".")
+    return (name[:dot] if dot > 0 else name).strip()[:200]
+
+
+def _store_assets(
+    session: Session, kb_id: str, doc_id: str, images: list[ParsedImage]
+) -> list[str]:
+    """把图片存进 `kb_assets`，返回与 `images` **同序**的资产 id。
+
+    ## 去重只在同一篇文档内
+
+    同一篇里重复出现的图只存一份（引用指向同一个 id）。**不跨文档去重** ——
+    跨文档共享会让「删掉 A 文档」连带带走 B 文档还在用的图，留下一堆坏图引用。
+    一个知识库几百篇文档、图片总共也就几 MB，不值得为省这点空间换来悬空引用。
+    """
+    ids: list[str] = []
+    for image in images:
+        digest = hashlib.sha256(image.data).hexdigest()
+        existing = session.exec(
+            select(KbAsset).where(
+                KbAsset.kb_id == kb_id,
+                KbAsset.doc_id == doc_id,
+                KbAsset.sha256 == digest,
+            )
+        ).first()
+        if existing is not None:
+            ids.append(existing.id)
+            continue
+        asset = KbAsset(
+            id=new_user_id(),
+            kb_id=kb_id,
+            doc_id=doc_id,
+            sha256=digest,
+            mime=image.mime,
+            bytes_len=len(image.data),
+            alt=image.alt,
+            blob=image.data,
+        )
+        session.add(asset)
+        ids.append(asset.id)
+    return ids
+
+
 def _insert_document(
-    session: Session, kb: KnowledgeBase, user: User, *, title: str, content: str, kind: str
+    session: Session,
+    kb: KnowledgeBase,
+    user: User,
+    *,
+    title: str,
+    content: str,
+    kind: str,
+    images: list[ParsedImage] | None = None,
 ) -> tuple[KbDocument, int]:
     """文本入库的唯一实现（粘贴正文与上传文件两条入口共用）。
 
@@ -415,17 +518,31 @@ def _insert_document(
     判重必须在落库前（否则先写进去再删，等于自己制造了一次写放大），
     建索引必须在落库后（向量行以 `chunk_id` 为外键）。
 
+    ## 图片怎么进来
+
+    解析器给出的是 `![图注](asset-index:<下标>)`（图片的 id 要入库时才有）。
+    这里先把图存进 `kb_assets` 拿到真 id，把占位换成 `![图注](asset:<id>)`，
+    **然后才切块** —— 切块与判重看到的都是最终形态。
+
+    ## 判重为什么按「剥离图片引用后的文本」算
+
+    同一份文档重传时，图片会拿到**新的 id**（每次入库都生成新的）。带着 id 算摘要，
+    「同一份资料只入一次库」这条约定就永远失效了。所以摘要只看文字与图注。
+
     ## 判重为什么是 409 而不是「静默跳过」
 
     静默跳过会让「这篇到底进没进去」变成需要去文档列表里数的事。409 把
     「已经在库里，那篇叫《X》，要替换请先删掉它」一次说清。作用域是**本库**
     （跨库同内容是正常的，见 `kb/digest.py`）。
     """
+    images = images or []
+
     chunks = chunk_text(content)
     if not chunks:
         raise HTTPException(status_code=422, detail="文档内容为空")
 
-    digest = digest_of(chunks)
+    # 摘要只看文字与图注：图片 id 每次入库都变，带着它算就永远判不出重复
+    digest = digest_of([strip_asset_refs(chunk) for chunk in chunks])
     _backfill_hashes(session, kb.id)
     if digest:
         duplicate = session.exec(
@@ -460,6 +577,19 @@ def _insert_document(
         created_by=user.id,
     )
     session.add(doc)
+    session.flush()
+
+    # 存图 → 把占位换成真 id → **重新切块**（替换后长度变了，块边界会变）
+    asset_ids = _store_assets(session, kb.id, doc.id, images)
+    content = replace_pending_refs(content, asset_ids)
+    # 正文里可能还引用了「先上传、后引用」的图（粘贴通道）→ 绑到这篇上
+    _bind_assets(session, kb.id, doc.id, content)
+    chunks = chunk_text(content)
+    if not chunks:
+        raise HTTPException(status_code=422, detail="文档内容为空")
+    doc.chars = len(content)
+    doc.chunk_count = len(chunks)
+
     chunk_rows: list[KbChunk] = []
     for ordinal, text in enumerate(chunks):
         row = KbChunk(id=new_user_id(), kb_id=kb.id, doc_id=doc.id, ordinal=ordinal, text=text)
@@ -468,9 +598,9 @@ def _insert_document(
     session.commit()
     session.refresh(doc)
 
-    # 建索引（FR-4.7 向量检索）：embedder 关着就跳过，失败也只是「这篇先只有词法能搜到」。
-    embedded = 0
+    # 建索引放在最后：向量行以 chunk_id 为外键，块必须先落库
     resolution = resolve_embedder()
+    embedded = 0
     if resolution.embedder is not None:
         embedded, _error = _embed_chunks(session, resolution.embedder, chunk_rows)
     return doc, embedded
@@ -551,9 +681,163 @@ def upload_document(
     raw_title = (payload.title or "").strip() or default_title(payload.filename)
     title = raw_title[:200] or "未命名文档"
     doc, embedded = _insert_document(
-        session, kb, user, title=title, content=parsed.text, kind=parsed.kind
+        session,
+        kb,
+        user,
+        title=title,
+        content=parsed.text,
+        kind=parsed.kind,
+        images=parsed.images,
     )
     return _document_view(doc, embedded=embedded, warnings=parsed.warnings)
+
+
+@router.get("/kbs/{kb_id}/assets/{asset_id}")
+def get_asset(
+    kb_id: str,
+    asset_id: str,
+    user: User = Depends(current_user),
+    session: Session = Depends(get_session),
+) -> Response:
+    """取一张图片。
+
+    ## 权限与读文档**完全同一套**
+
+    走 `_kb_or_404`：库不可见就是 403，图不存在（或不属于这个库）就是 404。
+    图片的可见性就是所属库的可见性，**没有任何旁路** —— 不给签名 URL、
+    不给免鉴权的直链，因为那等于开一个「拿到链接就能看」的洞。
+
+    ## 为什么 `nosniff`
+
+    `mime` 是入库时按扩展名白名单定的（`kb/assets.py`），不是用户随便填的；
+    但 `nosniff` 仍然要加：它保证浏览器不猜类型。这样即使将来白名单放宽了，
+    也不会出现「上传一个 .html 被当成页面执行」。
+
+    ETag 用图片内容的 sha256：内容不变就不重传（`Cache-Control: private`，
+    不进公共缓存 —— 知识库内容是私有的）。
+    """
+    kb, _member = _kb_or_404(session, kb_id, user)
+    asset = session.get(KbAsset, asset_id)
+    if asset is None or asset.kb_id != kb.id:
+        raise HTTPException(status_code=404, detail="图片不存在")
+    return Response(
+        content=asset.blob,
+        media_type=asset.mime,
+        headers={
+            "Cache-Control": "private, max-age=3600",
+            "ETag": f'"{asset.sha256}"',
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+#: 单张图片上限（字节）。4MB 足够一张截图 / 一张架构图，
+#: 又不至于让一张图把 SQLite 撑大（图片最终都进库）。
+MAX_ASSET_BYTES = 4 * 1024 * 1024
+
+#: 孤儿图片的保留期：上传后超过这么久还没被任何文档引用，就清掉。
+#:
+#: 为什么要清：图片是「先入库、正文后引用」（粘贴时要立刻看到图，不能等保存），
+#: 所以用户上传后不保存文档就会留下一张没人引用的图。
+ORPHAN_ASSET_TTL = timedelta(hours=1)
+
+
+def _purge_orphan_assets(session: Session, kb_id: str) -> int:
+    """清掉这个库里「上传了但没被任何文档引用」且已过期的图片。"""
+    orphans = session.exec(
+        select(KbAsset).where(
+            KbAsset.kb_id == kb_id,
+            KbAsset.doc_id == "",
+            KbAsset.created_at < utc_now() - ORPHAN_ASSET_TTL,
+        )
+    ).all()
+    for asset in orphans:
+        session.delete(asset)
+    if orphans:
+        session.commit()
+    return len(orphans)
+
+
+def _bind_assets(session: Session, kb_id: str, doc_id: str, content: str) -> int:
+    """把正文里引用的图片**绑定**到这篇文档上。
+
+    图片上传时还没有文档（`doc_id` 为空），等文档保存时才知道它属于哪一篇。
+    只绑定「属于本库且尚未绑定」的 —— 别人的图、已经绑过的图都不动。
+
+    绑定之后它才跟着文档一起被彻底删除清掉（见 `_purge_document`），
+    也才不会被当成孤儿清走。
+    """
+    bound = 0
+    for asset_id in collect_asset_ids(content):
+        asset = session.get(KbAsset, asset_id)
+        if asset is None or asset.kb_id != kb_id or asset.doc_id != "":
+            continue
+        asset.doc_id = doc_id
+        session.add(asset)
+        bound += 1
+    return bound
+
+
+@router.post("/kbs/{kb_id}/assets", response_model=AssetView, status_code=201)
+def upload_asset(
+    kb_id: str,
+    payload: UploadAssetRequest,
+    user: User = Depends(current_user),
+    session: Session = Depends(get_session),
+) -> AssetView:
+    """上传一张图片（粘贴截图 / 选文件）。
+
+    ## 为什么要单独的接口
+
+    图片是「**先入库、正文后引用**」：用户粘贴一张截图后要**立刻**看到它，
+    而那要等文档保存就太迟了（用户可能还没想好放哪、也可能直接关掉）。
+    代价是可能留下孤儿图 → 由 `_purge_orphan_assets` 惰性清理。
+
+    ## 类型按**内容**判定
+
+    扩展名是用户能改的（把 `.html` 改名成 `.png` 就能骗过扩展名检查），
+    魔数骗不过，而且我们给出的 mime 正是浏览器真正会用的那个。
+
+    ## 权限
+
+    要写权限：图片最终要插进某篇文档里，没写权限就改不了文档 → 图也用不上。
+    """
+    kb, _member = _writable_kb_or_404(session, kb_id, user)
+    try:
+        data = decode_base64(payload.contentBase64)
+    except ParseError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+    if len(data) > MAX_ASSET_BYTES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"图片超过 {MAX_ASSET_BYTES // (1024 * 1024)}MB 上限",
+        )
+    mime = sniff_mime(data)
+    if mime is None:
+        raise HTTPException(
+            status_code=422,
+            detail="只支持 PNG / JPEG / GIF / WebP / BMP 图片（按文件内容判定，不看扩展名）",
+        )
+
+    asset = KbAsset(
+        id=new_user_id(),
+        kb_id=kb.id,
+        doc_id="",
+        sha256=hashlib.sha256(data).hexdigest(),
+        mime=mime,
+        bytes_len=len(data),
+        alt=_asset_alt(payload.filename),
+        blob=data,
+    )
+    session.add(asset)
+    session.commit()
+    session.refresh(asset)
+
+    # 顺带清一次孤儿图（低频操作，不放在列表这种热路径上）
+    _purge_orphan_assets(session, kb.id)
+
+    return AssetView(id=asset.id, mime=asset.mime, bytesLen=asset.bytes_len, alt=asset.alt)
 
 
 @router.get("/kbs/{kb_id}/documents", response_model=list[DocumentView])
@@ -635,36 +919,108 @@ def get_document(
 
 
 @router.patch("/kbs/{kb_id}/documents/{doc_id}", response_model=DocumentView)
-def rename_document(
+def update_document(
     kb_id: str,
     doc_id: str,
-    payload: RenameDocumentRequest,
+    payload: UpdateDocumentRequest,
     user: User = Depends(current_user),
     session: Session = Depends(get_session),
 ) -> DocumentView:
-    """改标题（内容不动）。要 admin —— 与入库同一个门槛。
+    """改标题 / 改正文。要 admin —— 与入库同一个门槛。
 
-    独立于「删除 + 重传」的意义：判重会让「同内容换个标题重传」变成 409，
-    所以标题必须能单独改，否则改错标题就只能删了再传（还会丢掉原来的创建时间）。
+    ## 三个决定
+
+    1. **正文以 Markdown 为唯一存储格式**：检索吃的是纯文本，编辑器产出的富文本
+       必须在写入前落成 Markdown（不是 HTML）。存 HTML 等于让检索去啃标签。
+    2. **改正文 = 重新入库**：切块 → 判重 → 换块 → 重建向量，一步都不能省。
+       只改 `chars` 而不换块，会让「正文变了但搜到的还是旧句子」——那比不能编辑更糟。
+    3. **判重要排除自己**：`content_hash != 本行` 才算重复，否则「改一个字再存」
+       会被自己拦下。作用域仍是本库（跨库同内容正常）。
+
+    换块的顺序与彻底删除一致（向量 → 块），否则会留下指向已删块的向量行。
     """
     kb, _member = _writable_kb_or_404(session, kb_id, user)
-    doc = session.get(KbDocument, doc_id)
-    if doc is None or doc.kb_id != kb.id:
-        raise HTTPException(status_code=404, detail="文档不存在")
-    title = payload.title.strip()
-    if title == "":
-        raise HTTPException(status_code=422, detail="标题不能为空")
-    doc.title = title[:200]
-    # 改名要打更新时间戳：列表上的「更新时间」如果一直等于创建时间，用户改完名
-    # 会以为没生效（而这一列存在的全部意义就是「这篇什么时候被动过」）。
+    doc = _kb_document_or_404(session, kb, doc_id)
+    touched = False
+
+    if payload.title is not None:
+        title = payload.title.strip()
+        if title == "":
+            raise HTTPException(status_code=422, detail="标题不能为空")
+        doc.title = title[:200]
+        touched = True
+
+    chunk_rows: list[KbChunk] = []
+    if payload.content is not None:
+        content = payload.content
+        chunks = chunk_text(content)
+        if not chunks:
+            raise HTTPException(status_code=422, detail="正文不能为空")
+
+        # 与入库同一口径：摘要只看文字与图注（图片 id 每次入库都变）
+        digest = digest_of([strip_asset_refs(chunk) for chunk in chunks])
+        _backfill_hashes(session, kb.id)
+        if digest:
+            duplicate = session.exec(
+                select(KbDocument).where(
+                    KbDocument.kb_id == kb.id,
+                    KbDocument.content_hash == digest,
+                    KbDocument.id != doc.id,
+                )
+            ).first()
+            if duplicate is not None:
+                if duplicate.deleted_at:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            f"这段内容和回收站里的《{duplicate.title}》一样，恢复它就行"
+                            "（不必把两篇改成一样）"
+                        ),
+                    )
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"这段内容和库里的《{duplicate.title}》完全一样，没有保存。"
+                        "同一份资料在库里只需要一篇"
+                    ),
+                )
+
+        # 顺序：向量 → 块。反过来会留下指向已删块的向量（彻底删除那边同理）
+        delete_vectors_for_doc(session, doc_id=doc.id)
+        for chunk in session.exec(select(KbChunk).where(KbChunk.doc_id == doc.id)).all():
+            session.delete(chunk)
+        session.flush()
+        for ordinal, text in enumerate(chunks):
+            row = KbChunk(id=new_user_id(), kb_id=kb.id, doc_id=doc.id, ordinal=ordinal, text=text)
+            session.add(row)
+            chunk_rows.append(row)
+
+        doc.chars = len(content)
+        doc.chunk_count = len(chunks)
+        doc.content_hash = digest
+        # 正文里新引用的图（粘贴通道上传的）→ 绑到这篇上，
+        # 之后它才会跟着文档一起被彻底删除清掉
+        _bind_assets(session, kb.id, doc.id, content)
+        touched = True
+
+    if not touched:
+        raise HTTPException(status_code=422, detail="没有要改的字段")
+
+    # 更新时间戳：列表上的「更新时间」如果一直等于创建时间，用户改完会以为没生效
     doc.updated_at = iso_z(utc_now())
     session.add(doc)
     session.commit()
     session.refresh(doc)
-    resolution = resolve_embedder()
+
     embedded = 0
+    resolution = resolve_embedder()
     if resolution.embedder is not None:
-        embedded = count_vectors_by_doc(session, kb_id=kb.id, model=resolution.model).get(doc.id, 0)
+        if chunk_rows:
+            embedded, _error = _embed_chunks(session, resolution.embedder, chunk_rows)
+        else:
+            embedded = count_vectors_by_doc(session, kb_id=kb.id, model=resolution.model).get(
+                doc.id, 0
+            )
     return _document_view(doc, embedded=embedded)
 
 
@@ -758,7 +1114,11 @@ def _rank_candidates(
     - `vector`：**词法一条都没命中、但向量命中了**才出现。这正是语义检索的价值场景
       （「报销」↔「费用核销」零字面重合），所以不能因为 `lexical` 为空就提前返回。
     """
-    lexical = rank_chunks([chunk.text for chunk in candidates], query, top_k=len(candidates))
+    # 词法也在投影上打分：`| 张三 | 30 |` 这行不含「年龄」，不投影就永远搜不到。
+    # 命中后返回给用户的仍是 `chunk.text`（原文表格），所以展示不受影响。
+    lexical = rank_chunks(
+        [retrieval_text(chunk.text) for chunk in candidates], query, top_k=len(candidates)
+    )
     resolution = resolve_embedder()
     embedder = resolution.embedder
     if embedder is None:

@@ -148,9 +148,11 @@ def test_docx_paragraphs_soft_breaks_and_table_warning() -> None:
     assert "第一段\n\n第二行\n第三行" in parsed.text
     # 段内软换行不能被粘成一行
     assert "第二行第三行" not in parsed.text
-    # 表格单元格的文本要进来（否则表格内容等于没传）
-    assert "甲列" in parsed.text and "乙列" in parsed.text
-    # 结构被摊平必须告知
+    # 表格必须**保留结构**：摊平成段落后，「甲列」和「乙列」的对应关系就没了，
+    # 而表格的全部价值就在这个对应关系上
+    assert "| 甲列 | 乙列 |" in parsed.text
+    assert "| --- | --- |" in parsed.text
+    # 转换带来的结构损失（合并单元格）要告知
     assert any("表格" in warning for warning in parsed.warnings)
 
 

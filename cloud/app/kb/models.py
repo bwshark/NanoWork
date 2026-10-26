@@ -166,3 +166,44 @@ class KnowledgeBaseDepartment(SQLModel, table=True):
 
     kb_id: str = Field(primary_key=True, foreign_key="knowledge_bases.id")
     department_id: str = Field(primary_key=True, index=True, foreign_key="departments.id")
+
+
+class KbAsset(SQLModel, table=True):
+    """文档里的图片二进制（2026-10-26）。
+
+    ## 为什么独立表
+
+    同 `KbVector` / `KnowledgeBaseDepartment`：`create_all` 不会 ALTER 已存在的表，
+    给 `kb_documents` 加列在真机上**静默不生效**。新表一定被建出来。
+
+    ## 二进制为什么进数据库而不是文件系统
+
+    1. **权限跟着库走**：图片的可见性就是所属库的可见性。放文件系统就要另做一套
+       「这个文件属于哪个库、谁能看」的目录与权限结构 —— 而库里已经有
+       `kb/visibility.py::allows()` 这一个判定实现，复制一份必然走偏。
+    2. **备份与事务一致**：一次备份带走库与它的图片；不会出现「文档删了、图还在」
+       这种文件系统孤儿（数据库里删文档时能连带清掉资产）。
+
+    代价是 SQLite 会被图片撑大。缓解：单图字节上限 + **按内容 sha256 去重**
+    （同一张 logo 用十次只存一份）。
+
+    ## 检索里没有它
+
+    图片本体**不进切块、不进向量**。它唯一的检索信号是图注（alt），
+    而图注在 Markdown 正文里（`![图注](asset:<id>)`）—— 那才是模型读的东西。
+    """
+
+    __tablename__ = "kb_assets"
+
+    id: str = Field(primary_key=True)
+    kb_id: str = Field(index=True, foreign_key="knowledge_bases.id")
+    #: 所属文档。空串 = 还没绑定（入库时先建资产、后绑文档）
+    doc_id: str = Field(default="", index=True)
+    #: 图片字节的 sha256：①按内容去重 ②当 ETag（内容变了 URL 就变）
+    sha256: str = Field(index=True)
+    mime: str = "application/octet-stream"
+    bytes_len: int = 0
+    #: 图注。**它是这张图唯一的检索信号**，所以单独存一份（正文里那份可能被用户改）
+    alt: str = ""
+    blob: bytes = b""
+    created_at: datetime = Field(default_factory=utc_now)

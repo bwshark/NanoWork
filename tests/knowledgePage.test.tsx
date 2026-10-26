@@ -107,12 +107,15 @@ function makeGateway(overrides: Partial<KbGateway> = {}): KbGateway {
     listKbs: vi.fn().mockResolvedValue({ ok: true, data: [KB] }),
     createKb: vi.fn().mockResolvedValue({ ok: true, data: KB }),
     listDocuments: vi.fn().mockResolvedValue({ ok: true, data: [DOC] }),
+    fetchAsset: vi.fn(),
+    uploadAsset: vi.fn(),
     getDocument: vi
       .fn()
       .mockResolvedValue({ ok: true, data: { ...DOC, content: '报销流程：走财务邮箱。' } }),
     uploadDocument: vi.fn().mockResolvedValue({ ok: true, data: DOC }),
     uploadFile: vi.fn().mockResolvedValue({ ok: true, data: { ...DOC, kind: 'docx' } }),
     renameDocument: vi.fn(),
+    updateDocument: vi.fn(),
     deleteDocument: vi.fn(),
     search: vi.fn().mockResolvedValue({ ok: true, data: [HIT] }),
     ...overrides,
@@ -1036,6 +1039,14 @@ describe('写操作', () => {
  * 这一组守的是「点开之后到底看到了什么」：正文是**另取**的一份数据（列表只有元数据），
  * 所以四件事必须分别成立 —— 取对了、术语不串、失败说实话、删了要跟着关。
  */
+/** 组织角色换成所有者（写权限 = admin/owner） */
+function ownerGateway(overrides: Partial<KbGateway> = {}): KbGateway {
+  return makeGateway({
+    listOrgs: vi.fn().mockResolvedValue({ ok: true, data: [{ ...ORG, role: 'owner' }] }),
+    ...overrides,
+  });
+}
+
 describe('阅读抽屉', () => {
   it('点一行就打开抽屉，并按 id 另取正文', async () => {
     const getDocument = vi.fn().mockResolvedValue({
@@ -1132,5 +1143,435 @@ describe('阅读抽屉', () => {
       () => document.querySelector('[data-testid="kb-doc-view-title"]') === null,
     );
     expect(document.querySelector('[data-testid="kb-doc-view-title"]')).toBeNull();
+  });
+
+  /**
+   * 文档里的图片。
+   *
+   * 关键约束：`<img src>` **不会**带 `Authorization` 头，而图片接口要 Bearer 票。
+   * 所以图片只能由 JS 带票取回字节、再换成 `blob:` 地址 —— 界面里看到的
+   * `blob:http://...` 就是这么来的。
+   */
+  /** jsdom 不实现 blob 地址，这里造一个假的（用完还原）。 */
+  function withBlobUrl() {
+    const originalCreate = URL.createObjectURL;
+    const originalRevoke = URL.revokeObjectURL;
+    let counter = 0;
+    URL.createObjectURL = () => `blob:http://localhost/${++counter}`;
+    URL.revokeObjectURL = () => undefined;
+    return () => {
+      URL.createObjectURL = originalCreate;
+      URL.revokeObjectURL = originalRevoke;
+    };
+  }
+
+  /** 含一张图的文档。 */
+  function imageDocument() {
+    return vi.fn().mockResolvedValue({
+      ok: true,
+      data: { ...DOC, content: '架构如下：\n\n![系统架构图](asset:aaa111)' },
+    });
+  }
+
+  it('文档里的图片渲染成 <img>（地址由带票取回的字节换出来）', async () => {
+    const restore = withBlobUrl();
+    try {
+      const fetchAsset = vi.fn().mockResolvedValue({ ok: true, data: new Blob(['img']) });
+      const host = render(
+        makeGateway({
+          getDocument: imageDocument(),
+          fetchAsset,
+          // 所有者 → 有写权限 → 走编辑器路径
+          listOrgs: vi.fn().mockResolvedValue({ ok: true, data: [{ ...ORG, role: 'owner' }] }),
+        }),
+      );
+      await flush();
+      await enterKb(host);
+      await act(async () => {
+        click(host.querySelector('[data-testid="kb-doc-row-d1"]'));
+        await flush();
+      });
+      await waitForSettled(() => document.querySelector('[data-testid="kb-editor"] img') !== null);
+
+      // 票是 JS 带上的（`<img>` 自己不会带 Authorization 头）
+      expect(fetchAsset).toHaveBeenCalledWith('k1', 'aaa111');
+      const image = document.querySelector('[data-testid="kb-editor"] img') as HTMLImageElement;
+      expect(image.getAttribute('src')).toBe('blob:http://localhost/1');
+      expect(image.getAttribute('alt')).toBe('系统架构图');
+    } finally {
+      restore();
+    }
+  });
+
+  it('只读路径（普通成员）也渲染出图 —— 两条路径共用同一份替换结果', async () => {
+    const restore = withBlobUrl();
+    try {
+      const fetchAsset = vi.fn().mockResolvedValue({ ok: true, data: new Blob(['img']) });
+      const host = render(makeGateway({ getDocument: imageDocument(), fetchAsset }));
+      await flush();
+      await enterKb(host);
+      await act(async () => {
+        click(host.querySelector('[data-testid="kb-doc-row-d1"]'));
+        await flush();
+      });
+      await waitForSettled(
+        () => document.querySelector('[data-testid="kb-doc-view-body"] img') !== null,
+      );
+
+      const image = document.querySelector(
+        '[data-testid="kb-doc-view-body"] img',
+      ) as HTMLImageElement;
+      expect(image.getAttribute('src')).toBe('blob:http://localhost/1');
+    } finally {
+      restore();
+    }
+  });
+
+  it('保存时把 blob 地址换回 asset:<id>（否则换个环境打开全是坏图）', async () => {
+    const restore = withBlobUrl();
+    try {
+      const fetchAsset = vi.fn().mockResolvedValue({ ok: true, data: new Blob(['img']) });
+      const updateDocument = vi.fn().mockResolvedValue({ ok: true, data: { ...DOC, chunkCount: 1 } });
+      const host = render(
+        makeGateway({
+          getDocument: imageDocument(),
+          fetchAsset,
+          updateDocument,
+          listOrgs: vi.fn().mockResolvedValue({ ok: true, data: [{ ...ORG, role: 'owner' }] }),
+        }),
+      );
+      await flush();
+      await enterKb(host);
+      await act(async () => {
+        click(host.querySelector('[data-testid="kb-doc-row-d1"]'));
+        await flush();
+      });
+      await waitForSettled(() => document.querySelector('[data-testid="kb-editor"] img') !== null);
+
+      const editor = dialogRoot().querySelector('[data-testid="kb-editor"]') as HTMLElement;
+      // **追加**而不是替换整个 innerHTML：替换会把那张图一起删掉，
+      // 那就测不到「图片引用在保存后还在不在」了
+      editor.insertAdjacentHTML('beforeend', '<div>改过的正文</div>');
+      await act(async () => {
+        editor.dispatchEvent(new Event('input', { bubbles: true }));
+        await flush();
+      });
+      await act(async () => {
+        click(dialogRoot().querySelector('[data-testid="kb-doc-view-save"]'));
+        await flush();
+      });
+
+      const sent = (updateDocument.mock.calls[0] as unknown as [string, string, { content: string }])[2]
+        .content;
+      expect(sent).toContain('asset:aaa111');
+      expect(sent).not.toContain('blob:');
+    } finally {
+      restore();
+    }
+  });
+
+
+/**
+ * 粘贴 / 选文件插图。
+ *
+ * 图片是「**先入库、正文后引用**」：粘贴时要立刻看到图，不能等文档保存。
+ * 这一组守的是：图片走上传、文本不走；插进去的是**可加载地址**（不是 base64），
+ * 而存回去的是 `asset:<id>`。
+ */
+describe('插入图片', () => {
+  /** jsdom 不实现 blob 地址与 execCommand，这里造假的。 */
+  function withBrowserStubs() {
+    const originalCreate = URL.createObjectURL;
+    const originalRevoke = URL.revokeObjectURL;
+    const originalExec = document.execCommand;
+    let counter = 0;
+    URL.createObjectURL = () => `blob:http://localhost/${++counter}`;
+    URL.revokeObjectURL = () => undefined;
+    const execCommand = vi.fn();
+    (document as unknown as { execCommand: unknown }).execCommand = execCommand;
+    return {
+      execCommand,
+      restore: () => {
+        URL.createObjectURL = originalCreate;
+        URL.revokeObjectURL = originalRevoke;
+        (document as unknown as { execCommand: unknown }).execCommand = originalExec;
+      },
+    };
+  }
+
+  /** 造一个带图片的 paste 事件。 */
+  function pasteImage(file: File, text = ''): Event {
+    const event = new Event('paste', { bubbles: true, cancelable: true });
+    Object.defineProperty(event, 'clipboardData', {
+      value: {
+        items: [{ kind: 'file', type: file.type, getAsFile: () => file }],
+        getData: () => text,
+      },
+    });
+    return event;
+  }
+
+  it('粘贴截图：先上传拿到 id，再在光标处插图', async () => {
+    const stubs = withBrowserStubs();
+    try {
+      const uploadAsset = vi.fn().mockResolvedValue({
+        ok: true,
+        data: { id: 'img-1', mime: 'image/png', bytesLen: 3, alt: '截图' },
+      });
+      const host = render(ownerGateway({ uploadAsset }));
+      await flush();
+      await enterKb(host);
+      await act(async () => {
+        click(host.querySelector('[data-testid="kb-doc-row-d1"]'));
+        await flush();
+      });
+      await waitForSettled(() => document.querySelector('[data-testid="kb-editor"]') !== null);
+
+      const editor = document.querySelector('[data-testid="kb-editor"]') as HTMLElement;
+      const file = new File([new Uint8Array([1, 2, 3])], '截图.png', { type: 'image/png' });
+      await act(async () => {
+        editor.dispatchEvent(pasteImage(file));
+        await flush();
+      });
+      await waitForSettled(() => uploadAsset.mock.calls.length > 0);
+
+      // 上传的是 base64（不带 data URL 前缀），文件名用来说明图注
+      expect(uploadAsset).toHaveBeenCalledWith(
+        'k1',
+        expect.objectContaining({ filename: '截图.png', contentBase64: expect.any(String) }),
+      );
+      // 插进去的是**可加载地址**（blob），不是 base64 —— base64 会把整块文本撑爆
+      await waitForSettled(() => stubs.execCommand.mock.calls.length > 0);
+      const html = String(stubs.execCommand.mock.calls[0][2] ?? '');
+      expect(html).toContain('blob:http://localhost/');
+      expect(html).toContain('alt="截图"');
+    } finally {
+      stubs.restore();
+    }
+  });
+
+  it('粘贴文字**不**触发上传（还是只取纯文本）', async () => {
+    const stubs = withBrowserStubs();
+    try {
+      const uploadAsset = vi.fn();
+      const host = render(ownerGateway({ uploadAsset }));
+      await flush();
+      await enterKb(host);
+      await act(async () => {
+        click(host.querySelector('[data-testid="kb-doc-row-d1"]'));
+        await flush();
+      });
+      await waitForSettled(() => document.querySelector('[data-testid="kb-editor"]') !== null);
+
+      const editor = document.querySelector('[data-testid="kb-editor"]') as HTMLElement;
+      const event = new Event('paste', { bubbles: true, cancelable: true });
+      Object.defineProperty(event, 'clipboardData', {
+        value: { items: [], getData: () => '纯文字内容' },
+      });
+      await act(async () => {
+        editor.dispatchEvent(event);
+        await flush();
+      });
+
+      expect(uploadAsset).not.toHaveBeenCalled();
+      expect(stubs.execCommand).toHaveBeenCalledWith('insertText', false, '纯文字内容');
+    } finally {
+      stubs.restore();
+    }
+  });
+
+  it('选文件上传：走同一个上传接口，然后插进编辑器', async () => {
+    const stubs = withBrowserStubs();
+    try {
+      const uploadAsset = vi.fn().mockResolvedValue({
+        ok: true,
+        data: { id: 'img-2', mime: 'image/png', bytesLen: 3, alt: '架构图' },
+      });
+      const host = render(ownerGateway({ uploadAsset }));
+      await flush();
+      await enterKb(host);
+      await act(async () => {
+        click(host.querySelector('[data-testid="kb-doc-row-d1"]'));
+        await flush();
+      });
+      await waitForSettled(() => document.querySelector('[data-testid="kb-editor"]') !== null);
+
+      const input = document.querySelector(
+        '[data-testid="kb-doc-image-input"]',
+      ) as HTMLInputElement;
+      expect(input).toBeTruthy();
+      const file = new File([new Uint8Array([1, 2, 3])], '架构图.png', { type: 'image/png' });
+      await act(async () => {
+        Object.defineProperty(input, 'files', { value: [file] });
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+        await flush();
+      });
+      await waitForSettled(() => uploadAsset.mock.calls.length > 0);
+
+      expect(uploadAsset).toHaveBeenCalledWith(
+        'k1',
+        expect.objectContaining({ filename: '架构图.png' }),
+      );
+      await waitForSettled(() => stubs.execCommand.mock.calls.length > 0);
+      expect(String(stubs.execCommand.mock.calls[0][2] ?? '')).toContain('alt="架构图"');
+    } finally {
+      stubs.restore();
+    }
+  });
+
+  it('上传失败时如实报错，不插图（不假装成功）', async () => {
+    const stubs = withBrowserStubs();
+    try {
+      const uploadAsset = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 422,
+        message: '只支持 PNG / JPEG / GIF / WebP / BMP 图片',
+        unauthorized: false,
+      });
+      const host = render(ownerGateway({ uploadAsset }));
+      await flush();
+      await enterKb(host);
+      await act(async () => {
+        click(host.querySelector('[data-testid="kb-doc-row-d1"]'));
+        await flush();
+      });
+      await waitForSettled(() => document.querySelector('[data-testid="kb-editor"]') !== null);
+
+      const editor = document.querySelector('[data-testid="kb-editor"]') as HTMLElement;
+      const file = new File([new Uint8Array([1])], 'x.exe', { type: 'image/png' });
+      await act(async () => {
+        editor.dispatchEvent(pasteImage(file));
+        await flush();
+      });
+      await waitForSettled(() => uploadAsset.mock.calls.length > 0);
+      await waitForSettled(() => (toast.error as unknown as { mock: { calls: unknown[] } }).mock.calls.length > 0);
+
+      expect(toast.error).toHaveBeenCalledWith(
+        expect.stringContaining('只支持 PNG'),
+      );
+      expect(stubs.execCommand).not.toHaveBeenCalled();
+    } finally {
+      stubs.restore();
+    }
+  });
+});
+
+});
+
+/**
+ * 正文编辑（抽屉里改完存回知识库）。
+ *
+ * 这一组守的是「保存这条链路是否真的把改动落进库」以及**失败时不许假装成功**：
+ * 脏标记被错误清掉的后果是用户以为存上了，然后关闭抽屉丢掉整段修改。
+ */
+describe('编辑正文', () => {
+  /** 模拟在 contentEditable 里改内容（React 的 onInput 走事件委托） */
+  async function typeInEditor(bodyHtml: string) {
+    const editor = dialogRoot().querySelector('[data-testid="kb-editor"]') as HTMLElement;
+    expect(editor).toBeTruthy();
+    editor.innerHTML = bodyHtml;
+    await act(async () => {
+      editor.dispatchEvent(new Event('input', { bubbles: true }));
+      await flush();
+    });
+  }
+
+  it('改完点保存：正文以 Markdown 发给服务端，块数来自服务端返回', async () => {
+    const updateDocument = vi
+      .fn()
+      .mockResolvedValue({ ok: true, data: { ...DOC, chunkCount: 3, chars: 12 } });
+    const host = render(ownerGateway({ updateDocument }));
+    await flush();
+    await enterKb(host);
+    await act(async () => {
+      click(host.querySelector('[data-testid="kb-doc-row-d1"]'));
+      await flush();
+    });
+
+    // 编辑区里是富文本 DOM（加粗 + 两段），存回去必须是 Markdown
+    await typeInEditor('<div><strong>改过的</strong>正文</div><div>第二段</div>');
+    expect(dialogRoot().querySelector('[data-testid="kb-doc-view-status"]')?.textContent).toBe(
+      '未保存',
+    );
+
+    await act(async () => {
+      click(dialogRoot().querySelector('[data-testid="kb-doc-view-save"]'));
+      await flush();
+    });
+
+    expect(updateDocument).toHaveBeenCalledWith('k1', 'd1', {
+      content: '**改过的**正文\n\n第二段',
+    });
+    expect(toast.success).toHaveBeenCalledWith(expect.stringContaining('已保存'));
+  });
+
+  it('保存失败（409 与另一篇重复）时脏标记还在——不能假装存上了', async () => {
+    const updateDocument = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 409,
+      message: '这段内容和库里的《差旅制度》完全一样，没有保存。',
+      unauthorized: false,
+    });
+    const host = render(ownerGateway({ updateDocument }));
+    await flush();
+    await enterKb(host);
+    await act(async () => {
+      click(host.querySelector('[data-testid="kb-doc-row-d1"]'));
+      await flush();
+    });
+    await typeInEditor('<div>和别的一样的内容</div>');
+
+    await act(async () => {
+      click(dialogRoot().querySelector('[data-testid="kb-doc-view-save"]'));
+      await flush();
+    });
+
+    // 判重是提示不是报错，但**必须留着脏标记**（否则用户以为存上了）
+    expect(toast.warning).toHaveBeenCalledWith(expect.stringContaining('完全一样'));
+    expect(dialogRoot().querySelector('[data-testid="kb-doc-view-status"]')?.textContent).toBe(
+      '未保存',
+    );
+  });
+
+  it('有未保存改动时关抽屉要先确认，选「放弃修改」才真的关', async () => {
+    const host = render(ownerGateway());
+    await flush();
+    await enterKb(host);
+    await act(async () => {
+      click(host.querySelector('[data-testid="kb-doc-row-d1"]'));
+      await flush();
+    });
+    await typeInEditor('<div>临时改两句</div>');
+
+    await act(async () => {
+      click(document.querySelector('[data-testid="kb-doc-view-close"]'));
+      await flush();
+    });
+    expect(document.body.textContent).toContain('还有未保存的修改');
+
+    await act(async () => {
+      click(document.querySelector('[data-testid="kb-doc-discard-edits"]'));
+      await flush();
+    });
+    await waitForSettled(
+      () => document.querySelector('[data-testid="kb-doc-view-title"]') === null,
+    );
+    expect(document.querySelector('[data-testid="kb-doc-view-title"]')).toBeNull();
+  });
+
+  it('没有写权限（普通成员）时不给编辑器，只读渲染正文', async () => {
+    const host = render(makeGateway());
+    await flush();
+    await enterKb(host);
+    await act(async () => {
+      click(host.querySelector('[data-testid="kb-doc-row-d1"]'));
+      await flush();
+    });
+
+    expect(dialogRoot().querySelector('[data-testid="kb-editor"]')).toBeNull();
+    expect(dialogRoot().querySelector('[data-testid="kb-doc-view-save"]')).toBeNull();
+    expect(dialogRoot().querySelector('[data-testid="kb-doc-view-body"]')?.textContent).toContain(
+      '报销流程',
+    );
   });
 });

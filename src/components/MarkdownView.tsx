@@ -30,9 +30,17 @@ const MarkdownRenderer = lazy(() =>
 interface MarkdownViewProps {
   content: string;
   sx?: object;
+  /**
+   * 放行 `blob:` 图片地址（知识库的图片是 blob 地址）。
+   *
+   * 刻意只透传一个**布尔**而不是传函数：`react-markdown` 是 772KB 的懒加载边界，
+   * 在这里 import 它的任何一个导出（哪怕只是 `defaultUrlTransform`）都会把整包
+   * 拽回首屏静态图。真正的判断留在 `markdown/MarkdownRenderer` 内部。
+   */
+  allowBlobUrls?: boolean;
 }
 
-export function MarkdownView({ content, sx }: MarkdownViewProps) {
+export function MarkdownView({ content, sx, allowBlobUrls }: MarkdownViewProps) {
   return (
     <Suspense
       fallback={
@@ -41,7 +49,7 @@ export function MarkdownView({ content, sx }: MarkdownViewProps) {
         </Box>
       }
     >
-      <MarkdownRenderer content={content} sx={sx} />
+      <MarkdownRenderer content={content} sx={sx} allowBlobUrls={allowBlobUrls} />
     </Suspense>
   );
 }

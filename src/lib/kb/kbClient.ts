@@ -237,7 +237,7 @@ function currentToken(config: KbClientConfig): string | null {
 async function request<T>(
   config: KbClientConfig,
   path: string,
-  init: { method?: string; body?: unknown } = {},
+  init: { method?: string; body?: unknown; parse?: 'json' | 'blob' } = {},
 ): Promise<KbApiResult<T>> {
   const fetchImpl = config.fetchImpl ?? fetch;
   const baseHeaders: Record<string, string> = {};
@@ -293,6 +293,9 @@ async function request<T>(
   }
   if (response.status === 204) return { ok: true, data: undefined as T };
   try {
+    // 图片要的是二进制：`<img src>` 不能带 Authorization 头，所以由这里带票取回
+    // 字节，再在页面里换成 blob URL（见 `lib/kb/assetLoader.ts`）
+    if (init.parse === 'blob') return { ok: true, data: (await response.blob()) as T };
     return { ok: true, data: (await response.json()) as T };
   } catch {
     return { ok: false, status: response.status, message: '响应格式异常', unauthorized: false };
@@ -359,6 +362,20 @@ export interface KbGateway {
   /** 文档列表。`trashed` = 看回收站（**只看删过的**，不含正常文档） */
   listDocuments(kbId: string, input?: { trashed?: boolean }): Promise<KbApiResult<KbDocument[]>>;
   /**
+   * 取一张图片的字节（`<img>` 不能带票，所以由 JS 取回再换 blob 地址）。
+   * 权限与读文档同一套：库不可见就是 403。
+   */
+  fetchAsset(kbId: string, assetId: string): Promise<KbApiResult<Blob>>;
+  /**
+   * 上传一张图片（粘贴 / 选文件）。要写权限。
+   *
+   * 图片是「先入库、正文后引用」：粘贴时要立刻看到图，不能等文档保存。
+   */
+  uploadAsset(
+    kbId: string,
+    input: { filename: string; contentBase64: string },
+  ): Promise<KbApiResult<KbAssetInfo>>;
+  /**
    * 读单篇（元数据 + 正文，抽屉里「打开文档」用）。
    *
    * 失败语义照旧原样转达：403 = 角色不够，404 = 不存在 / 在回收站里。
@@ -375,6 +392,17 @@ export interface KbGateway {
   ): Promise<KbApiResult<KbDocument>>;
   /** 改标题（内容与块都不动）；需要管理员 */
   renameDocument(kbId: string, docId: string, title: string): Promise<KbApiResult<KbDocument>>;
+  /**
+   * 改标题 / 改正文（同一个接口，字段传了才改）；需要管理员。
+   *
+   * 改正文是**重新入库**：服务端会重新切块、重算摘要、重建向量 —— 所以它比改名慢，
+   * 而且可能因为「和库里另一篇内容一样」被 409 拦下。
+   */
+  updateDocument(
+    kbId: string,
+    docId: string,
+    input: { title?: string; content?: string },
+  ): Promise<KbApiResult<KbDocument>>;
   /**
    * 删文档。默认**进回收站**（可从 `undo` 恢复），`purge` = 彻底删除（不可撤销）。
    * 需要管理员或该库允许部门的负责人。
@@ -420,10 +448,13 @@ export function createKbGateway(config: KbClientConfig): KbGateway {
     updateKbVisibility: (kbId, input) => updateKbVisibility(config, kbId, input),
     createKb: (orgId, input) => createKb(config, orgId, input),
     listDocuments: (kbId, input) => listDocuments(config, kbId, input),
+    fetchAsset: (kbId, assetId) => fetchKbAsset(config, kbId, assetId),
+    uploadAsset: (kbId, input) => uploadKbAsset(config, kbId, input),
     getDocument: (kbId, docId) => getKbDocument(config, kbId, docId),
     uploadDocument: (kbId, input) => uploadDocument(config, kbId, input),
     uploadFile: (kbId, input) => uploadKbFile(config, kbId, input),
     renameDocument: (kbId, docId, title) => renameKbDocument(config, kbId, docId, title),
+    updateDocument: (kbId, docId, input) => updateKbDocument(config, kbId, docId, input),
     deleteDocument: (kbId, docId, input) => deleteKbDocument(config, kbId, docId, input),
     restoreDocument: (kbId, docId) => restoreKbDocument(config, kbId, docId),
     search: (orgId, input) => searchOrgKbs(config, orgId, input),
@@ -579,6 +610,71 @@ export function renameKbDocument(
     config,
     `/api/kbs/${encodeURIComponent(kbId)}/documents/${encodeURIComponent(docId)}`,
     { method: 'PATCH', body: { title } },
+  );
+}
+
+/**
+ * 改标题 / 改正文。
+ *
+ * 与 `renameKbDocument` 是同一条路由：服务端两个字段都可选，传了才改。留两个入口
+ * 是因为调用方的语义不同（改名不该被误传成"覆盖正文"，反之亦然）。
+ */
+export function updateKbDocument(
+  config: KbClientConfig,
+  kbId: string,
+  docId: string,
+  input: { title?: string; content?: string },
+): Promise<KbApiResult<KbDocument>> {
+  return request<KbDocument>(
+    config,
+    `/api/kbs/${encodeURIComponent(kbId)}/documents/${encodeURIComponent(docId)}`,
+    { method: 'PATCH', body: input },
+  );
+}
+
+/** 一张已入库的图片。`alt` 是图注 —— 它唯一的检索信号。 */
+export interface KbAssetInfo {
+  id: string;
+  mime: string;
+  bytesLen: number;
+  alt: string;
+}
+
+/**
+ * 上传一张图片（粘贴截图 / 选文件）。
+ *
+ * 走 JSON + base64，与文件上传同一套理由（服务端不引 `python-multipart`）。
+ * 服务端按**内容**判定类型（魔数），所以改扩展名骗不过。
+ */
+export function uploadKbAsset(
+  config: KbClientConfig,
+  kbId: string,
+  input: { filename: string; contentBase64: string },
+): Promise<KbApiResult<KbAssetInfo>> {
+  return request<KbAssetInfo>(config, `/api/kbs/${encodeURIComponent(kbId)}/assets`, {
+    method: 'POST',
+    body: input,
+  });
+}
+
+/**
+ * 取一张图片的字节。
+ *
+ * 为什么要单独一个方法而不是把 URL 直接放进 `<img src>`：`<img>` **不会**带
+ * `Authorization` 头，而知识库的接口一律要 Bearer 票。所以图片必须由 JS 带票取回，
+ * 再在页面里换成 `blob:` 地址（`lib/kb/assetLoader.ts`）。
+ *
+ * 权限判定在服务端走的是**读文档那一套**（库的可见性），没有任何旁路。
+ */
+export function fetchKbAsset(
+  config: KbClientConfig,
+  kbId: string,
+  assetId: string,
+): Promise<KbApiResult<Blob>> {
+  return request<Blob>(
+    config,
+    `/api/kbs/${encodeURIComponent(kbId)}/assets/${encodeURIComponent(assetId)}`,
+    { parse: 'blob' },
   );
 }
 

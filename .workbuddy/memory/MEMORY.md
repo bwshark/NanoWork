@@ -42,6 +42,40 @@ FR 权威：`docs/nanowork-prd-design-v2.md` 第 3 章；逐日细节 `YYYY-MM-D
 - 绑定形态：渲染层每轮预取（不是引擎工具）。⛔ `kbIds: []` = 组织可见**全部**库，与 `toolAllow: []`（一个都不许）方向相反，不能共用归一。检索不到**不注入任何段**。provider 靠 `setKnowledgeSearchProvider` 注入（否则 lib↔sync/runtime 成环）。
 - ⛔ Agent 上新字段必须改三处：`types/agent.ts` + `agentsStore.buildAgent` + `mergeAgents`（漏第三处的症状：给内置专家设的值重启后消失）。
 - 文档解析：`.docx`（zip + document.xml）/ `.xlsx`（sharedStrings + 各 sheet `<row>`，路径靠 rels 解析，不能猜 sheet1）/ `.pptx`（`slideN.xml` 的 `<a:t>`，**按页号数字排序**）/ `.txt|md|csv`（UTF-8-sig → GB18030）/ `.pdf` 用 **pypdf 可选依赖**（`-i https://pypi.org/simple`）。上传走 **base64 JSON**、先解析后落库、8MB / 20 万字；扫描件 422（**OCR 明确不做**）；降级走 `warnings` 由客户端逐条弹。
+
+- ⛔ **正文以 Markdown 为唯一存储格式**（检索吃纯文本，存 HTML 等于让检索啃标签）；
+  `docx`/`xlsx` 解析产 **GFM 管道表格**（`w:p` 全量 iter 会把表格拍平 → 改成按
+  `body` 顺序遍历 `w:p`/`w:tbl`；xlsx 空单元格在 XML 里缺失 → 按 `r="C5"` 定位列号）。
+- ⛔ **检索投影不落库**：`KbChunk.text` 存 GFM 原文（详情页拼回正文要用），
+  投影在 `chunking.retrieval_text()` 那一刻算；**词法排序与 embedding 必须走同一个
+  投影函数**。投影要**按 `\n\n` 逐段**做（短文档的标题+段落+表格装同一块，
+  「整块是表格」不成立 → 否则最常见的情况一次都不生效）。投影的价值是「列名与数据
+  同一行」，不是「从零命中变命中」。
+- ⛔ **转换层（`src/lib/kb/richText.ts`）必须有 `table`/`img` 分支**，否则保存时
+  **静默吞掉**（不报错，每存一次丢一次）；单元格要包 `<div>`（裸文本 td 在
+  contentEditable 里点不进去）；对齐用 `data-align` 不用 `style`（浏览器会改写 style）。
+- 表格样式抽 `components/knowledge/docTableSx.ts` 两处共用；⛔ 别给 `th` 设默认
+  `text-align`（会抹掉 remark-gfm 的 `align` 属性）。
+- **图片**（已做）：独立表 `kb_assets`（`create_all` 不 ALTER）；正文存内部 scheme
+  `![图注](asset:<id>)`（解析阶段是 `asset-index:<n>`，入库时换真 id）；
+  ⛔ **判重按「剥离图片引用后的文本」算**（图片 id 每次入库都变，带 id 算摘要
+  就永远判不出重复）；图片去重**只在同一文档内**（跨文档共享会让删 A 带走 B 的图）；
+  SVG/EMF/WMF 不收（SVG 是 XSS 载体）。
+- ⛔ **`<img src>` 不带 `Authorization` 头** → 只能 JS 带票取字节再换 `blob:` 地址；
+  **不选签名 URL**（那给权限开旁路）。渲染前文本层替换、保存前换回 `asset:<id>`；
+  图片解析必须放**页面层**（编辑器只在换文档时写 DOM，异步结果到不了编辑器）；
+  ⛔ react-markdown 默认 `urlTransform` 会清空 `blob:` → 放行逻辑留在
+  `markdown/MarkdownRenderer` 内部（`MarkdownView` 只透传布尔，import 它的任何
+  导出都会把 772KB 拽回首屏）。
+- ⚠️ **`sx` 里 `borderRadius: 4` 实测变成 40px**（被当 spacing 换算）→ 写像素用字符串。
+- **插图通道**（粘贴 / 选文件）：`POST /kbs/{kb}/assets`（base64 JSON）→ 图片
+  **先入库、正文后引用**（粘贴要立刻看到图）→ 代价是孤儿图，按「`doc_id` 为空且
+  超 1 小时」惰性清理；⛔ **类型按内容魔数判**（改扩展名骗不过）；⛔ **保存文档时要把
+  正文引用的 asset 绑定到该文档**（否则不会跟着 purge 清掉）；上传要写权限。
+- ⛔ **插图的选区取用顺序是「当前选区 → 上次记下的」**：只用上次记的会插错位置
+  （先粘贴的图跑到后选的文件后面，顺序反）—— 真机才发现，单测测不出。
+  点「插入图片」按钮前要 `captureSelection`（文件对话框让编辑器失焦）。
+- 图表：只做静态图（跟图片同路）与数值抽取，**交互式图表编辑器不做**。
 - 加列迁移：`cloud/app/migrations.py` 的 `ADDED_COLUMNS`（DDL 必须带 DEFAULT）。⛔ 只加不改不删。判据必须在**自建 engine** 上跑（conftest 每例重建库，迁移分支走不到）。
 - 文档生命周期：写要 admin（`allowed_roles` 只管读）；判重按切好的块算 sha256（重复 409 点名已有标题）；删除要三张表都清（vectors→chunks→documents）且校验 `doc.kb_id`。
 - 可见性唯一实现 `kb/visibility.py::allows()`：**admin|owner 无条件放行**（管理豁免，否则「建完看不见也改不了」）→ member 需 `角色 ∈ allowedRoles` ∧（不按部门收窄 ∨ 我直属部门 ∈ 允许集合的子树）。⛔ 所以界面上「管理员/所有者」必须画成不可关：点得动却不改变结果 = 让人以为权限变了。

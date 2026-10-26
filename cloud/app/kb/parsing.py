@@ -32,7 +32,10 @@ import binascii
 import io
 import xml.etree.ElementTree as ET
 import zipfile
+from collections.abc import Iterator
 from dataclasses import dataclass, field
+
+from app.kb.assets import PENDING_SCHEME, mime_for_suffix
 
 #: 单个上传文件的上限（原始字节）。
 MAX_UPLOAD_BYTES = 8 * 1024 * 1024
@@ -73,6 +76,10 @@ _W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 _S = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
 _A = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
 _REL = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
+#: 图片的两种画法都要认：DrawingML（现代 Word/WPS）与 VML（老版 Word 存的 docx）
+_P = "{http://schemas.openxmlformats.org/presentationml/2006/main}"
+_WP = "{http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing}"
+_V = "{urn:schemas-microsoft-com:vml}"
 
 
 class ParseError(ValueError):
@@ -80,10 +87,26 @@ class ParseError(ValueError):
 
 
 @dataclass(frozen=True)
+class ParsedImage:
+    """文档里的一张图。
+
+    `alt` 是它**唯一的检索信号**（图片本体不进切块、不进向量），所以要尽量取到：
+    Word 里图的「替代文字」在 `wp:docPr@descr`，PowerPoint 在 `p:cNvPr@descr`。
+    """
+
+    data: bytes
+    mime: str
+    alt: str = ""
+
+
+@dataclass(frozen=True)
 class ParsedDocument:
     text: str
     kind: str
     warnings: list[str] = field(default_factory=list)
+    #: 文档里的图片。正文里对应位置是 `![图注](asset-index:<下标>)`，
+    #: 入库时换成真正的 `asset:<id>`（见 `kb/assets.py`）。
+    images: list[ParsedImage] = field(default_factory=list)
 
 
 def decode_base64(payload: str) -> bytes:
@@ -113,8 +136,8 @@ def parse_document(filename: str, data: bytes) -> ParsedDocument:
         text, warnings = _decode_text(data)
         return ParsedDocument(text=text, kind="text", warnings=warnings)
     if suffix == ".docx":
-        text, warnings = _parse_docx(data)
-        return ParsedDocument(text=text, kind="docx", warnings=warnings)
+        text, warnings, images = _parse_docx(data)
+        return ParsedDocument(text=text, kind="docx", warnings=warnings, images=images)
     if suffix == ".pdf":
         text, warnings = _parse_pdf(data)
         return ParsedDocument(text=text, kind="pdf", warnings=warnings)
@@ -122,8 +145,8 @@ def parse_document(filename: str, data: bytes) -> ParsedDocument:
         text, warnings = _parse_xlsx(data)
         return ParsedDocument(text=text, kind="xlsx", warnings=warnings)
     if suffix == ".pptx":
-        text, warnings = _parse_pptx(data)
-        return ParsedDocument(text=text, kind="pptx", warnings=warnings)
+        text, warnings, images = _parse_pptx(data)
+        return ParsedDocument(text=text, kind="pptx", warnings=warnings, images=images)
     if suffix in (".doc", ".xls", ".ppt"):
         raise ParseError(
             f"不支持旧版 Office 格式（{suffix}），请另存为 .docx / .xlsx / .pptx / .pdf 再上传"
@@ -202,7 +225,7 @@ def _read_zip_member(zf: zipfile.ZipFile, name: str) -> bytes:
     return zf.read(name)
 
 
-def _parse_docx(data: bytes) -> tuple[str, list[str]]:
+def _parse_docx(data: bytes) -> tuple[str, list[str], list[ParsedImage]]:
     try:
         zf = zipfile.ZipFile(io.BytesIO(data))
     except zipfile.BadZipFile as error:
@@ -210,29 +233,128 @@ def _parse_docx(data: bytes) -> tuple[str, list[str]]:
 
     with zf:
         xml = _read_zip_member(zf, "word/document.xml")
+        rels = _read_rels(zf, "word/_rels/document.xml.rels")
+        try:
+            root = ET.fromstring(xml)
+        except ET.ParseError as error:
+            raise ParseError("docx 正文 XML 解析失败（文件可能已损坏）") from error
 
-    try:
-        root = ET.fromstring(xml)
-    except ET.ParseError as error:
-        raise ParseError("docx 正文 XML 解析失败（文件可能已损坏）") from error
+        body = root.find(_W + "body")
+        if body is None:
+            raise ParseError("docx 正文里没有 body 节点（文件结构不对）")
 
-    paragraphs: list[str] = []
-    tables = 0
-    for node in root.iter():
-        if node.tag == _W + "tbl":
-            tables += 1
-    for paragraph in root.iter(_W + "p"):
-        text = _run_text(paragraph)
-        if text != "":
-            paragraphs.append(text)
+        images: list[ParsedImage] = []
+        blocks: list[str] = []
+        tables = 0
+        for kind, payload in _walk_body(body, zf, rels, "word/", images):
+            if kind == "p":
+                if payload:
+                    blocks.append(str(payload))
+                continue
+            if kind == "tbl":
+                tables += 1
+                rows = _docx_table_rows(payload)
+                if rows:
+                    blocks.append("\n".join(_gfm_table(rows)))
+                continue
+            # 图片占位：单独成段，前后各留空行（它是一个独立的块）
+            blocks.append(str(payload))
 
-    if not paragraphs:
+    if not blocks:
         raise ParseError("docx 里没有可提取的段落（可能只有图片或文本框）")
 
     warnings: list[str] = []
     if tables:
-        warnings.append(f"文档含 {tables} 个表格，已按段落展开（单元格之间不保留行列结构）")
-    return _normalize("\n\n".join(paragraphs)), warnings
+        warnings.append(
+            f"文档含 {tables} 个表格，已转成 Markdown 表格"
+            "（合并单元格在 Markdown 里没有语法，内容只保留在左上角那一格）"
+        )
+    if images:
+        warnings.append(f"文档含 {len(images)} 张图片，已随文入库（图片只按图注参与检索）")
+    return _normalize("\n\n".join(blocks)), warnings, images
+
+
+def _walk_body(
+    node: ET.Element,
+    zf: zipfile.ZipFile,
+    rels: dict[str, str],
+    base: str,
+    images: list[ParsedImage],
+) -> Iterator[tuple[str, object]]:
+    """按**文档顺序**产出 `("p", 文本)`、`("tbl", 表格节点)`、`("img", 占位)`。
+
+    不能再用 `root.iter(w:p)`：表格单元格里也是 `w:p`，那样遍历会把表格拍平成一串
+    段落 —— `| 张三 | 30 |` 的行列关系彻底消失，表格变成「张三」「30」两个独立段落，
+    检索时「年龄」和「30」再也对不上。
+
+    未知的包装层（`w:sdt` 内容控件、`w:sdtContent`）必须递归穿透，
+    否则被控件包住的整段正文读不到。
+    """
+    for child in node:
+        if child.tag == _W + "p":
+            yield ("p", _run_text(child))
+            # 段落里的图排在这一段**之后**：图注是它唯一的检索信号，
+            # 紧跟着它所在的段落，模型才分得清「这张图说的是哪一段」
+            for image in _paragraph_images(child, zf, rels, base):
+                images.append(image)
+                yield ("img", _image_placeholder(image, len(images) - 1))
+        elif child.tag == _W + "tbl":
+            yield ("tbl", child)
+        elif len(child):
+            yield from _walk_body(child, zf, rels, base, images)
+
+
+def _docx_table_rows(table: ET.Element) -> list[list[str]]:
+    """`w:tbl` → 行列表。
+
+    `w:gridSpan` 是横向合并：GFM 没有合并语法，内容留在第一格，其余补空占位 ——
+    不补的话后面的格子会整体左移，「这一行只有 3 格」变成假的。
+    """
+    rows: list[list[str]] = []
+    for row in table.findall(_W + "tr"):
+        cells: list[str] = []
+        for cell in row.findall(_W + "tc"):
+            span = 1
+            properties = cell.find(_W + "tcPr")
+            if properties is not None:
+                grid = properties.find(_W + "gridSpan")
+                if grid is not None:
+                    try:
+                        span = max(1, int(grid.get(_W + "val") or "1"))
+                    except ValueError:
+                        span = 1
+            text = " ".join(part for part in (_run_text(p) for p in cell.findall(_W + "p")) if part)
+            cells.append(text)
+            cells.extend([""] * (span - 1))
+        if any(cell for cell in cells):
+            rows.append(cells)
+    return rows
+
+
+def _gfm_cell(text: str) -> str:
+    """单元格文本：换行压成空格（GFM 一格不能有真换行），`|` 转义（否则凭空多一列）。"""
+    return " ".join(text.split()).replace("|", "\\|")
+
+
+def _gfm_table(rows: list[list[str]]) -> list[str]:
+    """行列表 → GFM 表格的行。**第一行当表头**（GFM 表格必须有表头）。
+
+    宽度取所有行的**最大值**并给短行补空：按第一行定宽会把右侧的列截掉，
+    而「表格右边几列不见了」是最难被发现的丢数据（读者不会知道自己少看了两列）。
+    """
+    if not rows:
+        return []
+    width = max(1, max(len(row) for row in rows))
+
+    def line(cells: list[str]) -> str:
+        filled = list(cells[:width]) + [""] * (width - len(cells))
+        return "| " + " | ".join(_gfm_cell(cell) for cell in filled) + " |"
+
+    return [
+        line(rows[0]),
+        "| " + " | ".join(["---"] * width) + " |",
+        *[line(row) for row in rows[1:]],
+    ]
 
 
 def _run_text(paragraph: ET.Element) -> str:
@@ -341,11 +463,19 @@ def _cell_text(cell: ET.Element, shared: list[str]) -> str:
 
 
 def _parse_xlsx(data: bytes) -> tuple[str, list[str]]:
-    """把工作簿按「一行一段」摊成文本。
+    """把每张工作表转成一个 **Markdown 表格**。
 
-    刻意**不保留行列结构**：知识库的检索单位是文本段，`A1|B1|C1` 这种表格形态
-    对人和模型都不好读；而"每行拼一句"恰好是表格最常见的语义（一条记录一行）。
-    这一点必须写进 warnings —— 丢掉结构是真的丢了信息，不能装作没丢。
+    为什么不摊成「一行一段」：那样 `张三 | 30 | 是` 里没有「年龄」「在职」这两个词，
+    用户搜「年龄」一个词都命中不了（表头在第一行，离得太远）。转成 GFM 表格之后，
+    切块器会把整表放在一块、检索投影会把表头拼进每一行 —— 是「能不能搜到」的差别，
+    不是排版差别。
+
+    两个必须处理的细节：
+
+    - **按 `r` 定位列号**：Excel 里空单元格在 XML 里**直接缺失**，按出现顺序取值
+      会让后面的列整体左移（「这一行只有 3 个值」其实是 5 列里有 2 列空着）。
+    - **第一行当表头**：GFM 表格必须有表头。绝大多数台账的第一行确实是列名，
+      少数不是的时候语义也还读得通；这一点写进 warnings。
 
     公式取的是**缓存值**（`<v>`），不是公式本身：公式文本对检索毫无意义，
     而 Excel 存盘时都会带上最后一次计算的结果。
@@ -377,37 +507,68 @@ def _parse_xlsx(data: bytes) -> tuple[str, list[str]]:
             except ET.ParseError:
                 blocks.append(f"【工作表：{name}】\n（这张表解析失败，已跳过）")
                 continue
-            lines: list[str] = []
+            rows: list[list[str]] = []
             for row in root.iter(_S + "row"):
-                values = [_cell_text(cell, shared) for cell in row.iter(_S + "c")]
-                values = [item for item in values if item]
-                cells_read += len(values)
+                cells = list(row.iter(_S + "c"))
+                if not cells:
+                    continue
+                values = _row_values(cells, shared)
+                cells_read += sum(1 for value in values if value)
                 if cells_read > MAX_TABLE_CELLS:
                     truncated = True
                     break
-                if values:
-                    # 「 | 」而不是制表符：制表符在纯文本里与空格无法区分，
-                    # 分隔符必须让人眼也能看出"这是两个格子"
-                    lines.append(" | ".join(values))
-            if lines:
-                blocks.append(f"【工作表：{name}】\n" + "\n".join(lines))
+                if any(value for value in values):
+                    rows.append(values)
+            if rows:
+                blocks.append(f"【工作表：{name}】\n" + "\n".join(_gfm_table(rows)))
             if truncated:
                 break
 
     if not blocks:
         raise ParseError("表格里没有可提取的内容（可能是空表或只有图表）")
 
-    warnings = ["表格已按行展开为文本，行列结构不保留"]
+    warnings = ["表格已转成 Markdown 表格，每张工作表的第一行当作表头"]
     if truncated:
         warnings.append(f"表格过大，只读了前 {MAX_TABLE_CELLS} 个单元格")
     return _normalize("\n\n".join(blocks)), warnings
 
 
-def _parse_pptx(data: bytes) -> tuple[str, list[str]]:
-    """按页提取幻灯片正文。
+def _column_index(cell: ET.Element) -> int | None:
+    """`r="C5"` → 2（列下标）。`A`→0、`Z`→25、`AA`→26。"""
+    letters = "".join(char for char in (cell.get("r") or "") if char.isalpha())
+    if not letters:
+        return None
+    index = 0
+    for char in letters.upper():
+        index = index * 26 + (ord(char) - 64)
+    return index - 1
+
+
+def _row_values(cells: list[ET.Element], shared: list[str]) -> list[str]:
+    """一行 → 按**列号**对齐的值列表（缺的格子补空串）。
+
+    Excel 里没有内容的单元格在 XML 里根本不出现，所以「第 3 个 `<c>`」不等于
+    「第 3 列」。按 `r` 属性定位才不会让整行左移。
+    """
+    positions = [_column_index(cell) for cell in cells]
+    known = [position for position in positions if position is not None]
+    width = (max(known) if known else len(cells) - 1) + 1
+    values = [""] * width
+    for cell, position in zip(cells, positions, strict=True):
+        if position is None or position >= len(values):
+            continue
+        values[position] = _cell_text(cell, shared)
+    return values
+
+
+def _parse_pptx(data: bytes) -> tuple[str, list[str], list[ParsedImage]]:
+    """按页提取幻灯片正文，**并把页里的图一起抽出来**。
 
     排序按**文件名里的数字**，不按字典序：`slide10.xml` 字典序会排在 `slide2.xml`
     之前，症状是"第 10 页的内容跑到第 2 页前面"——检索照样能用，但引用顺序是乱的。
+
+    图片是**页级**的：`p:pic` 不在 `a:p` 里，所以上面遍历段落的那个循环拿不到它，
+    要单独按 `p:pic → a:blip r:embed` 走一遍。
     """
     try:
         zf = zipfile.ZipFile(io.BytesIO(data))
@@ -425,6 +586,7 @@ def _parse_pptx(data: bytes) -> tuple[str, list[str]]:
             raise ParseError("这份 .pptx 里没有幻灯片")
 
         blocks: list[str] = []
+        images: list[ParsedImage] = []
         for index, name in enumerate(names, start=1):
             try:
                 root = ET.fromstring(_read_zip_member(zf, name))
@@ -435,6 +597,10 @@ def _parse_pptx(data: bytes) -> tuple[str, list[str]]:
                 text = "".join(node.text or "" for node in paragraph.iter(_A + "t")).strip()
                 if text:
                     paragraphs.append(text)
+            rels = _read_rels(zf, f"ppt/slides/_rels/{name.rsplit('/', 1)[-1]}.rels")
+            for image in _slide_images(root, zf, rels):
+                images.append(image)
+                paragraphs.append(_image_placeholder(image, len(images) - 1))
             if paragraphs:
                 blocks.append(f"【第 {index} 页】\n" + "\n".join(paragraphs))
 
@@ -443,4 +609,136 @@ def _parse_pptx(data: bytes) -> tuple[str, list[str]]:
             "幻灯片里没有可提取的文字（可能整份都是图片）。"
             "图文类幻灯片建议先导出为文本，或把要点粘贴到「正文」框里"
         )
-    return _normalize("\n\n".join(blocks)), ["已提取幻灯片正文；备注、图片与图表里的文字未提取"]
+    warnings = ["已提取幻灯片正文；备注与图表里的文字未提取"]
+    if images:
+        warnings.append(f"幻灯片含 {len(images)} 张图片，已随文入库（图片只按图注参与检索）")
+    return _normalize("\n\n".join(blocks)), warnings, images
+
+
+def _read_rels(zf: zipfile.ZipFile, path: str) -> dict[str, str]:
+    """读 `*.rels`：`Id` → `Target`。
+
+    关系文件不存在（有的生成器不写）不是错误：返回空表，图片就都取不到，
+    但**文字照常入库** —— 不能因为没有图片关系就整篇拒收。
+    """
+    if path not in zf.namelist():
+        return {}
+    try:
+        root = ET.fromstring(_read_zip_member(zf, path))
+    except ET.ParseError:
+        return {}
+    out: dict[str, str] = {}
+    for node in root.iter():
+        if not node.tag.endswith("Relationship"):
+            continue
+        rel_id = node.get("Id", "")
+        target = node.get("Target", "")
+        if rel_id and target:
+            out[rel_id] = target
+    return out
+
+
+def _resolve_target(base: str, target: str) -> str:
+    """rels 里的 Target → zip 内路径。
+
+    Target 有三种写法：相对（`media/image1.png`）、绝对（`/word/media/image1.png`）、
+    上跳（`../media/x.png`）。都见过，按顺序处理。
+    """
+    if target.startswith("/"):
+        return target.lstrip("/")
+    if target.startswith("../"):
+        return target[3:]
+    return f"{base}{target}" if base else target
+
+
+def _drawing_alt(node: ET.Element) -> str:
+    """图的替代文字：DrawingML 是 `wp:docPr@descr`，PowerPoint 是 `p:cNvPr@descr`。
+
+    没有就返回空串（图仍然入库，只是检索不到 —— 图注缺失是原件的问题，
+    不是我们能补出来的）。
+    """
+    for tag in (_WP + "docPr", _P + "cNvPr"):
+        for element in node.iter(tag):
+            for key in ("descr", "name"):
+                value = (element.get(key) or "").strip()
+                if value:
+                    return value[:200]
+    return ""
+
+
+def _escape_alt(text: str) -> str:
+    """图注转义：`]` 会提前结束 Markdown 的 alt 段。
+
+    图注里的 `]` 不常见但合法（文件名里就有），不转义的话正文会被截断成
+    `![图注` —— 后面整篇都变成图片语法。
+    """
+    return text.replace("\\", "\\\\").replace("]", "\\]").replace("[", "\\[").strip()
+
+
+def _image_placeholder(image: ParsedImage, index: int) -> str:
+    """图片在正文里的占位：`![图注](asset-index:<下标>)`。"""
+    return f"![{_escape_alt(image.alt)}]({PENDING_SCHEME}{index})"
+
+
+def _paragraph_images(
+    paragraph: ET.Element, zf: zipfile.ZipFile, rels: dict[str, str], base: str
+) -> list[ParsedImage]:
+    """段落里的图片。
+
+    两种画法都要认：`<w:drawing><a:blip r:embed>`（DrawingML，现代 Word/WPS）与
+    `<w:pict><v:imagedata r:id>`（VML，老版 Word 存出来的 docx 走这条）。
+
+    类型不在白名单（emf / wmf / svg）时**跳过**而不是硬塞：浏览器不认这些格式，
+    硬塞进去只会得到一个坏图；SVG 更是 XSS 载体（同源返回就能执行脚本）。
+    """
+    out: list[ParsedImage] = []
+    alt = _drawing_alt(paragraph)
+    for node in paragraph.iter():
+        embed = ""
+        if node.tag == _A + "blip":
+            embed = node.get(_REL + "embed") or ""
+        elif node.tag == _V + "imagedata":
+            embed = node.get(_REL + "id") or ""
+        if not embed:
+            continue
+        target = rels.get(embed)
+        if not target:
+            continue
+        path = _resolve_target(base, target)
+        if path not in zf.namelist():
+            continue
+        mime = mime_for_suffix(_suffix(path))
+        if mime is None:
+            continue
+        try:
+            blob = _read_zip_member(zf, path)
+        except ParseError:
+            continue
+        out.append(ParsedImage(data=blob, mime=mime, alt=alt))
+    return out
+
+
+def _slide_images(root: ET.Element, zf: zipfile.ZipFile, rels: dict[str, str]) -> list[ParsedImage]:
+    """一页里的图片（`p:pic` → `a:blip r:embed`）。"""
+    out: list[ParsedImage] = []
+    for picture in root.iter(_P + "pic"):
+        alt = _drawing_alt(picture)
+        for node in picture.iter(_A + "blip"):
+            embed = node.get(_REL + "embed") or ""
+            if not embed:
+                continue
+            target = rels.get(embed)
+            if not target:
+                continue
+            path = _resolve_target("ppt/slides/", target)
+            if path not in zf.namelist():
+                continue
+            mime = mime_for_suffix(_suffix(path))
+            if mime is None:
+                continue
+            try:
+                blob = _read_zip_member(zf, path)
+            except ParseError:
+                continue
+            out.append(ParsedImage(data=blob, mime=mime, alt=alt))
+    return out

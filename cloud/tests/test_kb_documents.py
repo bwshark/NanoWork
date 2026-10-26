@@ -98,6 +98,28 @@ def _make_docx(paragraphs: list[str]) -> bytes:
     return buffer.getvalue()
 
 
+def _make_docx_with_table(rows: list[list[str]]) -> bytes:
+    """造一份「一段正文 + 一张表」的 docx。"""
+    ns = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+
+    def cell(text: str) -> str:
+        return f"<w:tc><w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:tc>"
+
+    body = "<w:p><w:r><w:t>以下是人名册。</w:t></w:r></w:p>"
+    body += "<w:tbl>"
+    body += "".join(f"<w:tr>{''.join(cell(value) for value in row)}</w:tr>" for row in rows)
+    body += "</w:tbl>"
+
+    xml = (
+        f'<?xml version="1.0" encoding="UTF-8"?>'
+        f'<w:document xmlns:w="{ns}"><w:body>{body}</w:body></w:document>'
+    )
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("word/document.xml", xml)
+    return buffer.getvalue()
+
+
 # —— 判重 ——
 
 
@@ -418,3 +440,138 @@ def test_visibility_patch_does_not_require_name(client: TestClient) -> None:
     # 收紧了就要真的看不见（不然这条只是"接口没报错"）
     visible = client.get(f"/api/orgs/{org}/kbs", headers=auth_headers(member)).json()
     assert visible == []
+
+
+# —— 改正文（编辑器保存走的就是它）——
+
+
+def test_update_content_rechunks_and_reindexes(client: TestClient) -> None:
+    """改正文 = 重新入库：块要换、字数要改、**旧句子要搜不到**。
+
+    只改 `chars` 不换块，界面会说「已保存」，而检索给出的还是修改前的句子 ——
+    这比「不能编辑」更糟：它让人以为改动生效了。
+    """
+    owner, _, org = _org(client)
+    kb = _kb(client, owner, org)
+    created = _add(client, owner, kb["id"], "差旅制度", f"{KEYWORD}：走财务邮箱。").json()
+    assert _hits(client, owner, org, KEYWORD)
+
+    resp = client.patch(
+        f"/api/kbs/{kb['id']}/documents/{created['id']}",
+        json={"content": "报销改走线上系统了。\n\n纸质单据一律不再接收。"},
+        headers=auth_headers(owner),
+    )
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["chars"] == len("报销改走线上系统了。\n\n纸质单据一律不再接收。")
+    # 块数是切块器的内部节奏（两段短文本会被装进同一块），这里只要求"至少一块"
+    assert body["chunkCount"] >= 1
+    # 旧内容消失、新内容可搜（两条都要断言：只验一条会把"块没换"漏过去）
+    assert not _hits(client, owner, org, "财务邮箱")
+    assert _hits(client, owner, org, "线上系统")
+
+
+def test_update_content_reads_back_as_edited(client: TestClient) -> None:
+    """保存后重新打开读到的必须是新正文（否则抽屉里会看到旧内容）。"""
+    owner, _, org = _org(client)
+    kb = _kb(client, owner, org)
+    created = _add(client, owner, kb["id"], "制度", f"{KEYWORD}：走财务邮箱。").json()
+
+    client.patch(
+        f"/api/kbs/{kb['id']}/documents/{created['id']}",
+        json={"content": "# 新标题\n\n改过之后的第一段。\n\n第二段。"},
+        headers=auth_headers(owner),
+    )
+    detail = client.get(
+        f"/api/kbs/{kb['id']}/documents/{created['id']}", headers=auth_headers(owner)
+    ).json()
+
+    assert detail["content"].startswith("# 新标题")
+    assert "第二段" in detail["content"]
+
+
+def test_update_content_rejects_duplicate_of_another_doc(client: TestClient) -> None:
+    """改成和库里另一篇一样的正文 → 409（并说出那一篇叫什么）。
+
+    判重必须**排除自己**，否则「改一个字再存」会被自己拦下；而跨库同内容仍然正常。
+    """
+    owner, _, org = _org(client)
+    kb = _kb(client, owner, org)
+    first = _add(client, owner, kb["id"], "甲", "甲的内容").json()
+    _add(client, owner, kb["id"], "乙", "乙的内容")
+
+    resp = client.patch(
+        f"/api/kbs/{kb['id']}/documents/{first['id']}",
+        json={"content": "乙的内容"},
+        headers=auth_headers(owner),
+    )
+
+    assert resp.status_code == 409
+    assert "乙" in resp.json()["detail"]
+
+
+def test_update_content_allows_editing_itself(client: TestClient) -> None:
+    """改一个字再存不能被自己的旧摘要拦下（判重排除本行）。"""
+    owner, _, org = _org(client)
+    kb = _kb(client, owner, org)
+    created = _add(client, owner, kb["id"], "制度", "第一版内容").json()
+
+    resp = client.patch(
+        f"/api/kbs/{kb['id']}/documents/{created['id']}",
+        json={"content": "第一版内容（补充一句）"},
+        headers=auth_headers(owner),
+    )
+
+    assert resp.status_code == 200, resp.text
+
+
+def test_update_content_rejects_blank(client: TestClient) -> None:
+    owner, _, org = _org(client)
+    kb = _kb(client, owner, org)
+    created = _add(client, owner, kb["id"], "制度", "有点内容").json()
+
+    resp = client.patch(
+        f"/api/kbs/{kb['id']}/documents/{created['id']}",
+        json={"content": "   \n\n  "},
+        headers=auth_headers(owner),
+    )
+
+    assert resp.status_code == 422
+
+
+# —— 表格（P1）——
+
+
+def test_docx_table_reads_back_as_table_and_stays_searchable(client: TestClient) -> None:
+    """docx 里的表格：详情要**读得回表格**，检索要照常命中。
+
+    改造前表格被摊成「张三」「30」两个独立段落 —— 详情页读不出这是一张表，
+    而「30」属于哪一列也再也对不上。这条同时钉住「结构保住了」与「没弄坏检索」。
+    """
+    owner, _, org = _org(client)
+    kb = _kb(client, owner, org)
+    payload = base64.b64encode(
+        _make_docx_with_table(
+            [["姓名", "年龄", "城市"], ["张三", "30", "北京"], ["李四", "41", "杭州"]]
+        )
+    ).decode()
+
+    created = client.post(
+        f"/api/kbs/{kb['id']}/documents/file",
+        json={"filename": "人名册.docx", "contentBase64": payload},
+        headers=auth_headers(owner),
+    )
+    assert created.status_code == 201, created.text
+
+    detail = client.get(
+        f"/api/kbs/{kb['id']}/documents/{created.json()['id']}", headers=auth_headers(owner)
+    ).json()
+
+    assert "| 姓名 | 年龄 | 城市 |" in detail["content"]
+    assert "| --- | --- | --- |" in detail["content"]
+    assert "| 张三 | 30 | 北京 |" in detail["content"]
+    # 表格前后的正文还在（没被表格吃掉）
+    assert "以下是人名册。" in detail["content"]
+
+    assert [hit["docTitle"] for hit in _hits(client, owner, org, "年龄")] == ["人名册"]

@@ -43,6 +43,13 @@ import { docIndexHint } from "@/lib/kb/kbDocumentMeta";
 import { readFileAsBase64 } from "@/lib/artifact/fileBase64";
 import { createRuntimeKbGateway } from "@/sync/kbGateway";
 import { useSyncRuntime } from "@/sync/useSyncRuntime";
+import {
+  collectAssetIds,
+  fileToBase64,
+  replaceAssetRefs,
+  restoreAssetRefs,
+} from "@/lib/kb/assetRef";
+import { createAssetLoader, type AssetLoader } from "@/lib/kb/assetLoader";
 import { KnowledgeSidebar } from "@/components/knowledge/KnowledgeSidebar";
 import { HeaderSubtitle, KnowledgeHeader, type KbMenuItem } from "@/components/knowledge/KnowledgeHeader";
 import { KnowledgeTeamPanel } from "@/components/knowledge/KnowledgeTeamPanel";
@@ -146,6 +153,21 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
+  // loader 常驻：client 变了才重建（重建 = 释放全部 blob 地址）
+  useEffect(() => {
+    if (!client) {
+      assetLoaderRef.current?.dispose();
+      assetLoaderRef.current = null;
+      return;
+    }
+    const loader = createAssetLoader(client);
+    assetLoaderRef.current = loader;
+    return () => {
+      loader.dispose();
+      assetLoaderRef.current = null;
+    };
+  }, [client]);
+
   const [orgs, setOrgs] = useState<KbOrg[]>([]);
   const [activeOrgId, setActiveOrgId] = useState<string>("");
   const [orgsError, setOrgsError] = useState("");
@@ -198,8 +220,17 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
   // 阅读抽屉：点列表里的一行打开。正文**单独取**（列表只有元数据）
   const [viewDocId, setViewDocId] = useState("");
   const [viewDetail, setViewDetail] = useState<KbDocumentDetail | null>(null);
+  /**
+   * 页面级的图片加载器。
+   *
+   * **常驻**（不随文档重建）：它同时管着「可加载地址 → 资产 id」的映射，
+   * 保存时要用这个映射把 `blob:` 地址换回 `asset:<id>`（正文里存的一直是
+   * `asset:<id>`，blob 地址是**一次性**的，存回去就全成坏图）。
+   */
+  const assetLoaderRef = useRef<AssetLoader | null>(null);
   const [viewLoading, setViewLoading] = useState(false);
   const [viewError, setViewError] = useState("");
+  const [viewSaving, setViewSaving] = useState(false);
 
   // 改名 / 删除都要先确认：目标文档 + 改名时正在编辑的标题。
   // 用两个独立状态而不是一个 `{ doc, mode }`：两个弹窗的打开条件互斥，
@@ -336,19 +367,106 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
     setViewLoading(true);
     setViewError("");
     const result = await target.getDocument(kbId, docId);
-    setViewLoading(false);
     if (!result.ok) {
+      setViewLoading(false);
       setViewDetail(null);
       setViewError(result.message);
       return;
     }
-    setViewDetail(result.data);
+    /*
+     * 图片：正文里的 `asset:<id>` 要换成浏览器能加载的地址。
+     *
+     * 为什么放在**页面层**而不是抽屉里：编辑器只在「换文档」时把 Markdown 写进
+     * DOM（之后每次输入都从 DOM 序列化回来）。图片解析是异步的 —— 放在抽屉里
+     * 会出现「解析完了但编辑器里的图还是坏图」，因为 DOM 不会再被重写。
+     * 放在这里等解析完再交给抽屉，编辑器第一次写入就是最终形态。
+     */
+    const ids = collectAssetIds(result.data.content);
+    const loader = assetLoaderRef.current;
+    if (ids.length === 0 || !loader) {
+      setViewLoading(false);
+      setViewDetail(result.data);
+      return;
+    }
+    // 换文档：上一篇的图地址不再需要（它的草稿也没了 —— 抽屉已关闭）
+    loader.releaseAll();
+    const urls = await Promise.all(ids.map((id) => loader.resolve(kbId, id)));
+    const lookup = new Map(ids.map((id, index) => [id, urls[index]]));
+    const replaced = replaceAssetRefs(result.data.content, (id) => lookup.get(id) ?? null);
+    setViewLoading(false);
+    setViewDetail({ ...result.data, content: replaced.text });
   }, []);
 
   useEffect(() => {
     if (!client || activeKbId === "" || viewDocId === "") return;
     void loadDetail(client, activeKbId, viewDocId);
   }, [client, activeKbId, viewDocId, loadDetail]);
+
+  /**
+   * 保存正文。
+   *
+   * 返回 `true` 才算成功 —— 抽屉据此决定要不要清脏标记（失败还清，用户下一次输入
+   * 就再也提示不出「未保存」了）。
+   *
+   * 成功后**重新拉一次详情**：服务端会把正文重新切块，读回来的才是它手上那份
+   * （空白归一化、尾巴空行都会变）。拿客户端那份当准，界面就和库里不一致了。
+   */
+  /**
+   * 上传一张图片（粘贴 / 选文件）。
+   *
+   * 图片是「**先入库、正文后引用**」：用户粘贴一张截图后要**立刻**看到它，
+   * 而那要等文档保存就太迟了。代价是可能留下孤儿图 → 服务端按「未绑定且超期」清。
+   *
+   * 返回的 `blobUrl` 用的是**手里这份字节**（`adopt`），不用再取一趟。
+   */
+  const handleUploadImage = useCallback(
+    async (file: File): Promise<{ assetId: string; blobUrl: string; alt: string } | null> => {
+      if (!client || activeKbId === "") return null;
+      try {
+        const contentBase64 = await fileToBase64(file);
+        const result = await client.uploadAsset(activeKbId, {
+          filename: file.name || "粘贴的图片.png",
+          contentBase64,
+        });
+        if (!result.ok) {
+          toast.error(result.message);
+          return null;
+        }
+        const loader = assetLoaderRef.current;
+        const blobUrl = loader ? loader.adopt(result.data.id, file) : "";
+        if (!blobUrl) {
+          toast.error("当前环境不支持插入图片");
+          return null;
+        }
+        return { assetId: result.data.id, blobUrl, alt: result.data.alt };
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "图片上传失败");
+        return null;
+      }
+    },
+    [client, activeKbId],
+  );
+
+  const handleSaveContent = async (content: string): Promise<boolean> => {
+    if (!client || viewDocId === "" || activeKbId === "") return false;
+    setViewSaving(true);
+    // 编辑器里显示的是 `blob:` 地址（一次性的），存回去必须换回 `asset:<id>`
+    const payload = restoreAssetRefs(content, assetLoaderRef.current?.map ?? new Map());
+    const result = await client.updateDocument(activeKbId, viewDocId, { content: payload });
+    setViewSaving(false);
+    if (!result.ok) {
+      // 409（和另一篇内容一样）走提示而不是报错：那不是失败，是"这份已经有了"
+      if (result.status === KB_DUPLICATE_STATUS) toast.warning(result.message);
+      else toast.error(result.message);
+      return false;
+    }
+    toast.success(`已保存：${result.data.chunkCount} 块`);
+    await loadDetail(client, activeKbId, viewDocId);
+    // 文档数没变，但「多少字 / 几块 / 更新时间」变了，列表要跟着刷新
+    await loadDocs(client, activeKbId, trashOpen);
+    await loadKbs(client, orgs);
+    return true;
+  };
 
   /**
    * 读部门树。失败**不 toast**：它是「可见范围」的附加信息，云端连不上时
@@ -1142,6 +1260,15 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
         onClose={closeViewer}
         onRename={openRename}
         onDelete={setDeleteTarget}
+        /**
+         * 写权限 = 组织里的 admin/owner（服务端 `_writable_kb_or_404` 的门槛）。
+         * 部门负责人那条更细的路径不在这里预判：真有权限的人保存不会被拦，
+         * 没权限的人会拿到 403 并被如实告知 —— 猜错的代价比多一次请求大。
+         */
+        canEdit={activeOrg !== null && (activeOrg.role === "owner" || activeOrg.role === "admin")}
+        saving={viewSaving}
+        onSave={handleSaveContent}
+        onUploadImage={handleUploadImage}
       />
 
       <RenameDocDialog
