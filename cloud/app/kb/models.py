@@ -209,6 +209,54 @@ class KbAsset(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utc_now)
 
 
+class KbGridPreview(SQLModel, table=True):
+    """`.xlsx` 的**表格视图**模型（2026-10-27）。
+
+    ## 为什么与 `KbFile.pdf` 分两张表、两条管线
+
+    PDF 是打印抽象：它能让人「看到这张表长什么样」，但单元格选不中、列宽拖不动、
+    formula 栏和 sheet 标签都不存在。要还原这些，前端需要的是工作簿模型
+    （单元格、样式、合并、行高列宽、冻结、公式缓存值），而它的形状、体积、
+    生成方式与 PDF 完全不同 —— 塞进同一列只会让两边都难读。
+
+    两条管线也解开了一个耦合：**.xlsx 打开时不必再拉 Office**。表格视图是
+    stdlib 解析（毫秒级），只有用户主动点「打印版式」时才需要转 PDF。
+
+    ## 为什么要存 `source_sha256` + `parser_version`
+
+    解析结果是**派生数据**，原文件一换就该重来。两者的组合就是「这份缓存还算不算数」
+    的唯一判据：sha 变了 = 文件换了；版本变了 = 解析器改了（新增了样式映射之类）。
+    任一不符就重新解析，而不是显示一份过期的表。
+
+    ## 为什么 blob 是 gzip
+
+    工作簿 JSON 里大量是重复的键名与样式片段，gzip 通常能压到 1/5–1/10。
+    `gzip.compress(..., mtime=0)` 保证同一份输入产出同一份字节（ETag 才稳定）。
+    """
+
+    __tablename__ = "kb_grid_previews"
+
+    #: 与文档同主键：一篇文档只有一份原文件、一份表格视图
+    doc_id: str = Field(primary_key=True, foreign_key="kb_documents.id")
+    kb_id: str = Field(index=True, foreign_key="knowledge_bases.id")
+    #: 生成这份结果时原文件的 sha256（与 `KbFile.sha256` 不符即过期）
+    source_sha256: str = Field(default="", index=True)
+    #: 生成它的解析器版本（见 `workbook.PARSER_VERSION`）
+    parser_version: int = 0
+    #: 空串 = 还没解析；`done` / `failed`
+    state: str = ""
+    #: 失败原因（原样给用户看：文件坏了、还是数据量超了）
+    error: str = ""
+    ms: int = 0
+    bytes_len: int = 0
+    #: gzip 后的工作簿 JSON
+    blob: bytes = b""
+    #: 工作表数 / 内容单元格数（列表与状态栏要显示，不必解压 blob）
+    sheets: int = 0
+    cells: int = 0
+    created_at: datetime = Field(default_factory=utc_now)
+
+
 class KbFile(SQLModel, table=True):
     """文档的**原文件**与它的预览 PDF（2026-10-26）。
 

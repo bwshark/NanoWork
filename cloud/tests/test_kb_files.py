@@ -21,7 +21,7 @@ from fastapi.testclient import TestClient
 
 from app.kb.models import KbFile
 from app.kb.parsing import parse_document
-from app.kb.render import RenderFailed, RenderUnavailable
+from app.kb.render import RenderFailed
 from tests.conftest import auth_headers
 from tests.test_kb_documents import _kb, _org
 from tests.test_kb_parsing import make_docx
@@ -59,9 +59,7 @@ def test_upload_keeps_original_bytes(client: TestClient) -> None:
     assert resp.status_code == 201, resp.text
     doc_id = resp.json()["id"]
 
-    got = client.get(
-        f"/api/kbs/{kb['id']}/documents/{doc_id}/file", headers=auth_headers(owner)
-    )
+    got = client.get(f"/api/kbs/{kb['id']}/documents/{doc_id}/file", headers=auth_headers(owner))
 
     assert got.status_code == 200
     assert got.content == data
@@ -69,9 +67,10 @@ def test_upload_keeps_original_bytes(client: TestClient) -> None:
         "application/vnd.openxmlformats-officedocument.wordprocessingml"
     )
     # 中文文件名必须走 RFC 5987：直接写进头里会因为 latin-1 编码失败
-    assert "filename*=UTF-8''%E5%B7%AE%E6%97%85%E5%88%B6%E5%BA%A6.docx" in got.headers[
-        "content-disposition"
-    ]
+    assert (
+        "filename*=UTF-8''%E5%B7%AE%E6%97%85%E5%88%B6%E5%BA%A6.docx"
+        in got.headers["content-disposition"]
+    )
     assert got.headers["x-content-type-options"] == "nosniff"
     assert got.headers["etag"].startswith('"')
 
@@ -250,8 +249,9 @@ def test_purge_removes_original(client: TestClient) -> None:
     kb = _kb(client, owner, org_id)
     doc = _upload(client, owner, kb["id"], "制度.docx", make_docx(["差旅制度"])).json()
 
-    from app.db import engine
     from sqlmodel import Session
+
+    from app.db import engine
 
     with Session(engine) as session:
         assert session.get(KbFile, doc["id"]) is not None
@@ -286,7 +286,9 @@ def _tiny_pdf(text: str) -> bytes:
     out += b"0000000000 65535 f \n"
     for offset in offsets:
         out += f"{offset:010d} 00000 n \n".encode()
-    out += f"trailer\n<</Size {len(objects) + 1}/Root 1 0 R>>\nstartxref\n{xref_at}\n%%EOF\n".encode()
+    out += (
+        f"trailer\n<</Size {len(objects) + 1}/Root 1 0 R>>\nstartxref\n{xref_at}\n%%EOF\n".encode()
+    )
     return bytes(out)
 
 

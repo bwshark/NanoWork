@@ -52,6 +52,8 @@ function makeGateway(overrides: Partial<KbGateway> = {}): KbGateway {
     getFilePreview: vi.fn(),
     buildFilePreview: vi.fn(),
     getPreviewPdf: vi.fn(),
+    getWorkbook: vi.fn(),
+    buildWorkbook: vi.fn(),
     getDocument: vi.fn(),
     uploadDocument: vi.fn(),
     uploadFile: vi.fn(),

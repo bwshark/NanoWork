@@ -1004,9 +1004,7 @@ def _rel_entries(zf: zipfile.ZipFile, path: str) -> list[tuple[str, str, str]]:
 
 def _read_rels(zf: zipfile.ZipFile, path: str) -> dict[str, str]:
     """`Id` → `Target`（图片引用只关心这两样）。"""
-    return {
-        rel_id: target for rel_id, _type, target in _rel_entries(zf, path) if rel_id and target
-    }
+    return {rel_id: target for rel_id, _type, target in _rel_entries(zf, path) if rel_id and target}
 
 
 def _rel_targets_of_type(zf: zipfile.ZipFile, path: str, suffix: str) -> list[str]:
@@ -1145,9 +1143,7 @@ def _drawing_alt(node: ET.Element) -> str:
     下方都显示一行「picture 7」，还进检索（真机上一份 40 页课件冒出 162 行）。
     作者手写的 `name`（比如「架构总览」）仍然认。
     """
-    elements = [
-        element for tag in (_WP + "docPr", _P + "cNvPr") for element in node.iter(tag)
-    ]
+    elements = [element for tag in (_WP + "docPr", _P + "cNvPr") for element in node.iter(tag)]
     for element in elements:
         value = (element.get("descr") or "").strip()
         if value:
@@ -1181,9 +1177,7 @@ def _is_ornament_run(run: ET.Element, text: str) -> bool:
 
 #: 中文字符区间：汉字 + CJK 标点（`\u3001-\u303f`，含「」、。，）+ 全角形式 + 弯引号。
 #: **不含 U+3000 全角空格** —— 那是作者主动打的缩进，该留着。
-_CJK = (
-    r"\u3400-\u9fff\uf900-\ufaff\u3001-\u303f\uff01-\uff60\u2018\u2019\u201c\u201d\u2014\u2026"
-)
+_CJK = r"\u3400-\u9fff\uf900-\ufaff\u3001-\u303f\uff01-\uff60\u2018\u2019\u201c\u201d\u2014\u2026"
 
 
 def _tidy_spacing(text: str) -> str:
@@ -1382,7 +1376,7 @@ def _slide_images(
     zf: zipfile.ZipFile,
     rels: dict[str, str],
     area: tuple[int, int],
-    stats: "_SlideStats",
+    stats: _SlideStats,
 ) -> list[ParsedImage]:
     """一页里的**内容图**（`p:pic` → `a:blip r:embed`）。
 

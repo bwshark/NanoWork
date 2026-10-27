@@ -202,7 +202,7 @@ def test_docx_textbox_fallback_is_not_read_twice() -> None:
     """
     mc = "http://schemas.openxmlformats.org/markup-compatibility/2006"
     same = (
-        '<w:r><w:t>标注文字</w:t></w:r>'
+        "<w:r><w:t>标注文字</w:t></w:r>"
         '<w:r><w:drawing><wp:inline><wp:docPr id="1" name="图1" descr="标注图"/>'
         '<a:graphic><a:graphicData><a:blip r:embed="rId7"/></a:graphicData></a:graphic>'
         "</wp:inline></w:drawing></w:r>"

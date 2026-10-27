@@ -113,6 +113,8 @@ function makeGateway(overrides: Partial<KbGateway> = {}): KbGateway {
     getFilePreview: vi.fn(),
     buildFilePreview: vi.fn(),
     getPreviewPdf: vi.fn(),
+    getWorkbook: vi.fn(),
+    buildWorkbook: vi.fn(),
     getDocument: vi
       .fn()
       .mockResolvedValue({ ok: true, data: { ...DOC, content: '报销流程：走财务邮箱。' } }),

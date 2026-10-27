@@ -8,42 +8,13 @@
  * 判据是 `tasks/verify-b5-first-paint.mjs` 量的首屏预算。
  */
 
-import { Component, Suspense, lazy, type ReactNode } from 'react';
+import { Suspense, lazy } from 'react';
 import { Box, CircularProgress, Stack, Typography } from '@mui/material';
+import { ViewerBoundary } from '@/components/knowledge/ViewerBoundary';
 
 const DocPreviewCanvas = lazy(() =>
   import('./DocPreviewCanvas').then((m) => ({ default: m.DocPreviewCanvas })),
 );
-
-/**
- * 查看器的错误边界。
- *
- * 为什么必须有：`lazy(() => import(...))` 的 chunk **加载失败**（网络、worker 404、
- * 打包异常）会以「渲染期抛错」的形式冒出来，而在 React 18 里没有边界就是整棵树卸载
- * —— 用户看到的是**整个应用白屏**，只因为他打开了一篇 PPT。
- * 失败限制在预览区，抽屉与正文照样能用。
- */
-class ViewerBoundary extends Component<{ children: ReactNode }, { error: string }> {
-  state = { error: '' };
-
-  static getDerivedStateFromError(error: unknown): { error: string } {
-    return { error: error instanceof Error ? error.message : '查看器加载失败' };
-  }
-
-  render() {
-    if (this.state.error === '') return this.props.children;
-    return (
-      <Box sx={{ py: 4 }} data-testid="kb-preview-crash">
-        <Typography sx={{ fontSize: 13, color: 'error.main' }}>
-          预览查看器加载失败：{this.state.error}
-        </Typography>
-        <Typography sx={{ mt: 1, fontSize: 12, color: 'text.secondary' }}>
-          换「正文」标签照样能读内容与检索。
-        </Typography>
-      </Box>
-    );
-  }
-}
 
 export interface DocPreviewViewProps {
   /** PDF 字节（已带票取回）；`null` = 还没取到 */

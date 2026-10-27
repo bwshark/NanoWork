@@ -264,7 +264,7 @@ export function DocPreviewCanvas({ bytes, title }: DocPreviewCanvasProps) {
           }}
         >
           {document === null ? (
-            <Stack alignItems="center" spacing={1} sx={{ py: 6 }}>
+            <Stack alignItems="center" spacing={1} sx={{ py: 6, m: "auto" }}>
               <CircularProgress size={18} />
               <Typography sx={{ fontSize: 12, color: "text.secondary" }}>正在打开预览…</Typography>
             </Stack>
@@ -274,7 +274,9 @@ export function DocPreviewCanvas({ bytes, title }: DocPreviewCanvasProps) {
               ref={canvasRef}
               aria-label={`${title} 第 ${page} 页`}
               data-testid="kb-preview-canvas"
-              sx={{ maxWidth: "100%", bgcolor: "background.paper", boxShadow: 1 }}
+              // my:auto 而不是容器 align-items:center —— 放大到超出容器高度时
+              // 自动外边距归零，页面从顶部开始、能滚到底；居中则会把上半页裁掉
+              sx={{ maxWidth: "100%", my: "auto", bgcolor: "background.paper", boxShadow: 1 }}
             />
           )}
         </Box>

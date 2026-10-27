@@ -109,7 +109,6 @@ def backend() -> str:
     return ""
 
 
-
 class ConvertError(RuntimeError):
     """转换失败。消息会**原样**回给前端（用户要知道是哪一步坏了）。"""
 

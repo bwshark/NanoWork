@@ -15,8 +15,10 @@
 
 from __future__ import annotations
 
+import gzip
 import hashlib
 import logging
+import time
 from datetime import timedelta
 from urllib.parse import quote
 
@@ -44,6 +46,7 @@ from app.kb.models import (
     KbChunk,
     KbDocument,
     KbFile,
+    KbGridPreview,
     KnowledgeBase,
     KnowledgeBaseDepartment,
     roles_from_json,
@@ -73,6 +76,7 @@ from app.kb.vectors import (
     vector_coverage,
 )
 from app.kb.visibility import kb_department_ids, member_can_read_kb, visible_kb_ids
+from app.kb.workbook import PARSER_VERSION, XLSX_SUFFIX, dumps_workbook, parse_workbook
 from app.orgs.department_access import managed_department_ids
 from app.orgs.models import Department, OrgMember
 from app.orgs.roles import ROLE_ADMIN, role_at_least
@@ -112,6 +116,9 @@ def _purge_document(session: Session, doc: KbDocument) -> None:
     original = session.get(KbFile, doc.id)
     if original is not None:
         session.delete(original)
+    grid = session.get(KbGridPreview, doc.id)
+    if grid is not None:
+        session.delete(grid)
     session.delete(doc)
 
 
@@ -246,11 +253,21 @@ class DocumentFileView(BaseModel):
     刻意**不并进 `DocumentView`**：文档列表里每行都查一次 `kb_files` 是 N+1，
     而只有「打开抽屉」这一件事需要它 —— 一次额外的轻请求比列表变慢划算。
 
-    `previewState` 四个值，对应四种**不同**的界面：
+    ## 两条预览管线，各有一套状态
+
+    `previewKind` 说**默认该进哪个视图**：
+    - `grid`：.xlsx 的表格视图（可选中单元格、拖动行列、看公式栏与 sheet 标签）；
+    - `pdf`：docx/pptx/pdf 的原格式预览（pdf.js 画出来）；
+    - `none`：没有原文件（早期文档）或格式不支持。
+
+    `previewState` 描述 **PDF/打印版式**这条线，四个值各对应一种界面：
     - `ready`：能直接看（PDF 直通，或已转好并落库）；
     - `pending`：还没转（服务端有能力，等用户点开时同步转）；
     - `failed`：转失败了（`previewError` 里有 Office 原话）；
     - `unavailable`：这台机器转不了（没有 Office / 早期文档没留原文件 / 格式不支持）。
+
+    `gridState` 描述**表格视图**这条线（只有 .xlsx 有意义）：
+    `pending`（还没解析）、`ready`、`failed`。
     """
 
     fileName: str = ""
@@ -260,6 +277,15 @@ class DocumentFileView(BaseModel):
     previewError: str = ""
     #: 本次/上次转换耗时（毫秒）。0 = 没转过（直通或读缓存）
     renderMs: int = 0
+    #: 默认视图：`grid` / `pdf` / `none`（见类注释）
+    previewKind: str = ""
+    #: 表格视图状态：`pending` / `ready` / `failed`（非 .xlsx 恒为空）
+    gridState: str = ""
+    gridError: str = ""
+    gridMs: int = 0
+    #: 解析出的工作表数 / 内容单元格数（状态栏与提示用；不必解压 blob）
+    gridSheets: int = 0
+    gridCells: int = 0
 
 
 class DocumentDetailView(DocumentView):
@@ -769,69 +795,93 @@ def _disposition(filename: str, *, inline: bool) -> str:
     fallback = "".join(
         char if 32 <= ord(char) < 127 and char not in '"\\' else "_" for char in filename
     )
-    return f'{kind}; filename="{(fallback or "file")[:120]}"; filename*=UTF-8\'\'{quote(filename)}'
+    return f"{kind}; filename=\"{(fallback or 'file')[:120]}\"; filename*=UTF-8''{quote(filename)}"
 
 
-def _file_view(row: KbFile | None) -> DocumentFileView:
+def _load_grid(session: Session, row: KbFile) -> KbGridPreview | None:
+    grid = session.get(KbGridPreview, row.doc_id)
+    if grid is None or grid.kb_id != row.kb_id:
+        return None
+    return grid
+
+
+def _grid_view(grid: KbGridPreview | None, row: KbFile) -> dict[str, object]:
+    """表格视图的状态。缓存是否还算数由**原文件 sha + 解析器版本**共同决定。
+
+    过期的行不删也不覆盖（下次 POST 会重写）：这里只回答「现在能不能直接读」。
+    """
+    fresh = (
+        grid is not None
+        and grid.source_sha256 == row.sha256
+        and grid.parser_version == PARSER_VERSION
+    )
+    if not fresh:
+        return {"gridState": "pending"}
+    if grid.state == "done" and grid.blob:
+        return {
+            "gridState": "ready",
+            "gridMs": grid.ms,
+            "gridSheets": grid.sheets,
+            "gridCells": grid.cells,
+        }
+    if grid.state == "failed":
+        return {"gridState": "failed", "gridError": grid.error or "表格解析失败"}
+    return {"gridState": "pending"}
+
+
+def _file_view(row: KbFile | None, grid: KbGridPreview | None = None) -> DocumentFileView:
     """原文件行 → 前端要的状态。四种值各对应一种**不同**的界面（见模型注释）。"""
     if row is None:
         return DocumentFileView(
+            previewKind="none",
             previewState="unavailable",
             previewError="这篇是早期入库的，没有留原文件（那时只存正文）；重新上传一次即可按原格式查看",
         )
 
     suffix = suffix_of(row.filename)
+    base: dict[str, object] = {
+        "fileName": row.filename,
+        "bytesLen": row.bytes_len,
+        "suffix": suffix,
+    }
+    if suffix == XLSX_SUFFIX:
+        # .xlsx 默认进表格视图；PDF 那条线只服务「打印版式」标签
+        base.update(_grid_view(grid, row))
+        preview_kind = "grid"
+    elif is_convertible(suffix):
+        preview_kind = "pdf"
+    else:
+        preview_kind = "none"
+    base["previewKind"] = preview_kind
+
     # PDF 自己就是预览：不需要 Office，也不需要转
     if suffix == PDF_SUFFIX:
-        return DocumentFileView(
-            fileName=row.filename,
-            bytesLen=row.bytes_len,
-            suffix=suffix,
-            previewState="ready",
-            renderMs=row.render_ms,
-        )
+        return DocumentFileView(**base, previewState="ready", renderMs=row.render_ms)
     if row.render_state == "done" and row.pdf:
-        return DocumentFileView(
-            fileName=row.filename,
-            bytesLen=row.bytes_len,
-            suffix=suffix,
-            previewState="ready",
-            renderMs=row.render_ms,
-        )
+        return DocumentFileView(**base, previewState="ready", renderMs=row.render_ms)
     if row.render_state == "failed":
         return DocumentFileView(
-            fileName=row.filename,
-            bytesLen=row.bytes_len,
-            suffix=suffix,
+            **base,
             previewState="failed",
             previewError=row.render_error or "预览生成失败",
             renderMs=row.render_ms,
         )
     if not is_convertible(suffix):
         return DocumentFileView(
-            fileName=row.filename,
-            bytesLen=row.bytes_len,
-            suffix=suffix,
+            **base,
             previewState="unavailable",
             previewError=f"{suffix or '这种格式'}不支持原格式预览，看「正文」即可",
         )
     if not is_available():
         return DocumentFileView(
-            fileName=row.filename,
-            bytesLen=row.bytes_len,
-            suffix=suffix,
+            **base,
             previewState="unavailable",
             previewError=(
                 "服务端没有可用的文档转换器（Office 或 LibreOffice），"
                 "生成不了原格式预览。看「正文」标签即可 —— 检索与阅读都不受影响"
             ),
         )
-    return DocumentFileView(
-        fileName=row.filename,
-        bytesLen=row.bytes_len,
-        suffix=suffix,
-        previewState="pending",
-    )
+    return DocumentFileView(**base, previewState="pending")
 
 
 @router.get("/kbs/{kb_id}/documents/{doc_id}/file")
@@ -876,7 +926,7 @@ def get_preview_info(
     row = session.get(KbFile, doc_id)
     if row is not None and row.kb_id != kb.id:
         row = None
-    return _file_view(row)
+    return _file_view(row, _load_grid(session, row) if row is not None else None)
 
 
 @router.post("/kbs/{kb_id}/documents/{doc_id}/preview", response_model=DocumentFileView)
@@ -904,7 +954,7 @@ def build_preview(
     if row is None or row.kb_id != kb.id:
         raise HTTPException(status_code=404, detail="这篇文档没有留原文件")
 
-    current = _file_view(row)
+    current = _file_view(row, _load_grid(session, row))
     if current.previewState in ("ready", "unavailable"):
         return current
 
@@ -943,7 +993,7 @@ def build_preview(
     row.render_ms = elapsed
     session.add(row)
     session.commit()
-    return _file_view(row)
+    return _file_view(row, _load_grid(session, row))
 
 
 @router.get("/kbs/{kb_id}/documents/{doc_id}/preview.pdf")
@@ -972,6 +1022,128 @@ def get_preview_pdf(
             "Content-Disposition": _disposition("preview.pdf", inline=True),
         },
     )
+
+
+@router.get("/kbs/{kb_id}/documents/{doc_id}/preview.workbook")
+def get_preview_workbook(
+    kb_id: str,
+    doc_id: str,
+    user: User = Depends(current_user),
+    session: Session = Depends(get_session),
+) -> Response:
+    """取表格视图的**工作簿 JSON**（.xlsx 专用）。
+
+    ## 为什么是 gzip
+
+    这团 JSON 通常 1–10 MB，压缩后常剩 1/5。**落库的就是压缩后的那份**：
+    POST 压一次，之后每次打开都只是原样返回，不再付 CPU。用
+    `gzip.compress(..., mtime=0)` 保证同一份输入产出同一份字节（ETag 才稳定）。
+
+    `Content-Encoding: gzip` 交给浏览器自己解 —— 前端 `response.json()` 拿到的是
+    解压后的 JSON，不必在业务代码里再写一遍解压。
+
+    ## 状态码
+
+    没原文件 404；不是 .xlsx / 还没解析 / 解析失败都是 409 + 一句人话 —— 前端
+    据此决定是「先请求生成」还是「把失败原因摆出来」。
+    """
+    kb, _member = _kb_or_404(session, kb_id, user)
+    row = session.get(KbFile, doc_id)
+    if row is None or row.kb_id != kb.id:
+        raise HTTPException(status_code=404, detail="这篇文档没有留原文件")
+    if suffix_of(row.filename) != XLSX_SUFFIX:
+        raise HTTPException(status_code=409, detail="只有 .xlsx 支持表格视图")
+    grid = _load_grid(session, row)
+    if grid is None or grid.source_sha256 != row.sha256 or grid.parser_version != PARSER_VERSION:
+        raise HTTPException(status_code=409, detail="表格视图还没生成，先请求生成表格视图")
+    # 失败要先于「没有 blob」判断：失败行的 blob 本来就是空的，
+    # 先看 blob 会把「文件坏了」说成「还没生成」，用户会一直点重试而不知道原因。
+    if grid.state == "failed":
+        raise HTTPException(status_code=409, detail=grid.error or "表格解析失败")
+    if not grid.blob:
+        raise HTTPException(status_code=409, detail="表格视图还没生成，先请求生成表格视图")
+    return Response(
+        content=grid.blob,
+        media_type="application/json; charset=utf-8",
+        headers={
+            "Content-Encoding": "gzip",
+            "Cache-Control": "private, max-age=600",
+            "ETag": f'"{row.sha256}-g{grid.parser_version}"',
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+@router.post("/kbs/{kb_id}/documents/{doc_id}/preview.workbook", response_model=DocumentFileView)
+def build_workbook(
+    kb_id: str,
+    doc_id: str,
+    user: User = Depends(current_user),
+    session: Session = Depends(get_session),
+) -> DocumentFileView:
+    """**解析并落库**表格视图（同步、幂等）。
+
+    ## 为什么同步
+
+    解析是纯 CPU 的 zip + XML 读取，实测毫秒级到两秒（取决于表格大小），
+    不需要 Office、不会弹窗、不会挂住 —— 与 PDF 渲染（3–10 秒、可能卡死）
+    完全不是一回事，所以这里连队列都不该有。
+
+    ## 为什么失败也回 200 + 状态
+
+    与 `build_preview` 同一条理由：前端要的是「现在能不能看、不能的话为什么」。
+    失败原因落库，下次打开直接说同一句话，而不是每次重新解析再失败一次。
+    """
+    kb, _member = _kb_or_404(session, kb_id, user)
+    row = session.get(KbFile, doc_id)
+    if row is None or row.kb_id != kb.id:
+        raise HTTPException(status_code=404, detail="这篇文档没有留原文件")
+    if suffix_of(row.filename) != XLSX_SUFFIX:
+        raise HTTPException(status_code=409, detail="只有 .xlsx 支持表格视图")
+
+    grid = _load_grid(session, row)
+    fresh = (
+        grid is not None
+        and grid.source_sha256 == row.sha256
+        and grid.parser_version == PARSER_VERSION
+        and grid.state == "done"
+        and bool(grid.blob)
+    )
+    if fresh:
+        return _file_view(row, grid)
+    if grid is None:
+        grid = KbGridPreview(doc_id=row.doc_id, kb_id=row.kb_id)
+        session.add(grid)
+
+    started = time.monotonic()
+    try:
+        payload = parse_workbook(row.blob)
+    except ParseError as error:
+        # 已解析成功过的旧结果也清掉：它对应的是另一份文件/另一版解析器
+        grid.blob = b""
+        grid.bytes_len = 0
+        grid.state = "failed"
+        grid.error = str(error)
+        grid.ms = int((time.monotonic() - started) * 1000)
+        grid.source_sha256 = row.sha256
+        grid.parser_version = PARSER_VERSION
+        session.add(grid)
+        session.commit()
+        return _file_view(row, grid)
+
+    blob = gzip.compress(dumps_workbook(payload), compresslevel=6, mtime=0)
+    grid.blob = blob
+    grid.bytes_len = len(blob)
+    grid.state = "done"
+    grid.error = ""
+    grid.ms = int((time.monotonic() - started) * 1000)
+    grid.source_sha256 = row.sha256
+    grid.parser_version = PARSER_VERSION
+    grid.sheets = len(payload["sheets"])
+    grid.cells = int(payload["totalCells"])
+    session.add(grid)
+    session.commit()
+    return _file_view(row, grid)
 
 
 @router.get("/kbs/{kb_id}/assets/{asset_id}")

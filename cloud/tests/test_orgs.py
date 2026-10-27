@@ -91,9 +91,7 @@ def test_admin_cannot_grant_owner(client: TestClient) -> None:
     """admin 能升 admin，但**不能**升 owner（不能授予高于自己的角色）。"""
     owner_token, admin_token, _, _ = two_users(client)
     org = create_org(client, owner_token)
-    assert (
-        add_member(client, owner_token, org["id"], "other@example.com", "admin")["status"] == 201
-    )
+    assert add_member(client, owner_token, org["id"], "other@example.com", "admin")["status"] == 201
 
     third = register(client, "third@example.com")
     assert (

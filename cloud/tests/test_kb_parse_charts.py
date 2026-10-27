@@ -22,8 +22,8 @@ import zipfile
 
 from fastapi.testclient import TestClient
 
-from app.kb.chunking import chunk_text, retrieval_text
 from app.kb.charts import MAX_CHART_POINTS, parse_chart
+from app.kb.chunking import chunk_text, retrieval_text
 from app.kb.parsing import parse_document
 from app.kb.tables import is_table_block
 from tests.conftest import auth_headers
@@ -70,7 +70,7 @@ def _series(name: str, categories: list[str], values: list[str], literal_name: b
         f"<c:cat><c:strRef><c:f>Sheet1!$A$2:$A$4</c:f><c:strCache>"
         f'<c:ptCount val="{len(categories)}"/>{cats}</c:strCache></c:strRef></c:cat>'
         f"<c:val><c:numRef><c:f>Sheet1!$B$2:$B$4</c:f><c:numCache>"
-        f"<c:formatCode>General</c:formatCode><c:ptCount val=\"{len(values)}\"/>{nums}"
+        f'<c:formatCode>General</c:formatCode><c:ptCount val="{len(values)}"/>{nums}'
         "</c:numCache></c:numRef></c:val></c:ser>"
     )
 
@@ -247,9 +247,7 @@ def test_pptx_chart_values_are_searchable() -> None:
     data = _pptx_with_chart(_chart("季度销售", [_series("收入", ["Q1"], ["300"])]))
 
     parsed = parse_document("汇报.pptx", data)
-    projected = [
-        retrieval_text(chunk) for chunk in chunk_text(parsed.text) if "收入" in chunk
-    ]
+    projected = [retrieval_text(chunk) for chunk in chunk_text(parsed.text) if "收入" in chunk]
 
     assert any("收入: 300" in text for text in projected), projected
 
@@ -296,7 +294,7 @@ def _xlsx_with_chart(chart_xml: str) -> bytes:
         "</Relationships>"
     )
     drawing = (
-        f'<?xml version="1.0"?><xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/'
+        '<?xml version="1.0"?><xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/'
         'drawingml/2006/spreadsheetDrawing"><xdr:twoCellAnchor/></xdr:wsDr>'
     )
     drawing_rels = (
@@ -342,7 +340,9 @@ def test_xlsx_keeps_sheet_table_when_chart_is_present() -> None:
 
 def test_is_covered_by_needs_every_value_and_the_series_name() -> None:
     """判据是「系列名 + 每个数值都出现过」；缺一个就不算重复（那份表就是唯一来源）。"""
-    chart = parse_chart(_chart("季度销售", [_series("收入", ["Q1", "Q2"], ["100", "300"])]).encode())
+    chart = parse_chart(
+        _chart("季度销售", [_series("收入", ["Q1", "Q2"], ["100", "300"])]).encode()
+    )
 
     assert chart is not None
     assert chart.is_covered_by({"收入", "100", "300"}) is True
@@ -390,7 +390,6 @@ def test_pptx_chart_never_deduped() -> None:
     assert not any("与单元格内容重复" in item for item in parsed.warnings)
 
 
-
 # —— 端到端：上传后能被检索到（这才是「检索文本」的判据）——
 
 
@@ -417,5 +416,6 @@ def test_uploaded_pptx_chart_is_searchable(client: TestClient) -> None:
     ).json()
     assert [hit["docTitle"] for hit in hits] == ["季度汇报"]
     # 命中的片段要能看出「哪个类别、多少钱」（snippet 是块原文，所以是表格形态）
-    assert any("华东区回款" in hit["snippet"] and "| Q2 | 300 |" in hit["snippet"] for hit in hits), hits
-
+    assert any(
+        "华东区回款" in hit["snippet"] and "| Q2 | 300 |" in hit["snippet"] for hit in hits
+    ), hits

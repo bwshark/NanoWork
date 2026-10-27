@@ -93,9 +93,7 @@ def test_member_never_sees_admin_only_kb(client: TestClient) -> None:
     owner_token, member_token, org = _org_with_members(client)
 
     public_kb = _create_kb(client, owner_token, org["id"], "公开制度")
-    secret_kb = _create_kb(
-        client, owner_token, org["id"], "管理层制度", roles=["admin", "owner"]
-    )
+    secret_kb = _create_kb(client, owner_token, org["id"], "管理层制度", roles=["admin", "owner"])
     _add_doc(client, owner_token, public_kb["id"], "员工版", f"{KEYWORD}：走财务邮箱。")
     # 管理员版**故意写得更"相关"**（关键词重复多次 → 打分更高）。
     # 这样「先按 topK 取再过滤」的实现会把它排到第一、然后被过滤掉 → 结果为空；
@@ -139,9 +137,7 @@ def test_non_member_gets_404(client: TestClient) -> None:
     assert (
         client.get(f"/api/kbs/{kb['id']}/documents", headers=auth_headers(outsider["access"]))
     ).status_code == 404
-    assert (
-        _search(client, outsider["access"], org["id"], KEYWORD).status_code == 404
-    )
+    assert _search(client, outsider["access"], org["id"], KEYWORD).status_code == 404
 
 
 def test_member_cannot_change_visibility(client: TestClient) -> None:

@@ -24,6 +24,7 @@ import CloseFullscreenIcon from "@mui/icons-material/CloseFullscreen";
 import MoreHorizIcon from "@mui/icons-material/MoreHoriz";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import DownloadOutlinedIcon from "@mui/icons-material/DownloadOutlined";
+import PrintOutlinedIcon from "@mui/icons-material/PrintOutlined";
 import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 import ImageIcon from "@mui/icons-material/Image";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
@@ -36,15 +37,26 @@ import {
 } from "@/components/knowledge/DocEditor";
 import { docTableSx } from "@/components/knowledge/docTableSx";
 import { DocPreviewView } from "@/components/knowledge/DocPreviewView";
+import { DocGridView } from "@/components/knowledge/DocGridView";
 import type {
   KbApiResult,
   KbDocument,
   KbDocumentDetail,
   KbFilePreview,
 } from "@/lib/kb/kbClient";
+import type { KbWorkbook } from "@/lib/kb/workbook";
 import { docUpdatedAt, formatRelativeTime } from "@/lib/kb/kbDocumentMeta";
 import { kindLabel } from "@/lib/kb/kbUpload";
 import { KbDocIcon } from "@/components/knowledge/kbAtoms";
+
+/**
+ * 阅读抽屉的三个视图。
+ *
+ * - `grid`：.xlsx 的**表格视图**（可选中单元格、拖动行列、切工作表）——默认视图；
+ * - `original`：docx/pptx/pdf 的打印版式（服务端转 PDF，pdf.js 画出来）；
+ * - `body`：入库时切好的正文（Markdown，检索吃的就是它）。
+ */
+type DocView = "grid" | "original" | "body";
 
 /**
  * 文档阅读抽屉（点列表里的一行打开）。
@@ -101,6 +113,15 @@ export interface DocViewerDrawerProps {
   loadFilePreview?: (docId: string) => Promise<KbApiResult<KbFilePreview>>;
   buildFilePreview?: (docId: string) => Promise<KbApiResult<KbFilePreview>>;
   loadPreviewPdf?: (docId: string) => Promise<KbApiResult<Blob>>;
+  /**
+   * 表格视图的两个调用（只有 .xlsx 会用到）。
+   *
+   * 与 PDF 那条线分开传：一条是「解析工作簿」（毫秒级、不需要 Office），
+   * 另一条是「转 PDF」（要 Office、几秒到几十秒）。合成一个接口就没法在
+   * 「表格解析失败但打印版式还能转」时给出一条对的退路。
+   */
+  loadWorkbook?: (docId: string) => Promise<KbApiResult<KbWorkbook>>;
+  buildWorkbook?: (docId: string) => Promise<KbApiResult<KbFilePreview>>;
 }
 
 /** 正文里的「另存为 .md」：真的下载一个文件，不是在界面上假装导出了。 */
@@ -134,6 +155,8 @@ export function DocViewerDrawer({
   loadFilePreview,
   buildFilePreview,
   loadPreviewPdf,
+  loadWorkbook,
+  buildWorkbook,
 }: DocViewerDrawerProps) {
   const editorRef = useRef<DocEditorHandle | null>(null);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
@@ -148,105 +171,222 @@ export function DocViewerDrawer({
   const [draft, setDraft] = useState<string | null>(null);
   const [confirmLeave, setConfirmLeave] = useState(false);
   /**
-   * 「原文 / 正文」两个视图。
+   * 「表格 / 原文 / 正文」三个视图。
    *
-   * 默认进**原文**：这就是"上传后以对应文档类型打开"这条需求 —— 能拿到原文件就按
-   * 原格式看排版；拿不到（早期文档没留原文件）或转不出来，才落到正文。
+   * 默认由**文件类型**决定（`previewKind` 说的就是这个）：.xlsx 直接进表格视图，
+   * docx/pptx/pdf 进打印版式，拿不到原文件（早期文档）才落到正文。
    */
-  const [view, setView] = useState<'original' | 'body'>('body');
+  const [view, setView] = useState<DocView>('body');
   const [filePreview, setFilePreview] = useState<KbFilePreview | null>(null);
   const [pdfBytes, setPdfBytes] = useState<ArrayBuffer | null>(null);
   const [previewBusy, setPreviewBusy] = useState(false);
   const [previewError, setPreviewError] = useState('');
+  /** 表格视图那一路自己的状态：与 PDF 的 busy/error 分开，否则两条线会互相清掉 */
+  const [workbook, setWorkbook] = useState<KbWorkbook | null>(null);
+  const [gridBusy, setGridBusy] = useState(false);
+  const [gridError, setGridError] = useState('');
   /** 预览流程的「代」，换文档/重试时自增，用来丢弃过期结果 */
   const previewRun = useRef(0);
   /**
-   * 三个预览调用放 ref：它们来自页面的 `client`，每次渲染都可能是新函数；
+   * 五个预览调用放 ref：它们来自页面的 `client`，每次渲染都可能是新函数；
    * 直接进依赖数组会让「打开一篇文档」这个 effect 反复重跑（每次重跑都转一次 PDF）。
    */
-  const previewApi = useRef({ loadFilePreview, buildFilePreview, loadPreviewPdf });
-  previewApi.current = { loadFilePreview, buildFilePreview, loadPreviewPdf };
+  const previewApi = useRef({
+    loadFilePreview,
+    buildFilePreview,
+    loadPreviewPdf,
+    loadWorkbook,
+    buildWorkbook,
+  });
+  previewApi.current = {
+    loadFilePreview,
+    buildFilePreview,
+    loadPreviewPdf,
+    loadWorkbook,
+    buildWorkbook,
+  };
 
   const content = detail?.content ?? "";
   const shown = draft ?? content;
   const dirty = draft !== null && draft !== content;
-  const meta = doc === null ? "" : `${kindLabel(doc.kind)} · ${doc.chars} 字 · ${doc.chunkCount} 块`;
   const updated = doc === null ? "" : formatRelativeTime(docUpdatedAt(doc));
+  /** 表格视图的规模（服务端解析完才知道，没解析完就不写 0 —— 0 工作表会让人以为表空了） */
+  const gridMeta =
+    view === "grid" && (filePreview?.gridSheets ?? 0) > 0
+      ? ` · ${filePreview?.gridSheets} 张工作表 · ${filePreview?.gridCells ?? 0} 个单元格`
+      : "";
+  const meta =
+    doc === null
+      ? ""
+      : view === "grid"
+        ? `${kindLabel(doc.kind)}${gridMeta}`
+        : `${kindLabel(doc.kind)} · ${doc.chars} 字 · ${doc.chunkCount} 块`;
 
   /**
-   * 跑一遍预览流程：问状态 →（需要就）生成 → 取 PDF 字节。
+   * 打印版式（PDF）那一路：问状态 →（需要就）让服务端转 → 取字节。
    *
    * `force` = 用户点了「重试」：跳过"已经 ready 就别转"的判断，重新走一次。
-   * 流程本身刻意放在界面层而不是页面层：什么时候转、什么时候落到正文，
-   * 都是**交互决定**，写在这里才看得懂。
    */
-  const runPreview = useCallback(async (docId: string, force: boolean) => {
-    const api = previewApi.current;
-    if (!api.loadFilePreview || !api.loadPreviewPdf) return;
+  const loadPdf = useCallback(
+    async (
+      docId: string,
+      state: KbFilePreview,
+      force: boolean,
+      alive: () => boolean,
+    ) => {
+      const api = previewApi.current;
+      setPreviewBusy(true);
+      setPreviewError('');
+      try {
+        let current = state;
+        if (!force && current.previewState !== 'ready' && current.previewState !== 'pending') {
+          setPreviewError(current.previewError);
+          if (current.previewState === 'unavailable') {
+            // 没有原文件 / 这台机器转不了：连切换都不给，直接看正文（正文照样能检索）
+            setFilePreview(null);
+            setView('body');
+          } else {
+            // failed：留在原文视图，把 Office 的原话与「重试」摆在用户面前
+            setView('original');
+          }
+          return;
+        }
+        setView('original');
+
+        if (current.previewState !== 'ready') {
+          if (!api.buildFilePreview) {
+            setPreviewError(current.previewError || '这篇文档没有可用的原格式预览');
+            setView('body');
+            return;
+          }
+          const built = await api.buildFilePreview(docId);
+          if (!alive()) return;
+          if (!built?.ok) {
+            setPreviewError(built?.message ?? '生成预览失败');
+            return;
+          }
+          current = built.data;
+          setFilePreview(current);
+          if (current.previewState !== 'ready') {
+            setPreviewError(current.previewError || '生成预览失败');
+            setView('original');
+            return;
+          }
+        }
+
+        if (!api.loadPreviewPdf) return;
+        const pdf = await api.loadPreviewPdf(docId);
+        if (!alive()) return;
+        if (!pdf?.ok) {
+          setPreviewError(pdf?.message ?? '预览读取失败');
+          return;
+        }
+        const buffer = await pdf.data.arrayBuffer();
+        if (!alive()) return;
+        setPdfBytes(buffer);
+      } finally {
+        if (alive()) setPreviewBusy(false);
+      }
+    },
+    [],
+  );
+
+  /**
+   * 表格视图那一路：状态不是 `ready` 就先解析（同步、幂等），再取工作簿 JSON。
+   *
+   * 为什么可以先解析再取：解析是 zip + XML，毫秒级到两秒、不拉 Office，
+   * 与 PDF 的 3–10 秒不是一回事 —— 所以「打开时顺手解析」不会让人干等。
+   */
+  const loadGrid = useCallback(
+    async (docId: string, state: KbFilePreview, alive: () => boolean) => {
+      const api = previewApi.current;
+      setGridBusy(true);
+      setGridError('');
+      try {
+        let current = state;
+        if (current.gridState !== 'ready') {
+          if (!api.buildWorkbook) {
+            setGridError('表格视图不可用：客户端没有接上解析接口');
+            return;
+          }
+          const built = await api.buildWorkbook(docId);
+          if (!alive()) return;
+          if (!built?.ok) {
+            setGridError(built?.message ?? '表格视图生成失败');
+            return;
+          }
+          current = built.data;
+          setFilePreview(current);
+          if (current.gridState !== 'ready') {
+            setGridError(current.gridError || '表格视图生成失败');
+            return;
+          }
+        }
+        if (!api.loadWorkbook) {
+          setGridError('表格视图不可用：客户端没有接上读取接口');
+          return;
+        }
+        const book = await api.loadWorkbook(docId);
+        if (!alive()) return;
+        if (!book?.ok) {
+          setGridError(book?.message ?? '表格视图读取失败');
+          return;
+        }
+        setWorkbook(book.data);
+      } finally {
+        if (alive()) setGridBusy(false);
+      }
+    },
+    [],
+  );
+
+  /** 打开一篇：先问状态，再按 `previewKind` 分流（表格 / 打印版式） */
+  const runPreview = useCallback(
+    async (docId: string, force: boolean) => {
+      const api = previewApi.current;
+      if (!api.loadFilePreview) return;
+      const run = previewRun.current + 1;
+      previewRun.current = run;
+      const alive = () => previewRun.current === run;
+
+      setPreviewError('');
+      setGridError('');
+      setPdfBytes(null);
+      setWorkbook(null);
+      try {
+        const info = await api.loadFilePreview(docId);
+        if (!alive()) return;
+        if (!info?.ok) {
+          // 连「有没有原文件」都问不到：两条视图都要说出同一句原因
+          // （.xlsx 此刻停在表格视图上，只写 previewError 会留下一个永远转圈的空白）
+          const message = info?.message ?? '读取原文件信息失败';
+          setPreviewError(message);
+          setGridError(message);
+          return;
+        }
+        setFilePreview(info.data);
+        // 没有 previewKind 的是老响应：按 PDF 那条线处理（.docx/.pdf 的行为不变）
+        if ((info.data.previewKind ?? 'pdf') === 'grid') {
+          setView('grid');
+          await loadGrid(docId, info.data, alive);
+          return;
+        }
+        await loadPdf(docId, info.data, force, alive);
+      } finally {
+        if (alive()) setPreviewBusy(false);
+      }
+    },
+    [loadGrid, loadPdf],
+  );
+
+  /** 从「⋯」里主动看打印版式（.xlsx 的另一条腿：需要 Office 转 PDF） */
+  const openPdfView = useCallback(() => {
+    const docId = doc?.id ?? '';
+    if (docId === '' || filePreview === null) return;
     const run = previewRun.current + 1;
     previewRun.current = run;
-    const alive = () => previewRun.current === run;
-
-    setPreviewBusy(true);
-    setPreviewError('');
-    setPdfBytes(null);
-    try {
-      const info = await api.loadFilePreview(docId);
-      if (!alive()) return;
-      if (!info?.ok) {
-        setPreviewError(info?.message ?? '读取原文件信息失败');
-        return;
-      }
-      setFilePreview(info.data);
-      let state = info.data;
-      if (!force && state.previewState !== 'ready' && state.previewState !== 'pending') {
-        setPreviewError(state.previewError);
-        if (state.previewState === 'unavailable') {
-          // 没有原文件 / 这台机器转不了：连切换都不给，直接看正文（正文照样能检索）
-          setFilePreview(null);
-          setView('body');
-        } else {
-          // failed：留在原文视图，把 Office 的原话与「重试」摆在用户面前
-          setView('original');
-        }
-        return;
-      }
-      setView('original');
-
-      if (state.previewState !== 'ready') {
-        if (!api.buildFilePreview) {
-          setPreviewError(state.previewError || '这篇文档没有可用的原格式预览');
-          setView('body');
-          return;
-        }
-        const built = await api.buildFilePreview(docId);
-        if (!alive()) return;
-        if (!built?.ok) {
-          setPreviewError(built?.message ?? '生成预览失败');
-          return;
-        }
-        state = built.data;
-        setFilePreview(state);
-        if (state.previewState !== 'ready') {
-          setPreviewError(state.previewError || '生成预览失败');
-          setView('original');
-          return;
-        }
-      }
-
-      const pdf = await api.loadPreviewPdf(docId);
-      if (!alive()) return;
-      if (!pdf?.ok) {
-        setPreviewError(pdf?.message ?? '预览读取失败');
-        return;
-      }
-      const buffer = await pdf.data.arrayBuffer();
-      if (!alive()) return;
-      setPdfBytes(buffer);
-    } finally {
-      if (alive()) setPreviewBusy(false);
-    }
-  }, []);
+    void loadPdf(docId, filePreview, false, () => previewRun.current === run);
+  }, [doc?.id, filePreview, loadPdf]);
 
   // 换了一篇就丢掉上一篇的草稿（否则会把 A 的改动带进 B）
   useEffect(() => {
@@ -258,8 +398,11 @@ export function DocViewerDrawer({
   useEffect(() => {
     setFilePreview(null);
     setPdfBytes(null);
+    setWorkbook(null);
     setPreviewError('');
-    setView('body');
+    setGridError('');
+    // 用列表里的 kind 先定视图：等 preview 接口回来再切，会先闪一下正文
+    setView(doc?.kind === 'xlsx' ? 'grid' : 'body');
     const docId = doc?.id ?? '';
     if (!open || docId === '') return;
     void runPreview(docId, false);
@@ -365,7 +508,8 @@ export function DocViewerDrawer({
             {doc?.title ?? "文档"}
           </Typography>
           {/* 只有**确实有原文件**时才出现切换：早期入库的文档没有原文件，
-              摆两个标签只会让用户点到一个空的「原文」 */}
+              摆两个标签只会让用户点到一个空的「原文」。
+              .xlsx 的标签是「表格」而不是「原文」—— 打开的就是表格视图，不是打印稿 */}
           {filePreview !== null && (
             <Stack
               direction="row"
@@ -373,11 +517,15 @@ export function DocViewerDrawer({
               data-testid="kb-doc-view-switch"
               sx={{ mr: 0.5, p: 0.25, borderRadius: 1, bgcolor: "action.hover" }}
             >
-              {(
-                [
-                  { key: "original" as const, label: "原文" },
-                  { key: "body" as const, label: "正文" },
-                ]
+              {(filePreview.previewKind === "grid"
+                ? [
+                    { key: "grid" as const, label: "表格" },
+                    { key: "body" as const, label: "正文" },
+                  ]
+                : [
+                    { key: "original" as const, label: "原文" },
+                    { key: "body" as const, label: "正文" },
+                  ]
               ).map((item) => (
                 <Typography
                   key={item.key}
@@ -468,12 +616,15 @@ export function DocViewerDrawer({
           </Tooltip>
         </Stack>
 
-        {/* 元信息：格式 / 字数 / 块数 / 更新时间。「拼回来的」这句放这里，
-            让人在开始读之前就知道它不等于原文件 */}
+        {/* 元信息：格式 / 字数 / 块数 / 更新时间。最后那句随视图变：
+            「拼回来的」只对正文成立，表格视图里说这句是错的（它就是原文件的解析） */}
         <Box sx={{ px: { xs: 2.5, sm: 4.5 }, pt: 2, flexShrink: 0 }}>
           <Typography sx={{ fontSize: 11.5, color: "text.secondary" }} data-testid="kb-doc-view-meta">
             {meta}
-            {updated !== "" ? ` · ${updated}更新` : ""} · 正文由入库时的分块拼回，原文件的排版与分页不在其中
+            {updated !== "" ? ` · ${updated}更新` : ""}
+            {view === "grid"
+              ? " · 表格视图来自原文件（只读，可选中单元格与拖动行列）"
+              : " · 正文由入库时的分块拼回，原文件的排版与分页不在其中"}
           </Typography>
         </Box>
 
@@ -481,13 +632,81 @@ export function DocViewerDrawer({
           sx={{
             flex: 1,
             minHeight: 0,
-            // 原文视图要撑满整块并**自己滚**（画布 + 缩略图栏各自滚）；
+            // 原文/表格视图要撑满整块并**自己滚**（画布、表格、缩略图栏各自滚）；
             // 正文视图沿用"整页滚"，两种滚法不能混在一起，否则滚轮会打架
-            ...(view === "original"
+            ...(view === "original" || view === "grid"
               ? { display: "flex", flexDirection: "column", overflow: "hidden" }
               : { overflowY: "auto", px: { xs: 2.5, sm: 4.5 }, pt: 2, pb: 4 }),
           }}
         >
+          {view === "grid" && (
+            <Box
+              sx={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", px: 1, pb: 1 }}
+              data-testid="kb-doc-view-grid"
+            >
+              <DocGridView
+                workbook={workbook}
+                title={doc?.title ?? "文档"}
+                hint={gridError === "" ? undefined : gridError}
+                busy={gridBusy}
+              />
+              {gridError !== "" && !gridBusy && (
+                <Stack direction="row" spacing={1.5} alignItems="center" sx={{ px: 1, pb: 1 }}>
+                  <Typography
+                    component="button"
+                    data-testid="kb-grid-retry"
+                    onClick={() => {
+                      const docId = doc?.id ?? "";
+                      if (docId !== "") void runPreview(docId, true);
+                    }}
+                    sx={{
+                      p: 0,
+                      border: "none",
+                      background: "none",
+                      cursor: "pointer",
+                      fontSize: 12.5,
+                      color: "info.main",
+                    }}
+                  >
+                    重试解析表格
+                  </Typography>
+                  <Typography
+                    component="button"
+                    data-testid="kb-grid-open-pdf"
+                    onClick={() => {
+                      setView("original");
+                      openPdfView();
+                    }}
+                    sx={{
+                      p: 0,
+                      border: "none",
+                      background: "none",
+                      cursor: "pointer",
+                      fontSize: 12.5,
+                      color: "info.main",
+                    }}
+                  >
+                    看打印版式
+                  </Typography>
+                  <Typography
+                    component="button"
+                    onClick={() => setView("body")}
+                    sx={{
+                      p: 0,
+                      border: "none",
+                      background: "none",
+                      cursor: "pointer",
+                      fontSize: 12.5,
+                      color: "text.secondary",
+                    }}
+                  >
+                    先看正文
+                  </Typography>
+                </Stack>
+              )}
+            </Box>
+          )}
+
           {view === "original" && (
             <Box
               sx={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}
@@ -538,12 +757,15 @@ export function DocViewerDrawer({
             </Box>
           )}
 
-          {view === "body" && filePreview === null && previewError !== "" && (
+          {/* 正文上方那条「为什么没按原格式打开」的注记。
+              两条管线的错误都要能在这里显形：只写 PDF 那条，表格解析失败的人
+              切到正文后会看到一篇「凭空没有解释」的内容 */}
+          {view === "body" && (previewError !== "" || gridError !== "") && (
             <Typography
               data-testid="kb-preview-note"
               sx={{ pb: 1.5, fontSize: 11.5, color: "text.secondary" }}
             >
-              {previewError}
+              {previewError !== "" ? previewError : gridError}
             </Typography>
           )}
 
@@ -649,11 +871,13 @@ export function DocViewerDrawer({
         <Divider />
         <Box sx={{ px: { xs: 2.5, sm: 4.5 }, py: 1, flexShrink: 0 }}>
           <Typography sx={{ fontSize: 11, color: "text.secondary" }}>
-            {view === "original"
-              ? "原文视图是只读的排版预览（由 Office 转成 PDF 后渲染）。要改内容或改图注，切到「正文」。"
-              : canEdit
-                ? "⌘/Ctrl + S 保存。图片下方那行图注可以直接改 —— 它是这张图参与检索的全部内容。保存后会重新切块并重建索引。"
-                : "只有团队管理员可以编辑正文（含图片下方的图注）。要改内容请联系管理员，或用「上传文件」重新入库一篇。"}
+            {view === "grid"
+              ? "表格视图是只读的（原文件在服务端是字节，改一个格子等于重写 xlsx）。可以选中单元格、拖动列头/行号边界调整宽高、切换工作表；公式只显示 Excel 存盘时的结果，不重算。要改内容切到「正文」。"
+              : view === "original"
+                ? "原文视图是只读的排版预览（由 Office 转成 PDF 后渲染）。要改内容或改图注，切到「正文」。"
+                : canEdit
+                  ? "⌘/Ctrl + S 保存。图片下方那行图注可以直接改 —— 它是这张图参与检索的全部内容。保存后会重新切块并重建索引。"
+                  : "只有团队管理员可以编辑正文（含图片下方的图注）。要改内容请联系管理员，或用「上传文件」重新入库一篇。"}
           </Typography>
         </Box>
       </Stack>
@@ -733,6 +957,29 @@ export function DocViewerDrawer({
             secondaryTypographyProps={{ fontSize: 10.5 }}
           />
         </MenuItem>
+        {/* 表格视图的「另一条腿」：.xlsx 也能按打印版式看（要 Office 转 PDF，慢，
+            所以不默认走它，也不占一个标签）—— 没有这个入口，图表/图片就彻底看不到了 */}
+        {filePreview?.previewKind === "grid" && (
+          <MenuItem
+            data-testid="kb-doc-print-layout"
+            onClick={() => {
+              setMenuAnchor(null);
+              setView("original");
+              openPdfView();
+            }}
+            sx={{ py: 0.6 }}
+          >
+            <ListItemIcon sx={{ minWidth: 34, color: "text.secondary" }}>
+              <PrintOutlinedIcon sx={{ fontSize: 18 }} />
+            </ListItemIcon>
+            <ListItemText
+              primary="看打印版式"
+              secondary="含图表与图片，需要转 PDF"
+              primaryTypographyProps={{ fontSize: 13 }}
+              secondaryTypographyProps={{ fontSize: 10.5 }}
+            />
+          </MenuItem>
+        )}
         <MenuItem
           data-testid="kb-doc-rename-from-view"
           onClick={() => {

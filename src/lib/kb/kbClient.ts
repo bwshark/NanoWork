@@ -17,6 +17,8 @@
  *    对用户是两句不同的话，不能被压成「请求失败」。
  */
 
+import type { KbWorkbook } from './workbook';
+
 export interface KbClientConfig {
   /** 云端根地址（`resolveSyncBaseUrl()` 的产物），尾部斜杠会被去掉 */
   baseUrl: string;
@@ -150,7 +152,14 @@ export interface KbDocumentDetail extends KbDocument {
  *
  * 文档列表里每行都查一次 `kb_files` 就是 N+1；而只有「打开抽屉」这一件事需要它。
  *
- * ## 四个 `previewState` 各对应一种界面
+ * ## 两条预览管线，各有一套状态
+ *
+ * `previewKind` 说**默认该进哪个视图**：
+ * - `grid`：.xlsx 的表格视图（可选中单元格、拖动行列、看公式栏与 sheet 标签）；
+ * - `pdf`：docx/pptx/pdf 的原格式预览（pdf.js 画出来）；
+ * - `none`：没有原文件（早期文档）或格式不支持。
+ *
+ * `previewState` 描述 **PDF/打印版式**这条线，四个值各对应一种界面：
  *
  * - `ready`：能看原文（PDF 直通，或已转好）；
  * - `pending`：服务端能转，还没转（用户点开时同步转，会等几秒）；
@@ -158,6 +167,13 @@ export interface KbDocumentDetail extends KbDocument {
  * - `unavailable`：这台机器转不了（没装 Office / 早期文档没留原文件 / 格式不支持）。
  *
  * 把 `failed` 和 `unavailable` 混成一个，用户就分不清「要不要找管理员」。
+ *
+ * ## `.xlsx` 为什么不走 PDF 那条线
+ *
+ * PDF 是打印抽象：单元格点不中、列宽拖不动、sheet 标签不存在。所以 .xlsx 默认进
+ * `grid`（服务端用 stdlib 解析工作簿，毫秒级、不需要 Office），PDF 只在用户主动点
+ * 「打印版式」时才生成。`gridState` 就是表格视图那条线的状态：
+ * `pending`（还没解析）/ `ready` / `failed`。
  */
 export interface KbFilePreview {
   fileName: string;
@@ -167,6 +183,21 @@ export interface KbFilePreview {
   previewError: string;
   /** 转换耗时（毫秒）。0 = 没转过（PDF 直通或读缓存） */
   renderMs: number;
+  /**
+   * 默认视图（服务端 `previewKind`）。
+   *
+   * 可选是因为它比 `previewState` 晚出现：老响应里没有这个字段，按「不是表格」
+   * 处理即可 —— 把缺字段当成 `grid` 会让 .docx 打到一个空表格上。
+   */
+  previewKind?: 'grid' | 'pdf' | 'none';
+  /** 表格视图状态（非 .xlsx 恒为空） */
+  gridState?: 'pending' | 'ready' | 'failed' | '';
+  gridError?: string;
+  /** 表格视图解析耗时（毫秒） */
+  gridMs?: number;
+  /** 工作表数 / 内容单元格数（服务端已解析好的规模，列表与状态栏直接显示） */
+  gridSheets?: number;
+  gridCells?: number;
 }
 
 export interface KbSearchHit {
@@ -413,6 +444,19 @@ export interface KbGateway {
   buildFilePreview(kbId: string, docId: string): Promise<KbApiResult<KbFilePreview>>;
   /** 预览 PDF 的字节（pdf.js 用；带票取回，不走 URL） */
   getPreviewPdf(kbId: string, docId: string): Promise<KbApiResult<Blob>>;
+  /**
+   * 表格视图的工作簿 JSON（.xlsx 专用）。
+   *
+   * 409 = 还没解析（或解析失败）：前端据此决定「先 POST 生成」还是把原因摆出来。
+   */
+  getWorkbook(kbId: string, docId: string): Promise<KbApiResult<KbWorkbook>>;
+  /**
+   * 解析并落库表格视图（同步、幂等，**不经过 Office**）。
+   *
+   * 返回的是状态（`gridState` / `gridSheets` / `gridError`），不是工作簿本体：
+   * 生成完还要再 GET 一次拿 JSON —— 两件事分开，失败时才说得清是哪一步。
+   */
+  buildWorkbook(kbId: string, docId: string): Promise<KbApiResult<KbFilePreview>>;
   uploadDocument(
     kbId: string,
     input: { title: string; content: string },
@@ -486,6 +530,8 @@ export function createKbGateway(config: KbClientConfig): KbGateway {
     getFilePreview: (kbId, docId) => getKbFilePreview(config, kbId, docId),
     buildFilePreview: (kbId, docId) => buildKbFilePreview(config, kbId, docId),
     getPreviewPdf: (kbId, docId) => getKbPreviewPdf(config, kbId, docId),
+    getWorkbook: (kbId, docId) => getKbWorkbook(config, kbId, docId),
+    buildWorkbook: (kbId, docId) => buildKbWorkbook(config, kbId, docId),
     uploadDocument: (kbId, input) => uploadDocument(config, kbId, input),
     uploadFile: (kbId, input) => uploadKbFile(config, kbId, input),
     renameDocument: (kbId, docId, title) => renameKbDocument(config, kbId, docId, title),
@@ -611,8 +657,39 @@ export function getKbPreviewPdf(
   return request<Blob>(config, `${previewPath(kbId, docId)}.pdf`, { parse: 'blob' });
 }
 
-/** 原文件的下载地址（带票，走 `downloadKbFile`）。 */
-export function downloadKbFile(
+/**
+ * 取表格视图的工作簿 JSON（.xlsx）。
+ *
+ * 服务端用 `Content-Encoding: gzip` 返回压缩后的字节，但**浏览器/Electron 的网络层
+ * 会自己解**（`fetch` 的 `response.json()` 拿到的是解压后的 JSON）—— 所以这里不需要
+ * 客户端解压，也不要手写 `Accept-Encoding: gzip`（自己设了头会让某些运行时不自动解）。
+ */
+export function getKbWorkbook(
+  config: KbClientConfig,
+  kbId: string,
+  docId: string,
+): Promise<KbApiResult<KbWorkbook>> {
+  return request<KbWorkbook>(config, `${previewPath(kbId, docId)}.workbook`);
+}
+
+/**
+ * 解析并落库表格视图（同步、幂等）。
+ *
+ * 为什么允许在「打开一篇 .xlsx」时直接调：解析是纯 CPU 的 zip + XML 读取，
+ * 毫秒级到两秒，不拉 Office、不弹窗 —— 与 PDF 渲染（3–10 秒、可能卡死）不是一回事。
+ * 已经解析过时它是一次空转（服务端按 sha256 + 解析器版本判断缓存）。
+ */
+export function buildKbWorkbook(
+  config: KbClientConfig,
+  kbId: string,
+  docId: string,
+): Promise<KbApiResult<KbFilePreview>> {
+  return request<KbFilePreview>(config, `${previewPath(kbId, docId)}.workbook`, {
+    method: 'POST',
+  });
+}
+
+/** 原文件的下载地址（带票，走 `downloadKbFile`）。 */export function downloadKbFile(
   config: KbClientConfig,
   kbId: string,
   docId: string,

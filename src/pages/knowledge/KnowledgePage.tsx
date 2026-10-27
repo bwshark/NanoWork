@@ -1282,6 +1282,13 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
         loadPreviewPdf={
           client === null ? undefined : (docId) => client.getPreviewPdf(activeKbId, docId)
         }
+        /* 表格视图（.xlsx）：解析走 stdlib、不碰 Office，所以「打开就解析」不会让人干等 */
+        loadWorkbook={
+          client === null ? undefined : (docId) => client.getWorkbook(activeKbId, docId)
+        }
+        buildWorkbook={
+          client === null ? undefined : (docId) => client.buildWorkbook(activeKbId, docId)
+        }
       />
 
       <RenameDocDialog

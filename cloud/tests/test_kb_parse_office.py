@@ -183,7 +183,9 @@ def test_large_xlsx_sheet_is_split_by_row_and_keeps_header() -> None:
     按字符硬切：切口落在某一行中间，切出来的两块既不是合法 Markdown，第二块起也
     没有列名（「65 是什么」再也读不出来）。
     """
-    rows = [["姓名", "年龄", "在职"]] + [[f"员工{index}", str(20 + index), "是"] for index in range(120)]
+    rows = [["姓名", "年龄", "在职"]] + [
+        [f"员工{index}", str(20 + index), "是"] for index in range(120)
+    ]
     data = _xlsx({"台账": rows})
 
     parsed = parse_document("台账.xlsx", data)
