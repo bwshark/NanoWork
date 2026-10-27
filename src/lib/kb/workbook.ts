@@ -348,6 +348,22 @@ export function isNumericCell(cell: KbCell | undefined): boolean {
 }
 
 /**
+ * 颜色归一化：`#RRGGBB` / `RRGGBB` / 8 位 `AARRGGBB` → `#RRGGBB`；认不出来给 `null`。
+ *
+ * ⚠️ 这条不是洁癖：服务端 `_color()` 产出的**已经带 `#`**（`"#000000"`），
+ * 客户端若再拼一个 `#` 就得到 `##000000` —— 非法 CSS，字色会**静默回退成继承色**。
+ * 症状是「整张表像蒙了一层、字看不清」（暗色主题下的继承色是浅灰），
+ * 而不是报错，所以这条必须有单一入口。
+ */
+export function cssColor(value: string | undefined | null): string | null {
+  if (!value) return null;
+  let raw = value.trim().replace(/^#/, '').toLowerCase();
+  // 8 位是 Excel 的 AARRGGBB（透明度在最前）；表格视图不透明确度，丢掉 alpha
+  if (/^[0-9a-fA-F]{8}$/.test(raw)) raw = raw.slice(2);
+  return /^[0-9a-fA-F]{6}$/.test(raw) ? `#${raw}` : null;
+}
+
+/**
  * FortuneSheet 边框编号 → CSS。
  *
  * 两套编号不是一回事（见服务端注释）：这里只按**粗细/线型**还原观感，不追求逐像素
@@ -359,7 +375,7 @@ export function borderCss(side: KbBorderSide | undefined): {
   color: string;
 } | null {
   if (!side) return null;
-  const color = `#${(side.color || '000000').replace(/^#/, '')}`;
+  const color = cssColor(side.color) ?? '#000000';
   switch (side.style) {
     case '2':
       return { width: 1, style: 'solid', color };

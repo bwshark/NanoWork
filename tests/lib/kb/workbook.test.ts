@@ -17,6 +17,7 @@ import {
   buildRowAxis,
   cellRef,
   columnLabel,
+  cssColor,
   displayText,
   indexSheet,
   inputText,
@@ -196,6 +197,26 @@ describe('显示文本', () => {
   });
 });
 
+describe('颜色归一化（服务端已经带 `#`，客户端不能再拼一个）', () => {
+  it('带井号、不带井号、8 位 ARGB 都归成 #RRGGBB', () => {
+    expect(cssColor('#000000')).toBe('#000000');
+    expect(cssColor('#eef1f5')).toBe('#eef1f5');
+    expect(cssColor('000000')).toBe('#000000');
+    // AARRGGBB：丢掉透明度
+    expect(cssColor('FFC0392B')).toBe('#c0392b');
+    expect(cssColor('  #C0392B  ')).toBe('#c0392b');
+  });
+
+  it('认不出来的给 null（宁可回退成默认色，也不要拼出 ##000000 这种非法值）', () => {
+    // 这条就是「整张表像蒙了一层」的根因：`##000000` 是非法 CSS，
+    // 字色会静默继承父级（暗色主题下是浅灰）
+    expect(cssColor('')).toBeNull();
+    expect(cssColor(undefined)).toBeNull();
+    expect(cssColor('red')).toBeNull();
+    expect(cssColor('#12345')).toBeNull();
+  });
+});
+
 describe('边框编号 → CSS', () => {
   it('OOXML 的 medium(2) 在这套编号里是 hair —— 只按粗细还原观感', () => {
     expect(borderCss({ style: '1', color: '000000' })).toEqual({
@@ -207,5 +228,10 @@ describe('边框编号 → CSS', () => {
     expect(borderCss({ style: '13', color: '00FF00' })?.width).toBe(3);
     expect(borderCss({ style: '4', color: '000000' })?.style).toBe('dashed');
     expect(borderCss(undefined)).toBeNull();
+  });
+
+  it('边框色也走同一个归一化（服务端给的是 "#000000"）', () => {
+    expect(borderCss({ style: '1', color: '#9AA4B2' })?.color).toBe('#9aa4b2');
+    expect(borderCss({ style: '1', color: '' })?.color).toBe('#000000');
   });
 });

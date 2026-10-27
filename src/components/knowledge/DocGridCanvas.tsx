@@ -43,6 +43,7 @@ import {
   buildColumnAxis,
   buildRowAxis,
   columnLabel,
+  cssColor,
   DEFAULT_COLUMN_WIDTH,
   DEFAULT_ROW_HEIGHT,
   displayText,
@@ -913,6 +914,10 @@ function CellBox({
   const decorations: string[] = [];
   if (value?.un) decorations.push('underline');
   if (value?.cl) decorations.push('line-through');
+  // ⚠️ 走 `cssColor`：服务端给的已经是 `#RRGGBB`，再拼一个 `#` 会变成非法 CSS，
+  // 字色静默回退成继承色（暗色主题下就是浅灰）——「像蒙了一层」就是这么来的
+  const background = cssColor(value?.bg);
+  const foreground = cssColor(value?.fc);
 
   const style: React.CSSProperties = {
     position: 'absolute',
@@ -924,10 +929,11 @@ function CellBox({
     display: 'flex',
     alignItems: valign,
     justifyContent: align,
-    padding: '0 6px',
+    // 左右留 4px（Excel 的默认内缩约 3px）：73px 的默认列宽下，能多显示半个字
+    padding: '0 4px',
     overflow: 'hidden',
-    backgroundColor: value?.bg ? `#${value.bg}` : elevated ? SURFACE : 'transparent',
-    color: value?.fc ? `#${value.fc}` : BODY_TEXT,
+    backgroundColor: background ?? (elevated ? SURFACE : 'transparent'),
+    color: foreground ?? BODY_TEXT,
     fontSize: value?.fs && value.fs > 0 ? `${Math.min(28, Math.max(9, value.fs))}px` : '13px',
     fontWeight: value?.bl ? 600 : 400,
     fontStyle: value?.it ? 'italic' : 'normal',

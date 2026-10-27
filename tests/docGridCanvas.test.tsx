@@ -205,6 +205,31 @@ describe('拖拽调整行列', () => {
   });
 });
 
+describe('单元格样式', () => {
+  it('颜色按服务端格式（带 `#`）还原，不能被拼成非法 CSS 让字色继承', () => {
+    const wb = workbook();
+    // 与服务端一致：`_color()` 产出的就是 `#RRGGBB`
+    wb.sheets[0].celldata[0] = {
+      r: 0,
+      c: 0,
+      v: { v: 'ID', m: 'ID', bl: 1, bg: '#eef1f5', fc: '#1f2329' },
+    };
+    const host = mount(<DocGridCanvas workbook={wb} title="银行信息列表" />);
+    const cell = host.querySelector<HTMLElement>('[data-testid="kb-grid-cell-0-0"]')!;
+
+    // 曾经这里是空串（`##1f2329` 被浏览器丢掉 → 继承父级浅色 → 「整张表像蒙了一层」）
+    expect(cell.style.color).not.toBe('');
+    expect(cell.style.color.toLowerCase()).toMatch(/rgb\(31,\s*35,\s*41\)|#1f2329/);
+    expect(cell.style.backgroundColor.toLowerCase()).toMatch(/rgb\(238,\s*241,\s*245\)|#eef1f5/);
+  });
+
+  it('没有字色时用默认深色（不是跟着暗色主题变浅）', () => {
+    const host = renderGrid();
+    const cell = host.querySelector<HTMLElement>('[data-testid="kb-grid-cell-1-0"]')!;
+    expect(cell.style.color.toLowerCase()).toMatch(/rgb\(31,\s*35,\s*41\)|#1f2329/);
+  });
+});
+
 describe('工作表切换', () => {
   it('底部标签点了换内容，且换表后选区回到 A1', () => {
     const host = renderGrid();
