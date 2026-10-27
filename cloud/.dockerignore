@@ -1,0 +1,37 @@
+# 构建上下文里**不要**出现的东西。
+#
+# 为什么把它当回事：`cloud/` 里躺着 1.3MB 的 `cloud.db` 与整个 `.venv`（几百 MB），
+# 不排除的话每次 `docker build` 都要把它们打包发给 daemon —— 慢，而且一旦
+# COPY 进去，用户数据就被烤进了镜像层（删不掉、会跟着镜像分发）。
+
+# 虚拟环境（容器里自己装依赖，宿主机的 venv 是 Windows 的，一个字节都用不上）
+.venv/
+venv/
+
+# 数据库与它的旁文件：用户数据，绝不能进镜像
+cloud.db
+cloud.db-*
+*.db
+*.db-wal
+*.db-shm
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# 测试：不进生产镜像。Linux 侧的「真能转吗」由 `docker/verify.py` 端到端验
+# （真上传真转换），比在镜像里跑单测更接近事实。
+tests/
+
+# 本地/编辑器杂物
+.git/
+.gitignore
+*.log
+.DS_Store
+.env
+.env.*
+DOCKER.md

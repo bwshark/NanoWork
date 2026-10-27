@@ -143,6 +143,32 @@ export interface KbDocumentDetail extends KbDocument {
   content: string;
 }
 
+/**
+ * 原文件与预览的状态（`GET /api/kbs/{kb}/documents/{doc}/preview`）。
+ *
+ * ## 为什么单独一个接口，不并进 `KbDocumentDetail`
+ *
+ * 文档列表里每行都查一次 `kb_files` 就是 N+1；而只有「打开抽屉」这一件事需要它。
+ *
+ * ## 四个 `previewState` 各对应一种界面
+ *
+ * - `ready`：能看原文（PDF 直通，或已转好）；
+ * - `pending`：服务端能转，还没转（用户点开时同步转，会等几秒）；
+ * - `failed`：转失败了（`previewError` 是 Office 的原话）；
+ * - `unavailable`：这台机器转不了（没装 Office / 早期文档没留原文件 / 格式不支持）。
+ *
+ * 把 `failed` 和 `unavailable` 混成一个，用户就分不清「要不要找管理员」。
+ */
+export interface KbFilePreview {
+  fileName: string;
+  bytesLen: number;
+  suffix: string;
+  previewState: 'ready' | 'pending' | 'failed' | 'unavailable';
+  previewError: string;
+  /** 转换耗时（毫秒）。0 = 没转过（PDF 直通或读缓存） */
+  renderMs: number;
+}
+
 export interface KbSearchHit {
   chunkId: string;
   docId: string;
@@ -381,6 +407,12 @@ export interface KbGateway {
    * 失败语义照旧原样转达：403 = 角色不够，404 = 不存在 / 在回收站里。
    */
   getDocument(kbId: string, docId: string): Promise<KbApiResult<KbDocumentDetail>>;
+  /** 原文件/预览状态（不触发转换） */
+  getFilePreview(kbId: string, docId: string): Promise<KbApiResult<KbFilePreview>>;
+  /** 要求生成预览并等它转完（同步、幂等） */
+  buildFilePreview(kbId: string, docId: string): Promise<KbApiResult<KbFilePreview>>;
+  /** 预览 PDF 的字节（pdf.js 用；带票取回，不走 URL） */
+  getPreviewPdf(kbId: string, docId: string): Promise<KbApiResult<Blob>>;
   uploadDocument(
     kbId: string,
     input: { title: string; content: string },
@@ -451,6 +483,9 @@ export function createKbGateway(config: KbClientConfig): KbGateway {
     fetchAsset: (kbId, assetId) => fetchKbAsset(config, kbId, assetId),
     uploadAsset: (kbId, input) => uploadKbAsset(config, kbId, input),
     getDocument: (kbId, docId) => getKbDocument(config, kbId, docId),
+    getFilePreview: (kbId, docId) => getKbFilePreview(config, kbId, docId),
+    buildFilePreview: (kbId, docId) => buildKbFilePreview(config, kbId, docId),
+    getPreviewPdf: (kbId, docId) => getKbPreviewPdf(config, kbId, docId),
     uploadDocument: (kbId, input) => uploadDocument(config, kbId, input),
     uploadFile: (kbId, input) => uploadKbFile(config, kbId, input),
     renameDocument: (kbId, docId, title) => renameKbDocument(config, kbId, docId, title),
@@ -536,6 +571,61 @@ export function getKbDocument(
     config,
     `/api/kbs/${encodeURIComponent(kbId)}/documents/${encodeURIComponent(docId)}`,
   );
+}
+
+/** 原文件/预览状态（只读，不触发转换）。 */
+export function getKbFilePreview(
+  config: KbClientConfig,
+  kbId: string,
+  docId: string,
+): Promise<KbApiResult<KbFilePreview>> {
+  return request<KbFilePreview>(config, previewPath(kbId, docId));
+}
+
+/**
+ * 要求服务端**生成**预览并等它转完（同步、幂等）。
+ *
+ * 服务端只在状态不是 `ready`/`unavailable` 时才真的去拉 Office，所以这里可以放心
+ * 在「点了原文但还没转」时直接调 —— 已经转好的文档是一次空转。
+ */
+export function buildKbFilePreview(
+  config: KbClientConfig,
+  kbId: string,
+  docId: string,
+): Promise<KbApiResult<KbFilePreview>> {
+  return request<KbFilePreview>(config, previewPath(kbId, docId), { method: 'POST' });
+}
+
+/**
+ * 取预览 PDF 的字节。
+ *
+ * 为什么是 blob 而不是 URL：`<embed src>` / pdf.js 的 URL 模式都**带不上
+ * Authorization 头**，而知识库的接口一律要 Bearer 票。带票取回字节再交给 pdf.js，
+ * 与图片走的是同一条路（见 `lib/kb/assetLoader.ts`）。
+ */
+export function getKbPreviewPdf(
+  config: KbClientConfig,
+  kbId: string,
+  docId: string,
+): Promise<KbApiResult<Blob>> {
+  return request<Blob>(config, `${previewPath(kbId, docId)}.pdf`, { parse: 'blob' });
+}
+
+/** 原文件的下载地址（带票，走 `downloadKbFile`）。 */
+export function downloadKbFile(
+  config: KbClientConfig,
+  kbId: string,
+  docId: string,
+): Promise<KbApiResult<Blob>> {
+  return request<Blob>(
+    config,
+    `/api/kbs/${encodeURIComponent(kbId)}/documents/${encodeURIComponent(docId)}/file`,
+    { parse: 'blob' },
+  );
+}
+
+function previewPath(kbId: string, docId: string): string {
+  return `/api/kbs/${encodeURIComponent(kbId)}/documents/${encodeURIComponent(docId)}/preview`;
 }
 
 /** 改可见范围。`name` 也走同一个接口（服务端复用同一份请求体，字段全部可选）。 */

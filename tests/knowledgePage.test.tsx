@@ -109,6 +109,10 @@ function makeGateway(overrides: Partial<KbGateway> = {}): KbGateway {
     listDocuments: vi.fn().mockResolvedValue({ ok: true, data: [DOC] }),
     fetchAsset: vi.fn(),
     uploadAsset: vi.fn(),
+    // 「按原格式打开」的三个调用：默认桩拿不到原文件 → 抽屉退回正文（老用例行为不变）
+    getFilePreview: vi.fn(),
+    buildFilePreview: vi.fn(),
+    getPreviewPdf: vi.fn(),
     getDocument: vi
       .fn()
       .mockResolvedValue({ ok: true, data: { ...DOC, content: '报销流程：走财务邮箱。' } }),

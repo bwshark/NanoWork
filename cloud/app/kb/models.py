@@ -207,3 +207,54 @@ class KbAsset(SQLModel, table=True):
     alt: str = ""
     blob: bytes = b""
     created_at: datetime = Field(default_factory=utc_now)
+
+
+class KbFile(SQLModel, table=True):
+    """文档的**原文件**与它的预览 PDF（2026-10-26）。
+
+    ## 为什么必须存原文件
+
+    入库时正文被切成块、原文件就丢了 —— 于是「按原格式打开」根本无从谈起
+    （前端只能拿到拼回来的纯文本）。要像在线文档那样看排版，就必须把原始字节留住。
+
+    ## 为什么 PDF 和原文件同一张表
+
+    生命周期完全一致（文档被彻底删除时一起清），拆两张表只会多一条 join、
+    多一处可能忘掉的清理。渲染是**派生**的：原文件在，PDF 随时可以重新生成，
+    所以"PDF 列"可以随时清空重来，不会丢信息。
+
+    ## 为什么二进制进数据库（与 `kb_assets` 同一条理由）
+
+    权限跟着库走（`kb/visibility.py` 是唯一判定实现，不复制第二份）；
+    备份与事务一致（删文档时连带清掉，不会出现文件系统孤儿）。
+    单个文件上限 8MB（上传入口 `MAX_UPLOAD_BYTES`），几十上百篇的量级 SQLite 扛得住。
+
+    ## 为什么没有 "pending" 状态
+
+    转换不是后台任务：**打开时才同步转**（`routes.build_preview`）。
+    所以 `render_state` 只有三种值 —— 空（还没转）、`done`、`failed`。
+    有后台任务就要有队列、重试与进度，而这里的转换只值 3–10 秒。
+    """
+
+    __tablename__ = "kb_files"
+
+    #: 与文档同主键：一篇文档只有一份原文件（多版历史不在本期范围）
+    doc_id: str = Field(primary_key=True, foreign_key="kb_documents.id")
+    kb_id: str = Field(index=True, foreign_key="knowledge_bases.id")
+    #: 用户上传时的文件名（下载时还给用户）
+    filename: str = ""
+    mime: str = "application/octet-stream"
+    bytes_len: int = 0
+    #: 原文件内容的 sha256：当 ETag 用（内容变了 URL 就变）
+    sha256: str = Field(default="", index=True)
+    blob: bytes = b""
+    #: 预览 PDF（Office 转出来的）。空 = 还没转或转换失败
+    pdf: bytes = b""
+    pdf_bytes_len: int = 0
+    #: 空串 = 还没转；`done` / `failed`（见类注释：刻意没有 pending）
+    render_state: str = ""
+    #: 转换失败的原因（原样给用户看：是文件坏了、还是 Office 弹窗挡住了）
+    render_error: str = ""
+    #: 转换耗时（毫秒）。慢的时候要能看出是"这台机器慢"还是"文件太大"
+    render_ms: int = 0
+    created_at: datetime = Field(default_factory=utc_now)

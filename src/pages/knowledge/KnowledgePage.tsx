@@ -1269,6 +1269,19 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
         saving={viewSaving}
         onSave={handleSaveContent}
         onUploadImage={handleUploadImage}
+        /* 「按原格式打开」：原文件在服务端（`kb_files`），预览由 Office 转成 PDF。
+           这里补上 kbId（网关的方法签名是 (kbId, docId)，抽屉只认当前库）。
+           包一层 lambda 不会让抽屉重复转 PDF —— 抽屉把这三个调用放在 ref 里，
+           只在「打开/换文档」时才跑一次。 */
+        loadFilePreview={
+          client === null ? undefined : (docId) => client.getFilePreview(activeKbId, docId)
+        }
+        buildFilePreview={
+          client === null ? undefined : (docId) => client.buildFilePreview(activeKbId, docId)
+        }
+        loadPreviewPdf={
+          client === null ? undefined : (docId) => client.getPreviewPdf(activeKbId, docId)
+        }
       />
 
       <RenameDocDialog

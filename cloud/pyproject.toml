@@ -14,6 +14,12 @@ dependencies = [
     # 直接依赖 bcrypt 原生 API 而非 passlib：passlib 1.7.4 在 Python 3.12+ 与
     # bcrypt 4.x 的组合下会抛 "(trapped) error reading bcrypt version"。
     "bcrypt>=4.0",
+    # `EmailStr`（认证接口的邮箱字段）的校验后端。
+    # ⚠️ 代码里**没有一行 import email_validator** —— pydantic 在运行时才去找它，
+    # 所以「扫一遍 import 看缺什么」永远查不到它。缺了的表现是服务**启动即崩**：
+    # `ImportError: email-validator is not installed, run pip install 'pydantic[email]'`。
+    # 宿主机 venv 里恰好装过，所以一直到容器化才暴露。
+    "email-validator>=2.1",
 ]
 
 [project.optional-dependencies]
@@ -31,6 +37,13 @@ parse = ["pypdf>=4"]
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
+
+# 包发现必须显式声明。setuptools 的 flat-layout 自动发现在「一个顶层目录」时侥幸能用，
+# 但 `cloud/` 下还有 `docker/`（运维脚本）与 `tests/`：
+#   `error: Multiple top-level packages discovered in a flat-layout: ['app', 'docker']`
+# 这个错只在容器里构建 wheel 时炸（宿主机因为有 egg-info 恰好躲过），所以写死更安全。
+[tool.setuptools.packages.find]
+include = ["app*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

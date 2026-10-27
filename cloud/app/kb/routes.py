@@ -18,6 +18,7 @@ from __future__ import annotations
 import hashlib
 import logging
 from datetime import timedelta
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel, Field
@@ -36,22 +37,32 @@ from app.kb.assets import (
 from app.kb.chunking import chunk_text, join_chunks, retrieval_text
 from app.kb.digest import digest_of
 from app.kb.embedding import resolve_embedder
+from app.kb.files import document_mime, sha256_hex, suffix_of
 from app.kb.models import (
     DEFAULT_ALLOWED_ROLES,
     KbAsset,
     KbChunk,
     KbDocument,
+    KbFile,
     KnowledgeBase,
     KnowledgeBaseDepartment,
     roles_from_json,
     roles_to_json,
 )
+from app.kb.office2pdf import PDF_SUFFIX
 from app.kb.parsing import (
     ParsedImage,
     ParseError,
     decode_base64,
     default_title,
     parse_document,
+)
+from app.kb.render import (
+    RenderFailed,
+    RenderUnavailable,
+    is_available,
+    is_convertible,
+    render_pdf,
 )
 from app.kb.retrieval import ScoredChunk, hybrid_rank, rank_by_vectors, rank_chunks
 from app.kb.vectors import (
@@ -97,6 +108,10 @@ def _purge_document(session: Session, doc: KbDocument) -> None:
     # 图片跟着文档一起清（软删进回收站时**不清** —— 恢复后图片还得能用）
     for asset in session.exec(select(KbAsset).where(KbAsset.doc_id == doc.id)).all():
         session.delete(asset)
+    # 原文件与预览 PDF 同理：它们只对活着的文档有意义
+    original = session.get(KbFile, doc.id)
+    if original is not None:
+        session.delete(original)
     session.delete(doc)
 
 
@@ -223,6 +238,28 @@ class DocumentView(BaseModel):
     warnings: list[str] = []
     #: 进回收站的时间；空串 = 正常文档。列表里要能看出"哪些是删过的"。
     deletedAt: str = ""
+
+
+class DocumentFileView(BaseModel):
+    """原文件与预览的状态（「原文」标签靠它决定能不能点）。
+
+    刻意**不并进 `DocumentView`**：文档列表里每行都查一次 `kb_files` 是 N+1，
+    而只有「打开抽屉」这一件事需要它 —— 一次额外的轻请求比列表变慢划算。
+
+    `previewState` 四个值，对应四种**不同**的界面：
+    - `ready`：能直接看（PDF 直通，或已转好并落库）；
+    - `pending`：还没转（服务端有能力，等用户点开时同步转）；
+    - `failed`：转失败了（`previewError` 里有 Office 原话）；
+    - `unavailable`：这台机器转不了（没有 Office / 早期文档没留原文件 / 格式不支持）。
+    """
+
+    fileName: str = ""
+    bytesLen: int = 0
+    suffix: str = ""
+    previewState: str = ""
+    previewError: str = ""
+    #: 本次/上次转换耗时（毫秒）。0 = 没转过（直通或读缓存）
+    renderMs: int = 0
 
 
 class DocumentDetailView(DocumentView):
@@ -689,7 +726,252 @@ def upload_document(
         kind=parsed.kind,
         images=parsed.images,
     )
+    _store_original(session, kb, doc, payload.filename, data)
     return _document_view(doc, embedded=embedded, warnings=parsed.warnings)
+
+
+def _store_original(
+    session: Session,
+    kb: KnowledgeBase,
+    doc: KbDocument,
+    filename: str,
+    data: bytes,
+) -> None:
+    """把原文件留下来（「按原格式打开」的唯一前提）。
+
+    为什么必须在**入库时**存：正文在那一刻就被切成块了，排版信息（位置、字号、
+    颜色、层级）在块里**不存在** —— 事后无论怎么拼都拼不回原文件。
+
+    存的时候顺手算 sha256：下载接口拿它当 ETag，将来也能用它判断「页面上的预览
+    是不是这份文件的」。
+    """
+    session.add(
+        KbFile(
+            doc_id=doc.id,
+            kb_id=kb.id,
+            filename=filename.strip()[:200] or "document",
+            mime=document_mime(filename),
+            bytes_len=len(data),
+            sha256=sha256_hex(data),
+            blob=data,
+        )
+    )
+    session.commit()
+
+
+def _disposition(filename: str, *, inline: bool) -> str:
+    """`Content-Disposition`：ASCII 兜底 + RFC 5987 的中文文件名。
+
+    HTTP 头只能是 latin-1，中文文件名直接写进去会让整个响应 500（Starlette 会在
+    编码时抛错）—— 所以必须走 `filename*=UTF-8''…`，同时给一个 ASCII 兜底名。
+    """
+    kind = "inline" if inline else "attachment"
+    fallback = "".join(
+        char if 32 <= ord(char) < 127 and char not in '"\\' else "_" for char in filename
+    )
+    return f'{kind}; filename="{(fallback or "file")[:120]}"; filename*=UTF-8\'\'{quote(filename)}'
+
+
+def _file_view(row: KbFile | None) -> DocumentFileView:
+    """原文件行 → 前端要的状态。四种值各对应一种**不同**的界面（见模型注释）。"""
+    if row is None:
+        return DocumentFileView(
+            previewState="unavailable",
+            previewError="这篇是早期入库的，没有留原文件（那时只存正文）；重新上传一次即可按原格式查看",
+        )
+
+    suffix = suffix_of(row.filename)
+    # PDF 自己就是预览：不需要 Office，也不需要转
+    if suffix == PDF_SUFFIX:
+        return DocumentFileView(
+            fileName=row.filename,
+            bytesLen=row.bytes_len,
+            suffix=suffix,
+            previewState="ready",
+            renderMs=row.render_ms,
+        )
+    if row.render_state == "done" and row.pdf:
+        return DocumentFileView(
+            fileName=row.filename,
+            bytesLen=row.bytes_len,
+            suffix=suffix,
+            previewState="ready",
+            renderMs=row.render_ms,
+        )
+    if row.render_state == "failed":
+        return DocumentFileView(
+            fileName=row.filename,
+            bytesLen=row.bytes_len,
+            suffix=suffix,
+            previewState="failed",
+            previewError=row.render_error or "预览生成失败",
+            renderMs=row.render_ms,
+        )
+    if not is_convertible(suffix):
+        return DocumentFileView(
+            fileName=row.filename,
+            bytesLen=row.bytes_len,
+            suffix=suffix,
+            previewState="unavailable",
+            previewError=f"{suffix or '这种格式'}不支持原格式预览，看「正文」即可",
+        )
+    if not is_available():
+        return DocumentFileView(
+            fileName=row.filename,
+            bytesLen=row.bytes_len,
+            suffix=suffix,
+            previewState="unavailable",
+            previewError=(
+                "服务端没有可用的文档转换器（Office 或 LibreOffice），"
+                "生成不了原格式预览。看「正文」标签即可 —— 检索与阅读都不受影响"
+            ),
+        )
+    return DocumentFileView(
+        fileName=row.filename,
+        bytesLen=row.bytes_len,
+        suffix=suffix,
+        previewState="pending",
+    )
+
+
+@router.get("/kbs/{kb_id}/documents/{doc_id}/file")
+def get_document_file(
+    kb_id: str,
+    doc_id: str,
+    user: User = Depends(current_user),
+    session: Session = Depends(get_session),
+) -> Response:
+    """下载**原文件**（当初上传的那份字节，一个 bit 都没动）。
+
+    权限与读文档完全同一套（`_kb_or_404`）：库不可见就 403，文件不存在或不属于这个库
+    就 404。不给签名 URL、不给免鉴权直链 —— 那等于开一个「拿到链接就能看」的洞。
+    """
+    kb, _member = _kb_or_404(session, kb_id, user)
+    row = session.get(KbFile, doc_id)
+    if row is None or row.kb_id != kb.id:
+        raise HTTPException(status_code=404, detail="这篇文档没有留原文件")
+    return Response(
+        content=row.blob,
+        media_type=row.mime,
+        headers={
+            "Cache-Control": "private, max-age=3600",
+            "ETag": f'"{row.sha256}"',
+            # 原文件按扩展名给了白名单类型，但仍然禁掉嗅探：万一将来白名单放宽，
+            # 也不至于出现「上传一个 .html 被当成页面执行」
+            "X-Content-Type-Options": "nosniff",
+            "Content-Disposition": _disposition(row.filename, inline=False),
+        },
+    )
+
+
+@router.get("/kbs/{kb_id}/documents/{doc_id}/preview", response_model=DocumentFileView)
+def get_preview_info(
+    kb_id: str,
+    doc_id: str,
+    user: User = Depends(current_user),
+    session: Session = Depends(get_session),
+) -> DocumentFileView:
+    """只读预览状态（不触发转换）。前端打开抽屉时先问这一句。"""
+    kb, _member = _kb_or_404(session, kb_id, user)
+    row = session.get(KbFile, doc_id)
+    if row is not None and row.kb_id != kb.id:
+        row = None
+    return _file_view(row)
+
+
+@router.post("/kbs/{kb_id}/documents/{doc_id}/preview", response_model=DocumentFileView)
+def build_preview(
+    kb_id: str,
+    doc_id: str,
+    user: User = Depends(current_user),
+    session: Session = Depends(get_session),
+) -> DocumentFileView:
+    """**生成**预览 PDF（同步、幂等）。
+
+    ## 为什么同步而不是后台任务
+
+    转换只值 3–10 秒（40 页课件实测 10 秒），而后台任务要付：队列、状态机、重试、
+    进程退出时的半成品清理。用户点开文档时等 10 秒、看着转圈，比「稍后自己好」
+    更符合直觉。
+
+    ## 为什么失败也回 200 + 状态
+
+    前端要的是「现在能不能看原文、不能的话为什么」。用 5xx 表示失败，前端还得
+    区分是网络错误还是转换错误，反而多一层猜测。
+    """
+    kb, _member = _kb_or_404(session, kb_id, user)
+    row = session.get(KbFile, doc_id)
+    if row is None or row.kb_id != kb.id:
+        raise HTTPException(status_code=404, detail="这篇文档没有留原文件")
+
+    current = _file_view(row)
+    if current.previewState in ("ready", "unavailable"):
+        return current
+
+    try:
+        pdf, elapsed = render_pdf(row.blob, suffix_of(row.filename))
+    except RenderUnavailable as error:
+        # 能力缺失：把原因留在行上（换台有 Office 的机器还能再转），状态仍是"没转"
+        row.render_error = str(error)
+        session.add(row)
+        session.commit()
+        return DocumentFileView(
+            fileName=row.filename,
+            bytesLen=row.bytes_len,
+            suffix=suffix_of(row.filename),
+            previewState="unavailable",
+            previewError=str(error),
+        )
+    except RenderFailed as error:
+        row.render_state = "failed"
+        row.render_error = str(error)
+        row.render_ms = 0
+        session.add(row)
+        session.commit()
+        return DocumentFileView(
+            fileName=row.filename,
+            bytesLen=row.bytes_len,
+            suffix=suffix_of(row.filename),
+            previewState="failed",
+            previewError=str(error),
+        )
+
+    row.pdf = pdf
+    row.pdf_bytes_len = len(pdf)
+    row.render_state = "done"
+    row.render_error = ""
+    row.render_ms = elapsed
+    session.add(row)
+    session.commit()
+    return _file_view(row)
+
+
+@router.get("/kbs/{kb_id}/documents/{doc_id}/preview.pdf")
+def get_preview_pdf(
+    kb_id: str,
+    doc_id: str,
+    user: User = Depends(current_user),
+    session: Session = Depends(get_session),
+) -> Response:
+    """取转好的 PDF（前端 pdf.js 把它画到 canvas 上）。"""
+    kb, _member = _kb_or_404(session, kb_id, user)
+    row = session.get(KbFile, doc_id)
+    if row is None or row.kb_id != kb.id:
+        raise HTTPException(status_code=404, detail="这篇文档没有留原文件")
+    # PDF 上传的预览**就是原文件**（不复制一份，那只会让库变大一倍）
+    preview = row.pdf or (row.blob if suffix_of(row.filename) == PDF_SUFFIX else b"")
+    if not preview:
+        raise HTTPException(status_code=409, detail="预览还没生成，先请求生成预览")
+    return Response(
+        content=preview,
+        media_type="application/pdf",
+        headers={
+            "Cache-Control": "private, max-age=86400",
+            "ETag": f'"{sha256_hex(preview)}"',
+            "X-Content-Type-Options": "nosniff",
+            "Content-Disposition": _disposition("preview.pdf", inline=True),
+        },
+    )
 
 
 @router.get("/kbs/{kb_id}/assets/{asset_id}")

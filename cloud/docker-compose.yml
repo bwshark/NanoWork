@@ -1,0 +1,49 @@
+# nanowork 云端服务（生产形态）
+#
+#   docker compose up -d --build
+#   docker compose logs -f cloud
+#   docker compose exec cloud python docker/verify.py --file /data/sample.pptx
+#
+# 只暴露一个端口、一个数据卷。没有 Postgres / Redis —— 这一版后端只有
+# SQLite 与本地文件，多拉两个容器只会多两处故障点。
+# 要换 Postgres 时只改 `NANOWORK_CLOUD_DB_URL`（见 cloud/app/db.py），别的不动。
+
+services:
+  cloud:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # 拉不到官方镜像时：BASE_IMAGE=<镜像源>/library/python:3.12-slim docker compose build
+        BASE_IMAGE: ${BASE_IMAGE:-python:3.12-slim}
+        # 国内构建建议：APT_MIRROR=mirrors.aliyun.com docker compose build
+        APT_MIRROR: ${APT_MIRROR:-}
+    image: nanowork-cloud:0.1.0
+    container_name: nanowork-cloud
+    ports:
+      # 宿主机 8910 → 容器 8910。客户端（Electron/Web）默认连的就是 8910。
+      - "${NANOWORK_CLOUD_PORT:-8910}:8910"
+    environment:
+      # 四道斜杠 = sqlite 绝对路径 `/data/cloud.db`（三道会被当成相对路径，
+      # 于是数据库落在容器工作目录里，**容器一重建就没了**）
+      NANOWORK_CLOUD_DB_URL: "sqlite:////data/cloud.db"
+      # 需要从**浏览器**直连时填这里（Electron 走主进程不受 CORS 限制）。
+      # 逗号分隔，必须写全 `scheme://host:port`。
+      NANOWORK_CLOUD_ORIGINS: "${NANOWORK_CLOUD_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173,http://localhost:5176,http://127.0.0.1:5176}"
+    volumes:
+      # 命名卷而不是 bind mount：bind mount 的属主是宿主机用户，容器内的
+      # uid 10001 常常写不进去（症状是「上传成功但重启后文档全没了」——
+      # 其实是 sqlite 根本没写成功）。要备份就 `docker run --rm -v ... tar`。
+      - nanowork-data:/data
+    restart: unless-stopped
+    # 转换可能在跑（最长 180 秒），给足时间让 uvicorn 收尾而不是被 SIGKILL
+    stop_grace_period: 30s
+    # 转换是 CPU/内存密集型（40 页课件转一次约几十秒），留一个上限防止单个
+    # 恶意大文件把宿主机拖垮；不够就往上调，别删。
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+
+volumes:
+  nanowork-data:

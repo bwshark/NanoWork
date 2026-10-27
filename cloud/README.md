@@ -48,6 +48,10 @@ Python 侧门禁**，与 `nanobot/` 分开（那里是只读参考，不得为�
 
 ## 启动
 
+> **Linux / 服务器部署走 Docker**：见 [DOCKER.md](DOCKER.md)。
+> 镜像里自带 LibreOffice，「原文」视图不需要 Windows 也不依赖 Office：
+> `docker compose up -d --build`（端口与数据卷、备份、排错都在那份文档里）。
+>
 > 报错 `net::ERR_CONNECTION_REFUSED` 到 `http://127.0.0.1:8910` 的根因就是**服务没起**。
 > 按下面任一方式拉起即可，并保持该终端开启（Ctrl+C 停止）。
 

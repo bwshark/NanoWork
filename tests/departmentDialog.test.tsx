@@ -48,6 +48,10 @@ function makeGateway(overrides: Partial<KbGateway> = {}): KbGateway {
     listDocuments: vi.fn(),
     fetchAsset: vi.fn(),
     uploadAsset: vi.fn(),
+    // 「按原格式打开」的三个调用：默认桩拿不到原文件 → 抽屉退回正文（老用例行为不变）
+    getFilePreview: vi.fn(),
+    buildFilePreview: vi.fn(),
+    getPreviewPdf: vi.fn(),
     getDocument: vi.fn(),
     uploadDocument: vi.fn(),
     uploadFile: vi.fn(),
