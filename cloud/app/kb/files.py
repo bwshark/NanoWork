@@ -18,12 +18,15 @@ DOCUMENT_MIME: dict[str, str] = {
     ".md": "text/markdown; charset=utf-8",
     ".csv": "text/csv; charset=utf-8",
     ".pdf": "application/pdf",
+    # 旧版 Word（OLE 复合文档）。入库前会被转成 `.docx` 再解析，但**原文件按原样
+    # 留给用户下载**，所以这里必须是它自己的类型，不能借 `.docx` 的。
+    ".doc": "application/msword",
     ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
 }
 
-#: 兜底类型：不认识的（或旧版 .doc/.xls/.ppt）一律按二进制下载，不让浏览器猜。
+#: 兜底类型：不认识的（或旧版 .xls/.ppt）一律按二进制下载，不让浏览器猜。
 FALLBACK_MIME = "application/octet-stream"
 
 

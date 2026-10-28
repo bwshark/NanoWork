@@ -47,6 +47,9 @@ ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     # 2026-10-25 列表「更新时间」：改名 / 恢复要能反映出来。
     # 空串 = 本行产生于该字段之前 → 读的时候退回 `created_at`（见 routes._document_view）。
     ("kb_documents", "updated_at", "TEXT NOT NULL DEFAULT ''"),
+    # 2026-10-28 预览 PDF 的"渲染器版本"：这一版开始导出标题书签（大纲视图要用）。
+    # 默认 0 = 本行产生于该字段之前 → 当作"没转"，下次打开重转一次，否则老 PDF 永远没大纲。
+    ("kb_files", "render_version", "INTEGER NOT NULL DEFAULT 0"),
 )
 
 #: (索引名, 表名, 列清单)。`CREATE INDEX IF NOT EXISTS` 在 SQLite 与 PostgreSQL

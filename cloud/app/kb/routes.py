@@ -61,6 +61,7 @@ from app.kb.parsing import (
     parse_document,
 )
 from app.kb.render import (
+    RENDER_VERSION,
     RenderFailed,
     RenderUnavailable,
     is_available,
@@ -857,9 +858,13 @@ def _file_view(row: KbFile | None, grid: KbGridPreview | None = None) -> Documen
     # PDF 自己就是预览：不需要 Office，也不需要转
     if suffix == PDF_SUFFIX:
         return DocumentFileView(**base, previewState="ready", renderMs=row.render_ms)
-    if row.render_state == "done" and row.pdf:
+    # 缓存判新旧：**能重转就重转，转不了就先用旧的**。
+    # 不能重转（这台机器没 Office/LibreOffice）时仍然把老 PDF 发出去 —— 它确实还能看，
+    # 只是没有书签；把它判成 unavailable 等于为了一个新功能把已有能力关掉。
+    stale = row.render_version < RENDER_VERSION
+    if row.render_state == "done" and row.pdf and not (stale and is_available()):
         return DocumentFileView(**base, previewState="ready", renderMs=row.render_ms)
-    if row.render_state == "failed":
+    if row.render_state == "failed" and not stale:
         return DocumentFileView(
             **base,
             previewState="failed",
@@ -989,6 +994,7 @@ def build_preview(
     row.pdf = pdf
     row.pdf_bytes_len = len(pdf)
     row.render_state = "done"
+    row.render_version = RENDER_VERSION
     row.render_error = ""
     row.render_ms = elapsed
     session.add(row)

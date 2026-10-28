@@ -2,7 +2,7 @@
 
 这一组守的不是「能解析」，而是**失败时必须说清原因**：
 
-- 旧版 `.doc` / 扫描件 PDF / 没装 pypdf —— 四种失败原因对用户是四句不同的话，
+- 旧版 `.xls` / 扫描件 PDF / 没装 pypdf —— 几种失败原因对用户是几句不同的话，
   压成一句「上传失败」，用户只会反复重试同一个文件。
 - 解析成功但有内容被丢掉（PDF 某几页没文本层、docx 里的表格被摊平）→ 必须回
   `warnings`。静默丢内容会变成"我明明传了那份资料，它就是搜不到"。
@@ -115,7 +115,7 @@ def test_empty_and_unknown_formats_are_rejected_with_reasons() -> None:
     with pytest.raises(ParseError, match="空"):
         parse_document("a.txt", b"")
     with pytest.raises(ParseError, match="不支持旧版 Office"):
-        parse_document("a.doc", b"whatever")
+        parse_document("a.xls", b"whatever")
     # 图片走**专门的 OCR 提示**（只说不支持等于让人去猜怎么办），
     # 所以"未知格式"这条要用一个真的谁都不认识的扩展名来测
     with pytest.raises(ParseError, match="不支持的格式"):
@@ -256,6 +256,85 @@ def test_broken_zip_is_rejected() -> None:
         parse_document("a.docx", b"not a zip at all")
 
 
+# —— 旧版 .doc（走办公套件转 .docx）——
+
+_OLE = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
+
+
+def test_doc_is_converted_to_docx_then_parsed(monkeypatch) -> None:
+    """`.doc` 的解析链路：**转容器 → 交给 docx 解析器**（表格因此活得下来）。
+
+    这里把转换器换掉（真转换要 Word / LibreOffice，单测机器上未必有）：
+    被测的是「拿到 docx 字节之后怎么处理」以及「这次转换必须说出来」。
+    """
+    from app.kb import render
+
+    monkeypatch.setattr(
+        render,
+        "convert_to_docx",
+        lambda data: make_docx(["差旅制度", "第一条 报销流程走财务邮箱。"], table=True),
+    )
+
+    parsed = parse_document("差旅制度.doc", _OLE + b"\x00" * 64)
+
+    assert parsed.kind == "doc"
+    assert "报销流程" in parsed.text
+    # 表格结构保住了（这正是"自己解 .doc"会丢的东西）
+    assert "| 甲列 | 乙列 |" in parsed.text
+    # 降级必须说出来：用户得知道这篇是「转过一次」的
+    assert parsed.warnings and "97-2003" in parsed.warnings[0]
+
+
+def test_doc_without_converter_says_save_as_docx(monkeypatch) -> None:
+    """没有转换器时给出**可照着做**的一句话，而不是"不支持 .doc"。"""
+    from app.kb import render
+
+    def unavailable(_data: bytes) -> bytes:
+        raise render.RenderUnavailable("没有可用的文档转换器")
+
+    monkeypatch.setattr(render, "convert_to_docx", unavailable)
+
+    with pytest.raises(ParseError, match="另存为 .docx"):
+        parse_document("旧.doc", _OLE + b"\x00" * 64)
+
+
+def test_doc_conversion_failure_reports_the_reason(monkeypatch) -> None:
+    from app.kb import render
+
+    def failed(_data: bytes) -> bytes:
+        raise render.RenderFailed("com_error: 文件被占用")
+
+    monkeypatch.setattr(render, "convert_to_docx", failed)
+
+    with pytest.raises(ParseError, match="转换失败"):
+        parse_document("旧.doc", _OLE + b"\x00" * 64)
+
+
+def test_doc_that_is_really_a_docx_is_not_sent_to_the_converter(monkeypatch) -> None:
+    """改了后缀的 `.docx` 很常见（浏览器下载、网盘改名都会这样）。
+
+    直接按 docx 解析：送去转换器不但白等几秒，Word 还可能因为"格式不符"弹窗。
+    """
+    from app.kb import render
+
+    def boom(_data: bytes) -> bytes:
+        raise AssertionError("这份文件本来就是 docx，不该调用转换器")
+
+    monkeypatch.setattr(render, "convert_to_docx", boom)
+
+    parsed = parse_document("伪装.doc", make_docx(["报销流程"]))
+
+    assert parsed.kind == "doc"
+    assert "报销流程" in parsed.text
+    assert any("实际内容是 .docx" in warning for warning in parsed.warnings)
+
+
+def test_doc_with_unknown_header_is_rejected_without_guessing() -> None:
+    """既不是 OLE 也不是 zip：直接说「文件头不对」，别让 Office 去猜。"""
+    with pytest.raises(ParseError, match="文件头"):
+        parse_document("网页.doc", "<html><body>另存为 Word 的网页</body></html>".encode())
+
+
 # —— pdf ——
 
 
@@ -339,6 +418,42 @@ def test_upload_docx_is_chunked_indexed_and_searchable(client: TestClient) -> No
     assert [hit["docTitle"] for hit in hits] == ["差旅制度"]
 
 
+def test_upload_doc_is_searchable_and_keeps_the_original_bytes(client, monkeypatch) -> None:
+    """整条 `.doc` 链路：转 docx → 切块 → 可检索，且**原文件按 .doc 原样留下**。
+
+    最后一条不能省：预览与下载读的都是这份原文件，存成转换后的 docx 就等于
+    「这篇文档再也打不开原格式」——它不会报错，只会在某天有人点开时白屏。
+    """
+    from app.kb import render
+
+    monkeypatch.setattr(
+        render, "convert_to_docx", lambda data: make_docx(["报销流程：走财务邮箱。"])
+    )
+
+    token, org_id, kb_id = _org_kb(client)
+    raw = _OLE + b"\x00" * 64
+    resp = _upload(client, token, kb_id, "差旅制度.doc", raw)
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+
+    assert body["kind"] == "doc"
+    assert any("97-2003" in warning for warning in body["warnings"])
+
+    hits = client.post(
+        f"/api/orgs/{org_id}/search",
+        json={"query": "报销流程"},
+        headers=auth_headers(token),
+    ).json()
+    assert [hit["docTitle"] for hit in hits] == ["差旅制度"]
+
+    original = client.get(
+        f"/api/kbs/{kb_id}/documents/{body['id']}/file", headers=auth_headers(token)
+    )
+    assert original.status_code == 200
+    assert original.content == raw
+    assert original.headers["content-type"].startswith("application/msword")
+
+
 def test_upload_title_defaults_to_filename_and_can_be_overridden(client: TestClient) -> None:
     token, _org_id, kb_id = _org_kb(client)
 
@@ -354,7 +469,7 @@ def test_upload_title_defaults_to_filename_and_can_be_overridden(client: TestCli
 def test_upload_failures_report_the_actual_reason(client: TestClient) -> None:
     token, _org_id, kb_id = _org_kb(client)
 
-    legacy = _upload(client, token, kb_id, "旧版.doc", b"\xd0\xcf\x11\xe0")
+    legacy = _upload(client, token, kb_id, "旧版.xls", b"\xd0\xcf\x11\xe0")
     assert legacy.status_code == 422
     assert "另存为" in legacy.json()["detail"]
 

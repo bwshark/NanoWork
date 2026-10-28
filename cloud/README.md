@@ -150,7 +150,8 @@ NANOWORK_KB_EMBED_API_KEY="sk-..." \
 | `.xlsx` | 读 `sharedStrings.xml` + 各 sheet 的 `<row>`，**一行一段**（`单元格 | 单元格`） | 标准库 |
 | `.pptx` | 各 `slideN.xml` 里的 `<a:t>`，按**页号数字**排序（`slide10` 不能排到 `slide2` 前） | 标准库 |
 | `.pdf` | 抽文本层 | **可选**：`pip install -i https://pypi.org/simple pypdf` |
-| 旧版 `.doc/.xls/.ppt` | 422，提示另存为 `.docx / .xlsx / .pptx / .pdf` | —— |
+| `.doc`（Word 97-2003） | 先用 Word / LibreOffice **转成 `.docx`**，再走 `.docx` 那条（表格行列因此保得住） | **需要 Office 或 LibreOffice** |
+| 旧版 `.xls/.ppt` | 422，提示另存为 `.xlsx / .pptx / .pdf` | —— |
 | 图片（png/jpg/…） | 422，**给出三条 OCR 路径**（OCR 导出 txt / 另存带文本层的 PDF / 直接粘贴正文） | —— |
 | 扫描件 PDF | 422，提示先 OCR（空文本层不入库） | —— |
 
@@ -160,6 +161,12 @@ NANOWORK_KB_EMBED_API_KEY="sk-..." \
 
 **OCR 明确不做**：它需要模型/引擎，识别质量直接决定检索质量。能做的只有
 "把该怎么办说清楚"，这一点落在 422 的文案里。
+
+⚠️ `.doc` 是**唯一**依赖办公套件的解析路径（其余格式全是标准库 / 可选 pypdf）。
+没有 Office / LibreOffice 的部署会在 422 里说「另存为 .docx 再传」——那是能力缺失，
+不是失败。判据：`tests/test_kb_parsing.py` 的 `.doc` 五例（转换失败 / 无转换器 /
+伪装成 .doc 的 docx / 文件头不对 / 端到端可检索且原文件原样保留）+
+`tests/test_office2pdf.py::test_doc_converts_to_docx_and_parses`（真 Word 转真文件）。
 
 ```bash
 # 装可选依赖（国内镜像可能没有这个包，加 -i 走官方源）

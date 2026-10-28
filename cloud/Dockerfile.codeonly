@@ -1,0 +1,23 @@
+# 只换代码的补丁层（`cloud/app/**` 改了、不想重装 LibreOffice 时用）
+#
+# 用法（在 cloud/ 目录下）：
+#   docker build -t nanowork-cloud:0.1.0 -f Dockerfile.codeonly .
+#   docker compose up -d --no-build
+#
+# ⚠️ 三个前提，缺一条就别用这个文件、走 `docker compose build`：
+#   1. 只改了 Python 代码（`app/**`）。改了 `pyproject.toml`（多一个 pip 依赖）或
+#      下面的 `Dockerfile`（apt 包 / 字体 / 用户 / CMD）→ 必须完整重建，
+#      补丁层继承的是**旧基底**里的系统环境；
+#   2. 基底镜像 `nanowork-cloud:0.1.0` 已存在（补丁层 `FROM` 的就是它自己 —— 原地
+#      换代，不打新的 tag，`docker compose` 才会只替换容器而不重新构建）；
+#   3. 只是本机/内网快修。交付给别人的镜像仍应走完整构建，否则别人拿到的是一个
+#      「说不清装了哪些系统包」的层叠物。
+#
+# 为什么值得单独留一个文件：完整的 `Dockerfile` 里 apt 装 LibreOffice 三件套 + 中文字体
+# 要几分钟，而"只改了一行 Python"占实际迭代的绝大多数。这个文件把那条路压到十几秒，
+# 并且用文件名把"这不是正式镜像"说清楚。
+FROM nanowork-cloud:0.1.0
+
+# 只覆盖应用代码。`--no-build` 让 compose 直接起新容器：数据在命名卷 nanowork-data 里，
+# 不会因为换容器而丢。
+COPY app /app/app

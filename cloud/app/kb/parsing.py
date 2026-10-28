@@ -9,16 +9,22 @@
 | `.xlsx` | 每张工作表 → GFM 表格；图表缓存另算 | 标准库 |
 | `.pptx` | 按页取正文 + 表格 + 备注 + SmartArt + 图片 + 图表 | 标准库 |
 | `.pdf` | `pypdf` 抽文本层 | **可选依赖**（`pip install pypdf`） |
-| `.doc` / `.pdf`（扫描件）/ 图片 | 明确报错，不猜 | —— |
+| `.doc` | 办公套件转成 `.docx`，再走下面那条 | **需要 Word / LibreOffice** |
+| `.xls` / `.ppt` / `.pdf`（扫描件）/ 图片 | 明确报错，不猜 | —— |
 
-三条判断：
+四条判断：
 
 1. **`.docx` 不引 `python-docx`**：docx 就是一个 zip + 一份 OOXML，标准库 `zipfile` +
    `ElementTree` 足够把段落取出来。多一个运行时依赖，换来的只是更省 40 行代码。
-2. **`.pdf` 做成可选依赖**：PDF 文本层提取（字体编码、CID、对象流）不是几十行能写对的。
+2. **`.doc` 不在本模块里"自己解析"**：Word 97-2003 是 OLE 复合文档 + 分片表，硬写能
+   跑通，但表格会被拍平成一行串 ——「年龄」与「30」从此对不上号，而这是**最容易被
+   当成"读对了"**的丢数据。转成 `.docx` 之后走现成的 `_parse_docx`，表格、图片、
+   图注、图表全都与 `.docx` 一致。代价是这台机器上必须有办公套件，没有就明确说
+   「另存为 .docx」，而不是静默入库一篇残缺的正文。
+3. **`.pdf` 做成可选依赖**：PDF 文本层提取（字体编码、CID、对象流）不是几十行能写对的。
    自己写个"看起来能跑"的抽取器，会把 Word 导出的中文 PDF 抽成乱码——**比不支持更糟**，
    因为用户会以为资料进去了。没装 `pypdf` 时明确回 422 并给出安装命令。
-3. **扫描件不假装成功**：没有文本层的 PDF 直接报错（提示先 OCR），而不是入库一篇空文档。
+4. **扫描件不假装成功**：没有文本层的 PDF 直接报错（提示先 OCR），而不是入库一篇空文档。
    空文档会静默占用块数，搜索结果里永远不出现，用户只会觉得「传了但搜不到」。
 
 ## 文字「藏在别处」的几种情况（都踩过）
@@ -60,6 +66,7 @@ SUPPORTED_EXTENSIONS: tuple[str, ...] = (
     ".txt",
     ".md",
     ".csv",
+    ".doc",
     ".docx",
     ".pdf",
     ".xlsx",
@@ -177,6 +184,9 @@ def parse_document(filename: str, data: bytes) -> ParsedDocument:
     if suffix in (".txt", ".md", ".csv"):
         text, warnings = _decode_text(data)
         return ParsedDocument(text=text, kind="text", warnings=warnings)
+    if suffix == ".doc":
+        text, warnings, images = _parse_doc(data)
+        return ParsedDocument(text=text, kind="doc", warnings=warnings, images=images)
     if suffix == ".docx":
         text, warnings, images = _parse_docx(data)
         return ParsedDocument(text=text, kind="docx", warnings=warnings, images=images)
@@ -189,9 +199,9 @@ def parse_document(filename: str, data: bytes) -> ParsedDocument:
     if suffix == ".pptx":
         text, warnings, images = _parse_pptx(data)
         return ParsedDocument(text=text, kind="pptx", warnings=warnings, images=images)
-    if suffix in (".doc", ".xls", ".ppt"):
+    if suffix in (".xls", ".ppt"):
         raise ParseError(
-            f"不支持旧版 Office 格式（{suffix}），请另存为 .docx / .xlsx / .pptx / .pdf 再上传"
+            f"不支持旧版 Office 格式（{suffix}），请另存为 .xlsx / .pptx / .pdf 再上传"
         )
     if suffix in IMAGE_SUFFIXES:
         # 图片里的文字必须过 OCR 才能变成可检索的文本。我们不做 OCR（需要模型/引擎，
@@ -265,6 +275,70 @@ def _read_zip_member(zf: zipfile.ZipFile, name: str) -> bytes:
     if info.file_size > MAX_UNCOMPRESSED_BYTES:
         raise ParseError("文件解压后过大（疑似异常压缩包），拒绝解析")
     return zf.read(name)
+
+
+#: OLE2 复合文档的魔数（Word 97-2003 的 `.doc` 都是这个头）。
+#:
+#: 判**内容**而不是只信后缀，是因为三种"假 .doc"在真实文件里都很常见：
+#: `PK\x03\x04` 是改了后缀的 `.docx`；`{\rtf` / `<html` 是存成 `.doc` 的 RTF / 网页。
+#: 把 `.docx` 送去转换器会白等几秒（甚至被 Word 提示"格式不符"），而它本来就能解析。
+_OLE_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
+
+
+def _parse_doc(data: bytes) -> tuple[str, list[str], list[ParsedImage]]:
+    """旧版 `.doc`：换个容器（`.docx`），正文交给 `_parse_docx`。
+
+    为什么不是"自己解 .doc"（见文件头的判断 2）：表格会拍平，而表格恰好是知识库
+    最常被检索的东西。转换这一步由办公套件做（`render.convert_to_docx` → 子进程），
+    本模块只负责**分派**，不做任何二进制解析。
+
+    三种输入必须分开处理，否则给出的提示会指错方向：
+    - 真的 `.doc`（OLE 头）→ 转 `.docx`；没有转换器时明确说「另存为 .docx」；
+    - 改了后缀的 `.docx`（`PK` 头）→ 直接解析，**不**去拉起 Word（白等）；
+    - 既不是 OLE 也不是 zip → 报「文件头不对」，而不是让 Office 去猜。
+    """
+    if data.startswith(b"PK\x03\x04"):
+        text, warnings, images = _parse_docx(data)
+        return (
+            text,
+            ["这份文件的扩展名是 .doc，实际内容是 .docx，已按 .docx 解析", *warnings],
+            images,
+        )
+    if not data.startswith(_OLE_MAGIC):
+        raise ParseError(
+            "这个 .doc 的文件头不是 Word 97-2003 格式（可能是改了后缀的 RTF / 网页 / "
+            "加密文档，或文件已损坏）。请用 Word / WPS 打开后「另存为 .docx」再上传"
+        )
+
+    # 延迟 import：只有 `.doc` 才需要子进程编排，其余格式不该在 import 期依赖它
+    from app.kb import render
+
+    try:
+        docx = render.convert_to_docx(data)
+    except render.RenderUnavailable as error:
+        raise ParseError(
+            "旧版 .doc 需要服务端的 Word / LibreOffice 先转成 .docx 才能解析，"
+            "这台机器上没有可用的转换器。"
+            "请用 Word / WPS 打开后「另存为 .docx」再上传（正文、表格、图片都会完整保留）"
+        ) from error
+    except render.RenderFailed as error:
+        raise ParseError(
+            f".doc 转换失败：{error}。可在 Word / WPS 里另存为 .docx 后重传"
+        ) from error
+
+    try:
+        text, warnings, images = _parse_docx(docx)
+    except ParseError as error:
+        raise ParseError(f"这份 .doc 转成 .docx 之后仍然解析失败：{error}") from error
+    return (
+        text,
+        [
+            "这是 Word 97-2003 的 .doc，已转成 .docx 后解析"
+            "（表格、图片与 .docx 一致；极少数排版特效可能丢失）",
+            *warnings,
+        ],
+        images,
+    )
 
 
 def _parse_docx(data: bytes) -> tuple[str, list[str], list[ParsedImage]]:

@@ -86,6 +86,12 @@ FR 权威：`docs/nanowork-prd-design-v2.md` 第 3 章；逐日细节 `YYYY-MM-D
 - 知识库页布局（2026-10-25 重排版）：侧栏团队→库两级树 + 右侧「团队视图（库卡片）/ 库视图（文件列表）」，**默认不进第一个库**（否则「这个团队有什么」永远要翻好几层）。建库/新建文档/成员与权限都在弹窗或「+」菜单里 → 取值要走 `dialogRoot()`/`document`（Portal 不在挂载容器内）。
 
 ## 本机环境坑
+- ⚠️ 本机云端跑在容器里（`nanowork-cloud` / 镜像 `nanowork-cloud:0.1.0` / 8910，命名卷 `cloud_nanowork-data`）：
+  改 `cloud/app/**` 后**必须重建镜像**，`docker restart` 与 `docker compose up -d`（无 `--build`）都还是旧代码。
+  快捷：`docker build -f cloud/Dockerfile.codeonly .` + `up -d --no-build`；判新旧用
+  `docker compose exec -T cloud python -c "from app.kb.parsing import SUPPORTED_EXTENSIONS; print(SUPPORTED_EXTENSIONS)"`。
+- Docker CLI 不在 PATH：`%LOCALAPPDATA%\Programs\DockerDesktop\resources\bin\docker.exe`（per-user 安装）。
+  这台机 PowerShell 里 `netstat` / `Select-Object` 管道会报怪错 → 查端口与容器一律用 Bash + 全路径。
 - ⚠️ `HTTP_PROXY` 会让 urllib 把 127.0.0.1 交给代理 → 502（uvicorn 明明好好的）。验证脚本用 `build_opener(ProxyHandler({}))`。
 - ⚠️ 重启 8910 前确认端口 PID 已换新：旧进程占着时新进程打完成迁移日志就 `WinError 10048` 退出，而 `/health` 仍 200（老进程在答）。
 - ⚠️ 云端全量 pytest **别加 `-q`**（Windows 上不打汇总行，会被误判失败）。

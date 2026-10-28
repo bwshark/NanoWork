@@ -313,6 +313,76 @@ nanowork/
 
 ---
 
+## 云端服务（知识库 / 账号 / 同步）· Docker 部署与更新
+
+前端只是客户端：文档解析、检索、组织与账号都在 `cloud/`，生产形态是**一个容器**（镜像 `nanowork-cloud:0.1.0`，容器 `nanowork-cloud`，宿主机 `8910`）。
+部署参数（构建参数、数据卷、反向代理）见 [`cloud/DOCKER.md`](cloud/DOCKER.md)，本节只讲**改完服务端代码怎么让它在容器里生效**。
+
+### 为什么必须「重建镜像」，而不只是重启
+
+镜像里装的是**打镜像那一刻 `cloud/app/**` 的快照**，宿主机上改源码不会渗进容器。三条常见误解：
+
+| 做法 | 结果 |
+| --- | --- |
+| `docker restart nanowork-cloud` | ❌ 还是旧代码（只重启进程） |
+| `docker compose up -d` | ❌ 镜像没变 → 复用旧容器，还是旧代码 |
+| `docker compose up -d --build` | ✅ 先构建镜像再替换容器 |
+
+症状是「客户端报的还是旧文案」（例如 `.doc` 仍回「不支持旧版 Office 格式」）。一条命令即可判定镜像新旧，不需要登录态：
+
+```bash
+cd cloud
+docker compose exec cloud python -c "from app.kb.parsing import SUPPORTED_EXTENSIONS; print(SUPPORTED_EXTENSIONS)"
+# 期望包含 '.doc'；没有就说明镜像还没重建
+```
+
+### 标准流程（改了 Dockerfile / `pyproject.toml` / 系统包）
+
+```bash
+cd cloud
+docker compose build          # 首次或改了依赖时慢：apt 要装 LibreOffice 三件套 + 中文字体
+docker compose up -d          # 用新镜像替换旧容器，数据卷不动
+docker compose ps             # STATUS 应为 Up (healthy)
+```
+
+只想一条命令：`docker compose up -d --build`。拉不到 `python:3.12-slim` 时用
+`BASE_IMAGE=<镜像源>/library/python:3.12-slim docker compose build`；
+国内构建可加 `APT_MIRROR=mirrors.aliyun.com`。
+
+### 快速流程（只改了 `cloud/app/**`，约 10 秒）
+
+最慢的是 apt 那层（LibreOffice + 中文字体），纯 Python 改动不必动它：拿**当前镜像当基底**再打一层，只 `COPY app`。仓库里备了 `cloud/Dockerfile.codeonly`：
+
+```bash
+cd cloud
+docker build -t nanowork-cloud:0.1.0 -f Dockerfile.codeonly .
+docker compose up -d --no-build      # ⚠️ 漏了 --no-build 会去重新走完整构建，白等几分钟
+```
+
+这条路径只换代码，**系统包与 pip 依赖仍来自基底镜像**；改了 `Dockerfile` 或 `pyproject.toml` 必须回到标准流程。
+
+### 重建会不会丢数据
+
+不会。数据库与上传的原文件都在命名卷里（`docker-compose.yml` 里写作 `nanowork-data`，
+实际名字带项目前缀，`docker volume ls` 看到的是 **`cloud_nanowork-data`**），挂到容器 `/data`，
+重建镜像、替换容器都不碰它。仍建议升级前备份一次：
+
+```bash
+docker run --rm -v cloud_nanowork-data:/data -v "$PWD":/backup alpine \
+  tar czf /backup/nanowork-data-$(date +%Y%m%d).tar.gz -C / data
+```
+
+### 生效后怎么验（从便宜到贵）
+
+1. `curl -s http://127.0.0.1:8910/health` —— 服务活着（容器 healthy 也可能是旧代码，别只看这个）；
+2. 上面那条 `SUPPORTED_EXTENSIONS` —— 直接读容器里的代码，最快判新旧；
+3. 客户端真传一个 `.doc` —— 应提示「这是 Word 97-2003 的 .doc，已转成 .docx 后解析」，而不是旧的 422 文案。
+
+> 客户端侧：`src/lib/kb/kbUpload.ts` 的上传白名单与上面那行命中的服务端白名单是**两份代码**。
+> Web / dev server 会热更新；**打包版 Electron 需要重新 `npm run build:electron`**。
+
+---
+
 ## 已知限制 / 遗留项
 
 1. **nanobot 当前不下发 `tool_calls` / `artifacts` 事件**：服务端 SSE 仅返回 `delta.content` 纯文本。客户端已实现标准 OpenAI `tool_calls` 增量解析器（网关/代理下发时自动生效）与文本启发式 artifact 提取（code / mermaid / html 围栏块），对标 WorkBuddy 富产物内联渲染。

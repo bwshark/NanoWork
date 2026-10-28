@@ -301,6 +301,9 @@ class KbFile(SQLModel, table=True):
     pdf_bytes_len: int = 0
     #: 空串 = 还没转；`done` / `failed`（见类注释：刻意没有 pending）
     render_state: str = ""
+    #: 这份 PDF 是用哪一版渲染器转的（`render.RENDER_VERSION`）。0 = 本行产生于该字段之前。
+    #: 比当前版本低 → 当作"没转"（下次打开重转），否则加了书签也永远用不到旧 PDF 上。
+    render_version: int = 0
     #: 转换失败的原因（原样给用户看：是文件坏了、还是 Office 弹窗挡住了）
     render_error: str = ""
     #: 转换耗时（毫秒）。慢的时候要能看出是"这台机器慢"还是"文件太大"

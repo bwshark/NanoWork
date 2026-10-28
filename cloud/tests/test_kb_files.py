@@ -163,6 +163,68 @@ def test_preview_is_idempotent(client: TestClient, monkeypatch) -> None:
     assert len(calls) == 1
 
 
+def test_stale_render_version_triggers_one_refresh(client: TestClient, monkeypatch) -> None:
+    """渲染器升级后（`RENDER_VERSION` 涨了），旧 PDF 要**重转一次**。
+
+    为什么必须重转：这一版开始在 PDF 里写标题书签，前端大纲视图只认书签。不重转的话
+    历史文档的大纲永远是空的，用户只会觉得"功能没做"。
+    为什么只转一次：转换是几秒的贵操作，每次打开都转就等于白缓存。
+    """
+    owner, _member, org_id = _org(client)
+    kb = _kb(client, owner, org_id)
+    doc = _upload(client, owner, kb["id"], "制度.docx", make_docx(["差旅制度"])).json()
+    calls: list[int] = []
+
+    def _counted(data: bytes, suffix: str) -> tuple[bytes, int]:
+        calls.append(1)
+        return FAKE_PDF, 5
+
+    monkeypatch.setattr("app.kb.routes.render_pdf", _counted)
+
+    url = f"/api/kbs/{kb['id']}/documents/{doc['id']}/preview"
+    assert client.post(url, headers=auth_headers(owner)).json()["previewState"] == "ready"
+    assert len(calls) == 1
+
+    # 模拟"这张 PDF 是上一版渲染器产的"：把当前版本调高一位，行上存的还是旧值
+    from app.kb.render import RENDER_VERSION
+
+    monkeypatch.setattr("app.kb.routes.RENDER_VERSION", RENDER_VERSION + 1)
+
+    # 状态接口先说 pending（前端据此再 POST 一次）
+    assert client.get(url, headers=auth_headers(owner)).json()["previewState"] == "pending"
+    assert client.post(url, headers=auth_headers(owner)).json()["previewState"] == "ready"
+    assert len(calls) == 2
+
+    # 重转之后又稳定了，不会每次打开都转
+    client.post(url, headers=auth_headers(owner))
+    assert len(calls) == 2
+
+
+def test_stale_pdf_is_still_served_when_this_machine_cannot_rerender(
+    client: TestClient, monkeypatch
+) -> None:
+    """不能重转时，老 PDF 照发 —— 别为了"新功能没数据"把已有能力关掉。
+
+    这台机器没 Office/LibreOffice 时，版本落后导致的 pending 是个死循环：
+    前端 POST → 转换器不可用 → unavailable → 用户本来能看的原文变成了"看不了"。
+    """
+    owner, _member, org_id = _org(client)
+    kb = _kb(client, owner, org_id)
+    doc = _upload(client, owner, kb["id"], "制度.docx", make_docx(["差旅制度"])).json()
+
+    monkeypatch.setattr("app.kb.routes.render_pdf", _fake_render())
+
+    url = f"/api/kbs/{kb['id']}/documents/{doc['id']}/preview"
+    assert client.post(url, headers=auth_headers(owner)).json()["previewState"] == "ready"
+
+    from app.kb.render import RENDER_VERSION
+
+    monkeypatch.setattr("app.kb.routes.RENDER_VERSION", RENDER_VERSION + 1)
+    monkeypatch.setattr("app.kb.routes.is_available", lambda: False)
+
+    assert client.get(url, headers=auth_headers(owner)).json()["previewState"] == "ready"
+
+
 def test_render_failure_is_reported_not_hidden(client: TestClient, monkeypatch) -> None:
     """转换失败：状态是 failed + Office 的原话，不能装作"还在转"。"""
     owner, _member, org_id = _org(client)

@@ -104,3 +104,58 @@ def test_render_refuses_when_no_backend(monkeypatch) -> None:
 
     with pytest.raises(render.RenderUnavailable, match="没有可用的文档转换器"):
         render.render_pdf(b"x", ".docx")
+
+
+# —— `.doc → .docx`（上传解析用）——
+
+
+def test_docx_target_only_accepts_legacy_doc() -> None:
+    """`docx` 目标只收 `.doc`。
+
+    `.docx` / `.txt` 本来就自己解析：让它们绕一趟办公套件，快的变慢、全的变缺，
+    而且把「本地能力」变成了「部署环境必须装 Office」——这是纯倒退。
+    """
+    assert office2pdf._TARGET_SOURCES[office2pdf.TARGET_DOCX] == {".doc"}
+    assert office2pdf._TARGET_SOURCES[office2pdf.TARGET_PDF] == office2pdf.SUPPORTED_SUFFIXES
+
+
+def test_libreoffice_convert_to_matches_the_target() -> None:
+    """`--convert-to` 的取值随目标变：PDF 出 PDF、`.doc` 出 docx，其它一律空串（= 不支持）。"""
+    assert office2pdf._lo_convert_to(".doc", office2pdf.TARGET_PDF).startswith(
+        "pdf:writer_pdf_Export"
+    )
+    assert office2pdf._lo_convert_to(".doc", office2pdf.TARGET_DOCX).startswith("docx:")
+    assert office2pdf._lo_convert_to(".docx", office2pdf.TARGET_DOCX) == ""
+    assert office2pdf._lo_convert_to(".md", office2pdf.TARGET_PDF) == ""
+
+
+def test_writer_pdf_filter_asks_for_bookmarks() -> None:
+    """Word 类文件的 PDF 必须显式打开 `ExportBookmarks`。
+
+    LibreOffice 默认**不导出**书签：漏了这段 JSON，容器里转出来的 PDF 一个书签都没有，
+    前端大纲面板在所有 Linux 部署上都是空的（Windows 上却正常 —— 最难查的那种差异）。
+    """
+    for suffix in (".doc", ".docx"):
+        value = office2pdf._lo_convert_to(suffix, office2pdf.TARGET_PDF)
+        assert "ExportBookmarks" in value, suffix
+    # 表格/幻灯片没有"标题书签"这回事，别给它们的 filter 加别的结构
+    assert "ExportBookmarks" not in office2pdf._lo_convert_to(".pptx", office2pdf.TARGET_PDF)
+    assert "ExportBookmarks" not in office2pdf._lo_convert_to(".xlsx", office2pdf.TARGET_PDF)
+
+
+def test_docx_conversion_refuses_without_backend(monkeypatch) -> None:
+    """`.doc` 的可用性与预览共用同一个探测：没有转换器就说清楚，不让解析器去猜。"""
+    monkeypatch.setattr(render, "backend", lambda: "")
+
+    with pytest.raises(render.RenderUnavailable):
+        render.convert_to_docx(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1")
+
+
+def test_unknown_target_is_rejected(tmp_path, monkeypatch) -> None:
+    """目标写错（例如将来有人传 `txt`）要报「不认识的转换目标」，而不是静默产出 PDF。"""
+    monkeypatch.setattr(office2pdf, "backend", lambda: "com")
+    source = tmp_path / "a.doc"
+    source.write_bytes(b"x")
+
+    with pytest.raises(office2pdf.ConvertError, match="不认识的转换目标"):
+        office2pdf.convert(source, tmp_path / "out.txt", "txt")

@@ -1,4 +1,14 @@
-"""原文件 → 预览 PDF 的服务端编排（**不碰办公套件**，那是 `office2pdf` 的事）。
+"""原文件 → 预览 PDF（以及旧版 `.doc` → `.docx`）的服务端编排（**不碰办公套件**，
+那是 `office2pdf` 的事）。
+
+## 两个用途，同一套机制
+
+| 用途 | 目标 | 谁调用 | 为什么 |
+| --- | --- | --- | --- |
+| 「按原格式打开」 | PDF | `routes` 的预览接口 | 前端 pdf.js 只认 PDF |
+| 旧版 `.doc` 入库 | DOCX | `parsing._parse_doc` | 转成 `.docx` 后复用**唯一**的 docx 解析器 |
+
+两者都**必须**走子进程 + 超时 + 串行，所以只实现一次（`_convert`）；差别只有超时时间。
 
 ## 为什么必须隔一层子进程
 
@@ -30,11 +40,30 @@ import threading
 import time
 from pathlib import Path
 
-from app.kb.office2pdf import PDF_SUFFIX, SUPPORTED_SUFFIXES, backend
+from app.kb.office2pdf import (
+    PDF_SUFFIX,
+    SUPPORTED_SUFFIXES,
+    TARGET_DOCX,
+    TARGET_PDF,
+    backend,
+)
 
 #: 转换超时（秒）。40 页课件实测约 10 秒；180 秒留足富余，
 #: 但必须有个上限 —— 否则一个挂住的 Office 会把这个请求挂到天荒地老。
 RENDER_TIMEOUT_SECONDS = 180
+
+#: `.doc → .docx` 的超时。比预览那条**短一半**：这条路上用户在界面上等上传结果，
+#: 180 秒等下去人会以为卡死；而 `.doc` 转 `.docx` 实测 3–8 秒，90 秒已很宽松。
+PARSE_TIMEOUT_SECONDS = 90
+
+#: 渲染产物版本。**只要"PDF 里装什么"变了就必须 +1**。
+#:
+#: 当前 = 2：Word 类文件转出的 PDF 带**标题书签**（大纲视图的数据源）。
+#: 为什么必须有这个数字：`kb_files.pdf` 是缓存，一张老 PDF 会被一直复用 —— 加了书签
+#: 却不涨版本，所有历史文档的大纲永远是空的，用户看到的结论是"功能没做"，而不是
+#: "这篇还没转"。`routes._file_view` 拿它跟行上的 `render_version` 比，落后就按"没转"
+#: 处理，下次打开自动重转一次（幂等，用户只多等一次几秒）。
+RENDER_VERSION = 2
 
 #: Office 并发不安全，串行执行（见文件头）。
 _LOCK = threading.Lock()
@@ -67,6 +96,43 @@ def is_convertible(suffix: str) -> bool:
     return suffix == PDF_SUFFIX or suffix in SUPPORTED_SUFFIXES
 
 
+def _convert(data: bytes, suffix: str, target: str, timeout: int) -> bytes:
+    """写临时文件 → 子进程转换 → 读回产物。两个用途共用这一段。
+
+    `target` 只传 `office2pdf` 认得的两个值（`pdf` / `docx`），产物后缀由它决定；
+    这里用 `out.{target}` 只是给临时文件起名，真正的后缀判断不在这一层。
+    """
+    with tempfile.TemporaryDirectory(prefix="nanowork-render-") as tmp:
+        source = Path(tmp) / f"source{suffix}"
+        output = Path(tmp) / f"out.{target}"
+        source.write_bytes(data)
+        with _LOCK:
+            try:
+                completed = subprocess.run(
+                    [
+                        sys.executable,
+                        "-m",
+                        "app.kb.office2pdf",
+                        str(source),
+                        str(output),
+                        "--to",
+                        target,
+                    ],
+                    capture_output=True,
+                    timeout=timeout,
+                    cwd=str(_PACKAGE_ROOT),
+                )
+            except subprocess.TimeoutExpired as error:
+                raise RenderFailed(
+                    f"转换超时（超过 {timeout} 秒）：转换器可能弹出了对话框没关"
+                ) from error
+        if completed.returncode != 0 or not output.exists():
+            # stderr 最后一行是人能读的那句（`com_error: ...`），别把整个 traceback 塞给用户
+            lines = (completed.stderr or b"").decode("utf-8", "replace").strip().splitlines()
+            raise RenderFailed(lines[-1][:300] if lines else "转换失败（转换器没有产出文件）")
+        return output.read_bytes()
+
+
 def render_pdf(data: bytes, suffix: str) -> tuple[bytes, int]:
     """原文件字节 → `(PDF 字节, 耗时毫秒)`。
 
@@ -84,24 +150,17 @@ def render_pdf(data: bytes, suffix: str) -> tuple[bytes, int]:
         )
 
     started = time.monotonic()
-    with tempfile.TemporaryDirectory(prefix="nanowork-render-") as tmp:
-        source = Path(tmp) / f"source{suffix}"
-        target = Path(tmp) / f"preview{PDF_SUFFIX}"
-        source.write_bytes(data)
-        with _LOCK:
-            try:
-                completed = subprocess.run(
-                    [sys.executable, "-m", "app.kb.office2pdf", str(source), str(target)],
-                    capture_output=True,
-                    timeout=RENDER_TIMEOUT_SECONDS,
-                    cwd=str(_PACKAGE_ROOT),
-                )
-            except subprocess.TimeoutExpired as error:
-                raise RenderFailed(
-                    f"转换超时（超过 {RENDER_TIMEOUT_SECONDS} 秒）：转换器可能弹出了对话框没关"
-                ) from error
-        if completed.returncode != 0 or not target.exists():
-            # stderr 最后一行是人能读的那句（`com_error: ...`），别把整个 traceback 塞给用户
-            lines = (completed.stderr or b"").decode("utf-8", "replace").strip().splitlines()
-            raise RenderFailed(lines[-1][:300] if lines else "转换失败（转换器没有产出文件）")
-        return target.read_bytes(), int((time.monotonic() - started) * 1000)
+    pdf = _convert(data, suffix, TARGET_PDF, RENDER_TIMEOUT_SECONDS)
+    return pdf, int((time.monotonic() - started) * 1000)
+
+
+def convert_to_docx(data: bytes) -> bytes:
+    """旧版 `.doc` → `.docx` 字节（**给解析用**，不是预览）。
+
+    为什么借这条链路、而不是让 `parsing` 自己调办公套件：COM 必须待在子进程里
+    （见文件头），而「子进程 + 超时 + 串行」这套实现在这里已经有一份，抄一遍必然
+    漏掉其中一条。`parsing` 只负责把结果交给 `_parse_docx`。
+    """
+    if not is_available():
+        raise RenderUnavailable("服务端没有可用的文档转换器（Office 或 LibreOffice）")
+    return _convert(data, ".doc", TARGET_DOCX, PARSE_TIMEOUT_SECONDS)

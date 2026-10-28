@@ -103,6 +103,21 @@ docker compose up -d --build      # 重建并滚动替换
 docker image prune -f             # 清掉旧层
 ```
 
+⚠️ **`docker restart` 与 `docker compose up -d`（不带 `--build`）都不会让新代码进容器** ——
+镜像里是打镜像那一刻的 `app/**` 快照。典型的症状是"客户端报的还是旧文案"。
+
+只改了 `app/**` 时代价更小的做法（约 10 秒，不重装 LibreOffice）：
+
+```bash
+docker build -t nanowork-cloud:0.1.0 -f Dockerfile.codeonly .
+docker compose up -d --no-build
+docker compose exec cloud python -c \
+  "from app.kb.parsing import SUPPORTED_EXTENSIONS; print(SUPPORTED_EXTENSIONS)"
+```
+
+判新旧不用登录：上面那条命令直接读容器里的代码。**完整说明见仓库根 `README.md` 的
+「云端服务 · Docker 部署与更新」一节。**
+
 启动时会自动跑 `create_all()` + `ensure_columns()`（只加列不改不删），
 老库可以直接用。**仍然建议升级前先备份**（见第 3 节）。
 

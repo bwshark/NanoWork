@@ -49,8 +49,14 @@ describe('precheckUpload', () => {
     expect(message).toContain('.docx');
   });
 
-  it('旧版 .doc 在这里就拦（服务端提示的是「另存为」，但根本不必发出去）', () => {
-    expect(precheckUpload({ name: '旧.doc', size: 1024 })).toContain('.doc');
+  it('旧版 .doc 放行：服务端会用 Office / LibreOffice 转成 .docx 再解析', () => {
+    expect(precheckUpload({ name: '旧.doc', size: 1024 })).toBeNull();
+    expect(precheckUpload({ name: '旧.DOC', size: 1024 })).toBeNull();
+  });
+
+  it('旧版 .xls / .ppt 仍然在这里拦（服务端只加开了 .doc 这一条）', () => {
+    expect(precheckUpload({ name: '旧.xls', size: 1024 })).toContain('.xls');
+    expect(precheckUpload({ name: '旧.ppt', size: 1024 })).toContain('.ppt');
   });
 
   it('无后缀文件也拦住', () => {
@@ -67,6 +73,7 @@ describe('precheckUpload', () => {
 describe('来源格式的中文名', () => {
   it('支持的格式都有中文名（缺一个界面上就是裸英文）', () => {
     expect(Object.keys(KB_KIND_LABELS).sort()).toEqual([
+      'doc',
       'docx',
       'pdf',
       'pptx',
@@ -75,6 +82,8 @@ describe('来源格式的中文名', () => {
     ]);
     expect(kindLabel('pdf')).toBe('PDF');
     expect(kindLabel('docx')).toBe('Word');
+    // 新旧 Word 在界面上都叫「Word」：用户不关心容器格式
+    expect(kindLabel('doc')).toBe('Word');
     expect(kindLabel('xlsx')).toBe('Excel');
     expect(kindLabel('pptx')).toBe('PPT');
   });
@@ -85,6 +94,6 @@ describe('来源格式的中文名', () => {
   });
 
   it('未知格式原样返回（后端再加格式时，显示原名也比空白强）', () => {
-    expect(kindLabel('doc')).toBe('doc');
+    expect(kindLabel('rtf')).toBe('rtf');
   });
 });
