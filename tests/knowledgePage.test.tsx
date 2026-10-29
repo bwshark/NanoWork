@@ -323,6 +323,78 @@ describe('检索', () => {
     expect(hits!.textContent).toContain('走财务邮箱');
   });
 
+  it('同一篇文档的多条命中收成一张卡，并点得开（不再是一块一卡、点不动）', async () => {
+    const HIT2 = { ...HIT, chunkId: 'c2', score: 0.31, snippet: '住宿标准：一线城市 500 元。' };
+    const gateway = makeGateway({
+      search: vi.fn().mockResolvedValue({ ok: true, data: [HIT, HIT2] }),
+    });
+    const host = render(gateway);
+    await flush();
+    await enterKb(host);
+
+    setInputValue(host.querySelector('[data-testid="kb-query"]') as HTMLInputElement, '报销');
+    await act(async () => {
+      click(buttonByText(host, '检索'));
+      await flush();
+    });
+
+    // 两条命中 → 一张卡（同一篇文档），标题只出现一次
+    expect(host.querySelectorAll('[data-testid="kb-hit-doc-d1"]').length).toBe(1);
+    expect(host.querySelector('[data-testid="kb-hits-count"]')!.textContent).toContain(
+      '2 条命中 · 1 篇文档',
+    );
+
+    await act(async () => {
+      click(host.querySelector('[data-testid="kb-hit-doc-d1"]'));
+      await flush();
+    });
+
+    // 点命中 = 按 id 拉正文（不是「点不动」也不是「只换了下选中态」）
+    expect(gateway.getDocument).toHaveBeenCalledWith('k1', 'd1');
+    // 抽屉在 Portal 里，只能从 document 找
+    await waitForSettled(() => document.querySelector('[data-testid="kb-doc-view-title"]') !== null);
+    expect(document.querySelector('[data-testid="kb-doc-view-title"]')!.textContent).toContain(
+      '差旅制度',
+    );
+  });
+
+  it('命中片段里的查询词被标出来（否则要自己逐字比对）', async () => {
+    const host = render(makeGateway());
+    await flush();
+    await enterKb(host);
+
+    setInputValue(host.querySelector('[data-testid="kb-query"]') as HTMLInputElement, '报销');
+    await act(async () => {
+      click(buttonByText(host, '检索'));
+      await flush();
+    });
+
+    const marks = [...host.querySelectorAll('[data-testid="kb-hits"] mark')].map(
+      (node) => node.textContent,
+    );
+    expect(marks).toContain('报销');
+  });
+
+  it('「清空」收起结果面板（输入框留着，改词再搜是常态）', async () => {
+    const host = render(makeGateway());
+    await flush();
+    await enterKb(host);
+
+    setInputValue(host.querySelector('[data-testid="kb-query"]') as HTMLInputElement, '报销');
+    await act(async () => {
+      click(buttonByText(host, '检索'));
+      await flush();
+    });
+
+    await act(async () => {
+      click(host.querySelector('[data-testid="kb-hits-clear"]'));
+      await flush();
+    });
+
+    expect(host.querySelector('[data-testid="kb-hits"]')).toBeNull();
+    expect((host.querySelector('[data-testid="kb-query"]') as HTMLInputElement).value).toBe('报销');
+  });
+
   it('服务端 403 原样报出来（不静默变成空结果）', async () => {
     const gateway = makeGateway({
       search: vi.fn().mockResolvedValue({

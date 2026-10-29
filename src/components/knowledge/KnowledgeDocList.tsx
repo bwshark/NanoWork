@@ -24,6 +24,7 @@ import type { KbDocument, KbSearchHit } from "@/lib/kb/kbClient";
 import { kindLabel } from "@/lib/kb/kbUpload";
 import { docUpdatedAt, formatRelativeTime } from "@/lib/kb/kbDocumentMeta";
 import { KbDocIcon, KbEmpty } from "@/components/knowledge/kbAtoms";
+import { KbSearchResults } from "@/components/knowledge/KbSearchResults";
 
 export type KbDocView = "list" | "grid";
 
@@ -53,6 +54,10 @@ export interface KnowledgeDocListProps {
     hits: readonly KbSearchHit[] | null;
     /** 引擎是纯词法（不命中同义词要明说，否则用户以为库坏了） */
     lexicalOnly: boolean;
+    /** 点命中 → 打开那篇文档看全文（片段只是上下文，判断不了是不是要的那篇） */
+    onOpenHit: (hit: KbSearchHit) => void;
+    /** 关掉结果面板。不清输入框：改词再搜是常态 */
+    onClear: () => void;
   };
   actions: {
     /** 点行 = 打开阅读抽屉（正文另取，见 `getDocument`） */
@@ -282,28 +287,14 @@ export function KnowledgeDocList({
       )}
 
       {search.hits !== null && search.error === "" && (
-        <Box sx={{ px: 2.5, py: 1 }} data-testid="kb-hits">
-          {search.hits.length === 0 ? (
-            <Typography sx={{ fontSize: 12.5, color: "text.secondary" }}>
-              没有命中。换个关键词试试
-              {search.lexicalOnly ? "（当前是词法匹配，同义词不会命中）" : "。"}
-            </Typography>
-          ) : (
-            <Stack spacing={0.75}>
-              {search.hits.map((hit) => (
-                <Paper key={hit.chunkId} variant="outlined" sx={{ p: 1.25, borderRadius: 1.5 }}>
-                  <Stack direction="row" spacing={1} alignItems="center">
-                    <Typography sx={{ fontSize: 12.5, fontWeight: 600 }}>{hit.docTitle}</Typography>
-                    <Chip size="small" variant="outlined" label={hit.score.toFixed(3)} />
-                  </Stack>
-                  <Typography sx={{ fontSize: 12, color: "text.secondary", mt: 0.5 }}>
-                    {hit.snippet}
-                  </Typography>
-                </Paper>
-              ))}
-            </Stack>
-          )}
-        </Box>
+        <KbSearchResults
+          hits={search.hits}
+          query={search.query}
+          lexicalOnly={search.lexicalOnly}
+          kindOf={(docId) => docs.find((doc) => doc.id === docId)?.kind}
+          onOpenHit={search.onOpenHit}
+          onClear={search.onClear}
+        />
       )}
 
       {error !== "" && (

@@ -1149,6 +1149,15 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
                   error: searchError,
                   hits,
                   lexicalOnly: retrieval === null || retrieval.embedder === "off",
+                  /* 点命中 = 打开那篇文档看全文。用 docId 而不是先找列表里的那条：
+                     全文抽屉自己会按 id 拉正文，列表里没有的记录也能打开；
+                     先把 viewDetail 清掉，否则会先闪一眼上一篇的正文。 */
+                  onOpenHit: (hit) => {
+                    setViewDocId(hit.docId);
+                    setViewDetail(null);
+                    setViewError("");
+                  },
+                  onClear: resetSearch,
                 }}
                 actions={{
                   onOpen: (doc) => {
