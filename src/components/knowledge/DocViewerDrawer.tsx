@@ -48,6 +48,18 @@ import type { KbWorkbook } from "@/lib/kb/workbook";
 import { docUpdatedAt, formatRelativeTime } from "@/lib/kb/kbDocumentMeta";
 import { kindLabel } from "@/lib/kb/kbUpload";
 import { KbDocIcon } from "@/components/knowledge/kbAtoms";
+import { EdgeResizeHandle } from "@/components/EdgeResizeHandle";
+
+/** 阅读抽屉的默认宽度（与「可拖」之前写的 860 一致：老用户的第一眼不变） */
+const DEFAULT_WIDTH = 860;
+/**
+ * 再窄，表格和 PDF 就只剩一条缝了。
+ *
+ * 为什么上限是**整窗宽**、而产物面板那种分栏面板要留主内容区：这个抽屉是覆盖式
+ * 的，铺满整屏本来就是它的合法状态（右上角就有「全宽」按钮），拖动只是把这个
+ * 状态做成连续的，不需要额外的保守值。
+ */
+const MIN_WIDTH = 480;
 
 /**
  * 阅读抽屉的三个视图。
@@ -161,6 +173,17 @@ export function DocViewerDrawer({
   const editorRef = useRef<DocEditorHandle | null>(null);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const [wide, setWide] = useState(false);
+  /**
+   * 抽屉宽度（拖动改它）。
+   *
+   * 为什么不跟 `wide` 合并成一个值：`wide` 是「跟随窗口」的一态，窗口缩放后
+   * 它要重新铺满；而拖动出来的是一个**固定像素**宽度。两者语义不同，合并之后
+   * 缩窗口会把用户拖好的宽度悄悄改掉。
+   */
+  const [width, setWidth] = useState(DEFAULT_WIDTH);
+  /** 拖动中：暂时摘掉宽度过渡，否则宽度追不上指针（看起来像「粘手」） */
+  const [resizing, setResizing] = useState(false);
+
   const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
   /**
    * 草稿：`null` = 还没动过（显示服务端的正文）。
@@ -430,6 +453,29 @@ export function DocViewerDrawer({
     if (ok) setDraft(null);
   };
 
+  /** 拖宽的上下限（上限随窗口走：窗口一缩，拖过的宽度也不该把抽屉顶出屏幕） */
+  const maxWidth = Math.max(MIN_WIDTH, window.innerWidth);
+  const clampWidth = (value: number) => Math.max(MIN_WIDTH, Math.min(value, maxWidth));
+
+  /** 抓手每帧给一个新宽度；从「全宽」开始拖要先退出全宽，否则 sx 还是 100% */
+  const handleResize = (next: number) => {
+    if (wide) setWide(false);
+    setWidth(clampWidth(next));
+  };
+
+  /**
+   * 窗口缩小时把拖过的宽度收回来。
+   *
+   * `maxWidth: 100%` 只兜住了「画得出去」，`aria-valuenow` 和下一次拖动的基准
+   * 都还是那个超宽的旧值 —— 用户会看到一条拖不动的抓手（起点在屏幕外）。
+   */
+  useEffect(() => {
+    const onResize = () =>
+      setWidth((previous) => Math.max(MIN_WIDTH, Math.min(previous, window.innerWidth)));
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
   const requestClose = () => {
     if (dirty) {
       setConfirmLeave(true);
@@ -470,13 +516,29 @@ export function DocViewerDrawer({
         "aria-modal": "true",
         "aria-labelledby": "kb-doc-view-title",
         sx: {
-          width: wide ? "100%" : { xs: "100%", sm: 860 },
+          // 全宽那一态优先（跟随窗口），否则用拖动定下的像素宽度；窄屏仍旧铺满
+          width: wide ? "100%" : { xs: "100%", sm: width },
           maxWidth: "100%",
           bgcolor: "background.paper",
           backgroundImage: "none",
+          // 拖动中摘掉过渡：留着的话宽度会慢半拍追指针（看起来像「粘手」）
+          transition: resizing ? "none" : undefined,
         },
       }}
     >
+      {/* 左边缘拖宽：表格、PDF 这类内容越宽越好读，固定 860 只是一个平均值。
+          全宽时没有「边缘」可拖，抓手一并撤掉 —— 与产物面板同一套交互 */}
+      {!wide && (
+        <EdgeResizeHandle
+          width={width}
+          min={MIN_WIDTH}
+          max={maxWidth}
+          ariaLabel="拖动调整文档预览宽度"
+          onResize={handleResize}
+          onDraggingChange={setResizing}
+          onReset={() => setWidth(DEFAULT_WIDTH)}
+        />
+      )}
       <Stack direction="column" sx={{ height: "100%", minHeight: 0 }}>
         <Stack
           direction="row"
