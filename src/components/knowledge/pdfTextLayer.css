@@ -1,0 +1,74 @@
+/**
+ * 自建文本层的样式（方案 A：不引 pdf.js 官方 `pdf_viewer.css`）。
+ *
+ * ## 为什么这几行必须精确
+ *
+ * 文本层是**透明的一层字压在画布上**：span 用绝对定位摆在"那个字在画布上的位置"，
+ * 字号等于画布上那个字的字高，颜色透明 —— 用户看到的是画布，选中和复制拿到的却是
+ * 这层 span。任何一条写错，症状都不是报错，而是"能拖选但选区和文字对不上"。
+ *
+ * 五条都是必需的：
+ * 1. `.textLayer` 铺满页面并 `overflow: hidden`：超出的字（旋转、页边）不参与选中；
+ * 2. `white-space: pre`：保留 PDF 里的空格与缩进，否则复制出来的中文会挤成一片；
+ * 3. `transform-origin: 0 0`：行内水平缩放（`scaleX`）以字的左上角为锚点，
+ *    换成默认的 `50% 50%` 会让每个字从中间往两边撑，越靠右偏得越多；
+ * 4. 颜色透明但**不能** `visibility: hidden` / `display: none`：那两个字都不参与选区；
+ * 5. `::selection` 必须给背景色：透明字选中后的高亮由这条画出来，否则选了看不出。
+ */
+
+.kbPdfPage {
+  position: relative;
+  margin: 0 auto 12px;
+  background: #fff;
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.28);
+  /* 缩放后 canvas 与文本层同时换尺寸，避免出现"画布已变、字还没变"的半帧 */
+  contain: layout paint;
+}
+
+.kbPdfCanvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: block;
+}
+
+.kbPdfTextLayer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  overflow: hidden;
+  line-height: 1;
+  text-align: initial;
+  text-size-adjust: none;
+  forced-color-adjust: none;
+  transform-origin: 0 0;
+  z-index: 2;
+  /* 让拖选能落到这一层：不然点到的是下面的 canvas */
+  cursor: text;
+}
+
+.kbPdfTextLayer span,
+.kbPdfTextLayer br {
+  color: transparent;
+  position: absolute;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0% 0%;
+}
+
+.kbPdfTextLayer span::selection,
+.kbPdfTextLayer br::selection {
+  background: rgba(64, 132, 255, 0.35);
+}
+
+/* 空页面（没有文本层）也要能拖过：否则从上一页选到下一页会把整段跳掉 */
+.kbPdfTextLayer .endOfContent {
+  display: block;
+  position: absolute;
+  inset: 100% 0 0;
+  z-index: -1;
+  cursor: default;
+  user-select: none;
+}
