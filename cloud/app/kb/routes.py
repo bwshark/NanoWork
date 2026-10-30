@@ -53,6 +53,7 @@ from app.kb.models import (
     roles_to_json,
 )
 from app.kb.office2pdf import PDF_SUFFIX
+from app.kb.personal import ensure_personal_kb
 from app.kb.parsing import (
     ParsedImage,
     ParseError,
@@ -458,6 +459,30 @@ def list_kbs(
     ids = set(visible_kb_ids(session, org_id, member))
     rows = session.exec(select(KnowledgeBase).where(KnowledgeBase.org_id == org_id)).all()
     return [_kb_view(session, kb) for kb in rows if kb.id in ids]
+
+
+#: 个人知识库的返回体：私有组织 id（检索要它）+ 那本库本身。
+#:
+#: `orgId` 必须回给客户端：检索接口是按组织走的（`POST /api/orgs/{org}/search`），
+#: 而私有组织刻意不出现在团队列表里 —— 客户端只能从这里拿到它。
+class PersonalKbView(BaseModel):
+    orgId: str
+    kb: KbView
+
+
+@router.get("/kb/personal", response_model=PersonalKbView)
+def get_personal_kb(
+    user: User = Depends(current_user),
+    session: Session = Depends(get_session),
+) -> PersonalKbView:
+    """取出（首次访问时创建）我的个人知识库。
+
+    语义是**取或建**，不是纯读：个人库不需要「新建」这个动作 —— 它属于每个人
+    本来就有的东西，让用户先点一次「新建」再开始写，只会多一步没有信息量的操作。
+    创建细节见 `kb/personal.py`。
+    """
+    _org, kb = ensure_personal_kb(session, user)
+    return PersonalKbView(orgId=kb.org_id, kb=_kb_view(session, kb))
 
 
 def _writable_kb_or_404(

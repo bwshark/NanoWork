@@ -17,7 +17,7 @@ from app.auth.security import new_user_id
 from app.db import get_session
 from app.orgs.guards import membership_or_404 as _membership_or_404
 from app.orgs.guards import require_role as _require_role
-from app.orgs.models import Organization, OrgMember
+from app.orgs.models import ORG_KIND_PERSONAL, Organization, OrgMember
 from app.orgs.roles import (
     ROLE_ADMIN,
     ROLE_MEMBER,
@@ -102,11 +102,19 @@ def list_orgs(
     user: User = Depends(current_user),
     session: Session = Depends(get_session),
 ) -> list[OrgSummary]:
+    """我加入的**团队**（个人空间不算团队，见下）。
+
+    `kind=personal` 的组织是个人知识库的私有容器（`kb/personal.py`）。把它列进团队树，
+    用户会以为「我加入了一个只有我一个人的公司」，而且它和真实团队在侧栏里长得一模一样 ——
+    个人库有专属入口，这条不该出现。
+    """
     memberships = session.exec(select(OrgMember).where(OrgMember.user_id == user.id)).all()
     out: list[OrgSummary] = []
     for membership in memberships:
         org = session.get(Organization, membership.org_id)
         if org is None:  # 组织被删但成员行还在（脏数据）：跳过而不是 500
+            continue
+        if org.kind == ORG_KIND_PERSONAL:  # 私有空间不是团队
             continue
         count = len(session.exec(select(OrgMember).where(OrgMember.org_id == org.id)).all())
         out.append(
@@ -154,9 +162,17 @@ def add_member(
     user: User = Depends(current_user),
     session: Session = Depends(get_session),
 ) -> MemberView:
-    """按邮箱加人（MVP 不做邀请邮件：对方必须**已有账户**）。"""
+    """按邮箱加人（MVP 不做邀请邮件：对方必须**已有账户**）。
+
+    **私有空间（个人知识库）不允许加人**：那里的资料写着「仅自己可见」。`kind` 只是
+    元数据，不在这里挡一道，任何拿到自己 org_id 的调用方都能把同事拉进个人空间 ——
+    隐私就成了界面上的一句话。
+    """
     actor = _membership_or_404(session, org_id, user)
     _require_role(actor, ROLE_ADMIN)
+    org = session.get(Organization, org_id)
+    if org is not None and org.kind == ORG_KIND_PERSONAL:
+        raise HTTPException(status_code=403, detail="个人空间不能添加成员")
     if not is_valid_role(payload.role):
         raise HTTPException(status_code=422, detail="角色不存在")
     if not can_grant(actor.role, payload.role):

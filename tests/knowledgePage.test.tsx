@@ -53,6 +53,19 @@ const KB = {
   createdAt: 'x',
 };
 
+/** 个人库：与团队库**不同 id**，且挂在私有组织下（服务端不对团队列表暴露它） */
+const PERSONAL_ORG_ID = 'po1';
+const PERSONAL_KB = {
+  id: 'pk1',
+  orgId: PERSONAL_ORG_ID,
+  name: '我的个人知识库',
+  description: '',
+  allowedRoles: ['member', 'admin', 'owner'],
+  allowedDepartments: [],
+  documentCount: 0,
+  createdAt: 'x',
+};
+
 const DEPT = {
   id: 'd1',
   orgId: 'o1',
@@ -85,6 +98,8 @@ const RETRIEVAL_OFF = {
 function makeGateway(overrides: Partial<KbGateway> = {}): KbGateway {
   return {
     listOrgs: vi.fn().mockResolvedValue({ ok: true, data: [ORG] }),
+    // 个人库：默认给一本**空**的（老用例都在团队视图里，个人库只负责不让侧栏闪空）
+    getPersonal: vi.fn().mockResolvedValue({ ok: true, data: { orgId: PERSONAL_ORG_ID, kb: PERSONAL_KB } }),
     retrievalInfo: vi.fn().mockResolvedValue({ ok: true, data: RETRIEVAL_OFF }),
     reindex: vi
       .fn()
@@ -186,13 +201,24 @@ describe('未登录 / 空团队', () => {
     expect(buttonByText(host, '去登录')).toBeTruthy();
   });
 
-  it('没有任何团队时给出创建入口（不假装在加载）', async () => {
-    const gateway = makeGateway({ listOrgs: vi.fn().mockResolvedValue({ ok: true, data: [] }) });
+  it('没有任何团队时落在个人库，而不是一张「请先建团队」的卡片', async () => {
+    /*
+     * 这条判据 2026-10-30 变了：个人库上线后，「一个团队都没有」的人进这一页
+     * 看到的不该是「先建团队」——他自己的库明明已经在那儿、能直接写。
+     * 建团队的入口仍在（侧栏「团队知识库」右边的 +），所以不算丢功能。
+     */
+    const gateway = makeGateway({
+      listOrgs: vi.fn().mockResolvedValue({ ok: true, data: [] }),
+      listKbs: vi.fn().mockResolvedValue({ ok: true, data: [] }),
+    });
     const host = render(gateway);
     await flush();
 
-    expect(host.textContent).toContain('还没有加入任何团队');
-    expect(host.querySelector('[data-testid="new-org-name"]')).toBeTruthy();
+    expect(host.textContent).toContain('个人知识库仅自己可见');
+    expect(host.querySelector('[data-testid="kb-add-task"]')).toBeTruthy();
+    // 建团队的路没被挡住：侧栏的「新建团队」还在
+    expect(host.querySelector('[data-testid="kb-new-team"]')).toBeTruthy();
+    expect(host.querySelector('[data-testid="new-org-name"]')).toBeNull();
   });
 });
 
@@ -1651,5 +1677,155 @@ describe('编辑正文', () => {
     expect(dialogRoot().querySelector('[data-testid="kb-doc-view-body"]')?.textContent).toContain(
       '报销流程',
     );
+  });
+});
+
+/**
+ * 个人知识库（2026-10-30）。
+ *
+ * 它的判据与团队库有三处**必须不一样**，写在这里是为了防止「以后统一一下」：
+ * 1. 谁都能进（不需要先有团队），而且不挂在任何团队下面；
+ * 2. 没有「成员与权限」——这本库没有第二个成员，画一个能改的权限开关就是撒谎；
+ * 3. 底部列表用的是**个人库自己的 kbId**，检索也走私有组织：串号的话用户会
+ *    在「我的库」里看到同事的资料，那是最严重的一类 bug。
+ */
+describe('个人知识库', () => {
+  const PERSONAL_DOC = {
+    id: 'pd1',
+    kbId: 'pk1',
+    title: '我的笔记',
+    chars: 12,
+    chunkCount: 1,
+    createdAt: 'x',
+  };
+
+  async function enterPersonal(host: ParentNode) {
+    await act(async () => {
+      click(host.querySelector('[data-testid="kb-personal"]'));
+      await flush();
+    });
+  }
+
+  it('侧栏点一下就能进：头像 / 副标题 / 添加任务，文档按个人库 id 取', async () => {
+    const listDocuments = vi.fn((kbId: string) =>
+      Promise.resolve<KbApiResult<KbDocument[]>>({
+        ok: true,
+        data: kbId === PERSONAL_KB.id ? [PERSONAL_DOC] : [DOC],
+      }),
+    );
+    const search = vi.fn().mockResolvedValue({ ok: true, data: [] });
+    const host = render(makeGateway({ listDocuments, search }));
+    await flush();
+
+    // 侧栏里它是一等公民（不是灰掉的占位）
+    expect(host.querySelector('[data-testid="kb-personal"]')?.textContent).toContain(
+      '我的个人知识库',
+    );
+
+    await enterPersonal(host);
+
+    expect(host.textContent).toContain('个人知识库仅自己可见');
+    expect(host.querySelector('[data-testid="kb-personal-avatar"]')).toBeTruthy();
+    expect(host.querySelector('[data-testid="kb-add-task"]')).toBeTruthy();
+    expect(listDocuments).toHaveBeenCalledWith(PERSONAL_KB.id, { trashed: false });
+    expect(host.textContent).toContain('我的笔记');
+
+    // 检索走**私有组织**：走成团队组织就会去搜上一个团队的资料
+    await act(async () => {
+      setInputValue(host.querySelector('[data-testid="kb-query"]') as HTMLInputElement, '笔记');
+      click(buttonByText(host, '检索'));
+      await flush();
+    });
+    expect(search).toHaveBeenCalledWith(PERSONAL_ORG_ID, {
+      query: '笔记',
+      kbId: PERSONAL_KB.id,
+    });
+  });
+
+  it('检索说明换成「仅自己可见」，不再说「团队共享资料」', async () => {
+    /*
+     * 那句说明是**权限承诺**，不是装饰：写着「团队共享资料 · 按角色可见」的个人库
+     * 会让用户以为同事看得见，于是不敢放东西（或者反过来放心放了）。
+     */
+    const host = render(makeGateway());
+    await flush();
+    await enterPersonal(host);
+
+    const caption = host.querySelector('[data-testid="kb-caption"]')?.textContent ?? '';
+    expect(caption).toContain('仅自己可见');
+    expect(caption).not.toContain('团队共享资料');
+  });
+
+  it('没有「成员与权限」：只有一条写明「仅自己可见」的灰项', async () => {
+    const host = render(makeGateway());
+    await flush();
+    await enterPersonal(host);
+
+    await act(async () => {
+      click(host.querySelector('[data-testid="kb-more-menu"]'));
+      await flush();
+    });
+    const scope = document.querySelector('[data-testid="kb-menu-personal-scope"]');
+    expect(scope).toBeTruthy();
+    expect(scope?.textContent).toContain('仅自己可见');
+    expect(document.querySelector('[data-testid="kb-menu-members"]')).toBeNull();
+  });
+
+  it('在个人库里新建一篇后仍停在个人库（刷新团队库计数不该把选中项清掉）', async () => {
+    /*
+     * 这条是真实回归：入库之后页面会顺手重拉团队库列表，而那段代码在
+     * 「选中的库不在团队列表里」时会清空选中项 —— 个人库永远不在那份列表里。
+     * 没挡住的表现是：写完一篇，界面跳回团队视图（看起来像「存丢了」）。
+     */
+    const listDocuments = vi.fn((kbId: string) =>
+      Promise.resolve<KbApiResult<KbDocument[]>>({
+        ok: true,
+        data: kbId === PERSONAL_KB.id ? [PERSONAL_DOC] : [DOC],
+      }),
+    );
+    const uploadDocument = vi.fn().mockResolvedValue({ ok: true, data: PERSONAL_DOC });
+    const host = render(makeGateway({ listDocuments, uploadDocument }));
+    await flush();
+    await enterPersonal(host);
+    await pickMenu(host, 'kb-add-menu', 'new-doc');
+
+    setInputValue(dialogRoot().querySelector('[data-testid="doc-title"]') as HTMLInputElement, '我的笔记');
+    setInputValue(
+      dialogRoot().querySelector('[data-testid="doc-content"]') as HTMLTextAreaElement,
+      '第一篇私人笔记。',
+    );
+    await act(async () => {
+      click(dialogRoot().querySelector('[data-testid="doc-submit"]'));
+      await flush();
+    });
+
+    expect(uploadDocument).toHaveBeenCalledWith(PERSONAL_KB.id, {
+      title: '我的笔记',
+      content: '第一篇私人笔记。',
+    });
+    // 还在个人库：副标题与「添加任务」都还在，团队视图的卡片没有回来
+    expect(host.textContent).toContain('个人知识库仅自己可见');
+    expect(host.querySelector('[data-testid="kb-add-task"]')).toBeTruthy();
+    expect(host.querySelector('[data-testid="kb-card-k1"]')).toBeNull();
+  });
+
+  it('切回团队之后就恢复团队那套菜单（个人库不是「一种视图」而是另一本库）', async () => {
+    const host = render(makeGateway());
+    await flush();
+    await enterPersonal(host);
+    expect(host.querySelector('[data-testid="kb-add-task"]')).toBeTruthy();
+
+    // 回到团队行 = 团队视图（卡片网格），主操作变回「新建知识库」
+    await act(async () => {
+      click(host.querySelector('[data-testid="kb-team-o1"]'));
+      await flush();
+    });
+    expect(host.querySelector('[data-testid="kb-add-task"]')).toBeNull();
+    expect(host.querySelector('[data-testid="kb-header-create"]')).toBeTruthy();
+
+    // 再进那本团队库：主操作是「上传文件」
+    await enterKb(host);
+    expect(host.querySelector('[data-testid="kb-add-task"]')).toBeNull();
+    expect(host.querySelector('[data-testid="kb-upload-file"]')).toBeTruthy();
   });
 });

@@ -42,6 +42,7 @@ const CHILD: KbDepartment = {
 function makeGateway(overrides: Partial<KbGateway> = {}): KbGateway {
   return {
     listOrgs: vi.fn(),
+    getPersonal: vi.fn(),
     createOrg: vi.fn(),
     listKbs: vi.fn(),
     createKb: vi.fn(),

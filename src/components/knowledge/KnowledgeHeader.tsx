@@ -29,6 +29,13 @@ export interface KnowledgeHeaderProps {
   variant: "team" | "kb";
   title: string;
   subtitle: ReactNode;
+  /**
+   * 左侧头像位。不传按 `variant` 用默认色块（团队 / 知识库）。
+   *
+   * 个人知识库传熊猫头像：它的「归属」不是组织，用团队那个 `GroupsOutlined` 会
+   * 暗示「这是给你所在的某家公司建的」。
+   */
+  leading?: ReactNode;
   /** 「+」里的项（新建 / 上传 / 导入） */
   addItems: readonly KbMenuItem[];
   /** 「⋯」里的项（成员与权限 / 管理 / 刷新） */
@@ -47,6 +54,7 @@ export function KnowledgeHeader({
   variant,
   title,
   subtitle,
+  leading,
   addItems,
   moreItems,
   primary,
@@ -110,7 +118,7 @@ export function KnowledgeHeader({
       spacing={1.5}
       sx={{ px: 2.5, py: 1.5, borderBottom: "1px solid", borderColor: "divider" }}
     >
-      <KbTile variant={variant} size={38} />
+      {leading ?? <KbTile variant={variant} size={38} />}
       <Box sx={{ minWidth: 0, flex: 1 }}>
         <Typography
           data-testid="kb-title"

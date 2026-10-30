@@ -27,16 +27,28 @@ export interface RetrievalCaption {
 /** 说明文字的前半句（与检索实现无关的部分）。 */
 export const KB_CAPTION_BASE = '团队共享资料 · 按角色可见 · 检索在服务端先过滤再打分';
 
+/**
+ * 个人知识库的前半句。
+ *
+ * 为什么不能沿用上面那句：它写着「团队共享资料 · 按角色可见」，而个人库里
+ * **没有任何别人**。同一条说明贴在两种库上，就等于在个人库里说一句假话 ——
+ * 而这句话还是关于权限的，用户会据此决定敢不敢往里放私人资料。
+ */
+export const KB_CAPTION_PERSONAL = '仅自己可见 · 检索在服务端先过滤再打分';
+
 function coverage(info: KbRetrievalInfo): string {
   const pending = Math.max(0, info.chunks - info.indexed);
   const base = `已索引 ${info.indexed}/${info.chunks} 块`;
   return pending > 0 ? `${base}，有 ${pending} 块待建索引` : base;
 }
 
-export function describeRetrieval(info: KbRetrievalInfo | null | undefined): RetrievalCaption {
+export function describeRetrieval(
+  info: KbRetrievalInfo | null | undefined,
+  base: string = KB_CAPTION_BASE,
+): RetrievalCaption {
   if (!info) {
     // 还没拿到状态：只说与实现无关的部分，不猜引擎
-    return { text: KB_CAPTION_BASE, warning: false };
+    return { text: base, warning: false };
   }
   if (info.error.trim() !== '') {
     return {
@@ -45,7 +57,7 @@ export function describeRetrieval(info: KbRetrievalInfo | null | undefined): Ret
     };
   }
   if (info.embedder === 'off') {
-    return { text: `${KB_CAPTION_BASE}（当前词法检索，向量检索未启用）`, warning: false };
+    return { text: `${base}（当前词法检索，向量检索未启用）`, warning: false };
   }
 
   const engine =
@@ -55,7 +67,7 @@ export function describeRetrieval(info: KbRetrievalInfo | null | undefined): Ret
         ? info.model
         : info.embedder;
   return {
-    text: `${KB_CAPTION_BASE}（向量检索：${engine}；${coverage(info)}）`,
+    text: `${base}（向量检索：${engine}；${coverage(info)}）`,
     // 有块没建索引：排序会「一半新一半旧」，值得提示但不阻断使用
     warning: info.stale,
   };

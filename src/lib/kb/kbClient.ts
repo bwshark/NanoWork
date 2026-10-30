@@ -78,6 +78,20 @@ export interface KbSummary {
 }
 
 /**
+ * 个人知识库（`GET /api/kb/personal`）。
+ *
+ * `orgId` 是服务端的**私有组织** id，必须带着：库里没有「个人检索」这种接口 ——
+ * 检索是按组织走的（`POST /api/orgs/{org}/search`），而私有组织刻意不出现在
+ * 团队列表里（`list_orgs` 会滤掉 `kind=personal`），客户端只能从这里拿到它。
+ *
+ * 服务端是**取或建**：第一次访问时就有了这本库，不存在「还没建」的状态。
+ */
+export interface KbPersonal {
+  orgId: string;
+  kb: KbSummary;
+}
+
+/**
  * 组织（团队）里的一名成员。
  *
  * 与 `KbDepartmentMember` 是两个维度：这里说的是「他在这家公司是什么身份」，
@@ -377,6 +391,8 @@ async function readDetail(response: Response): Promise<string | null> {
  */
 export interface KbGateway {
   listOrgs(): Promise<KbApiResult<KbOrg[]>>;
+  /** 我的个人知识库（仅自己可见，服务端取或建） */
+  getPersonal(): Promise<KbApiResult<KbPersonal>>;
   createOrg(name: string): Promise<KbApiResult<KbOrg>>;
   listKbs(orgId: string): Promise<KbApiResult<KbSummary[]>>;
   /** 改库的可见范围（角色 + 部门）。要求 admin —— 它会改变别人能不能看见 */
@@ -519,6 +535,7 @@ export interface KbGateway {
 export function createKbGateway(config: KbClientConfig): KbGateway {
   return {
     listOrgs: () => listMyOrgs(config),
+    getPersonal: () => getPersonalKb(config),
     createOrg: (name) => createOrg(config, name),
     listKbs: (orgId) => listKbs(config, orgId),
     updateKbVisibility: (kbId, input) => updateKbVisibility(config, kbId, input),
@@ -567,6 +584,16 @@ export function listMyOrgs(config: KbClientConfig): Promise<KbApiResult<KbOrg[]>
 /** 建组织（创建者自动成为 owner）。 */
 export function createOrg(config: KbClientConfig, name: string): Promise<KbApiResult<KbOrg>> {
   return request<KbOrg>(config, '/api/orgs', { method: 'POST', body: { name } });
+}
+
+/**
+ * 我的个人知识库。
+ *
+ * ⚠️ 这个接口会**建行**（取或建，见服务端 `kb/personal.py`），所以它是第一次进
+ * 知识库页时调一次、而不是每次轮询调一次 —— 幂等只是幂等，不是免费。
+ */
+export function getPersonalKb(config: KbClientConfig): Promise<KbApiResult<KbPersonal>> {
+  return request<KbPersonal>(config, '/api/kb/personal');
 }
 
 /** 组织内我可见的知识库（服务端已按角色过滤，客户端**不做二次过滤**）。 */

@@ -79,6 +79,14 @@ FR 权威：`docs/nanowork-prd-design-v2.md` 第 3 章；逐日细节 `YYYY-MM-D
 - 加列迁移：`cloud/app/migrations.py` 的 `ADDED_COLUMNS`（DDL 必须带 DEFAULT）。⛔ 只加不改不删。判据必须在**自建 engine** 上跑（conftest 每例重建库，迁移分支走不到）。
 - 文档生命周期：写要 admin（`allowed_roles` 只管读）；判重按切好的块算 sha256（重复 409 点名已有标题）；删除要三张表都清（vectors→chunks→documents）且校验 `doc.kb_id`。
 - 可见性唯一实现 `kb/visibility.py::allows()`：**admin|owner 无条件放行**（管理豁免，否则「建完看不见也改不了」）→ member 需 `角色 ∈ allowedRoles` ∧（不按部门收窄 ∨ 我直属部门 ∈ 允许集合的子树）。⛔ 所以界面上「管理员/所有者」必须画成不可关：点得动却不改变结果 = 让人以为权限变了。
+- **个人知识库**（2026-10-30）：形态是「`Organization.kind=personal` 的私有组织 + 其下一本普通库」，
+  ⛔ **不要**给 `knowledge_bases` 加 `owner_user_id` 再分叉一套可见性——`_kb_or_404` /
+  `visible_kb_ids` 只有一份实现，加分支就是「列表看不到、直连能读」。id 确定性（`p<uid>`/`k<uid>`）
+  让取或建天然幂等。两道闸缺一不可：`list_orgs` 滤掉 personal；`add_member` 对 personal 回 403。
+- ⛔ 个人库不在 `kbsByOrg` 里 → 页面里任何「选中的库不在团队列表就清空」的代码都会把它踢掉
+  （症状：写完一篇跳回团队视图）。`KnowledgePage` 用 `personalKbRef` 排掉；加新刷新逻辑时同样要排。
+- 文案即承诺：「团队共享资料 · 按角色可见」不能贴在个人库上（`KB_CAPTION_PERSONAL`）。
+
 - 回收站：`deleted_at` ISO 字符串、**空串 = 活**。默认软删（块与向量留着 → 恢复即可检索），`?purge=true` 才动三张表。⛔ `deleted_at == ''` 的过滤要写在**四处**（检索候选 / 重建索引 / 列表 / 覆盖率），少一处就是「删了还能搜到」。30 天 + 惰性清理（不靠 cron）。
 - `kb_documents.updated_at`（2026-10-25 加）：ISO 字符串，空串 = 老行 → `_document_view` 读时退回 `created_at`；改名/恢复打戳。列表「更新时间」读它，别拿 createdAt 冒充。
 - 部门：`parent_id` 用**空串**表根（NULL 在唯一索引里互不相等）；移动校验环 / 整棵子树高度 / 同级重名；部门角色 `member/manager` 与组织角色是两个维度；**有部门范围**的库其允许部门负责人可维护，没部门范围的库仍只归组织管理员。
@@ -104,4 +112,9 @@ FR 权威：`docs/nanowork-prd-design-v2.md` 第 3 章；逐日细节 `YYYY-MM-D
 - ⛔ 从 WorkBuddy 宿主起引擎必须 `CODEBUDDY_SAFE_DELETE_ENABLED=0`（filelock 的 unlink 被垫片拦 → serve 退出）。
 - `tool_deny` 按工具名不按能力（deny `write_file` 后子代理会用 `apply_patch`/`exec`）。
 - Dream 输入只有 `memory/history.jsonl`；`/dream` 是后台任务，候选轮询 `GET /v1/dream/review`。
+- ⚠️ **写入工具会把形似凭据的字面串替换成 `***`**（`password123` 落盘变 `***`，登录 401 排查半天）。
+  脚本里的测试口令要拆写（`"pass"+"word"+"123"`），写完用 `python -c` 打 repr 复核。
+- ⚠️ 内置浏览器（IAB）对本应用截图会超 10MiB、`dom_cua_get_visible_dom` 返回空 → 走 Playwright
+  （`npx --no-install playwright`；包在 `~/AppData/Local/npm-cache/_npx/<hash>/node_modules/playwright`，
+  版本要对齐 `ms-playwright` 已装的 chromium 修订号）。`vite --strictHost` 是错 flag（`--strictPort`）。
 - venv：只有 `nanobot/nanobot/.venv` 在用；引擎测试 `cd nanobot && ./nanobot/.venv/Scripts/python.exe -m pytest tests/`。

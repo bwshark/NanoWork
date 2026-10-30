@@ -35,6 +35,7 @@ const KB2 = { ...KB1, id: 'k2', name: '产品手册', documentCount: 1 };
 function makeGateway(overrides: Partial<KbGateway> = {}): KbGateway {
   return {
     listOrgs: vi.fn().mockResolvedValue({ ok: true, data: [ORG, ORG2] }),
+    getPersonal: vi.fn(),
     createOrg: vi.fn(),
     listKbs: vi.fn().mockResolvedValue({ ok: true, data: [KB1, KB2] }),
     createKb: vi.fn(),

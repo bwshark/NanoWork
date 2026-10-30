@@ -3,21 +3,21 @@ import { Box, IconButton, Stack, Tooltip, Typography } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
 import ChevronRightIcon from "@mui/icons-material/ChevronRight";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
-import BookmarkBorderOutlinedIcon from "@mui/icons-material/BookmarkBorderOutlined";
+import ArticleOutlinedIcon from "@mui/icons-material/ArticleOutlined";
 import MenuBookOutlinedIcon from "@mui/icons-material/MenuBookOutlined";
 import type { KbOrg, KbSummary } from "@/lib/kb/kbClient";
 import { SidebarSectionLabel } from "@/components/knowledge/kbAtoms";
 
 /**
- * 左侧导航：个人知识库（占位）+ 团队 → 知识库两级树。
+ * 左侧导航：个人知识库 + 团队 → 知识库两级树。
  *
  * ## 三条取舍
  *
  * 1. **树是全展开的**，不是「点团队才去加载它的库」：团队通常只有两三个，
  *    懒加载省下的那次请求换不来任何等待，反而让「同事说他有个库」在自己侧栏里
  *    看不见（要猜是哪一个团队）。
- * 2. **个人知识库显式标成未开放**，而不是藏起来：参考界面有它，用户会找；
- *    找不到比看到一句「还在做」更糟。
+ * 2. **个人库是单独的一片，不挂在任何团队下**：它属于人，不属于组织。画进团队树
+ *    （哪怕放在第一个团队下面）会让人以为「换团队就看不到了」——而它跟着账号走。
  * 3. **选中态只有一处**（当前库）：团队行也有「当前团队」的意思，但它只在
  *    没有选库时才是焦点，所以用底色深浅区分，不用两个选中样式打架。
  */
@@ -25,8 +25,18 @@ export interface KnowledgeSidebarProps {
   orgs: readonly KbOrg[];
   /** 团队 id → 该团队下我可见的知识库（服务端已按角色过滤，这里不再筛） */
   kbsByOrg: Record<string, KbSummary[]>;
+  /**
+   * 我的个人知识库。`null` = 还没取到（首次进页面 / 未登录 / 连不上云端）。
+   *
+   * 刻意**不在这里显示一个「我的个人知识库」的空壳**：那一行点了会打不开任何东西，
+   * 而用户分不清「还没加载完」和「它坏了」。
+   */
+  personal: KbSummary | null;
+  /** 当前看的是不是个人库（选中态） */
+  personalActive: boolean;
   activeOrgId: string;
   activeKbId: string;
+  onSelectPersonal: () => void;
   onSelectTeam: (orgId: string) => void;
   onSelectKb: (orgId: string, kbId: string) => void;
   onCreateTeam: () => void;
@@ -36,8 +46,11 @@ export interface KnowledgeSidebarProps {
 export function KnowledgeSidebar({
   orgs,
   kbsByOrg,
+  personal,
+  personalActive,
   activeOrgId,
   activeKbId,
+  onSelectPersonal,
   onSelectTeam,
   onSelectKb,
   onCreateTeam,
@@ -92,26 +105,46 @@ export function KnowledgeSidebar({
 
       <Box sx={{ px: 1, pb: 1 }}>
         <SidebarSectionLabel>个人知识库</SidebarSectionLabel>
-        <Tooltip
-          title="个人知识库还没做：当前只支持团队知识库（资料按组织隔离）"
-          placement="right"
-        >
-          <Box
-            sx={{
-              display: "flex",
-              alignItems: "center",
-              gap: 1,
-              px: 1.25,
-              height: 30,
-              borderRadius: 1.5,
-              color: "text.disabled",
-              cursor: "not-allowed",
-            }}
-          >
-            <BookmarkBorderOutlinedIcon sx={{ fontSize: 16 }} />
-            <Typography sx={{ fontSize: 12.5 }}>我的个人知识库</Typography>
-          </Box>
-        </Tooltip>
+        {personal === null ? (
+          <Typography sx={{ px: 1.25, py: 0.75, fontSize: 11.5, color: "text.disabled" }}>
+            正在准备…
+          </Typography>
+        ) : (
+          <Tooltip title="只有你能看到，也支持检索" placement="right">
+            <Box
+              data-testid="kb-personal"
+              onClick={onSelectPersonal}
+              sx={{
+                display: "flex",
+                alignItems: "center",
+                gap: 0.75,
+                height: 30,
+                px: 1,
+                borderRadius: 1.5,
+                cursor: "pointer",
+                bgcolor: personalActive ? "action.selected" : "transparent",
+                color: personalActive ? "text.primary" : "text.secondary",
+                "&:hover": {
+                  bgcolor: personalActive ? "action.selected" : "action.hover",
+                },
+              }}
+            >
+              <ArticleOutlinedIcon sx={{ fontSize: 15, flexShrink: 0 }} />
+              <Typography
+                sx={{
+                  fontSize: 12.5,
+                  fontWeight: personalActive ? 600 : 400,
+                  color: personalActive ? "text.primary" : "inherit",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {personal.name}
+              </Typography>
+            </Box>
+          </Tooltip>
+        )}
       </Box>
 
       <Stack
@@ -272,7 +305,7 @@ export function KnowledgeSidebar({
           <Typography
             sx={{ fontSize: 11.5, color: "text.disabled", px: 1.25, py: 1 }}
           >
-            还没有团队。知识库挂在团队下，先建一个。
+            还没有团队。团队知识库挂在团队下，先建一个。
           </Typography>
         )}
       </Box>

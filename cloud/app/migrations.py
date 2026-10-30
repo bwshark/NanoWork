@@ -50,6 +50,9 @@ ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     # 2026-10-28 预览 PDF 的"渲染器版本"：这一版开始导出标题书签（大纲视图要用）。
     # 默认 0 = 本行产生于该字段之前 → 当作"没转"，下次打开重转一次，否则老 PDF 永远没大纲。
     ("kb_files", "render_version", "INTEGER NOT NULL DEFAULT 0"),
+    # 2026-10-30 个人知识库：组织种类（team / personal）。
+    # 默认 'team' = 老行都是真实团队。反过来（默认 personal）会让历史团队从团队列表里消失。
+    ("organizations", "kind", "TEXT NOT NULL DEFAULT 'team'"),
 )
 
 #: (索引名, 表名, 列清单)。`CREATE INDEX IF NOT EXISTS` 在 SQLite 与 PostgreSQL

@@ -31,11 +31,27 @@ from sqlmodel import Field, SQLModel
 from app.timeutil import utc_now
 
 
+#: 组织种类。`team` = 用户建的真实团队（出现在团队列表里）；
+#: `personal` = 每个用户一个的**私有空间**，只用来装个人知识库。
+#:
+#: 为什么个人知识库要伪装成一个组织，而不是给 `knowledge_bases` 加 `owner_user_id`：
+#: 知识库的每一条路由都建立在「库属于某个组织 + 我是该组织成员」之上
+#: （`_kb_or_404` / `_writable_kb_or_404` / 检索的 `visible_kb_ids`）。
+#: 换一套「个人库」的判定分支，就等于把「谁能看到哪本库」写成两份实现——
+#: 而那份代码的注释里已经写明，两份实现必然出现「列表看不到、直连能读」的组合漏洞。
+#: 复用一个只有自己一人的组织，隔离性由**现有成员表**保证，判定仍然只有一处。
+ORG_KIND_TEAM = "team"
+ORG_KIND_PERSONAL = "personal"
+
+
 class Organization(SQLModel, table=True):
     __tablename__ = "organizations"  # type: ignore[assignment]
 
     id: str = Field(primary_key=True)
     name: str = Field(index=True)
+    #: 见上：`team` / `personal`。老行按 `team`（迁移的 DEFAULT 就是它）——
+    #: 默认成 personal 会让历史团队从列表里凭空消失。
+    kind: str = Field(default=ORG_KIND_TEAM, index=True)
     created_by: str = Field(index=True)
     created_at: datetime = Field(default_factory=utc_now)
 

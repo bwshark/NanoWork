@@ -19,6 +19,7 @@ import CodeOutlinedIcon from "@mui/icons-material/CodeOutlined";
 import ChatBubbleOutlineIcon from "@mui/icons-material/ChatBubbleOutline";
 import UploadFileOutlinedIcon from "@mui/icons-material/UploadFileOutlined";
 import RefreshIcon from "@mui/icons-material/Refresh";
+import ScheduleIcon from "@mui/icons-material/Schedule";
 import { ROUTES } from "@/lib/core/constants";
 import { toast } from "@/components/Toast";
 import {
@@ -33,11 +34,12 @@ import {
   type KbDocumentDetail,
   type KbGateway,
   type KbOrg,
+  type KbPersonal,
   type KbRetrievalInfo,
   type KbSearchHit,
   type KbSummary,
 } from "@/lib/kb/kbClient";
-import { describeRetrieval } from "@/lib/kb/kbRetrievalCaption";
+import { KB_CAPTION_PERSONAL, describeRetrieval } from "@/lib/kb/kbRetrievalCaption";
 import { KB_UPLOAD_ACCEPT, precheckUpload } from "@/lib/kb/kbUpload";
 import { docIndexHint } from "@/lib/kb/kbDocumentMeta";
 import { readFileAsBase64 } from "@/lib/artifact/fileBase64";
@@ -66,6 +68,8 @@ import {
 import { NewDocDrawer, titleFromContent } from "@/components/knowledge/NewDocDrawer";
 import { DocViewerDrawer } from "@/components/knowledge/DocViewerDrawer";
 import { DepartmentDialog } from "@/components/knowledge/DepartmentDialog";
+import { PersonalKbAvatar } from "@/components/knowledge/PersonalKbAvatar";
+import { AddKbTaskDialog } from "@/components/knowledge/AddKbTaskDialog";
 
 /**
  * 知识库（M7 客户端）：团队 → 知识库 → 文档 / 检索。
@@ -73,11 +77,18 @@ import { DepartmentDialog } from "@/components/knowledge/DepartmentDialog";
  * ## 布局（与参考界面一致）
  *
  * ```
- * ┌ 侧栏（团队 → 知识库两级树）┬ 团队视图：知识库卡片网格 ┐
- * │ 个人知识库（占位）          │ 或                       │
- * │ 团队知识库                  │ 知识库视图：文件列表      │
- * └───────────────────────────┴─────────────────────────┘
+ * ┌ 侧栏（个人库 + 团队 → 知识库两级树）┬ 团队视图：知识库卡片网格 ┐
+ * │ 我的个人知识库（仅自己可见）        │ 或                       │
+ * │ 团队知识库                          │ 知识库视图：文件列表      │
+ * └─────────────────────────────────────┴─────────────────────────┘
  * ```
+ *
+ * ## 个人库为什么「像一本团队库，但不是」
+ *
+ * 服务端的形态是**私有组织下的一本普通库**（见 `cloud/app/kb/personal.py`），
+ * 所以文档列表、检索、回收站、图片、预览全都不用分叉。页面这里只多两件事：
+ * ① 选中态（`personalActive`）——它不走团队树，`activeOrg` 为 null；
+ * ② 标题区换头像 / 副标题 / 主操作（「添加任务」而不是「上传文件」）。
  *
  * 两个视图互斥，靠**有没有选中库**切换：没选库 = 先看清楚这个团队有哪些库
  * （卡片上是范围与篇数），选了库 = 看里面的文件。刻意不给「默认直接进第一个库」：
@@ -93,6 +104,9 @@ import { DepartmentDialog } from "@/components/knowledge/DepartmentDialog";
  */
 
 const ALL_ROLES = ["member", "admin", "owner"] as const;
+
+/** 个人库的副标题。与参考界面同一句话：它解释的是「为什么这里没有成员与权限」。 */
+const PERSONAL_KB_SUBTITLE = "个人知识库仅自己可见，快来打造你的知识花园吧！";
 
 /**
  * 登录态问题的三种结论。
@@ -184,6 +198,38 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
   const [kbsLoading, setKbsLoading] = useState(false);
   const [activeKbId, setActiveKbId] = useState<string>("");
 
+  /**
+   * 我的个人知识库。服务端**取或建**：拿到就说明它已经存在，页面不必有「新建」分支。
+   * `null` = 还没取到（未登录 / 连不上 / 首次加载中）。
+   */
+  const [personal, setPersonal] = useState<KbPersonal | null>(null);
+  const [personalError, setPersonalError] = useState("");
+  /**
+   * 当前看的是不是个人库。
+   *
+   * 为什么不用「`activeOrgId` 是不是私有组织」来推：私有组织刻意不出现在团队列表里
+   * （服务端 `list_orgs` 已滤掉），拿它反推只会把「这个 id 我不认识」当成
+   * 「这是个人库」——而将来任何一种「组织列表没取到」都会踩到这行。
+   */
+  const [personalActive, setPersonalActive] = useState(false);
+  /** 给「添加任务」用的定时任务表单 */
+  const [taskDialogOpen, setTaskDialogOpen] = useState(false);
+
+  /**
+   * 个人库 id 的镜像（同步进 ref，供 `loadKbs` 判断「这个选中项不在团队列表里是正常的」）。
+   *
+   * 不写进 `loadKbs` 的依赖：那会让「选中个人库」重跑一次「取全部团队的库」——
+   * 而这跟个人库毫无关系。
+   */
+  const personalKbRef = useRef<string>("");
+  /** `personalActive` 的镜像：`loadPersonal` 成功回调要用，但它不该因切换视图而重建 */
+  const personalActiveRef = useRef(false);
+
+  useEffect(() => {
+    personalKbRef.current = personal?.kb.id ?? "";
+    personalActiveRef.current = personalActive;
+  }, [personal, personalActive]);
+
   const [docs, setDocs] = useState<KbDocument[]>([]);
   const [docsError, setDocsError] = useState("");
   const [docsLoading, setDocsLoading] = useState(false);
@@ -261,12 +307,14 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
    */
   const accountLabel = runtime?.account.getSession()?.email ?? "当前账户";  const kbs = useMemo(() => kbsByOrg[activeOrgId] ?? [], [kbsByOrg, activeOrgId]);
   const activeKb = useMemo(() => {
+    // 个人库不在 `kbsByOrg` 里（那里只装团队库）→ 必须单独认一次
+    if (personalActive) return personal?.kb ?? null;
     for (const list of Object.values(kbsByOrg)) {
       const found = list.find((kb) => kb.id === activeKbId);
       if (found) return found;
     }
     return null;
-  }, [kbsByOrg, activeKbId]);
+  }, [kbsByOrg, activeKbId, personalActive, personal]);
 
   const loadOrgs = useCallback(async (target: KbGateway) => {
     setOrgsLoading(true);
@@ -324,17 +372,47 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
     }
     setKbsByOrg(next);
     setKbsError(firstError);
-    // 选中的库可能刚被删掉 / 权限被收回：清掉，别让右侧挂着一个不存在的库
-    setActiveKbId((prev) =>
-      prev !== "" && Object.values(next).some((items) => items.some((kb) => kb.id === prev))
+    // 选中的库可能刚被删掉 / 权限被收回：清掉，别让右侧挂着一个不存在的库。
+    // ⚠️ 个人库**永远不在**这份集合里：不先把这种情况排掉，上传一篇文档后
+    // （入库会顺手刷新团队库计数）用户就会被踢回团队视图。
+    setActiveKbId((prev) => {
+      if (prev !== "" && prev === personalKbRef.current) return prev;
+      return prev !== "" && Object.values(next).some((items) => items.some((kb) => kb.id === prev))
         ? prev
-        : "",
-    );
+        : "";
+    });
   }, []);
 
   useEffect(() => {
     if (client) void loadKbs(client, orgs);
   }, [client, orgs, loadKbs]);
+
+  /**
+   * 取我的个人库。
+   *
+   * **失败不置 `personal`**（保持 null）：界面于是只显示「正在准备…」而不是一个
+   * 名字对但点进去什么都没有的入口。错误单独记一份，由页面顶部把原话报出来 ——
+   * 云端连不上时用户需要知道的是「连不上」，不是「个人库不存在」。
+   */
+  const loadPersonal = useCallback(async (target: KbGateway) => {
+    const result = await target.getPersonal();
+    if (!result.ok) {
+      if (result.unauthorized) setSessionExpired(true);
+      setPersonalError(result.message);
+      return;
+    }
+    setPersonalError("");
+    setPersonal(result.data);
+    // 换了账号 / 换了票之后，之前选中的 id 不再是自己的库 → 跟着换到新的那本
+    if (personalActiveRef.current) {
+      setActiveOrgId(result.data.orgId);
+      setActiveKbId(result.data.kb.id);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (client) void loadPersonal(client);
+  }, [client, loadPersonal]);
 
   const loadDocs = useCallback(async (target: KbGateway, kbId: string, trashed = false) => {
     if (!kbId) {
@@ -529,6 +607,8 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
   };
 
   const selectTeam = (orgId: string) => {
+    personalActiveRef.current = false;
+    setPersonalActive(false);
     setActiveOrgId(orgId);
     setActiveKbId("");
     setTrashOpen(false);
@@ -537,8 +617,27 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
   };
 
   const selectKb = (orgId: string, kbId: string) => {
+    personalActiveRef.current = false;
+    setPersonalActive(false);
     setActiveOrgId(orgId);
     setActiveKbId(kbId);
+    setTrashOpen(false);
+    closeViewer();
+    resetSearch();
+  };
+
+  /**
+   * 进个人库。
+   *
+   * `activeOrgId` 也一起换成私有组织：检索（`POST /api/orgs/{org}/search`）是按组织
+   * 走的，不换的话「在本库内检索」会去搜上一个团队。
+   */
+  const selectPersonal = () => {
+    if (!personal) return;
+    personalActiveRef.current = true;
+    setPersonalActive(true);
+    setActiveOrgId(personal.orgId);
+    setActiveKbId(personal.kb.id);
     setTrashOpen(false);
     closeViewer();
     resetSearch();
@@ -840,11 +939,29 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
     if (!client) return;
     void loadOrgs(client);
     void loadKbs(client, orgs);
+    void loadPersonal(client);
     void loadDocs(client, activeKbId, trashOpen);
     void loadRetrieval(client, activeKbId);
   };
 
-  const caption = describeRetrieval(retrieval);
+  /**
+   * 没有团队时直接落在个人库。
+   *
+   * 这不是「默认进第一个库」那种偷懒：没有团队的人进这一页，看到的原来是一张
+   * 「你还没有加入任何团队」的卡片 —— 而个人库明明已经在那儿、能直接用。
+   * 有团队的人仍然落在团队视图（那条产品决定没变）。
+   */
+  useEffect(() => {
+    if (personalActiveRef.current || personal === null || orgsLoading) return;
+    if (orgs.length > 0) return;
+    personalActiveRef.current = true;
+    setPersonalActive(true);
+    setActiveOrgId(personal.orgId);
+    setActiveKbId(personal.kb.id);
+  }, [personal, orgs, orgsLoading]);
+
+  // 个人库不能说「团队共享资料 · 按角色可见」：那里没有任何别人
+  const caption = describeRetrieval(retrieval, personalActive ? KB_CAPTION_PERSONAL : undefined);
   const canReindex =
     retrieval !== null && retrieval.embedder !== "off" && retrieval.stale && activeKbId !== "";
 
@@ -983,13 +1100,54 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
     },
   ];
 
+  /**
+   * 个人库的「⋯」：**刻意没有成员与权限**。
+   *
+   * 不是藏起来，而是画成一条写明原因的灰项：这一页的团队库有「谁可以看这本库」，
+   * 个人库却没有 —— 用户会找。找不到会以为「权限太大了」，而事实是这本库压根
+   * 没有第二个成员。
+   */
+  const personalMoreItems: KbMenuItem[] = [
+    {
+      key: "personal-scope",
+      group: "个人库",
+      label: "可见范围",
+      hint: "仅自己可见，不可修改",
+      disabled: true,
+    },
+    {
+      key: "refresh",
+      group: "个人库",
+      label: "刷新",
+      icon: <RefreshIcon fontSize="small" />,
+      onSelect: refreshAll,
+    },
+  ];
+
+  /** 个人库的主操作是「添加任务」：往里加资料走「+」菜单（与参考界面一致） */
+  const personalPrimary = (
+    <Button
+      size="small"
+      variant="outlined"
+      startIcon={<ScheduleIcon />}
+      data-testid="kb-add-task"
+      onClick={() => setTaskDialogOpen(true)}
+      sx={{ ml: 1, flexShrink: 0 }}
+    >
+      添加任务
+    </Button>
+  );
+
   return (
     <Box sx={{ display: "flex", height: "100%", minHeight: 0, bgcolor: "background.default" }}>
       <KnowledgeSidebar
         orgs={orgs}
         kbsByOrg={kbsByOrg}
+        personal={personal?.kb ?? null}
+        personalActive={personalActive}
         activeOrgId={activeOrgId}
         activeKbId={activeKbId}
+        onSelectPersonal={selectPersonal}
         onSelectTeam={selectTeam}
         onSelectKb={selectKb}
         onCreateTeam={() => setTeamDialogOpen(true)}
@@ -1023,6 +1181,15 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
           </Alert>
         )}
 
+        {personalError !== "" && (
+          <Typography
+            data-testid="kb-personal-error"
+            sx={{ px: 2.5, py: 1, fontSize: 12, color: "text.secondary" }}
+          >
+            个人知识库暂时取不到：{personalError}
+          </Typography>
+        )}
+
         {orgsLoading && orgs.length === 0 && (
           <Stack direction="row" spacing={1} alignItems="center" sx={{ p: 2.5 }}>
             <CircularProgress size={14} />
@@ -1033,7 +1200,7 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
         )}
 
         {/* 没有任何组织：说明白 + 给创建入口（不假装「加载中」） */}
-        {!orgsLoading && orgsError === "" && orgs.length === 0 && (
+        {!orgsLoading && orgsError === "" && orgs.length === 0 && !personalActive && (
           <Box sx={{ p: 3 }}>
             <Paper variant="outlined" sx={{ p: 2.5, maxWidth: 520 }}>
               <Typography sx={{ fontSize: 13.5, mb: 1.5 }}>
@@ -1070,22 +1237,28 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
           </Box>
         )}
 
-        {activeOrg !== null && (
+        {(activeOrg !== null || personalActive) && (
           <>
             <KnowledgeHeader
               variant={hasKb ? "kb" : "team"}
-              title={hasKb && activeKb ? activeKb.name : activeOrg.name}
+              title={hasKb && activeKb ? activeKb.name : activeOrg?.name ?? ""}
+              leading={personalActive ? <PersonalKbAvatar size={40} /> : undefined}
               subtitle={
                 <HeaderSubtitle>
-                  {hasKb && activeKb
-                    ? describeKb(activeKb)
-                    : `${KB_ROLE_LABELS[activeOrg.role] ?? activeOrg.role} · ${activeOrg.memberCount} 人 · ${kbs.length} 个知识库`}
+                  {personalActive
+                    ? PERSONAL_KB_SUBTITLE
+                    : hasKb && activeKb
+                      ? describeKb(activeKb)
+                      : `${KB_ROLE_LABELS[activeOrg?.role ?? ""] ?? activeOrg?.role ?? ""} · ${activeOrg?.memberCount ?? 0} 人 · ${kbs.length} 个知识库`}
                 </HeaderSubtitle>
               }
               addItems={addItems}
-              moreItems={moreItems}
+              moreItems={personalActive ? personalMoreItems : moreItems}
               primary={
-                hasKb ? (
+                /* 个人库的主操作是「添加任务」；团队库/团队视图仍是上传文件 / 新建知识库 */
+                personalActive ? (
+                  personalPrimary
+                ) : hasKb ? (
                   <Button
                     size="small"
                     variant="outlined"
@@ -1171,7 +1344,11 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
                   onPurge: setPurgeTarget,
                 }}
                 emptyHint={
-                  trashOpen ? "回收站是空的。" : "这个知识库还没有文档。用右上角「上传文件」加一篇。"
+                  trashOpen
+                    ? "回收站是空的。"
+                    : personalActive
+                      ? "个人库还是空的。点右上角「+」上传一份资料，或直接写一篇笔记。"
+                      : "这个知识库还没有文档。用右上角「上传文件」加一篇。"
                 }
               />
             ) : (
@@ -1274,7 +1451,11 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
          * 部门负责人那条更细的路径不在这里预判：真有权限的人保存不会被拦，
          * 没权限的人会拿到 403 并被如实告知 —— 猜错的代价比多一次请求大。
          */
-        canEdit={activeOrg !== null && (activeOrg.role === "owner" || activeOrg.role === "admin")}
+        canEdit={
+          // 个人库：私有组织里我是 owner（`kb/personal.py`），所以恒可写
+          personalActive ||
+          (activeOrg !== null && (activeOrg.role === "owner" || activeOrg.role === "admin"))
+        }
         saving={viewSaving}
         onSave={handleSaveContent}
         onUploadImage={handleUploadImage}
@@ -1343,6 +1524,12 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
         departments={departments}
         onClose={() => setScopeKb(null)}
         onSave={() => void handleSaveScope()}
+      />
+
+      <AddKbTaskDialog
+        open={taskDialogOpen}
+        kbName={personal?.kb.name ?? "我的个人知识库"}
+        onClose={() => setTaskDialogOpen(false)}
       />
 
       <TeamMembersDialog
