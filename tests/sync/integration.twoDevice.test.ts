@@ -19,6 +19,7 @@
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
+import net from 'node:net';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -52,13 +53,51 @@ const PY = path.join(
   process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python',
 );
 const hasVenv = fs.existsSync(PY);
-const BASE = 'http://127.0.0.1:8910';
+/**
+ * ⛔ **不能用固定端口**。原来写死 8910，而 `nanowork-cloud` 容器也监听 8910：
+ * 端口被占时 `spawn` 的 uvicorn **立即退出**（`WinError 10048`），`stdio: 'ignore'` 把错误吞掉；
+ * 紧接着 `waitHealth` 探到**容器**返回的 200 → 判定「服务端就绪」→ 用例连的是
+ * **容器的持久库**而不是自己的临时 sqlite。
+ *
+ * 症状是**假红**：门禁② 报 `expected 'A-edit' to be 'B-edit'`，看起来完全像一个真实的
+ * 并发裁决 bug（时序敏感、加两行 `console.log` 就变绿），实际只是读到了别的库里的旧数据。
+ * 2026-10-31 实测：容器在跑 → 红；`docker stop nanowork-cloud` → 两条全绿。
+ *
+ * 改成「先占一个空闲端口再放掉」：端口由 OS 分配，与任何常驻服务都不会撞。
+ */
+let BASE_PORT = 0;
+/** 服务基址；端口在 `beforeAll` 里才定（顶层不能 await） */
+let BASE = '';
 
 const DEV_A_WS = '/devA/ws';
 const DEV_B_WS = '/devB/ws';
 
 let server: ChildProcess | null = null;
 let dbDir = '';
+
+/**
+ * 取一个当前空闲的 TCP 端口（让 OS 分配，然后立刻释放）。
+ *
+ * 释放到 spawn 之间有一瞬竞态，但实际风险极小（OS 不会马上把这个端口给别的进程）；
+ * 相比写死端口撞上常驻服务（本机一定会撞），这个窗口可以接受。
+ */
+function pickFreePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const probe = net.createServer();
+    probe.unref();
+    probe.on('error', reject);
+    probe.listen(0, '127.0.0.1', () => {
+      const address = probe.address();
+      if (typeof address === 'string' || address === null) {
+        probe.close();
+        reject(new Error('拿不到端口'));
+        return;
+      }
+      const { port } = address;
+      probe.close(() => resolve(port));
+    });
+  });
+}
 
 function waitHealth(url: string, timeoutMs: number): Promise<void> {
   const deadline = Date.now() + timeoutMs;
@@ -118,10 +157,12 @@ async function rmWithRetry(target: string, attempts = 30, delayMs = 100): Promis
 
 beforeAll(async () => {
   if (!hasVenv) return;
+  BASE_PORT = await pickFreePort();
+  BASE = `http://127.0.0.1:${BASE_PORT}`;
   dbDir = fs.mkdtempSync(path.join(os.tmpdir(), 'nanowork-it-'));
   // Windows 路径统一成正斜杠，拼出 `sqlite:///<abs>/it.db`
   const dbFile = path.join(dbDir, 'it.db').replace(/\\/g, '/');
-  server = spawn(PY, ['-m', 'uvicorn', 'app.main:app', '--host', '127.0.0.1', '--port', '8910'], {
+  server = spawn(PY, ['-m', 'uvicorn', 'app.main:app', '--host', '127.0.0.1', '--port', String(BASE_PORT)], {
     cwd: CLOUD_DIR,
     env: { ...process.env, NANOWORK_CLOUD_DB_URL: `sqlite:///${dbFile}` },
     stdio: 'ignore',
