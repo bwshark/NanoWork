@@ -9,7 +9,7 @@
  */
 
 import { MemoryRouter } from 'react-router-dom';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ProjectsPage } from '@/pages/projects/ProjectsPage';
 import { useSessionsStore } from '@/stores/sessionsStore';
@@ -21,8 +21,10 @@ import type {
 } from '@/lib/project/projectClient';
 import { PROJECT_LOGIN_REQUIRED } from '@/lib/project/projectClient';
 import type { KbGateway, KbOrg, KbOrgMember } from '@/lib/kb/kbClient';
+import type { Session, TaskConfig } from '@/types';
 import {
   buttonByText,
+  byAria,
   click,
   dialogRoot,
   fieldByLabel,
@@ -39,7 +41,46 @@ vi.mock('@/components/Toast', () => ({
   toast: { success: vi.fn(), error: vi.fn(), info: vi.fn(), warning: vi.fn() },
 }));
 
+/**
+ * 每条用例前把三个 store 清空。
+ *
+ * ⚠️ 这不是洁癖：上一版没有这个钩子，某条用例留下的任务（`projectId: 'p1'`）会渲染出
+ * 自己的「移出」按钮，下一条用例 `buttonByText('移出')` 点到的是**任务那个**，
+ * 于是「会话移出」看起来没生效 —— 单跑绿、连跑红，且报错指向的断言完全无辜。
+ */
+beforeEach(() => {
+  useSessionsStore.setState({ sessions: [], activeId: null, sessionTombstones: {} });
+  useTasksStore.setState({ tasks: [], tombstones: {}, runs: [] });
+});
+
 const ORG: KbOrg = { id: 'o1', name: 'Acme', role: 'member', memberCount: 3, createdAt: 'x' };
+
+/** 会话基线：`rev = 1`（新建态），`projectId` 由用例自己决定 */
+function baseSession(id: string, title: string): Session {
+  return {
+    id,
+    agentId: '',
+    title,
+    messages: [],
+    permissionLog: [],
+    createdAt: '2026-10-31T00:00:00Z',
+    updatedAt: '2026-10-31T00:00:00Z',
+    rev: 1,
+    updatedBy: '',
+  };
+}
+
+function baseTask(id: string, name: string): TaskConfig {
+  return {
+    id,
+    name,
+    schedule: { kind: 'interval', minutes: 60 },
+    prompt: 'p',
+    agentId: '',
+    status: 'enabled',
+    createdAt: '2026-10-31T00:00:00Z',
+  };
+}
 
 function project(over: Partial<ProjectSummary> = {}): ProjectSummary {
   return {
@@ -331,6 +372,94 @@ describe('项目空间页', () => {
 
     expect(buttonByText(document, '新建会话')).toBeNull();
     expect(buttonByText(document, '新建任务')).toBeNull();
+    unmount();
+  });
+
+  it('「把已有会话移进来」只列未归属任何项目的会话，选中后真的写进 projectId', async () => {
+    const p = project();
+    const { gateway } = fakeProjectGateway({ list: [p], detail: detailOf(p) });
+    useSessionsStore.setState({
+      sessions: [
+        { ...baseSession('s-free', '未归属的会话') },
+        // 已属于别的项目：不该出现在候选里（跨项目搬移是另一件事）
+        { ...baseSession('s-other', '属于别的项目'), projectId: 'p2' },
+      ],
+      activeId: null,
+      sessionTombstones: {},
+    });
+
+    render(gateway, fakeKbGateway());
+    await waitForSettled(() => (document.body.textContent ?? '').includes('登月计划'));
+    click(listItemByText('登月计划'));
+    await waitForSettled(() => (document.body.textContent ?? '').includes('成员（2）'));
+
+    click(buttonByText(document, '把已有会话移进来'));
+    await waitForSettled(() => (document.body.textContent ?? '').includes('未归属的会话'));
+
+    const dialogText = dialogRoot().textContent ?? '';
+    expect(dialogText, '已属于别的项目的会话不该出现在候选里').not.toContain('属于别的项目');
+
+    click(listItemByText('未归属的会话'));
+    await flush();
+
+    const moved = useSessionsStore.getState().sessions.find((s) => s.id === 's-free');
+    expect(moved?.projectId, '移入后必须归属本项目').toBe('p1');
+    // `updateSession` 会自动涨 rev（不要手写）—— 这里顺带钉住「移入是一次真改动」
+    expect(moved?.rev, '移入必须涨 rev，否则同步不过去').toBeGreaterThan(1);
+    unmount();
+  });
+
+  it('「移出」把 projectId 清成 undefined（不是空串）', async () => {
+    const p = project();
+    const { gateway } = fakeProjectGateway({ list: [p], detail: detailOf(p) });
+    useSessionsStore.setState({
+      sessions: [{ ...baseSession('s1', '项目里的会话'), projectId: 'p1' }],
+      activeId: null,
+      sessionTombstones: {},
+    });
+
+    render(gateway, fakeKbGateway());
+    await waitForSettled(() => (document.body.textContent ?? '').includes('登月计划'));
+    click(listItemByText('登月计划'));
+    await waitForSettled(() => (document.body.textContent ?? '').includes('项目里的会话'));
+
+    click(byAria('把会话「项目里的会话」移出项目'));
+    await flush();
+
+    const moved = useSessionsStore.getState().sessions.find((s) => s.id === 's1');
+    // `undefined` 才是「不属于任何项目」；空串会造出一个没有意义的中间态
+    expect(moved?.projectId).toBeUndefined();
+    // 移出后它从项目看板里消失
+    expect(document.body.textContent).not.toContain('项目里的会话');
+    unmount();
+  });
+
+  it('任务也能移入 / 移出项目', async () => {
+    const p = project();
+    const { gateway } = fakeProjectGateway({ list: [p], detail: detailOf(p) });
+    useTasksStore.setState({
+      tasks: [
+        { ...baseTask('t-free', '未归属的任务') },
+        { ...baseTask('t-other', '属于别的项目的任务'), projectId: 'p2' },
+      ],
+      tombstones: {},
+      runs: [],
+    });
+
+    render(gateway, fakeKbGateway());
+    await waitForSettled(() => (document.body.textContent ?? '').includes('登月计划'));
+    click(listItemByText('登月计划'));
+    await waitForSettled(() => (document.body.textContent ?? '').includes('成员（2）'));
+
+    click(buttonByText(document, '把已有任务移进来'));
+    await waitForSettled(() => (document.body.textContent ?? '').includes('未归属的任务'));
+    expect(dialogRoot().textContent ?? '').not.toContain('属于别的项目的任务');
+
+    click(listItemByText('未归属的任务'));
+    await flush();
+
+    const moved = useTasksStore.getState().tasks.find((t) => t.id === 't-free');
+    expect(moved?.projectId).toBe('p1');
     unmount();
   });
 });

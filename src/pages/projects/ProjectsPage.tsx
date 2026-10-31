@@ -33,6 +33,7 @@ import { TaskFormDialog } from "@/components/tasks/TaskFormDialog";
 import { useAgentsStore } from "@/stores/agentsStore";
 import { ROUTES } from "@/lib/core/constants";
 import type { TaskDraft } from "@/lib/task/taskDraft";
+import type { Session, TaskConfig } from "@/types";
 import {
   artifactsOfProject,
   sessionsOfProject,
@@ -123,6 +124,12 @@ export function ProjectsPage({
   const [busy, setBusy] = useState(false);
   /** 「在项目里新建任务」：复用任务表单，只把 `projectId` 预填进去 */
   const [taskOpen, setTaskOpen] = useState(false);
+  /**
+   * 「把已有会话 / 任务移进来」：两个弹窗分开，因为候选来源不同
+   * （会话取全部未归属项目的会话，任务取全部未归属项目的任务）。
+   */
+  const [moveSessionOpen, setMoveSessionOpen] = useState(false);
+  const [moveTaskOpen, setMoveTaskOpen] = useState(false);
 
   const activeOrg = orgs.find((o) => o.id === activeOrgId);
   /** 组织角色只用来决定「删除项目」这一个入口的可见性（服务端只给 admin/owner） */
@@ -401,6 +408,56 @@ export function ProjectsPage({
     setTaskOpen(false);
   };
 
+  /**
+   * 把已有会话 / 任务移进 / 移出项目。
+   *
+   * 只调 `updateSession` / `updateTask`，**不手写 `rev`**：
+   * 会话的 `rev` 由 `updateSession` 内的 `withSessionSync` 比较白名单字段后自动递增，
+   * 任务的由 `updateTask` 的 `metaForEdit` 递增。手写一遍就会出现「同一个改动涨两次」，
+   * 而同步层会把它当成两次独立变更反复推送。
+   *
+   * 移出用 `undefined` 而不是空串：`undefined` 才是「不属于任何项目」，
+   * 空串在 `sessionsOfProject` 里同样是假，但它会让 `SESSION_SYNC_FIELDS` 的比较
+   * 把「没归属」和「归属为空」判成同一次改动之外的东西 —— 语义上不该有那个中间态。
+   */
+  const moveSessionIntoProject = (session: Session) => {
+    if (!activeId) return;
+    useSessionsStore
+      .getState()
+      .updateSession(session.id, (s) => ({ ...s, projectId: activeId }));
+    toast.success(`已把「${session.title}」移入项目`);
+    setMoveSessionOpen(false);
+  };
+
+  const moveSessionOutOfProject = (session: Session) => {
+    useSessionsStore
+      .getState()
+      .updateSession(session.id, (s) => ({ ...s, projectId: undefined }));
+    toast.success(`已把「${session.title}」移出项目`);
+  };
+
+  const moveTaskIntoProject = (task: TaskConfig) => {
+    if (!activeId) return;
+    useTasksStore.getState().updateTask(task.id, { projectId: activeId });
+    toast.success(`已把「${task.name}」移入项目`);
+    setMoveTaskOpen(false);
+  };
+
+  const moveTaskOutOfProject = (task: TaskConfig) => {
+    useTasksStore.getState().updateTask(task.id, { projectId: undefined });
+    toast.success(`已把「${task.name}」移出项目`);
+  };
+
+  /** 候选 = 不属于任何项目的会话（已归属别的项目的不列：跨项目搬移是另一件事） */
+  const movableSessions = useMemo(
+    () => allSessions.filter((s) => !s.projectId),
+    [allSessions],
+  );
+  const movableTasks = useMemo(
+    () => allTasks.filter((t) => !t.projectId && t.deletedAt == null),
+    [allTasks],
+  );
+
   if (client === null) {
     return (
       <Box sx={{ p: 3 }}>
@@ -666,9 +723,29 @@ export function ProjectsPage({
                         secondary={t.status === "enabled" ? "启用中" : "已停用"}
                         primaryTypographyProps={{ noWrap: true }}
                       />
+                      {canContribute && (
+                        <Button
+                          size="small"
+                          /* aria-label 带对象名：页面上有两个「移出」（任务行 / 会话行），
+                             纯文字会让辅助技术与用例都点错行 */
+                          aria-label={`把任务「${t.name}」移出项目`}
+                          onClick={(e) => {
+                            // 阻止冒泡：这一行本身是「打开任务页」的按钮
+                            e.stopPropagation();
+                            moveTaskOutOfProject(t);
+                          }}
+                        >
+                          移出
+                        </Button>
+                      )}
                     </ListItemButton>
                   ))}
                 </List>
+              )}
+              {canContribute && (
+                <Button size="small" onClick={() => setMoveTaskOpen(true)}>
+                  把已有任务移进来
+                </Button>
               )}
             </Box>
             <Box>
@@ -696,9 +773,26 @@ export function ProjectsPage({
                         secondary={`${s.messageCount ?? 0} 条消息`}
                         primaryTypographyProps={{ noWrap: true }}
                       />
+                      {canContribute && (
+                        <Button
+                          size="small"
+                          aria-label={`把会话「${s.title}」移出项目`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            moveSessionOutOfProject(s);
+                          }}
+                        >
+                          移出
+                        </Button>
+                      )}
                     </ListItemButton>
                   ))}
                 </List>
+              )}
+              {canContribute && (
+                <Button size="small" onClick={() => setMoveSessionOpen(true)}>
+                  把已有会话移进来
+                </Button>
               )}
               {projectArtifacts.length > 0 && (
                 <Stack direction="row" spacing={1} sx={{ mt: 1, flexWrap: "wrap" }}>
@@ -807,6 +901,68 @@ export function ProjectsPage({
         onSubmit={createTaskInProject}
         onClose={() => setTaskOpen(false)}
       />
+
+      {/*
+       * 两个「移进来」的选择弹窗。候选**只列未归属任何项目**的条目：
+       * 已属于别的项目的会话/任务是「跨项目搬移」，那是另一件事（涉及对面项目
+       * 的成员要不要知道），不在这一版里顺手做。
+       */}
+      <Dialog
+        open={moveSessionOpen}
+        onClose={() => setMoveSessionOpen(false)}
+        fullWidth
+        maxWidth="xs"
+      >
+        <DialogTitle>把已有会话移进来</DialogTitle>
+        <DialogContent>
+          {movableSessions.length === 0 ? (
+            <Typography variant="body2" sx={{ color: "text.secondary", mt: 1 }}>
+              没有可移入的会话（不属于任何项目的会话才会出现在这里）
+            </Typography>
+          ) : (
+            <List dense>
+              {movableSessions.map((s) => (
+                <ListItemButton key={s.id} onClick={() => moveSessionIntoProject(s)}>
+                  <ListItemText
+                    primary={s.title}
+                    secondary={`${s.messageCount ?? 0} 条消息`}
+                    primaryTypographyProps={{ noWrap: true }}
+                  />
+                </ListItemButton>
+              ))}
+            </List>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setMoveSessionOpen(false)}>关闭</Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={moveTaskOpen} onClose={() => setMoveTaskOpen(false)} fullWidth maxWidth="xs">
+        <DialogTitle>把已有任务移进来</DialogTitle>
+        <DialogContent>
+          {movableTasks.length === 0 ? (
+            <Typography variant="body2" sx={{ color: "text.secondary", mt: 1 }}>
+              没有可移入的任务（不属于任何项目的任务才会出现在这里）
+            </Typography>
+          ) : (
+            <List dense>
+              {movableTasks.map((t) => (
+                <ListItemButton key={t.id} onClick={() => moveTaskIntoProject(t)}>
+                  <ListItemText
+                    primary={t.name}
+                    secondary={t.status === "enabled" ? "启用中" : "已停用"}
+                    primaryTypographyProps={{ noWrap: true }}
+                  />
+                </ListItemButton>
+              ))}
+            </List>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setMoveTaskOpen(false)}>关闭</Button>
+        </DialogActions>
+      </Dialog>
     </Stack>
   );
 }
