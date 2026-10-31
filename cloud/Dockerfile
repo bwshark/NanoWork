@@ -80,7 +80,15 @@ WORKDIR /app
 COPY pyproject.toml ./
 COPY app ./app
 COPY docker ./docker
-RUN pip install --no-cache-dir ".[parse]"
+# pip 源可覆盖：默认官方 PyPI；国内构建换镜像源能躲开 files.pythonhosted.org 的
+# 连接失败（2026-10-31 实测：官方源在这里直接 `HTTPSConnectionPool` 报错，
+# 而 apt 走 aliyun 是通的 —— 两者是**独立**的，换了一个不代表另一个也通）。
+#   docker build --build-arg PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ .
+ARG PIP_INDEX_URL=""
+RUN if [ -n "$PIP_INDEX_URL" ]; then \
+        pip config set global.index-url "$PIP_INDEX_URL"; \
+    fi; \
+    pip install --no-cache-dir ".[parse]"
 
 USER app
 
