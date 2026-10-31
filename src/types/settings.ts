@@ -15,17 +15,34 @@ import type { ShortcutId } from '../lib/editor/shortcuts';
 import type { ProcessDetailLevel } from './process';
 
 /**
- * 语音转录（STT）配置：走 OpenAI 兼容的 `/audio/transcriptions`。
- * 未启用时 Composer 的语音按钮保持禁用（不申请麦克风权限）。
+ * 语音转录（STT）配置。
+ *
+ * ## 为什么不复用网关
+ * 早期设计是「endpoint 留空 → 复用网关 `/audio/transcriptions`」。但引擎的
+ * `serve` 进程**没有注册这个路由**（`nanobot/api/server.py` 只有 chat/models/
+ * plugins/usage/dream/approvals/config），STT 在引擎侧只服务 channel 消息
+ * （`channels/base.py::transcribe_audio`），客户端 HTTP 够不到。
+ * 因此默认配置下那条请求**必然 404**。
+ *
+ * 现在的语义是「直连服务商」：`provider` 决定请求形状与默认 base，
+ * `endpoint` 只在自建网关/代理时需要填。
  */
 export interface TranscriptionConfig {
   /** 是否启用语音输入 */
   enabled: boolean;
-  /** 转录服务 endpoint（OpenAI 兼容前缀）；留空则复用网关 endpoint */
+  /**
+   * 转录服务商（引擎注册表名，见 `lib/voice/providers.ts`）。
+   *
+   * 用 `string` 而非字面量联合：目录会随引擎升级增减，写死联合类型会让
+   * 「引擎新增一家、客户端老版本」直接编译失败。非法值由 `findTranscriptionProvider`
+   * 回退到 `custom`。
+   */
+  provider: string;
+  /** 转录服务 endpoint（OpenAI 兼容前缀）；留空则用 provider 的默认地址 */
   endpoint: string;
   /** 转录模型名（如 whisper-1 / whisper-large-v3） */
   model: string;
-  /** 转录服务 API Key；留空则复用网关 apiToken */
+  /** 转录服务 API Key（该服务商在公网时必填） */
   apiToken: string;
   /** 语言提示（ISO-639-1，如 zh / en）；留空由服务端自动检测 */
   language: string;

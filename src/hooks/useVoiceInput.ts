@@ -1,200 +1,238 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { connectionManager } from '@/ai/connectionManager';
-import { useSettingsStore } from '@/stores/settingsStore';
-
 /**
- * 语音输入 Hook：封装 MediaRecorder 采集 + 转录回填。
+ * 语音输入 Hook：录音 → 转 WAV → 转写 → 文本回填。
  *
  * 生命周期：
- *   start() → 申请麦克风 → 录音（同时采集音量电平用于 UI 动效）
- *   stop()  → 停止采集 → 拿音频 Blob 调 client.transcribe() → onTranscript(文本)
- *   cancel()→ 停止采集但丢弃音频（用户主动放弃）
+ *   start()  → 申请麦克风（三级降级）→ MediaRecorder 采集 + 电平分析
+ *   stop()   → 停止采集 → Blob 转 16kHz WAV → transcribeAudio() → onTranscript
+ *   cancel() → 停止采集但丢弃音频（用户主动放弃，或录制期间按 Esc）
  *
- * 所有浏览器 API 缺失/拒绝授权的情况统一转成中文错误文案走 onError，
- * 组件侧只需 toast 提示，不必关心具体内核差异。
+ * ## 与旧实现的三个关键差异
+ * 1. **转写不再走网关**：旧实现打 `{网关}/audio/transcriptions`，而引擎 `serve`
+ *    没有该路由（STT 只在 gateway 的 WS 通道里，客户端够不到）→ 默认必 404。
+ *    现在直连服务商，见 `lib/voice/transcribe.ts`。
+ * 2. **上传前转 WAV**：各家服务商对 webm 的支持参差不齐，转 16kHz 单声道 WAV
+ *    后通吃，且省掉服务端重采样。
+ * 3. **状态机显式化**：`idle | acquiring | recording | transcribing`。
+ *    旧实现用 `recording` + `transcribing` 两个布尔，存在
+ *    「两个都 false 但其实正在申请麦克风」的空档——这段时间里按钮可点，
+ *    连点两次会开两个 MediaRecorder。
+ *
+ * ## 卸载安全
+ * 每个 await 之后都检查 `mountedRef`：`getUserMedia` 与 `decodeAudioData`
+ * 都是异步的，用户在授权框弹出时切走页面是常态，不检查就会对着已卸载
+ * 的组件 setState（React 18 不报错，但麦克风**不会停**）。
  */
 
-/** 默认最大录制时长（秒）：超时自动停止并转录，避免忘记点停止导致内存堆积 */
-const DEFAULT_MAX_SECONDS = 300;
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { useSettingsStore } from '@/stores/settingsStore';
+import {
+  acquireMicrophone,
+  isRecordingSupported,
+  pickRecorderMime,
+  type AudioCapture,
+} from '@/lib/voice/capture';
+import { describeVoiceError, type VoiceErrorCode } from '@/lib/voice/errors';
+import { bandLevels, smoothLevels, VOICE_BAR_COUNT } from '@/lib/voice/levels';
+import { transcribeAudio } from '@/lib/voice/transcribe';
+import { blobToWav } from '@/lib/voice/wav';
 
-/** 音量电平采样间隔（ms） */
-const LEVEL_INTERVAL = 100;
+/** 默认最大录制时长（秒）。引擎侧 `transcription.max_duration_sec` 默认 120 */
+const DEFAULT_MAX_SECONDS = 120;
 
-/** 浏览器可编码的录音 MIME 候选，按优先级探测 */
-const MIME_CANDIDATES = [
-  'audio/webm;codecs=opus',
-  'audio/webm',
-  'audio/ogg;codecs=opus',
-  'audio/mp4',
-];
+/** 电平降频间隔（ms）：capture 侧 33ms 一跳，这里再降到 ~15fps 才 setState */
+const LEVEL_SAMPLE_MS = 66;
+
+/** 时长格式化 mm:ss */
+export function formatDuration(totalSeconds: number): string {
+  const s = Math.max(0, Math.floor(Number.isFinite(totalSeconds) ? totalSeconds : 0));
+  const mm = Math.floor(s / 60);
+  const ss = s % 60;
+  return `${mm}:${ss.toString().padStart(2, '0')}`;
+}
+
+/** 显式状态机（见文件头注释第 3 点） */
+export type VoicePhase = 'idle' | 'acquiring' | 'recording' | 'transcribing';
 
 export interface UseVoiceInputOptions {
   /** 转录成功回调：把文本回填到输入框光标处 */
   onTranscript: (text: string) => void;
   /** 失败回调（已转成人类可读文案） */
-  onError?: (message: string) => void;
+  onError?: (message: string, code: VoiceErrorCode) => void;
   /** 最大录制时长（秒） */
   maxSeconds?: number;
 }
 
 export interface UseVoiceInputResult {
-  /** 正在录音 */
+  phase: VoicePhase;
+  /** 兼容旧调用点：正在录音 */
   recording: boolean;
-  /** 录音已结束、正在转写 */
+  /** 兼容旧调用点：正在转写 */
   transcribing: boolean;
   /** 已录制秒数（UI 计时展示） */
   seconds: number;
-  /** 0~1 音量电平（UI 做脉冲/波形动效） */
+  /** 0~1 总电平（脉冲扩散用） */
   level: number;
-  /** 当前环境是否支持录音（不支持时 UI 应直接禁用按钮） */
+  /** 5 段频段电平（0~1），波形条用 */
+  bands: number[];
+  /** 当前环境是否支持录音 */
   supported: boolean;
-  /** 开始录音；失败时通过 onError 上报 */
+  /** 转录配置是否就绪（未配置时 UI 应引导去设置，而不是让用户白录一段） */
+  ready: boolean;
   start: () => Promise<void>;
-  /** 停止并转写 */
   stop: () => void;
-  /** 取消本次录音（不转写） */
   cancel: () => void;
 }
 
-/** 当前环境是否具备录音能力 */
+/** 当前环境是否具备录音能力（保留旧导出名，供既有调用点与测试使用） */
 export function isVoiceRecordingSupported(): boolean {
-  return (
-    typeof window !== 'undefined' &&
-    typeof navigator !== 'undefined' &&
-    !!navigator.mediaDevices?.getUserMedia &&
-    typeof window.MediaRecorder !== 'undefined'
-  );
-}
-
-/** 挑一个当前内核真正支持的编码格式（Safari / Chrome / Firefox 各不相同） */
-function pickMimeType(): string | undefined {
-  if (typeof MediaRecorder === 'undefined') return undefined;
-  return MIME_CANDIDATES.find((type) => {
-    try {
-      return MediaRecorder.isTypeSupported(type);
-    } catch {
-      return false;
-    }
-  });
-}
-
-/** 由录音 MIME 推断上传文件扩展名（服务端据此判别音频格式） */
-function extFromMime(mime: string): string {
-  if (mime.includes('webm')) return 'webm';
-  if (mime.includes('ogg')) return 'ogg';
-  if (mime.includes('mp4')) return 'm4a';
-  if (mime.includes('mpeg')) return 'mp3';
-  if (mime.includes('wav')) return 'wav';
-  return 'webm';
-}
-
-/** 秒数格式化为 mm:ss */
-export function formatDuration(totalSeconds: number): string {
-  const s = Math.max(0, Math.floor(totalSeconds));
-  const mm = Math.floor(s / 60);
-  const ss = s % 60;
-  return `${mm}:${ss.toString().padStart(2, '0')}`;
+  return isRecordingSupported();
 }
 
 /** 语音输入：录音 → 转写 → 文本回填 */
 export function useVoiceInput(options: UseVoiceInputOptions): UseVoiceInputResult {
   const { onTranscript, onError, maxSeconds = DEFAULT_MAX_SECONDS } = options;
 
-  const [recording, setRecording] = useState(false);
-  const [transcribing, setTranscribing] = useState(false);
+  const [phase, setPhase] = useState<VoicePhase>('idle');
   const [seconds, setSeconds] = useState(0);
   const [level, setLevel] = useState(0);
-  const [supported] = useState(() => isVoiceRecordingSupported());
+  const [bands, setBands] = useState<number[]>(() =>
+    new Array<number>(VOICE_BAR_COUNT).fill(0),
+  );
+  const [supported] = useState(() => isRecordingSupported());
 
-  /** 麦克风流 / 录音器 / 数据块 */
-  const streamRef = useRef<MediaStream | null>(null);
+  // 转录配置：只读当前值，不做响应式订阅——录音过程中用户改不了设置
+  // （设置页在另一个路由），订阅只会多一条渲染链
+  const transcription = useSettingsStore((s) => s.settings.transcription);
+  const ready =
+    transcription?.enabled === true && transcription.model.trim() !== '';
+
+  const captureRef = useRef<AudioCapture | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const mimeRef = useRef<string>('audio/webm');
-  /** 本次录音是否已被用户取消 */
+  /** 本次录音是否已被取消（停止后不转写） */
   const cancelledRef = useRef(false);
-  /** 计时器 / 音量采样器 */
   const tickRef = useRef<number | null>(null);
-  const levelRef = useRef<number | null>(null);
-  /** 音量分析链路 */
-  const audioCtxRef = useRef<AudioContext | null>(null);
-  /** 是否已卸载（避免卸载后回调仍 setState） */
+  const unsubLevelRef = useRef<(() => void) | null>(null);
+  const bandsRef = useRef<number[]>(new Array<number>(VOICE_BAR_COUNT).fill(0));
+  const lastSampleRef = useRef(0);
   const mountedRef = useRef(true);
+  /** 上一次点击时间：抑制双击（500ms 内第二次点击直接忽略） */
+  const lastToggleRef = useRef(0);
 
-  /** 释放麦克风与音频分析资源 */
-  const releaseResources = useCallback(() => {
+  /** 释放采集与定时器（幂等，可重复调用） */
+  const release = useCallback(() => {
     if (tickRef.current !== null) {
       window.clearInterval(tickRef.current);
       tickRef.current = null;
     }
-    if (levelRef.current !== null) {
-      window.clearInterval(levelRef.current);
-      levelRef.current = null;
+    unsubLevelRef.current?.();
+    unsubLevelRef.current = null;
+    captureRef.current?.dispose();
+    captureRef.current = null;
+    bandsRef.current = new Array<number>(VOICE_BAR_COUNT).fill(0);
+    if (mountedRef.current) {
+      setLevel(0);
+      setBands(new Array<number>(VOICE_BAR_COUNT).fill(0));
     }
-    streamRef.current?.getTracks().forEach((t) => t.stop());
-    streamRef.current = null;
-    if (audioCtxRef.current) {
-      void audioCtxRef.current.close().catch(() => undefined);
-      audioCtxRef.current = null;
-    }
-    if (mountedRef.current) setLevel(0);
   }, []);
 
-  /** 把音频送转录，成功后回填文本 */
+  const fail = useCallback(
+    (err: unknown, context: 'acquire' | 'transcribe') => {
+      const info = describeVoiceError(err, context);
+      onError?.(info.message, info.code);
+    },
+    [onError],
+  );
+
+  /** 音频 → WAV → 转写 → 回填 */
   const runTranscribe = useCallback(
-    async (blob: Blob) => {
+    async (raw: Blob) => {
       if (!mountedRef.current) return;
-      setTranscribing(true);
+      setPhase('transcribing');
       try {
-        const client = await connectionManager.getClient();
-        // 转录是可选能力：方法存在性即能力声明（见 ai/runtime/types.ts），
-        // 不具备时显式报可读错误，而不是抛 TypeError
-        if (!client.transcribe) {
-          throw new Error('当前引擎不支持语音转录');
+        const cfg = useSettingsStore.getState().settings.transcription;
+        // 转 WAV 失败时回退原始格式：宁可「可能不支持」也不要「一定失败」，
+        // 因为有些网关确实吃 webm，而解码失败往往是环境问题（无 AudioContext）
+        let audio = raw;
+        let filename = `voice-${Date.now()}.webm`;
+        try {
+          audio = await blobToWav(raw);
+          filename = 'voice.wav';
+        } catch {
+          audio = raw;
         }
-        const { language } = useSettingsStore.getState().settings.transcription ?? {
-          language: '',
-        };
-        const text = await client.transcribe({
-          audio: blob,
-          filename: `voice-${Date.now()}.${extFromMime(mimeRef.current)}`,
-          ...(language.trim() !== '' ? { language: language.trim() } : {}),
-        });
+        if (!mountedRef.current) return;
+
+        const text = await transcribeAudio(cfg, { audio, filename });
         if (!mountedRef.current) return;
         onTranscript(text);
       } catch (err) {
         if (!mountedRef.current) return;
-        onError?.(err instanceof Error ? err.message : String(err));
+        fail(err, 'transcribe');
       } finally {
-        if (mountedRef.current) setTranscribing(false);
+        if (mountedRef.current) setPhase('idle');
       }
     },
-    [onError, onTranscript],
+    [fail, onTranscript],
   );
 
   const start = useCallback(async () => {
-    if (recording || transcribing) return;
+    // 双击抑制：录音按钮是「点一下开、再点一下关」，误双击会立刻开-关-再开
+    const now = Date.now();
+    if (now - lastToggleRef.current < 500) return;
+    lastToggleRef.current = now;
+
+    if (phase !== 'idle') return;
     if (!supported) {
-      onError?.('当前环境不支持录音（需要浏览器麦克风权限）');
+      onError?.('当前环境不支持录音（需要浏览器麦克风权限）', 'unsupported');
       return;
     }
+    if (!ready) {
+      onError?.(
+        '未启用语音输入，请先到「设置 → 连接 → 语音输入」配置',
+        'unsupported',
+      );
+      return;
+    }
+
+    setPhase('acquiring');
+    setSeconds(0);
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const capture = await acquireMicrophone();
       if (!mountedRef.current) {
-        stream.getTracks().forEach((t) => t.stop());
+        capture.dispose();
+        setPhase('idle');
         return;
       }
-      streamRef.current = stream;
+      captureRef.current = capture;
+
+      // 电平订阅：capture 侧 33ms 一跳，这里降频再 setState，
+      // 避免高频重渲染打断输入区的中文输入法组合
+      unsubLevelRef.current = capture.onLevels((freq) => {
+        const stamp = Date.now();
+        if (stamp - lastSampleRef.current < LEVEL_SAMPLE_MS) return;
+        lastSampleRef.current = stamp;
+        const raw = bandLevels(freq, VOICE_BAR_COUNT);
+        const smoothed = smoothLevels(bandsRef.current, raw);
+        bandsRef.current = smoothed;
+        if (!mountedRef.current) return;
+        setBands(smoothed);
+        // 总电平取各段均值：只看中间那根会让「纯环境噪声」也显示满格
+        const avg =
+          smoothed.reduce((sum, v) => sum + v, 0) / (smoothed.length || 1);
+        setLevel(Math.min(1, avg));
+      });
+
+      const mime = pickRecorderMime();
+      const recorder = new MediaRecorder(
+        capture.stream,
+        mime ? { mimeType: mime } : undefined,
+      );
+      mimeRef.current = recorder.mimeType || mime || 'audio/webm';
+      recorderRef.current = recorder;
       chunksRef.current = [];
       cancelledRef.current = false;
-
-      const mimeType = pickMimeType();
-      const recorder = new MediaRecorder(
-        stream,
-        mimeType ? { mimeType } : undefined,
-      );
-      mimeRef.current = recorder.mimeType || mimeType || 'audio/webm';
-      recorderRef.current = recorder;
 
       recorder.ondataavailable = (e) => {
         if (e.data && e.data.size > 0) chunksRef.current.push(e.data);
@@ -202,33 +240,30 @@ export function useVoiceInput(options: UseVoiceInputOptions): UseVoiceInputResul
       recorder.onstop = () => {
         const chunks = chunksRef.current;
         chunksRef.current = [];
-        releaseResources();
+        release();
+        recorderRef.current = null;
         if (!mountedRef.current) return;
-        setRecording(false);
-        // 用户取消 / 无有效音频：直接收尾，不发起转录
+        setPhase('idle');
         if (cancelledRef.current) {
           cancelledRef.current = false;
           return;
         }
         if (chunks.length === 0) {
-          onError?.('没有录到声音，请重试');
+          onError?.('没有录到声音，请重试', 'empty');
           return;
         }
-        const blob = new Blob(chunks, { type: mimeRef.current });
-        void runTranscribe(blob);
+        void runTranscribe(new Blob(chunks, { type: mimeRef.current }));
       };
 
-      // 每 250ms 吐一次数据，避免长录时一次性堆积在内存
+      // 每 250ms 吐一次数据：长录时不会一次性把整段音频压在内存里
       recorder.start(250);
-      setSeconds(0);
-      setRecording(true);
+      setPhase('recording');
 
-      // 计时：到点自动停止并转写
       tickRef.current = window.setInterval(() => {
         setSeconds((prev) => {
           const next = prev + 1;
           if (next >= maxSeconds) {
-            // 到达上限：立即停（onstop 里会走转录流程）
+            // 到点自动停（onstop 里走转写流程）
             window.setTimeout(() => {
               if (recorderRef.current?.state === 'recording') {
                 recorderRef.current.stop();
@@ -239,58 +274,13 @@ export function useVoiceInput(options: UseVoiceInputOptions): UseVoiceInputResul
           return next;
         });
       }, 1000);
-
-      // 音量电平：用 AnalyserNode 采样时域波形求均方根
-      try {
-        const Ctor =
-          window.AudioContext ??
-          (window as unknown as { webkitAudioContext?: typeof AudioContext })
-            .webkitAudioContext;
-        if (Ctor) {
-          const ctx = new Ctor();
-          audioCtxRef.current = ctx;
-          const source = ctx.createMediaStreamSource(stream);
-          const analyser = ctx.createAnalyser();
-          analyser.fftSize = 512;
-          source.connect(analyser);
-          const buffer = new Uint8Array(analyser.frequencyBinCount);
-          levelRef.current = window.setInterval(() => {
-            analyser.getByteTimeDomainData(buffer);
-            let sum = 0;
-            for (let i = 0; i < buffer.length; i += 1) {
-              const v = (buffer[i] - 128) / 128;
-              sum += v * v;
-            }
-            const rms = Math.sqrt(sum / buffer.length);
-            // 放大并截断到 0~1，便于 UI 直接当强度用
-            if (mountedRef.current) setLevel(Math.min(1, rms * 3));
-          }, LEVEL_INTERVAL);
-        }
-      } catch {
-        // 音量分析只是锦上添花，失败不影响录音与转录
-      }
     } catch (err) {
-      releaseResources();
-      const name = err instanceof DOMException ? err.name : '';
-      const message =
-        name === 'NotAllowedError'
-          ? '麦克风权限被拒绝，请在浏览器/系统设置中允许后重试'
-          : name === 'NotFoundError'
-            ? '未检测到麦克风设备'
-            : `无法开始录音：${err instanceof Error ? err.message : String(err)}`;
-      onError?.(message);
+      release();
+      if (mountedRef.current) setPhase('idle');
+      fail(err, 'acquire');
     }
-  }, [
-    maxSeconds,
-    onError,
-    recording,
-    releaseResources,
-    runTranscribe,
-    supported,
-    transcribing,
-  ]);
+  }, [fail, maxSeconds, onError, phase, ready, release, runTranscribe, supported]);
 
-  /** 停止并转写 */
   const stop = useCallback(() => {
     const recorder = recorderRef.current;
     if (recorder && recorder.state !== 'inactive') {
@@ -299,36 +289,48 @@ export function useVoiceInput(options: UseVoiceInputOptions): UseVoiceInputResul
     }
   }, []);
 
-  /** 取消：停止但丢弃音频 */
   const cancel = useCallback(() => {
     const recorder = recorderRef.current;
     if (recorder && recorder.state !== 'inactive') {
       cancelledRef.current = true;
       recorder.stop();
     } else {
-      // 未在录音时调用：确保资源也被回收
-      releaseResources();
-      if (mountedRef.current) setRecording(false);
+      release();
+      if (mountedRef.current) setPhase('idle');
     }
-  }, [releaseResources]);
+  }, [release]);
 
-  // 卸载时兜底清理：停止录音、释放麦克风与定时器
+  // 卸载兜底：必须停轨，否则麦克风指示灯常亮（用户会以为在偷听）
   useEffect(() => {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
       const recorder = recorderRef.current;
       if (recorder && recorder.state !== 'inactive') {
-        // 已卸载则无需转写，直接丢弃
         cancelledRef.current = true;
         recorder.stop();
       }
+      // onstop 是异步的，这里同步释放一次，不依赖它
       if (tickRef.current !== null) window.clearInterval(tickRef.current);
-      if (levelRef.current !== null) window.clearInterval(levelRef.current);
-      streamRef.current?.getTracks().forEach((t) => t.stop());
-      void audioCtxRef.current?.close().catch(() => undefined);
+      unsubLevelRef.current?.();
+      unsubLevelRef.current = null;
+      captureRef.current?.dispose();
+      captureRef.current = null;
+      recorderRef.current = null;
     };
   }, []);
 
-  return { recording, transcribing, seconds, level, supported, start, stop, cancel };
+  return {
+    phase,
+    recording: phase === 'recording',
+    transcribing: phase === 'transcribing',
+    seconds,
+    level,
+    bands,
+    supported,
+    ready,
+    start,
+    stop,
+    cancel,
+  };
 }

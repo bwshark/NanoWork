@@ -25,6 +25,7 @@ function baseSettings(): Settings {
     memoryPolicy: { ...DEFAULT_MEMORY_POLICY },
     transcription: {
       enabled: false,
+      provider: 'groq',
       endpoint: 'http://local',
       model: 'whisper-1',
       apiToken: 'stt-token',

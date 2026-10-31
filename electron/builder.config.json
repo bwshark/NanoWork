@@ -47,7 +47,11 @@
     "hardenedRuntime": true,
     "gatekeeperAssess": false,
     "entitlements": "electron/assets/entitlements.mac.plist",
-    "entitlementsInherit": "electron/assets/entitlements.mac.plist"
+    "entitlementsInherit": "electron/assets/entitlements.mac.plist",
+    "extendInfo": {
+      "NSMicrophoneUsageDescription": "nanowork 需要使用麦克风进行语音输入：录音在本地完成，仅把音频发送到你配置的转录服务转成文字。",
+      "NSSpeechRecognitionUsageDescription": "nanowork 使用语音识别把你说的话转成文字填入输入框。"
+    }
   },
   "win": {
     "target": [

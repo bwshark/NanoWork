@@ -33,6 +33,7 @@ function fullSettings(overrides: Partial<Settings> = {}): Settings {
     memoryPolicy: { ...DEFAULT_MEMORY_POLICY },
     transcription: {
       enabled: true,
+      provider: 'groq',
       endpoint: 'http://127.0.0.1:9999/v1',
       model: 'whisper-1',
       apiToken: 'secret-stt-token',
@@ -165,6 +166,17 @@ describe('toSyncPayload：偏好要真的跟过来', () => {
       }),
     );
 
-    expect(payload.transcription).toEqual({ enabled: false, model: 'whisper-1', language: 'zh' });
+    // 只断言「该留的留、该剔的剔」，不断言具体模型名：
+    // 模型默认值属于 provider 目录的职责（`lib/voice/providers.ts`），
+    // 在这里写死会让「换默认 provider」这种正当改动变成假红。
+    expect(payload.transcription).toEqual({
+      enabled: DEFAULT_TRANSCRIPTION.enabled,
+      provider: DEFAULT_TRANSCRIPTION.provider,
+      model: DEFAULT_TRANSCRIPTION.model,
+      language: DEFAULT_TRANSCRIPTION.language,
+    });
+    // endpoint / apiToken 是本机凭据，绝不能上云
+    expect(payload.transcription).not.toHaveProperty('endpoint');
+    expect(payload.transcription).not.toHaveProperty('apiToken');
   });
 });
