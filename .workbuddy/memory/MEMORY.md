@@ -46,7 +46,26 @@ FR 权威：`docs/nanowork-prd-design-v2.md` 第 3 章；逐日细节 `YYYY-MM-D
 - ⛔ Electron 默认**拒绝所有 media 权限**（抛 `NotAllowedError`，症状同「用户拒绝」）；`setPermissionRequestHandler` + `setPermissionCheckHandler` **两个都要设**；mac 打包要 `NSMicrophoneUsageDescription`。
 - 错误分类：**`NotReadableError`（设备被占用）才是 Windows 最常见**，文案要指向「关掉会议软件」；用 `err.name` 不用 `instanceof`。
 - ⚠️ 从文档复制 endpoint 常带尾部逗号 → `normalizeSttEndpoint` 清 `,;，；`（否则 `/v1,/chat/completions` 必 404）。
-- ⚠️ 本机 `~/.nanowork/settings.json` 的 `transcription` 需 `provider=dashscope` + `model=qwen3-asr-flash`；`custom` 分支默认走 multipart，配百炼会失败。
+- **实时流式**（边说边出字）：WS `{WorkspaceId}.xxx.maas.aliyuncs.com/api-ws/v1/realtime?model=...`
+  - ⛔ 鉴权**只能** `?api_key=`：浏览器 WebSocket 不能设 header，子协议也不合法
+    （`Bearer sk-x` 含空格 → `SyntaxError: invalid subprotocol`）。代价是 key 进 URL → 只允许 wss。
+  - ⛔ 中间结果事件是 **`transcription.delta`**（文档只写 `.text`），字段 `text`(定稿)+`stash`(尾巴)；
+    最终在 `.completed` 的 `transcript`。两种事件名都要认（不同模型可能不同）。
+  - ⛔ **commit 后不发 `session.finished`**（实测只发 completed）→ 用「completed 后静默 600ms」
+    收尾，别干等超时（否则转圈十几秒）。另必须等 `session.updated` 再灌音频，早了开头几片被吞。
+  - 模型额度（实测）：`qwen-audio-3.1-realtime-flash` 可用；
+    `qwen3-asr-flash-realtime` / `qwen-audio-3.0-asr-flash` / `fun-asr-flash` 均
+    `AllocationQuota.FreeTierOnly`（免费额度耗尽，不是代码问题）。
+  - PCM 用 **AudioWorklet** 降采样（块平均，避免混叠），不用 ScriptProcessor（跑主线程会卡打字）；
+    与电平分析复用同一个 AudioContext（开第二个会让麦克风被接两次，部分驱动直接静音）。
+  - 中间结果回填必须**整体替换**（记草稿区长度），直接 append 会变成「你好你好你好」。
+  - 边框流动光晕：`conic-gradient + mask` 只留 1px 环，动 `--voice-angle`（合成层不重排）；
+    ⛔ 容器 `overflow` 必须 `visible`，否则 `inset:-1` 的光晕被裁一圈。
+- ⚠️ 本机 `~/.nanowork/settings.json` 的 `transcription` 需 `provider=dashscope` +
+  `model=qwen-audio-3.1-realtime-flash`（实时）或 `qwen3-asr-flash`（非实时）；
+  `custom` 分支默认走 multipart，配百炼会失败。
+- ⚠️ 参考视频/录屏若音轨 -91dB（全静音，录屏没开麦）→ 用官方公网样例
+  `dashscope.oss-cn-beijing.aliyuncs.com/audios/welcome.mp3` 验证识别。
 
 ## 知识库（M7）
 - 绑定：渲染层每轮预取。⛔ `kbIds: []` = 组织可见**全部**库（与 `toolAllow: []` 方向相反）；provider 靠 `setKnowledgeSearchProvider` 注入（否则成环）；检索不到不注入任何段。
