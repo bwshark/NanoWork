@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Box, Button, MenuItem, Switch, TextField } from '@mui/material';
+import { Box, Button, MenuItem, Switch, TextField, Typography } from '@mui/material';
 import { SettingsCard, SettingsRow } from '@/components/settings/SettingsPrimitives';
 import { toast } from '@/components/Toast';
 import { connectionManager } from '@/ai/connectionManager';
@@ -72,6 +72,30 @@ export function ConnectionSection() {
   const spec =
     findTranscriptionProvider(transcription.provider) ??
     TRANSCRIPTION_PROVIDERS[TRANSCRIPTION_PROVIDERS.length - 1];
+
+  /**
+   * 模型与服务商的兼容性提示（**保存前**给出，不等失败）。
+   *
+   * 两条都来自实测：
+   * - 百炼的 `qwen-audio-*` 系列在 chat 形态下只接受公网 URL，传 base64 会回
+   *   `400 url error, please check url` —— 该文案完全指不出真因；
+   * - 名字带 `-streaming` / `-realtime` 的是实时流式模型，需要 WebSocket 会话，
+   *   不能用于「录一段再识别」。
+   */
+  const modelWarning = (() => {
+    const model = transcription.model.trim();
+    if (!model) return '';
+    if (spec.protocol === 'dashscope-chat') {
+      if (model.startsWith('qwen-audio') || /-(streaming|realtime)/.test(model)) {
+        return `「${model}」不能用于语音输入：它要么只接受公网音频 URL，要么是实时流式模型（需 WebSocket 会话）。请改用 qwen3-asr-flash。`;
+      }
+      return '';
+    }
+    if (/(streaming|realtime)/.test(model) && spec.protocol === 'openai-multipart') {
+      return `「${model}」看起来是实时流式模型，OpenAI 兼容的 /audio/transcriptions 用不了它。请换成非流式模型（如 whisper-1 / whisper-large-v3）。`;
+    }
+    return '';
+  })();
 
   return (
     <Box>
@@ -211,6 +235,20 @@ export function ConnectionSection() {
             }
           />
         </SettingsRow>
+
+        {/* 模型兼容性提示：**保存前就告诉他这个组合不行**。
+            实测踩过：按百炼文档填了 qwen-audio-3.1-asr-flash-streaming，
+            结果录音正常、一停就失败，报错是 400「url error」——
+            那句文案完全指不出「该模型只吃公网 URL」。
+            在设置页拦住比让用户录一段再失败便宜得多。 */}
+        {modelWarning && (
+          <Box sx={{ px: 2, pb: 1 }}>
+            <Typography sx={{ fontSize: 12, color: 'warning.main', lineHeight: 1.6 }}>
+              {modelWarning}
+            </Typography>
+          </Box>
+        )}
+
         <Box sx={{ px: 2, py: 1.75 }}>
           <Button variant="contained" onClick={saveTranscription}>
             保存语音设置

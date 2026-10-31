@@ -31,7 +31,21 @@ export type TranscriptionProtocol =
   /** StepFun：SSE 流式，`POST {base}/audio/asr/sse`，body 为 base64 */
   | 'stepfun-sse'
   /** 小米 MiMo：OpenAI chat 形状，音频以 input_audio 塞进 messages */
-  | 'mimo-chat';
+  | 'mimo-chat'
+  /**
+   * 阿里云百炼（DashScope）OpenAI 兼容模式：`POST {base}/chat/completions`，
+   * 音频以 base64 data URI 塞进 `messages[0].content[0].input_audio.data`。
+   *
+   * ⚠️ **它没有 `/audio/transcriptions` 路由**（实测该路径返回 404 空体），
+   * 与 `mimo-chat` 形状相近但**响应与参数不同**，因此单独一类：
+   * - 语言提示走顶层 `asr_options.language`（不是 `language` 字段）
+   * - 结果在 `choices[0].message.content`
+   * - `qwen-audio-*` 系列只接受**公网 URL**，传 base64 会回
+   *   `400 url error, please check url`；只有 `qwen3-asr-flash` 接受 base64。
+   *   这个坑实测踩过：用户按文档填了 streaming 模型，症状是「录音正常、
+   *   一停就失败」，而错误文案完全指向不了真因。
+   */
+  | 'dashscope-chat';
 
 export interface TranscriptionProviderSpec {
   /** 引擎注册表名（snake_case） */
@@ -73,6 +87,16 @@ export const TRANSCRIPTION_PROVIDERS: readonly TranscriptionProviderSpec[] = [
     model: 'FunAudioLLM/SenseVoiceSmall',
     apiBase: 'https://api.siliconflow.cn/v1',
     protocol: 'openai-multipart',
+    needsKey: true,
+  },
+  {
+    name: 'dashscope',
+    label: '阿里云百炼（Qwen3-ASR，中文强）',
+    // ⛔ 必须是 `qwen3-asr-flash`：`qwen-audio-*` 系列在 chat 形态下**只吃公网 URL**，
+    // 传 base64 会回 `400 url error`。默认值选错 = 用户开箱即失败。
+    model: 'qwen3-asr-flash',
+    apiBase: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    protocol: 'dashscope-chat',
     needsKey: true,
   },
   {
@@ -141,12 +165,19 @@ export const DEFAULT_TRANSCRIPTION_PROVIDER = 'groq';
 
 /**
  * 归一化 endpoint：
- * - 尾部斜杠去掉（拼接 `/audio/transcriptions` 时不出现双斜杠）
- * - 已带 `/audio/transcriptions` 的完整 URL 原样返回（用户从文档里直接粘贴很常见）
+ * - 尾部空白与斜杠去掉（拼接路径时不出现双斜杠）
+ * - **去掉尾部逗号 / 分号**：用户从文档里复制地址时经常连带标点一起粘进来
+ *   （实测就遇到 `.../compatible-mode/v1,`），拼出 `/v1,/chat/completions`
+ *   必然 404，而报错只显示「HTTP 404」，完全看不出是多了个逗号。
+ * - 已带完整路径的 URL 原样返回（用户从文档直接粘贴端点很常见）
  */
 export function normalizeSttEndpoint(raw: string): string {
-  const trimmed = raw.trim().replace(/\/+$/, '');
-  return trimmed;
+  return raw
+    .trim()
+    // 尾部标点（逗号 / 分号 / 中文逗号）——复制粘贴最常见的污染
+    .replace(/[,;，；]+$/, '')
+    .trim()
+    .replace(/\/+$/, '');
 }
 
 /**
@@ -162,12 +193,14 @@ export function resolveTranscriptionUrl(
   switch (spec.protocol) {
     case 'openai-multipart':
     case 'mimo-chat':
+    case 'dashscope-chat':
       // 用户可能已经贴了完整端点，此时不再重复拼接
       return base.includes('/audio/') || base.includes('/chat/')
         ? base
-        : spec.protocol === 'mimo-chat'
-          ? `${base}/chat/completions`
-          : `${base}/audio/transcriptions`;
+        : spec.protocol === 'openai-multipart'
+          ? `${base}/audio/transcriptions`
+          : // mimo-chat 与 dashscope-chat 都是 chat 形态
+            `${base}/chat/completions`;
     case 'stepfun-sse':
       return base.includes('/audio/') ? base : `${base}/audio/asr/sse`;
     case 'assemblyai':
