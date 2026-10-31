@@ -29,6 +29,14 @@ import LibraryAddOutlinedIcon from "@mui/icons-material/LibraryAddOutlined";
 import UnarchiveOutlinedIcon from "@mui/icons-material/UnarchiveOutlined";
 import { toast } from "@/components/Toast";
 import { ROUTES } from "@/lib/core/constants";
+import {
+  artifactsOfProject,
+  sessionsOfProject,
+  tasksOfProject,
+} from "@/lib/project/projectScope";
+import { useArtifactsStore } from "@/stores/artifactsStore";
+import { useSessionsStore } from "@/stores/sessionsStore";
+import { useTasksStore } from "@/stores/tasksStore";
 import { KB_OFFLINE_HINT, type KbGateway, type KbOrg, type KbOrgMember, type KbSummary } from "@/lib/kb/kbClient";
 import {
   PROJECT_LOGIN_REQUIRED,
@@ -50,8 +58,11 @@ import { useSyncRuntime } from "@/sync/useSyncRuntime";
  *    不再自己算一遍「我是不是 lead」—— 重算就是第二套权限规则，后端一改必漏。
  * 2. **删除入口比 `canManage` 更严**：只有组织 admin/owner 才显示（服务端就是这么判的）。
  *    看着是同一个项目页，权限口径差一层是故意的。
- * 3. **看板与产物是「尚未接入」而不是「0 个任务」**。后者会被读成「这个项目真的没有任务」，
- *    而事实是功能还不存在 —— 这两句话给用户的结论完全相反。
+ * 3. **看板与产物来自本机投影**（`lib/project/projectScope.ts`），不是服务端。
+ *    归属是声明（`Session.projectId` / `TaskConfig.projectId` 随同步走），服务端只有
+ *    `project_kbs` 一张关联表；再让服务端算一遍等于把同一件事实现两遍，必然漂移。
+ *    产物的归属**派生**（产物 → 会话 → 项目），不在产物上冗余存一份 —— 否则会话
+ *    移到别的项目时，产物那份快照留在原地，归属会慢慢烂掉。
  */
 export function ProjectsPage({
   gateway,
@@ -110,6 +121,36 @@ export function ProjectsPage({
   const activeOrg = orgs.find((o) => o.id === activeOrgId);
   /** 组织角色只用来决定「删除项目」这一个入口的可见性（服务端只给 admin/owner） */
   const isOrgAdmin = activeOrg?.role === "admin" || activeOrg?.role === "owner";
+
+  /*
+   * 项目内的任务 / 会话 / 产物：**本机投影**（不是服务端返回的）。
+   *
+   * 为什么不用服务端：项目归属是本机声明的（`Session.projectId` / `TaskConfig.projectId`
+   * 随同步走），服务端只存了 `project_kbs` 这一张关联表。再让服务端算一遍「这个项目
+   * 有哪些会话」等于把同一件事实现两遍，而两遍必然漂移。
+   *
+   * 订阅 store 而不是读一次：用户在别的页面新建会话 / 跑任务，回到这里应当立刻看到。
+   */
+  const allSessions = useSessionsStore((s) => s.sessions);
+  const allTasks = useTasksStore((s) => s.tasks);
+  const artifactIndex = useArtifactsStore((s) => s.index);
+  const projectSessions = useMemo(
+    () => sessionsOfProject(allSessions, activeId),
+    [allSessions, activeId],
+  );
+  const projectTasks = useMemo(
+    () => tasksOfProject(allTasks, activeId),
+    [allTasks, activeId],
+  );
+  const projectArtifacts = useMemo(
+    () =>
+      artifactsOfProject(
+        allSessions,
+        Object.values(artifactIndex ?? {}),
+        activeId,
+      ),
+    [allSessions, artifactIndex, activeId],
+  );
 
   const loadOrgs = useCallback(async () => {
     if (!kb) return;
@@ -538,19 +579,70 @@ export function ProjectsPage({
 
             <Box>
               <Typography variant="subtitle2" sx={{ fontWeight: 500, mb: 1 }}>
-                任务看板
+                任务（{projectTasks.length}）
               </Typography>
-              <Typography variant="body2" sx={{ color: "text.secondary" }}>
-                尚未接入
-              </Typography>
+              {projectTasks.length === 0 ? (
+                <Typography variant="body2" sx={{ color: "text.secondary" }}>
+                  这个项目里还没有任务
+                </Typography>
+              ) : (
+                <List dense disablePadding>
+                  {projectTasks.map((t) => (
+                    <ListItemButton key={t.id} onClick={() => navigate(ROUTES.tasks)}>
+                      <ListItemText
+                        primary={t.name}
+                        secondary={t.status === "enabled" ? "启用中" : "已停用"}
+                        primaryTypographyProps={{ noWrap: true }}
+                      />
+                    </ListItemButton>
+                  ))}
+                </List>
+              )}
             </Box>
             <Box>
               <Typography variant="subtitle2" sx={{ fontWeight: 500, mb: 1 }}>
-                产物库
+                会话与产物（{projectSessions.length} 个会话 / {projectArtifacts.length} 个产物）
               </Typography>
-              <Typography variant="body2" sx={{ color: "text.secondary" }}>
-                尚未接入
-              </Typography>
+              {projectSessions.length === 0 ? (
+                <Typography variant="body2" sx={{ color: "text.secondary" }}>
+                  这个项目里还没有会话
+                </Typography>
+              ) : (
+                <List dense disablePadding>
+                  {projectSessions.map((s) => (
+                    <ListItemButton
+                      key={s.id}
+                      onClick={() => {
+                        // 用 store 的公开入口切会话再跳页：聊天页不读路由 state，
+                        // 只 navigate 会落在「上次打开的会话」上（点了却像没反应）
+                        useSessionsStore.getState().selectSession(s.id);
+                        navigate(ROUTES.chat);
+                      }}
+                    >
+                      <ListItemText
+                        primary={s.title}
+                        secondary={`${s.messageCount ?? 0} 条消息`}
+                        primaryTypographyProps={{ noWrap: true }}
+                      />
+                    </ListItemButton>
+                  ))}
+                </List>
+              )}
+              {projectArtifacts.length > 0 && (
+                <Stack direction="row" spacing={1} sx={{ mt: 1, flexWrap: "wrap" }}>
+                  {projectArtifacts.slice(0, 12).map((a) => (
+                    <Chip
+                      key={a.id}
+                      size="small"
+                      label={a.title || a.id}
+                      onClick={() => navigate(ROUTES.artifacts)}
+                    />
+                  ))}
+                  {projectArtifacts.length > 12 && (
+                    <Chip size="small" variant="outlined" label={`另有 ${projectArtifacts.length - 12} 个`} />
+                  )}
+                </Stack>
+              )}
             </Box>
           </Stack>
         )}

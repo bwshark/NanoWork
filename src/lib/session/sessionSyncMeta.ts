@@ -42,6 +42,8 @@ import type { Session, SyncMeta } from '@/types';
  * `workdir` 在清单里：它是**语义工作空间**（用户选的目录），是用户的显式选择。
  * 「路径跨设备不成立」这个理由只对 `streamWorkdir` 成立——`workdir` 要不要跨设备
  * 沿用是产品决策，改由同步层的策略处理，不该在这里被悄悄丢掉。
+ *
+ * `projectId`（FR-12.7）同理在清单里：它是「这个会话属于哪个项目」的声明。
  */
 export const SESSION_SYNC_FIELDS = [
   'title',
@@ -59,6 +61,9 @@ export const SESSION_SYNC_FIELDS = [
   // FR-3.9 ①：建会话时的插件版本声明。跨设备成立（历史事实），且不带上它就
   // 无法回答「换机 GC 会不会删掉别的设备正在用的那一版」。
   'pluginVersions',
+  // FR-12.7：所属项目空间。**是声明不是事实** —— 换台设备看到的「这个会话属于
+  // 哪个项目」必须一致，否则同一个项目在两台机器上显示的工作内容不同。
+  'projectId',
 ] as const satisfies readonly (keyof Session)[];
 
 /** 从会话上摘出参与比较的那几个字段 */

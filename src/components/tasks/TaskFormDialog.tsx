@@ -108,6 +108,13 @@ interface FormState {
    * 而清空动作必须能真的传到 store（`updateTask` 是浅合并，省略键 = 旧值留下）。
    */
   workdir: string;
+  /**
+   * 所属项目空间（FR-12.7）。空串 = 不属于任何项目。
+   *
+   * 与 `workdir` 同款「可被清空」：任务可以从一个项目移到「不归属」，
+   * 所以这个键必须留在状态里、并在提交时显式带上。
+   */
+  projectId: string;
 }
 
 /** UI 默认值：周期 + 每天 09:00（最贴近「定时任务」的直觉） */
@@ -388,6 +395,7 @@ function toForm(initial?: Partial<TaskConfig>): FormState {
     delivery:
       initial?.delivery && initial.delivery.targets.length > 0 ? initial.delivery : undefined,
     workdir: initial?.workdir ?? '',
+    projectId: initial?.projectId ?? '',
   };
 }
 
@@ -487,6 +495,11 @@ export function TaskFormDialog({
        * 收敛成 `undefined` 而不是空串——「未指定」在类型上就该是缺席。
        */
       workdir: form.workdir.trim() ? form.workdir.trim() : undefined,
+      /*
+       * 项目归属同理**显式带上**：任务可以从一个项目移到「不归属任何项目」，
+       * 省略键会让浅合并把旧项目留下 —— 界面上已经看不到归属了，数据里还在。
+       */
+      projectId: form.projectId.trim() ? form.projectId.trim() : undefined,
       runOptions: {
         ...(form.run.model ? { model: form.run.model } : {}),
         ...(form.run.skillIds.length > 0 ? { skillIds: form.run.skillIds } : {}),

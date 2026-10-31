@@ -211,6 +211,14 @@ interface SessionsState {
        * 显式传入的 agentId 不受此开关影响（那是调用方的明确指派）。
        */
       inheritCapabilities?: boolean;
+      /**
+       * 所属项目空间（FR-12.7）。缺省 = 不属于任何项目。
+       *
+       * 由项目页的「在项目里新建会话」入口传；**不从全局状态推断**
+       * （「当前打开的项目」这种隐式上下文会让用户在一个项目里点新建、
+       * 会话却挂到上次看的那个项目上）。
+       */
+      projectId?: string;
     },
   ) => Session;
   /**
@@ -1564,6 +1572,11 @@ export const useSessionsStore = create<SessionsState>()(
         fullAccess: opts?.fullAccess,
         toolApproval: opts?.toolApproval,
         ...(opts?.mode !== undefined ? { mode: opts.mode } : {}),
+        /**
+         * 所属项目空间（FR-12.7）。**只在显式指定时写**：`undefined` 是「不属于任何项目」
+         * 这个真实状态，不能用空串或默认项目填充（那会让所有会话都挂进一个项目）。
+         */
+        ...(opts?.projectId ? { projectId: opts.projectId } : {}),
         title,
         messages: [],
         permissionLog: [],

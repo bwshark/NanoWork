@@ -137,6 +137,17 @@ export interface TaskConfig extends SyncMetaFields {
    * 用户只会看到「配了目录却没生效」，所以录入侧（表单）就拦住。
    */
   workdir?: string;
+  /**
+   * 所属**项目空间**（FR-12.7）：项目 id；省略 = 不属于任何项目。
+   *
+   * 与 `workdir` 是两个维度：`workdir` 管「文件读写落在哪个目录」，
+   * 本字段只管「这个任务归到哪个项目看板里」。**不参与引擎下发**
+   * （`toNanobotJob` 不读它），所以改它不会触发网关重启。
+   *
+   * 与 `Session.projectId` 同一条纪律：只存服务端 id，项目删了就按
+   * 「项目已不存在」渲染，不凭字符串反推项目名。
+   */
+  projectId?: string;
   status: TaskStatus;
   createdAt: string;
   /** 结果推送（FR-5.6）；缺省 = 不推送（任务结果只留在自己的执行留痕里） */

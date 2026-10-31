@@ -12,6 +12,8 @@ import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 
 import { ProjectsPage } from '@/pages/projects/ProjectsPage';
+import { useSessionsStore } from '@/stores/sessionsStore';
+import { useTasksStore } from '@/stores/tasksStore';
 import type {
   ProjectDetail,
   ProjectGateway,
@@ -177,6 +179,77 @@ describe('项目空间页', () => {
     click(listItemByText('含归档'));
     await waitForSettled(() => listCalls.some((c) => c.includeArchived));
     expect(listCalls.some((c) => c.includeArchived)).toBe(true);
+    unmount();
+  });
+
+  it('任务与会话来自本机归属（projectId），不是服务端', async () => {
+    const p = project();
+    const { gateway } = fakeProjectGateway({ list: [p], detail: detailOf(p) });
+
+    useSessionsStore.setState({
+      sessions: [
+        {
+          id: 's1',
+          agentId: '',
+          title: '项目里的会话',
+          projectId: 'p1',
+          messages: [],
+          permissionLog: [],
+          createdAt: '2026-10-31T00:00:00Z',
+          updatedAt: '2026-10-31T00:00:00Z',
+        },
+        {
+          id: 's2',
+          agentId: '',
+          title: '不属于项目的会话',
+          messages: [],
+          permissionLog: [],
+          createdAt: '2026-10-31T00:00:00Z',
+          updatedAt: '2026-10-31T00:00:00Z',
+        },
+      ],
+      activeId: null,
+      sessionTombstones: {},
+    });
+    useTasksStore.setState({
+      tasks: [
+        {
+          id: 't1',
+          name: '项目里的任务',
+          projectId: 'p1',
+          schedule: { kind: 'interval', minutes: 60 },
+          prompt: 'p',
+          agentId: '',
+          status: 'enabled',
+          createdAt: '2026-10-31T00:00:00Z',
+        },
+        {
+          id: 't2',
+          name: '别的任务',
+          schedule: { kind: 'interval', minutes: 60 },
+          prompt: 'p',
+          agentId: '',
+          status: 'enabled',
+          createdAt: '2026-10-31T00:00:00Z',
+        },
+      ],
+      tombstones: {},
+      runs: [],
+    });
+
+    render(gateway, fakeKbGateway());
+    await waitForSettled(() => (document.body.textContent ?? '').includes('登月计划'));
+    click(listItemByText('登月计划'));
+    await waitForSettled(() => (document.body.textContent ?? '').includes('任务（1）'));
+
+    const text = document.body.textContent ?? '';
+    // 只有归属这个项目的条目出现（另一条必须不出现）
+    expect(text).toContain('项目里的会话');
+    expect(text).not.toContain('不属于项目的会话');
+    expect(text).toContain('项目里的任务');
+    expect(text).not.toContain('别的任务');
+    // 不再是「尚未接入」：功能已经接上了
+    expect(text).not.toContain('尚未接入');
     unmount();
   });
 });
