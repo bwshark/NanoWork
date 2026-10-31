@@ -131,3 +131,56 @@ describe('resolveTranscriptionUrl：最终请求地址', () => {
     );
   });
 });
+
+describe('normalizeSttEndpoint：复制粘贴污染', () => {
+  it('**关键**：去掉尾部逗号（从文档复制地址最常见的污染）', () => {
+    // 实测踩过：`.../compatible-mode/v1,` 拼出 `/v1,/chat/completions` 必 404
+    expect(normalizeSttEndpoint('https://x/compatible-mode/v1,')).toBe(
+      'https://x/compatible-mode/v1',
+    );
+  });
+
+  it('去掉尾部中文逗号 / 分号', () => {
+    expect(normalizeSttEndpoint('https://x/v1，')).toBe('https://x/v1');
+    expect(normalizeSttEndpoint('https://x/v1;')).toBe('https://x/v1');
+  });
+
+  it('逗号 + 斜杠混在一起也能清干净', () => {
+    expect(normalizeSttEndpoint('https://x/v1/,')).toBe('https://x/v1');
+  });
+});
+
+describe('dashscope：百炼走 chat 形态而非 /audio/transcriptions', () => {
+  const ds = findTranscriptionProvider('dashscope')!;
+
+  it('**关键**：默认模型是 qwen3-asr-flash（不是 qwen-audio-*）', () => {
+    // qwen-audio-* 在 chat 形态下只吃公网 URL，传 base64 回 400 url error
+    expect(ds.model).toBe('qwen3-asr-flash');
+  });
+
+  it('**关键**：协议是 dashscope-chat（不是 openai-multipart）', () => {
+    expect(ds.protocol).toBe('dashscope-chat');
+  });
+
+  it('**关键**：URL 拼成 /chat/completions，不拼 /audio/transcriptions', () => {
+    const url = resolveTranscriptionUrl(ds, '');
+    expect(url).toBe('https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions');
+    expect(url).not.toContain('/audio/');
+  });
+
+  it('用户填专属工作空间域名也能正确拼接', () => {
+    expect(
+      resolveTranscriptionUrl(ds, 'https://ws-xxx.cn-beijing.maas.aliyuncs.com/compatible-mode/v1'),
+    ).toBe(
+      'https://ws-xxx.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions',
+    );
+  });
+
+  it('用户填的地址尾部带逗号也能拼出正确 URL', () => {
+    expect(
+      resolveTranscriptionUrl(ds, 'https://ws-xxx.cn-beijing.maas.aliyuncs.com/compatible-mode/v1,'),
+    ).toBe(
+      'https://ws-xxx.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions',
+    );
+  });
+});

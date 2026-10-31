@@ -33,6 +33,21 @@ FR 权威：`docs/nanowork-prd-design-v2.md` 第 3 章；逐日细节 `YYYY-MM-D
 - vitest 全量必带 `--maxWorkers=3 --silent`（不加会刷 13 万行 act 告警 → `ERR_IPC_CHANNEL_CLOSED`、拿不到汇总行）；`EPERM node-brokered-fs-shim` 重跑即绿。
 - `npm run build` 偶发 vite panic → 单跑 `npx vite build` 重定向日志更稳。
 
+## 语音输入（STT）
+- ⛔ 引擎 `serve` **没有** `/audio/transcriptions`（STT 只在 channel + gateway WS 事件里）→ 客户端必须**直连服务商**。
+- ⛔ 阿里云百炼 `compatible-mode/v1` 也**没有**该路由（实测 404）：走 `POST /chat/completions`，音频 base64 放 `messages[0].content[0].input_audio.data`，语言走**顶层** `asr_options.language`，结果在 `choices[0].message.content`，须显式 `stream:false`。
+- ⛔ 百炼 `qwen-audio-*` **只吃公网 URL**（传 base64 回 `400 url error`）；能内联 base64 的只有 `qwen3-asr-flash`。带 `-streaming`/`-realtime` 的是实时模型，不能「录一段再识别」。实测同音频：qwen3→200 / qwen-audio-3.0、fun-asr→403 额度 / streaming→400。
+- 探模型是否存在：`POST /chat/completions` 传 `{"model":X,"messages":[{"role":"user","content":"hi"}]}`（回 `url error`=形态错，回 `model not found`=名字错）；`GET /models` 列真实清单。
+- ⛔ 上传前转 **16kHz 单声道 WAV**（Chrome/Electron 只吐 webm/opus，硅基流动等只认 wav/mp3）；WAV 头**必须小端**，量化用 32767 不用 32768。
+- ⛔ 录音态配色按主题分两套：参考图 `#dff7f2`+`#7cdfcb` 在浅色背景对比度 <2:1 → 浅色改 `#0f766e` 实底 + `#d7fbf1` 条。
+- 扩散环 `@keyframes` **起点 opacity 必须 0**（给 0.55 会留硬描边，像边框不像扩散）；走 transform/opacity 上合成层，别用 box-shadow。
+- 波形取**前 1/4 频段 + 对数分桶**（512 bin 全等分会后 4 根恒 0）+ 噪声地板。
+- ⛔ 点麦克风会让输入区**失焦** → 转写回来时 `editableCaretOffset` 读不到选区会返回文本长度（永远追加末尾）→ 开录时记 `voiceAnchorRef`。
+- ⛔ Electron 默认**拒绝所有 media 权限**（抛 `NotAllowedError`，症状同「用户拒绝」）；`setPermissionRequestHandler` + `setPermissionCheckHandler` **两个都要设**；mac 打包要 `NSMicrophoneUsageDescription`。
+- 错误分类：**`NotReadableError`（设备被占用）才是 Windows 最常见**，文案要指向「关掉会议软件」；用 `err.name` 不用 `instanceof`。
+- ⚠️ 从文档复制 endpoint 常带尾部逗号 → `normalizeSttEndpoint` 清 `,;，；`（否则 `/v1,/chat/completions` 必 404）。
+- ⚠️ 本机 `~/.nanowork/settings.json` 的 `transcription` 需 `provider=dashscope` + `model=qwen3-asr-flash`；`custom` 分支默认走 multipart，配百炼会失败。
+
 ## 知识库（M7）
 - 绑定：渲染层每轮预取。⛔ `kbIds: []` = 组织可见**全部**库（与 `toolAllow: []` 方向相反）；provider 靠 `setKnowledgeSearchProvider` 注入（否则成环）；检索不到不注入任何段。
 - ⛔ 正文以 Markdown 为唯一存储格式，解析产 GFM 管道表格；检索投影不落库、按 `\n\n` 逐段算，词法与 embedding 共用同一函数。
@@ -63,6 +78,8 @@ FR 权威：`docs/nanowork-prd-design-v2.md` 第 3 章；逐日细节 `YYYY-MM-D
 - ⚠️ 验 FR-8.3 回收站**别用 `%TEMP%` 下的路径**：临时目录内的删除是**直删**（返回 `Deleted (temp directory, not recycled)`），`defaultDenyWrite` 仍会拦，但「是否进回收站」验不出来。
 - Dream 输入只有 `memory/history.jsonl`；`/dream` 是后台任务，候选轮询 `GET /v1/dream/review`。
 - ⚠️ 写入工具会把形似凭据的字面串换成 `***` → 测试口令拆写并 `repr` 复核。
+- ⚠️ 内置浏览器（IAB）对本应用截图超 10MiB、`dom_cua_get_visible_dom` 返回空 → 走 Playwright（`npx --no-install playwright`；包在 `~/AppData/Local/npm-cache/_npx/<hash>/node_modules/playwright`，**必须传 `executablePath`** 指向 `ms-playwright/chromium-<rev>/chrome-win64/chrome.exe`，否则版本不符直接报「Executable doesn't exist」）。`vite --strictHost` 是错 flag（`--strictPort`）。
+- ⚠️ 新增 worktree 需建 node_modules 目录联接（PowerShell `New-Item -ItemType Junction`；cmd 的 `mklink /J` 在 Git Bash 里会被路径空格打断）。
 - venv 只有 `nanobot/nanobot/.venv`；引擎测试 `cd nanobot && ./nanobot/.venv/Scripts/python.exe -m pytest tests/`。
 
 ## 打包交付

@@ -265,3 +265,147 @@ describe('buildTranscribeRequest：文件名带时长', () => {
     expect(req.filename).toBe('voice-0s.wav');
   });
 });
+
+/**
+ * 阿里云百炼（dashscope-chat）：**这是实测踩过的第二个坑**。
+ *
+ * 用户按文档填了 `qwen-audio-3.1-asr-flash-streaming` + `compatible-mode/v1`，
+ * 症状是「录音正常、一停就失败」。真因有两层：
+ * 1. 百炼**没有** `/audio/transcriptions`（404），必须走 `/chat/completions`
+ * 2. `qwen-audio-*` 在 chat 形态下**只吃公网 URL**，传 base64 回
+ *    `400 url error` —— 这个文案完全指不出「模型不支持内联音频」
+ *
+ * 变异清单：
+ * - 协议改回 openai-multipart → 「URL 是 /chat/completions」变红
+ * - 不拦 qwen-audio → 「提前拦截给出可执行建议」变红
+ * - 把 language 放进顶层而不是 asr_options → 「asr_options.language」变红
+ * - 不传 stream:false → 「显式 stream false」变红
+ */
+function dashscopeCfg(patch: Partial<TranscriptionConfig> = {}): TranscriptionConfig {
+  return cfg({ provider: 'dashscope', endpoint: '', model: 'qwen3-asr-flash', ...patch });
+}
+
+describe('transcribeAudio：阿里云百炼 chat 形态', () => {
+  beforeEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('**关键**：打到 /chat/completions，而不是 /audio/transcriptions', async () => {
+    const { calls } = stubFetch(
+      new Response(JSON.stringify({ choices: [{ message: { content: '你好' } }] }), {
+        status: 200,
+      }),
+    );
+    await transcribeAudio(dashscopeCfg(), { audio: audioBlob(), filename: 'voice.wav' });
+    expect(calls[0].url).toBe(
+      'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions',
+    );
+    expect(calls[0].url).not.toContain('/audio/');
+  });
+
+  it('**关键**：音频以 base64 data URI 放在 input_audio.data', async () => {
+    const { calls } = stubFetch(
+      new Response(JSON.stringify({ choices: [{ message: { content: 'ok' } }] }), {
+        status: 200,
+      }),
+    );
+    await transcribeAudio(dashscopeCfg(), { audio: audioBlob(), filename: 'voice.wav' });
+    const body = JSON.parse(calls[0].init.body as string) as {
+      messages: Array<{ content: Array<{ type: string; input_audio: { data: string } }> }>;
+    };
+    const part = body.messages[0].content[0];
+    expect(part.type).toBe('input_audio');
+    expect(part.input_audio.data.startsWith('data:audio/')).toBe(true);
+    expect(part.input_audio.data).toContain(';base64,');
+  });
+
+  it('**关键**：语言提示放顶层 asr_options.language（不是 OpenAI 的 language）', async () => {
+    const { calls } = stubFetch(
+      new Response(JSON.stringify({ choices: [{ message: { content: 'ok' } }] }), {
+        status: 200,
+      }),
+    );
+    await transcribeAudio(dashscopeCfg({ language: 'zh' }), {
+      audio: audioBlob(),
+      filename: 'voice.wav',
+    });
+    const body = JSON.parse(calls[0].init.body as string) as Record<string, unknown>;
+    expect(body.asr_options).toEqual({ language: 'zh' });
+    expect(body).not.toHaveProperty('language');
+  });
+
+  it('**关键**：显式 stream:false（默认走流式会拿到 SSE 而不是 JSON）', async () => {
+    const { calls } = stubFetch(
+      new Response(JSON.stringify({ choices: [{ message: { content: 'ok' } }] }), {
+        status: 200,
+      }),
+    );
+    await transcribeAudio(dashscopeCfg(), { audio: audioBlob(), filename: 'voice.wav' });
+    const body = JSON.parse(calls[0].init.body as string) as Record<string, unknown>;
+    expect(body.stream).toBe(false);
+  });
+
+  it('**关键**：qwen-audio-* 提前拦截，给出可执行建议（而不是抛 400 url error）', async () => {
+    const { fn } = stubFetch(new Response('{}', { status: 200 }));
+    await expect(
+      transcribeAudio(dashscopeCfg({ model: 'qwen-audio-3.0-asr-flash' }), {
+        audio: audioBlob(),
+        filename: 'voice.wav',
+      }),
+    ).rejects.toThrow(/qwen3-asr-flash/);
+    // 不发请求：这个组合注定失败，白跑一次只会浪费时间
+    expect(fn).not.toHaveBeenCalled();
+  });
+
+  it('带 -streaming 后缀的模型名同样被拦截', async () => {
+    const { fn } = stubFetch(new Response('{}', { status: 200 }));
+    await expect(
+      transcribeAudio(
+        dashscopeCfg({ model: 'qwen-audio-3.1-asr-flash-streaming' }),
+        { audio: audioBlob(), filename: 'voice.wav' },
+      ),
+    ).rejects.toThrow(/不支持直接上传音频/);
+    expect(fn).not.toHaveBeenCalled();
+  });
+
+  it('从 choices[0].message.content 取文本并 trim', async () => {
+    stubFetch(
+      new Response(JSON.stringify({ choices: [{ message: { content: '  识别结果  ' } }] }), {
+        status: 200,
+      }),
+    );
+    const text = await transcribeAudio(dashscopeCfg(), {
+      audio: audioBlob(),
+      filename: 'voice.wav',
+    });
+    expect(text).toBe('识别结果');
+  });
+
+  it('content 是分块数组时也能拼出文本', async () => {
+    stubFetch(
+      new Response(
+        JSON.stringify({ choices: [{ message: { content: [{ text: '你' }, { text: '好' }] } }] }),
+        { status: 200 },
+      ),
+    );
+    const text = await transcribeAudio(dashscopeCfg(), {
+      audio: audioBlob(),
+      filename: 'voice.wav',
+    });
+    expect(text).toBe('你好');
+  });
+
+  it('content 为空 → 报可读错误（不返回空串让 UI 静默）', async () => {
+    stubFetch(new Response(JSON.stringify({ choices: [{ message: { content: '' } }] }), { status: 200 }));
+    await expect(
+      transcribeAudio(dashscopeCfg(), { audio: audioBlob(), filename: 'voice.wav' }),
+    ).rejects.toThrow(/没有识别到/);
+  });
+
+  it('缺 choices 字段也不抛 TypeError（报可读错误）', async () => {
+    stubFetch(new Response(JSON.stringify({}), { status: 200 }));
+    await expect(
+      transcribeAudio(dashscopeCfg(), { audio: audioBlob(), filename: 'voice.wav' }),
+    ).rejects.toThrow(/没有识别到/);
+  });
+});
