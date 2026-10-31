@@ -166,7 +166,35 @@
 - 项目列表的排序 / 搜索（现在是按创建时间倒序，几十个以内够用）；
 - **跨项目搬移**（A 项目的会话直接移到 B 项目）：现在要先移出、再移入，两步。
 
-### 2.8 一条测试污染的现场记录
+### 2.8 ⛔ 「创建项目报 Not Found」= 镜像没重建（2026-10-31 现场）
+
+**症状**：组织下拉能出来（`GET /api/orgs` 成功），但点「创建」报 `Not Found`，
+左侧列表区也显示 `Not Found`。`/health` 仍是 200，其它页面全正常。
+
+**根因**：`cloud/app/projects/` 是新增模块，而运行中的镜像是 4 小时前构建的，
+**里面根本没有这个目录**（`docker exec nanowork-cloud ls /app/app/projects` →
+`No such file or directory`）。`docker restart` / 无 `--build` 的 `up` 都只重启**旧镜像**。
+
+**判据（一条命令，不需要文件、不需要登录）**：
+
+```bash
+cd cloud && python docker/verify.py --routes-only
+```
+
+它拉 `/openapi.json` 检查必需路由是否注册（`REQUIRED_ROUTE_PREFIXES`）。缺了会打印
+「镜像与源码不同步」并 **exit 1**。用 `openapi` 而不是逐个请求的原因：不需要登录态，
+也不会把「路由不存在」与「不是成员」（服务端同样是 404）混成同一个现象。
+
+⚠️ 已用变异验证：把清单里任一路由改成不存在的路径 → 自检变红且 exit 1；还原后 exit 0。
+
+**重建命令**（网络受限时用本地已有的基础镜像，否则会卡在 docker.io 拉取）：
+
+```bash
+BASE_IMAGE=swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/python:3.12-slim \
+  APT_MIRROR=mirrors.aliyun.com docker compose build cloud
+```
+
+### 2.9 一条测试污染的现场记录
 
 `tests/projectsPage.test.tsx` 第一版**没有 `beforeEach` 清 store**。某条用例留下的任务
 （`projectId: 'p1'`）会渲染出自己的「移出」按钮，下一条用例 `buttonByText('移出')` 点到的是

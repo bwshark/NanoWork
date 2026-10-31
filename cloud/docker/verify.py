@@ -171,21 +171,73 @@ def verify_file(client: Client, kb_id: str, org_id: str, path: Path) -> bool:
     return True
 
 
+#: 容器镜像必须注册的路由前缀。
+#:
+#: ⚠️ 这份清单存在的唯一理由：**镜像与源码不同步**时，症状是前端某个页面所有请求
+#: 都 404（界面显示 Not Found），而 `/health` 仍然 200、其它页面全都正常 ——
+#: 2026-10-31 的「创建项目报 Not Found」就是这么来的：`app/projects/` 是新增模块，
+#: 运行中的镜像是 4 小时前构建的，里面根本没有它（`docker restart` 不会重建镜像）。
+#: 只要跑一次这个自检，就能立刻分清「后端没写这个接口」与「镜像没更新」。
+REQUIRED_ROUTE_PREFIXES = (
+    "/api/orgs/{org_id}/projects",
+    "/api/projects/{project_id}",
+    "/api/models/builtin",
+)
+
+
+def check_routes(client: Client) -> bool:
+    """拉 `/openapi.json` 确认必需路由都在。返回是否全部命中。
+
+    ⚠️ 用 openapi 而不是逐个请求：不需要登录态，也不会因为 403/404 的业务语义
+    （「不是成员」也是 404）把「路由不存在」和「没权限」混成同一个现象。
+    """
+    try:
+        spec = client.call("GET", "/openapi.json")
+    except urllib.error.HTTPError as exc:
+        print(f"  ✗ 取不到 /openapi.json（{exc.code}）—— 服务可能不是这个应用")
+        return False
+    paths = set((spec or {}).get("paths", {})) if isinstance(spec, dict) else set()
+    missing = [item for item in REQUIRED_ROUTE_PREFIXES if item not in paths]
+    if missing:
+        print(f"  ✗ 镜像缺路由：{missing}")
+        print("    镜像与源码不同步。改过 cloud/app/** 必须 `docker compose up -d --build`，")
+        print("    `docker restart` 用的是**旧镜像**（这是最常见的原因）。")
+        return False
+    print(f"  ✓ 必需路由齐全（{len(REQUIRED_ROUTE_PREFIXES)} 条）")
+    return True
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description="nanowork 云端容器端到端验证")
     parser.add_argument("--base-url", default=os.environ.get("VERIFY_BASE_URL", "http://127.0.0.1:8910"))
     parser.add_argument("--file", action="append", default=[], help="要上传的真实文件，可重复")
     parser.add_argument("--name", default="容器验证", help="组织名")
+    parser.add_argument(
+        "--routes-only",
+        action="store_true",
+        help="只验必需路由是否注册（镜像与源码同步自检，不需要 --file）",
+    )
     args = parser.parse_args(argv[1:])
 
-    if not args.file:
-        parser.error("至少要给一个 --file")
+    # `--routes-only`：只做镜像/源码同步自检，不需要任何文件。
+    # 这是「改了 cloud/app/** 却忘了重建镜像」的**一条命令**判据 ——
+    # 原来要等用户在界面上点到那个页面才发现 Not Found。
+    if not args.file and not args.routes_only:
+        parser.error("至少给一个 --file，或加 --routes-only 只验路由")
 
     client = Client(args.base_url)
     print(f"目标 {args.base_url}")
 
     health = client.call("GET", "/health")
     print(f"健康检查 {health}")
+
+    # 先验路由再登录：镜像缺模块时，后面每一步都会以「Not Found」失败，
+    # 而那句话听起来像「我请求错了」，完全指不到「镜像旧了」这个真因。
+    if not check_routes(client):
+        return 1
+    if args.routes_only:
+        print("\n结果：路由自检通过")
+        return 0
 
     _login(client)
     org = client.call("POST", "/api/orgs", {"name": args.name})
