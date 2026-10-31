@@ -400,7 +400,7 @@ function baseSettingsForRegistryTest(): Settings {
     autoSummarize: true,
     memoryRecall: true,
     memoryPolicy: { ...DEFAULT_MEMORY_POLICY },
-    transcription: { enabled: false, endpoint: 'http://local', model: 'whisper-1', apiToken: '', language: 'zh' },
+    transcription: { enabled: false, provider: 'groq', endpoint: 'http://local', model: 'whisper-1', apiToken: '', language: 'zh' },
     desktop: { closeToTray: true, hotkey: '', openAtLogin: false, showInDock: true },
     workspaceAliases: {},
     knownWorkspaces: [],

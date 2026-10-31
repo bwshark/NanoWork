@@ -8,6 +8,10 @@ import {
 } from '@/lib/core/constants';
 import { DEFAULT_BINDINGS, DEFAULT_WAKE_ACCELERATOR } from '@/lib/editor/shortcuts';
 import type { ShortcutId } from '@/lib/editor/shortcuts';
+import {
+  DEFAULT_TRANSCRIPTION_PROVIDER,
+  TRANSCRIPTION_PROVIDER_NAMES,
+} from '@/lib/voice/providers';
 import { metaForEdit } from '@/lib/sync/syncStamp';
 import type {
   ConnectionStatus,
@@ -87,11 +91,22 @@ interface SettingsState {
   resetShortcuts: () => void;
 }
 
-/** 语音转录默认配置：默认关闭（需用户显式配置模型后才会启用语音按钮） */
+/**
+ * 语音转录默认配置。
+ *
+ * `enabled` 默认 **false**：语音是可选能力，默认关着才不会在用户第一次
+ * 点麦克风时突然弹系统授权框（那会让人以为应用在偷听）。
+ *
+ * `provider` 默认 groq（目录里的第一项）：它的免费额度 + 中文准确率最均衡，
+ * 且模型 `whisper-large-v3` 与引擎注册表默认值一致。
+ * `model` 留空——真正生效的模型由 `providers.ts` 的 spec 提供，
+ * 这里写死会让用户换 provider 后仍带着上一家的模型名。
+ */
 export const DEFAULT_TRANSCRIPTION: TranscriptionConfig = {
   enabled: false,
+  provider: 'groq',
   endpoint: '',
-  model: 'whisper-1',
+  model: 'whisper-large-v3',
   apiToken: '',
   language: 'zh',
 };
@@ -260,7 +275,12 @@ export const useSettingsStore = create<SettingsState>()(
       name: STORAGE_KEYS.settings,
       storage: zustandStorage,
       // v14：记忆 v2 策略（蒸馏门槛 / 归档阈值 / 注入预算）
-      version: 14,
+      // v15：转录配置新增 `provider`（原来只有 endpoint，直连服务商后必须知道是谁）。
+      // 老用户的持久化里没有这个字段 → 浅合并已补 `groq`，但这里再归一化一次：
+      // 手工写入的未知 provider 会让 `findTranscriptionProvider` 落到 custom 分支，
+      // 而 custom 的 apiBase 为空 → 请求 URL 拼成 `/audio/transcriptions`（无 host），
+      // 表现为 fetch 直接抛 TypeError。提前收敛到合法值比事后排查便宜得多。
+      version: 15,
       migrate: (persistedState) => {
         const state = persistedState as Partial<SettingsState> | undefined;
         if (state?.settings?.gatewayEndpoint?.includes(':8765')) {
@@ -278,10 +298,19 @@ export const useSettingsStore = create<SettingsState>()(
           };
           // v4：转录配置是嵌套对象，浅合并拿不到内层默认值，需单独补齐，
           // 否则老用户升级后 settings.transcription 为 undefined，语音面板直接崩
+          // v15：同时归一化 `provider`（老值不存在 → 默认 groq；未知值 → 默认 groq）
           state.settings.transcription = {
             ...DEFAULT_TRANSCRIPTION,
             ...(state.settings.transcription ?? {}),
           };
+          if (
+            !TRANSCRIPTION_PROVIDER_NAMES.includes(
+              state.settings.transcription.provider,
+            )
+          ) {
+            state.settings.transcription.provider =
+              DEFAULT_TRANSCRIPTION_PROVIDER;
+          }
           // v5：桌面端配置同为嵌套对象，浅合并同样拿不到内层默认值，需单独补齐，
           // 否则老用户升级后 settings.desktop 为 undefined，设置页与托盘联动会崩
           state.settings.desktop = {

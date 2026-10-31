@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, Notification, safeStorage, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, Notification, safeStorage, session, shell, systemPreferences } from 'electron';
 import { basename, dirname, extname, isAbsolute, join, resolve } from 'node:path';
 import { promises as fs, appendFileSync, existsSync, readFileSync, watch as fsWatch, type Dirent } from 'node:fs';
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -5823,6 +5823,55 @@ app.whenReady().then(async () => {
 
   // 隐藏系统级原生菜单（自绘菜单栏接管）
   Menu.setApplicationMenu(null);
+
+  // ——— 麦克风权限（语音输入） ———
+  //
+  // ## 为什么必须显式放行
+  // Electron 默认**不授予**任何 `media` 权限请求，`getUserMedia` 会直接抛
+  // `NotAllowedError`。症状与「用户拒绝了授权」一模一样，但用户根本没看到
+  // 任何授权框——排查时极易误判成「浏览器权限没开」。
+  //
+  // ## 为什么只放行 media、且只放行本应用自己的窗口
+  // 这是最小授权面：
+  // - 只处理 `media`（麦克风/摄像头），其余（geolocation/notifications/midi…）
+  //   一律交回默认拒绝，避免「因为要录音顺手把定位也开了」；
+  // - 只对 `isTrustedOrigin` 的请求放行。渲染层在打包态是 `file://`，dev 态是
+  //   `http://localhost:*`；iframe 里的第三方内容（知识库预览、mermaid）
+  //   拿到麦克风是明确的越权。
+  //
+  // ## 为什么还要 `setPermissionCheckHandler`
+  // `setPermissionRequestHandler` 只管「弹框/首次请求」；`navigator.permissions.query`
+  // 与部分内部路径走的是 **check** 通道。只设 request 不设 check 的后果：
+  // 权限状态查询恒为 denied，某些库会据此提前放弃，且**不会再触发 request**，
+  // 表现为「明明放行了还是拿不到麦克风」。
+  const isTrustedOrigin = (url: string): boolean => {
+    if (url.startsWith('file://')) return true;
+    // dev server（vite）与本地预览
+    return /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?/i.test(url);
+  };
+
+  const appSession = session.defaultSession;
+  appSession.setPermissionRequestHandler((webContents, permission, callback, details) => {
+    if (permission !== 'media') {
+      callback(false);
+      return;
+    }
+    const origin = details?.requestingUrl ?? webContents?.getURL?.() ?? '';
+    callback(isTrustedOrigin(origin));
+  });
+  appSession.setPermissionCheckHandler((_wc, permission, requestingOrigin) => {
+    if (permission !== 'media') return false;
+    return isTrustedOrigin(requestingOrigin ?? '');
+  });
+  // macOS 首次调用会弹系统级「允许访问麦克风」；这里主动触发一次，
+  // 让系统授权在应用启动时就完成，而不是等用户点下麦克风才弹（那一秒的
+  // 系统弹框会盖住录音按钮，用户容易点错）。
+  // 失败一律吞掉：用户拒绝是合法选择，语音按钮会走「权限被拒」文案。
+  if (process.platform === 'darwin') {
+    void systemPreferences
+      .askForMediaAccess('microphone')
+      .catch(() => undefined);
+  }
 
   // 旧版单文件存储 → ①/② 目录化落点的一次性迁移。
   // 必须早于 createWindow：建窗时会同步读主题偏好，迁移完成后即可直接命中新落点。

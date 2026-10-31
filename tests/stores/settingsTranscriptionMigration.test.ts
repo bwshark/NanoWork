@@ -67,7 +67,10 @@ describe('settingsStore 迁移 v3 → v4：transcription 补齐', () => {
     const s = useSettingsStore.getState().settings;
     expect(s.transcription).toEqual(DEFAULT_TRANSCRIPTION);
     expect(s.transcription.enabled).toBe(false);
-    expect(s.transcription.model).toBe('whisper-1');
+    // 不写死模型名：默认模型随 provider 目录变化（whisper-1 → whisper-large-v3），
+    // 硬编码会让「换默认 provider」这种正当改动变成假红。判据是「与默认值同源」。
+    expect(s.transcription.model).toBe(DEFAULT_TRANSCRIPTION.model);
+    expect(s.transcription.provider).toBe(DEFAULT_TRANSCRIPTION.provider);
     // 用户既有值必须保留
     expect(s.apiToken).toBe('tok-legacy');
     expect(s.memoryEnabled).toBe(false);

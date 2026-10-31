@@ -1,10 +1,14 @@
 import { useEffect, useState } from 'react';
-import { Box, Button, Switch, TextField } from '@mui/material';
+import { Box, Button, MenuItem, Switch, TextField } from '@mui/material';
 import { SettingsCard, SettingsRow } from '@/components/settings/SettingsPrimitives';
 import { toast } from '@/components/Toast';
 import { connectionManager } from '@/ai/connectionManager';
 import { useModelsStore } from '@/stores/modelsStore';
 import { DEFAULT_TRANSCRIPTION, useSettingsStore } from '@/stores/settingsStore';
+import {
+  TRANSCRIPTION_PROVIDERS,
+  findTranscriptionProvider,
+} from '@/lib/voice/providers';
 
 /**
  * 连接：网关（OpenAI 兼容）凭据 + 语音输入（STT）。
@@ -44,14 +48,30 @@ export function ConnectionSection() {
   };
 
   const saveTranscription = () => {
-    // 关闭时不必校验模型；开启时模型为空会让每次转写都失败，提前兜底
-    if (transcription.enabled && transcription.model.trim() === '') {
-      toast.error('请先填写转录模型');
-      return;
+    // 关闭时不必校验；开启时缺模型或（公网服务商）缺 Key 都会让每次转写失败，
+    // 提前兜底比让用户录一段再看到 401 便宜得多
+    if (transcription.enabled) {
+      if (transcription.model.trim() === '') {
+        toast.error('请先填写转录模型');
+        return;
+      }
+      const spec = findTranscriptionProvider(transcription.provider);
+      if (spec?.needsKey && transcription.apiToken.trim() === '') {
+        toast.error(`「${spec.label}」需要填写 API Key`);
+        return;
+      }
+      if (!spec?.apiBase && transcription.endpoint.trim() === '') {
+        toast.error('该服务商无默认地址，请填写 Endpoint');
+        return;
+      }
     }
     setSettings({ transcription });
     toast.success('语音输入设置已保存');
   };
+
+  const spec =
+    findTranscriptionProvider(transcription.provider) ??
+    TRANSCRIPTION_PROVIDERS[TRANSCRIPTION_PROVIDERS.length - 1];
 
   return (
     <Box>
@@ -87,11 +107,11 @@ export function ConnectionSection() {
 
       <SettingsCard
         title="语音输入"
-        description="走 OpenAI 兼容的 /audio/transcriptions 接口。Endpoint 与 API Key 留空时复用上方网关配置；未启用时输入框的语音按钮保持禁用，不会申请麦克风权限。"
+        description="客户端直连转录服务商（不走 nanobot 网关：引擎的 /v1 没有 /audio/transcriptions 路由，语音转录在引擎侧只服务 channel 消息）。选一个服务商、填上它的 API Key 即可。未启用时麦克风按钮不会申请麦克风权限。"
       >
         <SettingsRow
           label="启用语音输入"
-          hint="关闭后输入框的麦克风按钮不可点，也不会申请麦克风权限"
+          hint="关闭后麦克风按钮只提示去设置，不申请麦克风权限"
           control={
             <Switch
               checked={transcription.enabled}
@@ -103,12 +123,44 @@ export function ConnectionSection() {
         />
         <SettingsRow
           layout="stack"
+          label="转录服务商"
+          hint="切换服务商会自动带出它的默认模型；自定义网关请选最后一项"
+        >
+          <TextField
+            select
+            fullWidth
+            size="small"
+            value={transcription.provider}
+            onChange={(e) => {
+              const next = findTranscriptionProvider(e.target.value);
+              setTranscription({
+                ...transcription,
+                provider: e.target.value,
+                // 换 provider 时同步换模型：留着上一家的模型名会让新服务商 400
+                model: next?.model ?? transcription.model,
+              });
+            }}
+          >
+            {TRANSCRIPTION_PROVIDERS.map((p) => (
+              <MenuItem key={p.name} value={p.name} sx={{ fontSize: 13 }}>
+                {p.label}
+              </MenuItem>
+            ))}
+          </TextField>
+        </SettingsRow>
+        <SettingsRow
+          layout="stack"
           label="转录服务 Endpoint"
-          hint={`留空则复用网关地址（${settings.gatewayEndpoint}）`}
+          hint={
+            spec.apiBase
+              ? `留空使用默认地址：${spec.apiBase}`
+              : "该服务商无默认地址，必须填写（如 http://127.0.0.1:8000/v1）"
+          }
         >
           <TextField
             fullWidth
             size="small"
+            placeholder={spec.apiBase || "http://127.0.0.1:8000/v1"}
             value={transcription.endpoint}
             onChange={(e) =>
               setTranscription({ ...transcription, endpoint: e.target.value })
@@ -119,14 +171,22 @@ export function ConnectionSection() {
           <TextField
             fullWidth
             size="small"
-            placeholder="whisper-1"
+            placeholder={spec.model}
             value={transcription.model}
             onChange={(e) =>
               setTranscription({ ...transcription, model: e.target.value })
             }
           />
         </SettingsRow>
-        <SettingsRow layout="stack" label="转录服务 API Key" hint="留空则复用网关 API Key">
+        <SettingsRow
+          layout="stack"
+          label="转录服务 API Key"
+          hint={
+            spec.needsKey
+              ? "该服务商在公网，必须填写自己的 Key"
+              : "自建网关若未启用鉴权可留空"
+          }
+        >
           <TextField
             fullWidth
             size="small"

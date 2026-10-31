@@ -12,11 +12,9 @@ import {
   Tooltip,
   Typography,
 } from "@mui/material";
-import type { Theme } from "@mui/material";
 import { alpha } from "@mui/material/styles";
 import SendIcon from "@mui/icons-material/Send";
 import StopIcon from "@mui/icons-material/Stop";
-import KeyboardVoiceIcon from "@mui/icons-material/KeyboardVoice";
 import SmartToyIcon from "@mui/icons-material/SmartToy";
 import GroupsIcon from "@mui/icons-material/Groups";
 import AutoAwesomeIcon from "@mui/icons-material/AutoAwesome";
@@ -53,7 +51,8 @@ import {
   FileReferencePicker,
   type FileRefItem,
 } from "@/components/composer/FileReferencePicker";
-import { useVoiceInput, formatDuration } from "@/hooks/useVoiceInput";
+import { useVoiceInput } from "@/hooks/useVoiceInput";
+import { VoiceInputButton } from "@/components/composer/VoiceInputButton";
 import { useActiveModelCapabilities } from "@/hooks/useActiveModelCapabilities";
 import { shortDegradedReason, visionNotice } from "@/lib/model/modelCapability";
 import {
@@ -613,7 +612,13 @@ export function Composer({
    */
   const suppressTriggerRef = useRef(false);
 
-  /** 语音转录配置（来自设置；未启用时语音按钮禁用，不申请麦克风权限） */
+  /**
+   * 语音转录配置（来自设置）。
+   *
+   * 就绪判定与 hook 内的 `ready` 同源（`enabled && model 非空`），这里保留一份
+   * 是因为工具栏还要用它决定「点击是开录还是去设置」——把它和 hook 的返回值
+   * 合并成单一真源后，按钮与 hook 就不会出现「按钮亮着但点下去报未配置」。
+   */
   const transcription = useSettingsStore((s) => s.settings.transcription);
   const voiceReady =
     transcription?.enabled === true && transcription.model.trim() !== "";
@@ -695,10 +700,54 @@ export function Composer({
     [replaceRange, pushUndo],
   );
 
+  /**
+   * 语音转写的**插入锚点**。
+   *
+   * 为什么不能像其他调用点那样直接用 `insertAtCaret`：
+   * 点下麦克风按钮会让输入框失焦、选区消失，而转写结果要等 1~3 秒才回来。
+   * 那时 `editableCaretOffset` 读到的选区**不在输入区内**，按它的实现会返回
+   * 「文本长度」——也就是永远追加到末尾。用户在句子中间说话，文字却跑到
+   * 最后一句后面，这是最容易被当成「AI 乱写」的体验问题。
+   *
+   * 因此开始录音的那一刻就把偏移量记下来，转写回来按这个偏移插入。
+   * 期间用户如果又动了光标，说明他改主意了——此时用**新光标**（用户意图优先）。
+   */
+  const voiceAnchorRef = useRef<number | null>(null);
+
+  const insertVoiceTranscript = useCallback(
+    (snippet: string) => {
+      const root = editableRef.current;
+      if (!root) return;
+      // 选区还在输入区内 → 用户显然希望插在当前光标处
+      const live = hasSelectionInside(root) ? editableCaretOffset(root) : null;
+      const anchor = live ?? voiceAnchorRef.current ?? extractEditableText(root).length;
+      // 锚点可能因用户删字而越界，收敛到当前文本长度
+      const total = extractEditableText(root).length;
+      const at = Math.min(anchor, total);
+      replaceRange(at, at, snippet);
+      pushUndo(0);
+      voiceAnchorRef.current = null;
+    },
+    [replaceRange, pushUndo],
+  );
+
   const voice = useVoiceInput({
-    onTranscript: insertAtCaret,
+    onTranscript: insertVoiceTranscript,
     onError: (message) => toast.error(message),
   });
+
+  /** 录音开关：开录前记录插入锚点（见 voiceAnchorRef 注释） */
+  const toggleVoice = useCallback(() => {
+    if (voice.recording) {
+      voice.stop();
+      return;
+    }
+    const root = editableRef.current;
+    // 只在「选区确实在输入区内」时记锚点；否则留 null 让它退到末尾
+    voiceAnchorRef.current =
+      root && hasSelectionInside(root) ? editableCaretOffset(root) : null;
+    void voice.start();
+  }, [voice]);
 
   // —— 附件增删 ——
   const addFiles = useCallback(
@@ -1401,8 +1450,8 @@ export function Composer({
     }
     if (matchBinding(resolveBinding("voice.toggle", shortcuts), e)) {
       e.preventDefault();
-      if (voice.recording) voice.stop();
-      else void voice.start();
+      // 走 toggleVoice 而不是内联 start/stop：它负责记录插入锚点（见 voiceAnchorRef）
+      toggleVoice();
     }
   };
 
@@ -2188,85 +2237,20 @@ export function Composer({
             </MenuItem>
           </Menu>
 
-          {/* 语音输入：未配置转录服务时禁用并提示去设置 */}
-          {voice.recording && (
-            <Typography
-              sx={{
-                fontSize: 12,
-                color: "error.main",
-                fontVariantNumeric: "tabular-nums",
-                userSelect: "none",
-              }}
-            >
-              {formatDuration(voice.seconds)}
-            </Typography>
-          )}
-          {voiceReady ? (
-            <Tooltip
-              title={
-                voice.recording
-                  ? "点击结束并开始转写"
-                  : voice.transcribing
-                    ? "正在转写…"
-                    : "语音输入"
-              }
-            >
-              <IconButton
-                size="small"
-                onClick={() => {
-                  if (voice.recording) voice.stop();
-                  else void voice.start();
-                }}
-                disabled={voice.transcribing}
-                aria-label="语音输入"
-                sx={{
-                  color: voice.recording ? "error.main" : "text.secondary",
-                  bgcolor: voice.recording ? "action.hover" : "transparent",
-                  "&:hover": { color: "text.primary", bgcolor: "action.hover" },
-                  // 录音中：用主题 error 色做一圈随音量扩散的脉冲，避免硬编码颜色
-                  ...(voice.recording
-                    ? {
-                        animation:
-                          "composerVoicePulse 1.4s ease-in-out infinite",
-                        "@keyframes composerVoicePulse": {
-                          "0%, 100%": {
-                            boxShadow: (theme: Theme) =>
-                              `0 0 0 0 ${alpha(theme.palette.error.main, 0.45)}`,
-                          },
-                          "50%": {
-                            boxShadow: (theme: Theme) =>
-                              `0 0 0 ${4 + voice.level * 6}px ${alpha(theme.palette.error.main, 0)}`,
-                          },
-                        },
-                      }
-                    : {}),
-                }}
-              >
-                {voice.recording ? (
-                  <StopIcon fontSize="small" />
-                ) : (
-                  <KeyboardVoiceIcon fontSize="small" />
-                )}
-              </IconButton>
-            </Tooltip>
-          ) : (
-            <Tooltip title="未配置转录服务，请在「设置 → 语音输入」中开启">
-              {/* disabled 按钮不派发鼠标事件，Tooltip 需要包一层 span 才能生效 */}
-              <span>
-                <IconButton
-                  size="small"
-                  disabled
-                  aria-label="语音输入（未配置转录服务）"
-                  sx={{
-                    color: "text.disabled",
-                    "&.Mui-disabled": { color: "text.disabled" },
-                  }}
-                >
-                  <KeyboardVoiceIcon fontSize="small" />
-                </IconButton>
-              </span>
-            </Tooltip>
-          )}
+          {/* 语音输入：状态机、环形动效、计时全部封在 VoiceInputButton 内。
+              未配置时点击会跳去设置页，而不是「禁用 + 只能看 Tooltip」。 */}
+          <VoiceInputButton
+            phase={voice.phase}
+            seconds={voice.seconds}
+            level={voice.level}
+            bands={voice.bands}
+            supported={voice.supported}
+            ready={voiceReady}
+            onToggle={toggleVoice}
+            // 未配置时直接打开设置弹窗并定位到「连接」分区（语音输入就在那里），
+            // 而不是只弹一句「请去设置」——用户还得自己找在哪
+            onConfigure={() => useSettingsUiStore.getState().openSettings('connection')}
+          />
 
           {isStreaming ? (
             // 流式传输中：把发送按钮换成「停止」按钮，点击中断当前会话对话

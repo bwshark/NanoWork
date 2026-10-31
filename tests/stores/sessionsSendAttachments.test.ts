@@ -75,6 +75,7 @@ function resetStores() {
       memoryPolicy: { ...DEFAULT_MEMORY_POLICY },
       transcription: {
         enabled: false,
+      provider: 'groq',
         endpoint: '',
         model: 'whisper-1',
         apiToken: '',
