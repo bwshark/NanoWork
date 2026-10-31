@@ -63,6 +63,10 @@ FR 权威：`docs/nanowork-prd-design-v2.md` 第 3 章；逐日细节 `YYYY-MM-D
 
 ## 本机环境坑
 - ⚠️ 云端跑在容器 `nanowork-cloud`(8910)：改 `cloud/app/**` **必须重建镜像**（`docker restart` 与无 `--build` 的 up 都是旧代码）。
+  症状是「某个页面全部 Not Found，但 `/health` 200、别的页面正常」→ 一条命令分清：`cd cloud && python docker/verify.py --routes-only`（拉 openapi 查必需路由，缺了 exit 1）。
+  ⛔ 重建时 `BASE_IMAGE` **必须与旧镜像同一版本**（现为 `python:3.13-slim`；用 3.12 会让 apt 层缓存全失效、卡在 56MB 中文字体包下载僵死）。查法 `docker run --rm <img> python -V`。
+  ⛔ **apt 源与 pip 源独立**：apt 走通 aliyun ≠ pip 通，官方 PyPI 在这里直接 `HTTPSConnectionPool` 失败。三条一起给：`BASE_IMAGE=<swr python:3.13-slim> APT_MIRROR=mirrors.aliyun.com PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/`。
+  ⚠️ 构建日志全是 NUL 字节（先 `tr -d '\000'`）；判断僵死看**日志字节数是否增长**，别看时长。`docker cp` 只能临时止血（容器重建即丢）。
 - Docker CLI 不在 PATH：`%LOCALAPPDATA%\Programs\DockerDesktop\resources\bin\docker.exe`。
 - ⚠️ `HTTP_PROXY` 会让 urllib 把 127.0.0.1 交给代理 → 502（脚本用 `ProxyHandler({})`）。
 - ⚠️ 重启 8910 前确认 PID 已换新（旧进程占着时新进程 `WinError 10048` 退出，`/health` 仍 200）。

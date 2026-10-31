@@ -13,6 +13,7 @@ import {
   Typography,
 } from "@mui/material";
 import { alpha } from "@mui/material/styles";
+import type { Theme } from "@mui/material";
 import SendIcon from "@mui/icons-material/Send";
 import StopIcon from "@mui/icons-material/Stop";
 import SmartToyIcon from "@mui/icons-material/SmartToy";
@@ -147,6 +148,16 @@ const KIND_LABEL: Record<AttachmentKind, string> = {
   audio: "音频",
   other: "文件",
 };
+
+/**
+ * 语音录音态的边框色（薄荷青）。
+ *
+ * 取自参考视频逐像素取样：光晕主体 `#66CBAF`，边缘过渡 `#59AB94` / `#3C836F`。
+ * 与 `VoiceInputButton` 的 `RECORDING_TONE` 同一色系，但**刻意不复用那个常量**：
+ * 按钮在浅色主题下要反色（深绿实底），而边框始终是「亮青色的光」，
+ * 浅色主题下反而需要更深一点的青才看得见——两处取值方向不同，合并会互相牵制。
+ */
+const VOICE_BORDER_COLOR = "#5fd0b4";
 
 /** `/compact` 指令插入的压缩提示词 */
 const COMPACT_PROMPT =
@@ -714,25 +725,67 @@ export function Composer({
    */
   const voiceAnchorRef = useRef<number | null>(null);
 
-  const insertVoiceTranscript = useCallback(
-    (snippet: string) => {
+  /**
+   * 本次语音的**草稿区长度**（实时模式下已写入输入框的字符数）。
+   *
+   * 为什么需要它：实时识别的中间结果是「整体替换」语义——同一条会反复下发
+   * （`text` 定稿 + `stash` 临时尾巴）。若每次 append，输入框会变成
+   * 「你好你好你好…」；因此必须记住「上次写了多少字」，下次先删掉再写新的。
+   *
+   * 用 `null` 表示「当前没有进行中的草稿」，`0` 表示「草稿区已建立但还没写内容」。
+   * 两者必须区分：否则首次中间结果到达时会被当成「没有草稿」而追加。
+   */
+  const voiceDraftLenRef = useRef<number | null>(null);
+
+  /** 把草稿区替换成新文本（先删旧草稿，再插新内容） */
+  const replaceVoiceDraft = useCallback(
+    (text: string) => {
       const root = editableRef.current;
       if (!root) return;
-      // 选区还在输入区内 → 用户显然希望插在当前光标处
-      const live = hasSelectionInside(root) ? editableCaretOffset(root) : null;
-      const anchor = live ?? voiceAnchorRef.current ?? extractEditableText(root).length;
-      // 锚点可能因用户删字而越界，收敛到当前文本长度
+      const anchor =
+        voiceAnchorRef.current ?? extractEditableText(root).length;
       const total = extractEditableText(root).length;
       const at = Math.min(anchor, total);
-      replaceRange(at, at, snippet);
+      const prev = voiceDraftLenRef.current ?? 0;
+      // 删掉上一次写入的草稿（长度可能因用户手动编辑而不再等于 prev，
+      // 因此用 min 收敛，绝不让 end 越过当前文本长度）
+      const end = Math.min(at + prev, total);
+      replaceRange(at, end, text);
+      voiceDraftLenRef.current = text.length;
+      // 中间结果不单独入撤销栈：一次语音应当只占**一步**撤销，
+      // 否则用户按 Ctrl+Z 会逐字回退，像卡带一样
+    },
+    [replaceRange],
+  );
+
+  /** 最终文本：结束草稿、落一步撤销、清锚点 */
+  const commitVoiceTranscript = useCallback(
+    (text: string) => {
+      const root = editableRef.current;
+      if (!root) return;
+      if (voiceDraftLenRef.current !== null) {
+        // 实时模式：最终结果替换掉草稿区
+        replaceVoiceDraft(text);
+      } else {
+        // 非实时模式：一次性插入（沿用锚点逻辑）
+        const live = hasSelectionInside(root) ? editableCaretOffset(root) : null;
+        const anchor =
+          live ?? voiceAnchorRef.current ?? extractEditableText(root).length;
+        const total = extractEditableText(root).length;
+        const at = Math.min(anchor, total);
+        replaceRange(at, at, text);
+      }
+      // 整段语音只入栈一步：撤销时整段消失，而不是逐字回退
       pushUndo(0);
+      voiceDraftLenRef.current = null;
       voiceAnchorRef.current = null;
     },
-    [replaceRange, pushUndo],
+    [pushUndo, replaceRange, replaceVoiceDraft],
   );
 
   const voice = useVoiceInput({
-    onTranscript: insertVoiceTranscript,
+    onTranscript: commitVoiceTranscript,
+    onPartial: replaceVoiceDraft,
     onError: (message) => toast.error(message),
   });
 
@@ -746,6 +799,8 @@ export function Composer({
     // 只在「选区确实在输入区内」时记锚点；否则留 null 让它退到末尾
     voiceAnchorRef.current =
       root && hasSelectionInside(root) ? editableCaretOffset(root) : null;
+    // 新一轮语音：草稿区从「无」开始（null，不是 0——见 voiceDraftLenRef 注释）
+    voiceDraftLenRef.current = null;
     void voice.start();
   }, [voice]);
 
@@ -1825,15 +1880,75 @@ export function Composer({
           position: "relative",
           bgcolor: "background.paper",
           border: "1px solid",
-          borderColor: dragOver ? "primary.main" : "divider",
+          // 语音录音中：边框换成薄荷青（视频里就是这个效果），
+          // 并与下方 ::after 的流动光晕配合。dragOver 优先级最高（拖拽是瞬时操作）。
+          borderColor: dragOver
+            ? "primary.main"
+            : voice.recording
+              ? VOICE_BORDER_COLOR
+              : "divider",
           borderRadius: 2,
           boxShadow: (theme) => (isHero ? theme.shadows[6] : theme.shadows[2]),
           transition: "border-color 0.2s, box-shadow 0.2s",
           "&:focus-within": {
-            borderColor: "primary.main",
-            boxShadow: (theme) => `0 0 0 1px ${theme.palette.primary.main}`,
+            borderColor: voice.recording ? VOICE_BORDER_COLOR : "primary.main",
+            boxShadow: (theme) =>
+              voice.recording
+                ? `0 0 0 1px ${VOICE_BORDER_COLOR}`
+                : `0 0 0 1px ${theme.palette.primary.main}`,
           },
-          overflow: "hidden",
+          // —— 语音录音中的流动光晕（视频目标效果）——
+          //
+          // 为什么用 ::after + 渐变位移，而不是给 border 做 animation：
+          // 1. `border-color` 只能整体变色，做不出「光在边框上流动」；
+          // 2. 用 `box-shadow` 逐帧改扩散半径会每帧重绘整层（4K 屏上打字掉帧）。
+          // 这里用「conic-gradient 沿边框扫一圈 + mask 只留 1px 环」，位移只改
+          // `--voice-angle`（一个自定义属性），合成层独立，不触发重排。
+          ...(voice.recording
+            ? {
+                "@keyframes voiceBorderSpin": {
+                  from: { "--voice-angle": "0deg" },
+                  to: { "--voice-angle": "360deg" },
+                },
+                "@keyframes voiceBorderPulse": {
+                  "0%, 100%": { opacity: 0.55 },
+                  "50%": { opacity: 0.95 },
+                },
+                "&::after": {
+                  content: '""',
+                  position: "absolute",
+                  inset: -1,
+                  borderRadius: 2,
+                  padding: "1px",
+                  pointerEvents: "none",
+                  background: (theme: Theme) =>
+                    `conic-gradient(from var(--voice-angle, 0deg), ` +
+                    `transparent 0deg, ${alpha(VOICE_BORDER_COLOR, 0.15)} 60deg, ` +
+                    `${VOICE_BORDER_COLOR} 110deg, #d7fbf1 130deg, ` +
+                    `${VOICE_BORDER_COLOR} 150deg, ${alpha(VOICE_BORDER_COLOR, 0.15)} 210deg, ` +
+                    `transparent 300deg, transparent 360deg)`,
+                  // mask 把渐变裁成只剩 1px 宽的环：`content-box` 排除内部
+                  WebkitMask:
+                    "linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0)",
+                  WebkitMaskComposite: "xor",
+                  mask: "linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0)",
+                  maskComposite: "exclude",
+                  animation:
+                    "voiceBorderSpin 2.4s linear infinite, voiceBorderPulse 1.8s ease-in-out infinite",
+                  // 用户关动效：保留静态环（能看出「正在录」），去掉旋转
+                  "@media (prefers-reduced-motion: reduce)": {
+                    animation: "none",
+                    background: (theme: Theme) => alpha(VOICE_BORDER_COLOR, 0.8),
+                  },
+                },
+                // 外发光：静态一层，不参与逐帧动画（省一次全层重绘）
+                boxShadow: `0 0 0 1px ${alpha(VOICE_BORDER_COLOR, 0.35)}, 0 0 18px ${alpha(VOICE_BORDER_COLOR, 0.18)}`,
+              }
+            : {}),
+          // 不能 overflow:hidden：录音态的 ::after 光晕在 inset:-1 处，
+          // 会被裁掉一圈（表现为「边框只有内侧发光」）。内容溢出的实际风险
+          // 由子元素自己控制（附件条 / 工具栏都有各自的裁剪）。
+          overflow: "visible",
         }}
       >
         {/* 拖拽悬停提示层 */}

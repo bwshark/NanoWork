@@ -63,7 +63,11 @@ const BAR_MIN_HEIGHT = 4;
 const BAR_MAX_HEIGHT = 15;
 
 export interface VoiceInputButtonProps {
-  phase: 'idle' | 'acquiring' | 'recording' | 'transcribing';
+  /**
+   * 状态机（与 `VoicePhase` 同构）。
+   * `connecting` = WS 握手 / 等服务端回执；`finishing` = 已 commit 等最终文本。
+   */
+  phase: 'idle' | 'acquiring' | 'connecting' | 'recording' | 'finishing' | 'transcribing';
   seconds: number;
   level: number;
   bands: number[];
@@ -207,9 +211,12 @@ function VoiceInputButtonInner({
 }: VoiceInputButtonProps) {
   const theme = useTheme();
   const tone = RECORDING_TONE[theme.palette.mode];
-  const recording = phase === "recording";
-  const transcribing = phase === "transcribing";
-  const acquiring = phase === "acquiring";
+  // connecting（等服务端回执）也算「正在录」：麦克风已开、电平在动，
+  // 显示计时与波形才能让用户知道「已经在听了」，而不是以为点了没反应。
+  const connecting = phase === 'connecting';
+  const recording = phase === 'recording' || connecting;
+  const transcribing = phase === 'transcribing' || phase === 'finishing';
+  const acquiring = phase === 'acquiring';
   const needsSetup = supported && !ready;
 
   // 不可用：环境不支持 / 未配置。两种情况文案不同——
@@ -218,13 +225,15 @@ function VoiceInputButtonInner({
     ? "当前环境不支持录音（需要麦克风权限）"
     : needsSetup
       ? "未配置语音输入，点击去设置"
-      : recording
-        ? "点击结束并转写（Ctrl+D）"
-        : transcribing
-          ? "正在转写…"
-          : acquiring
-            ? "正在申请麦克风…"
-            : "语音输入（Ctrl+D，或长按 Alt）";
+      : connecting
+        ? "正在连接实时识别…"
+        : phase === 'recording'
+          ? "点击结束（实时识别中，Ctrl+D）"
+          : transcribing
+            ? "正在收尾…"
+            : acquiring
+              ? "正在申请麦克风…"
+              : "语音输入（Ctrl+D，或长按 Alt）";
 
   const handleClick = () => {
     if (!supported) return;

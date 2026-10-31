@@ -17,6 +17,8 @@
  * 采集层尽力要求，量化前再用 `normalizePeak` 兜一层（见 `wav.ts`）。
  */
 
+import { attachPcmCapture } from './pcm';
+
 /**
  * 期望采样率；实际以 `track.getSettings()` 为准（浏览器会静默改）。
  *
@@ -52,12 +54,23 @@ const CONSTRAINT_TIERS: readonly MediaTrackConstraints[] = [
 
 export interface AudioCapture {
   stream: MediaStream;
-  /** 实际生效的采样率（用于日志与诊断，不参与编码——编码固定 16kHz） */
+  /** 实际生效的采样率（用于日志与诊断，不编码——PCM 抽取固定 16kHz） */
   sampleRate: number;
-  /** 释放：停轨 + 关 AudioContext */
+  /** 释放：停轨 + 关 AudioContext + 断开 AudioWorklet */
   dispose: () => void;
   /** 注册电平回调（0~1 的频段数组）；返回取消注册函数 */
   onLevels: (cb: (levels: number[]) => void) => () => void;
+  /**
+   * 注册 PCM16 帧回调（16kHz 单声道）。
+   *
+   * 实时识别必须边录边送 PCM，不能用 `MediaRecorder`——它只产 webm/opus，
+   * 而 realtime 协议要的是裸 PCM16。这里用 `AudioWorklet` 在音频线程里
+   * 重采样到 16kHz 并按帧回传，主线程只做转发。
+   *
+   * 返回取消注册函数；`AudioWorklet` 不可用（或 AudioContext 创建失败）时
+   * 返回 `null`，调用方应退回非实时模式，而不是静默不送音频。
+   */
+  onPcm: (cb: (pcm: Int16Array) => void) => (() => void) | null;
 }
 
 /**
@@ -161,6 +174,28 @@ export async function acquireMicrophone(): Promise<AudioCapture> {
     onLevels: (cb) => {
       levelSubs.add(cb);
       return () => levelSubs.delete(cb);
+    },
+    onPcm: (cb) => {
+      if (!audioCtx) return null;
+      // 复用同一个 AudioContext：再开一个会让麦克风被接两次（部分驱动下
+      // 第二次 createMediaStreamSource 直接静音），也更容易撞 6 个上下文上限。
+      const ctx = audioCtx;
+      let cancelled = false;
+      let cancel: (() => void) | null = null;
+      // attachPcmCapture 是异步的（要加载 Worklet 模块），但调用方需要同步拿到取消函数
+      void attachPcmCapture(ctx, stream, (frame) => {
+        if (!cancelled) cb(frame);
+      }).then((fn) => {
+        if (cancelled) {
+          if (fn) fn();
+        } else {
+          cancel = fn;
+        }
+      });
+      return () => {
+        cancelled = true;
+        if (cancel) cancel();
+      };
     },
   };
 }
