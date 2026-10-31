@@ -11,6 +11,7 @@ import {
   CRON_SESSION_ID_PREFIX,
 } from '@/lib/session/sessionImport';
 import { artifactContentHash, hasContentHashInHistory } from '@/lib/artifact/artifactIndex';
+import { buildDiscussionRecord } from '@/lib/voice/discussionRecord';
 import { recordAppAudit } from '@/lib/audit/appAudit';
 import {
   createRecorder,
@@ -246,6 +247,27 @@ interface SessionsState {
   appendChannelMessage: (sessionId: string, content: string) => string;
   /** 撤回一条乐观上屏的频道消息（发送失败时用；id 不存在则静默 no-op） */
   dropChannelMessage: (sessionId: string, messageId: string) => void;
+  /**
+   * 追加一条「语音讨论纪要」助手消息。
+   *
+   * ## 为什么是 store 动作而不是 UI 直接 push
+   * 消息的唯一事实源是**事件流**：只在内存里塞一条，刷新后就会消失
+   * （用户会认为纪要丢了）。因此必须和正常回合一样，落一条 `message`
+   * 事件 + 一条 `session-end`（本轮边界的判据只有它）。
+   *
+   * ## 为什么要 `loadSession`
+   * 记录器是「会话水合时建立」的。首启直接进空态面板、用户当场开讨论时，
+   * 会话可能还没水合——此时 `recordFor` 会拒绝落盘（见 `recordFor` 的注释），
+   * 纪要在内存里看着正常、重启即丢，属于最难查的一类假绿。
+   */
+  appendVoiceDiscussionRecord: (
+    sessionId: string,
+    input: {
+      durationMs: number;
+      turns: Array<{ role: 'user' | 'assistant'; text: string }>;
+      summary: string;
+    },
+  ) => Promise<void>;
   /**
    * 为 IM 会话开一条**实时过程**占位助手消息，返回其 id。
    *
@@ -1933,6 +1955,47 @@ export const useSessionsStore = create<SessionsState>()(
             ? { ...x, messages: x.messages.filter((m) => m.id !== messageId) }
             : x,
         ),
+      }));
+    },
+
+    /**
+     * 语音讨论纪要：文本由 `buildDiscussionRecord` 统一生成（与落盘同源，
+     * 避免「界面显示 A、刷新后变 B」）。
+     */
+    appendVoiceDiscussionRecord: async (sessionId, input) => {
+      const session = get().sessions.find((x) => x.id === sessionId);
+      // 只读会话（定时任务留痕等）不接受追加：它们的内容真值在引擎侧
+      if (!session || session.readonly) return;
+      if (!hydratedSessions.has(sessionId)) await get().loadSession(sessionId);
+      if (!get().sessions.some((x) => x.id === sessionId)) return;
+
+      const content = buildDiscussionRecord(input);
+      const createdAt = nowIso();
+      const message: Message = {
+        id: genId(),
+        role: 'assistant',
+        content,
+        createdAt,
+        ...(input.durationMs > 0 ? { durationMs: input.durationMs } : {}),
+      };
+
+      recordFor(sessionId, (f) => [
+        f.message({
+          messageId: message.id,
+          role: 'assistant',
+          content,
+          createdAt,
+          ...(input.durationMs > 0 ? { durationMs: input.durationMs } : {}),
+        }),
+        // 会话边界：没有 `session-end` 的这一段在重放投影里会缺「本轮结束」，
+        // 时间线与后续记忆写入都靠它切分
+        f.sessionEnd({ reason: 'done' }),
+      ]);
+
+      get().updateSession(sessionId, (s) => ({
+        ...s,
+        messages: [...s.messages, message],
+        updatedAt: createdAt,
       }));
     },
 

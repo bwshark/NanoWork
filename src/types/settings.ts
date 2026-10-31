@@ -48,6 +48,47 @@ export interface TranscriptionConfig {
   language: string;
 }
 
+/**
+ * 语音合成（TTS）配置：语音讨论时把模型回复念出来。
+ *
+ * ## 为什么单独一段而不是复用 `transcription`
+ * 两者服务商可以不同（识别用 A 家、合成用 B 家），配额也是分开的——
+ * 实测同一账号下 `qwen-audio-*` 能识别、`qwen3-tts-*` 却 `FreeTierOnly`，
+ * 混在同一段配置里就只能「要么都能用要么都不能用」。
+ *
+ * ## 为什么字段是 `endpoint` + `apiToken` 而不是指向转录配置
+ * 大多数部署会把两者指向同一个工作区地址，那时留空即可（解析时回退到
+ * `transcription`），但**不能反过来**：一旦有人把 TTS 接到公网合成服务，
+ * 回退链会把转录的凭据送出去。
+ */
+export interface TtsConfig {
+  /**
+   * 是否启用**云端**语音合成。
+   *
+   * 关掉之后仍可能听到系统语音（见 `fallbackToSystem`）；两者都关才是纯字幕。
+   */
+  enabled: boolean;
+  /**
+   * 合成服务地址。留空 = 地址与凭据一并沿用 `transcription`。
+   *
+   * 百炼的合成**不在** `/compatible-mode/v1` 下（实测该前缀无 TTS 路由），
+   * 解析时会按域名换算到 `/api/v1/services/aigc/multimodal-generation/generation`。
+   */
+  endpoint: string;
+  /** 合成模型（如 qwen3-tts-flash） */
+  model: string;
+  /** 音色（如 Cherry / Ethan） */
+  voice: string;
+  /** API Key；留空 = 沿用 `transcription.apiToken` */
+  apiToken: string;
+  /**
+   * 云端失败时是否退回系统语音合成（`speechSynthesis`）。
+   *
+   * 默认开：额度用尽 / 网络不通时，用户宁可听到机械音也不要「AI 变成哑巴」。
+   */
+  fallbackToSystem: boolean;
+}
+
 /** 全局设置（持久化） */
 export interface Settings {
   /** nanobot 网关 endpoint（OpenAI 兼容 API 前缀），默认 http://127.0.0.1:8765/v1 */
@@ -90,6 +131,14 @@ export interface Settings {
   // —— 语音输入（STT）——
   /** 语音转录服务配置：未启用时 Composer 语音按钮禁用 */
   transcription: TranscriptionConfig;
+  /**
+   * 语音合成配置（语音讨论的播报）。
+   *
+   * **可选**：老配置里没有这段，解析时按「跟随 transcription」处理（见
+   * `lib/voice/tts.ts::resolveTtsConfig`）。做成必填会逼所有既有测试夹具补字段，
+   * 而它本身完全可以从已有配置推导出来。
+   */
+  tts?: TtsConfig;
   // —— 桌面端（Electron）——
   /**
    * 系统托盘 / 全局快捷键 / 开机自启等桌面专有行为。

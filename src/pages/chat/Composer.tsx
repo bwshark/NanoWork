@@ -35,6 +35,8 @@ import { useExpertGroupsStore } from "@/stores/expertGroupsStore";
 import { useSkillsStore } from "@/stores/skillsStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useModelsStore, describeModelId, modelGroups } from "@/stores/modelsStore";
+import { availablePresetIds, resolveTurnModel } from "@/lib/agent/agentBinding";
+import { resolveDefaultWorkspacePath } from "@/stores/storageInfoStore";
 import { useSettingsUiStore } from "@/stores/settingsUiStore";
 import { useSessionUiStore } from "@/stores/sessionUiStore";
 import { ComposerMenu } from "./ComposerMenu";
@@ -53,7 +55,10 @@ import {
   type FileRefItem,
 } from "@/components/composer/FileReferencePicker";
 import { useVoiceInput } from "@/hooks/useVoiceInput";
+import { useVoiceDiscussion, type VoiceDiscussionResult } from "@/hooks/useVoiceDiscussion";
 import { VoiceInputButton } from "@/components/composer/VoiceInputButton";
+import { VoiceDiscussionButton } from "@/components/composer/VoiceDiscussionButton";
+import { VoiceDiscussionDialog } from "@/components/voice/VoiceDiscussionDialog";
 import { useActiveModelCapabilities } from "@/hooks/useActiveModelCapabilities";
 import { shortDegradedReason, visionNotice } from "@/lib/model/modelCapability";
 import {
@@ -104,7 +109,7 @@ import {
   type UndoStack,
 } from "@/lib/editor/undoStack";
 import { toast } from "@/components/Toast";
-import type { Attachment, AttachmentKind } from "@/types";
+import type { Attachment, AttachmentKind, ChatMessageParam } from "@/types";
 
 export { detectTrigger, type TriggerState } from "@/lib/editor/composerTrigger";
 
@@ -1220,10 +1225,70 @@ export function Composer({
   );
 
   /** 无活跃会话时先创建（继承当前全局活跃专家团 / 专家），返回会话 id */
-  const ensureSessionId = (): string => {
+  const ensureSessionId = useCallback((): string => {
     if (activeSessionId) return activeSessionId;
     return useSessionsStore.getState().createSession(undefined, "新会话").id;
-  };
+  }, [activeSessionId]);
+
+  const appendVoiceDiscussionRecord = useSessionsStore((s) => s.appendVoiceDiscussionRecord);
+  const handleVoiceDiscussionFinish = useCallback(
+    async (result: VoiceDiscussionResult) => {
+      try {
+        // 空态直接开讨论时，直到这里才建会话：开始讨论不该凭空留下一条空任务。
+        const sessionId = ensureSessionId();
+        await appendVoiceDiscussionRecord(sessionId, result);
+        toast.success("语音讨论已结束，纪要已添加到当前会话");
+      } catch (err) {
+        toast.error(`讨论纪要保存失败：${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+    [appendVoiceDiscussionRecord, ensureSessionId],
+  );
+
+  /** 只带最近 12 条正文：讨论要能接续当前话题，但不能把整个长会话塞进每一次提问。 */
+  const discussionHistory = useMemo<ChatMessageParam[]>(() => {
+    const history: ChatMessageParam[] = [];
+    for (const message of (activeSession?.messages ?? []).slice(-12)) {
+      if ((message.role === "user" || message.role === "assistant") && message.content.trim()) {
+        history.push({ role: message.role, content: message.content });
+      }
+    }
+    return history;
+  }, [activeSession?.messages]);
+
+  const discussionContext = useMemo(
+    () => ({
+      agentId: effectiveAgentId,
+      model: resolveTurnModel(
+        activeSession?.model,
+        effectiveAgent?.model,
+        availablePresetIds(models),
+      ),
+      workspace: activeSession?.workdir ?? resolveDefaultWorkspacePath(),
+      fullAccess: activeSession?.fullAccess,
+      persona: effectiveAgent?.systemPrompt,
+      history: discussionHistory,
+      toolDeny: effectiveAgent?.toolDeny,
+    }),
+    [
+      activeSession?.fullAccess,
+      activeSession?.model,
+      activeSession?.workdir,
+      discussionHistory,
+      effectiveAgent?.model,
+      effectiveAgent?.systemPrompt,
+      effectiveAgent?.toolDeny,
+      effectiveAgentId,
+      models,
+    ],
+  );
+
+  const voiceDiscussion = useVoiceDiscussion({
+    context: discussionContext,
+    onFinish: handleVoiceDiscussionFinish,
+    onError: (message) => toast.error(message),
+    onNotice: (message) => toast.warning(message),
+  });
 
   const handleModelSelect = (m: string) => {
     setModelAnchor(null);
@@ -2367,6 +2432,20 @@ export function Composer({
             onConfigure={() => useSettingsUiStore.getState().openSettings('connection')}
           />
 
+          {/* 语音讨论只落在任务会话事件流；IM 的 onSubmit 走引擎 /v1/turn，不能混写。 */}
+          {!onSubmit && (
+            <VoiceDiscussionButton
+              active={voiceDiscussion.open}
+              disabled={disabled || busy || !voiceDiscussion.supported}
+              disabledReason={voiceDiscussion.blockedReason}
+              onClick={() => {
+                // 两个功能共用麦克风，绝不能让「语音输入」与「讨论」同时持有音轨。
+                if (voice.recording) voice.stop();
+                void voiceDiscussion.start();
+              }}
+            />
+          )}
+
           {isStreaming ? (
             // 流式传输中：把发送按钮换成「停止」按钮，点击中断当前会话对话
             <Tooltip title="停止生成">
@@ -2430,6 +2509,24 @@ export function Composer({
           </Box>
         )}
       </Box>
+
+      {!onSubmit && (
+        <VoiceDiscussionDialog
+          open={voiceDiscussion.open}
+          phase={voiceDiscussion.phase}
+          seconds={voiceDiscussion.seconds}
+          level={voiceDiscussion.level}
+          turns={voiceDiscussion.turns}
+          liveText={voiceDiscussion.liveText}
+          muted={voiceDiscussion.muted}
+          subtitles={voiceDiscussion.subtitles}
+          notice={voiceDiscussion.notice}
+          onToggleMute={voiceDiscussion.toggleMute}
+          onToggleSubtitles={() => voiceDiscussion.setSubtitles(!voiceDiscussion.subtitles)}
+          onFinish={() => void voiceDiscussion.finish()}
+          onCancel={voiceDiscussion.cancel}
+        />
+      )}
 
       {/* `/` 技能与指令浮层 */}
       <SlashCommandPicker
