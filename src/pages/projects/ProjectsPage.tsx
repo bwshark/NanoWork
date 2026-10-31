@@ -26,9 +26,13 @@ import ArchiveOutlinedIcon from "@mui/icons-material/ArchiveOutlined";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import GroupAddOutlinedIcon from "@mui/icons-material/GroupAddOutlined";
 import LibraryAddOutlinedIcon from "@mui/icons-material/LibraryAddOutlined";
+import PlaylistAddIcon from "@mui/icons-material/PlaylistAdd";
 import UnarchiveOutlinedIcon from "@mui/icons-material/UnarchiveOutlined";
 import { toast } from "@/components/Toast";
+import { TaskFormDialog } from "@/components/tasks/TaskFormDialog";
+import { useAgentsStore } from "@/stores/agentsStore";
 import { ROUTES } from "@/lib/core/constants";
+import type { TaskDraft } from "@/lib/task/taskDraft";
 import {
   artifactsOfProject,
   sessionsOfProject,
@@ -117,10 +121,22 @@ export function ProjectsPage({
   const [kbOpen, setKbOpen] = useState(false);
   const [kbCandidates, setKbCandidates] = useState<KbSummary[]>([]);
   const [busy, setBusy] = useState(false);
+  /** 「在项目里新建任务」：复用任务表单，只把 `projectId` 预填进去 */
+  const [taskOpen, setTaskOpen] = useState(false);
 
   const activeOrg = orgs.find((o) => o.id === activeOrgId);
   /** 组织角色只用来决定「删除项目」这一个入口的可见性（服务端只给 admin/owner） */
   const isOrgAdmin = activeOrg?.role === "admin" || activeOrg?.role === "owner";
+  /**
+   * 能不能往这个项目里添东西（会话 / 任务）。
+   *
+   * 口径是「项目成员 **或** 组织管理员」：`myRole` 非空 = 我是这个项目的人；
+   * 组织管理员按管理豁免同款处理（与知识库的可见性口径一致 —— 否则管理员在自己
+   * 建的、但没把自己加进去的项目里连一个会话都建不了）。
+   */
+  const canContribute = detail
+    ? detail.project.myRole !== "" || isOrgAdmin
+    : false;
 
   /*
    * 项目内的任务 / 会话 / 产物：**本机投影**（不是服务端返回的）。
@@ -134,6 +150,8 @@ export function ProjectsPage({
   const allSessions = useSessionsStore((s) => s.sessions);
   const allTasks = useTasksStore((s) => s.tasks);
   const artifactIndex = useArtifactsStore((s) => s.index);
+  // 任务表单的默认专家：订阅而不是 getState()，否则专家列表后到时会拿不到（表单已挂载）
+  const defaultAgentId = useAgentsStore((s) => s.agents[0]?.id ?? "");
   const projectSessions = useMemo(
     () => sessionsOfProject(allSessions, activeId),
     [allSessions, activeId],
@@ -353,6 +371,36 @@ export function ProjectsPage({
     await refreshAll();
   };
 
+  /**
+   * 在项目里新建会话：切到聊天页并带上 `projectId`。
+   *
+   * 顺序刻意是「先建再跳」：`createSession` 会把新会话设为 active，聊天页打开时
+   * 落在它上面 —— 若反过来先跳页再建，用户会先看到旧会话闪一下。
+   */
+  const createSessionInProject = () => {
+    if (!activeId) return;
+    useSessionsStore.getState().createSession(undefined, "新会话", {
+      projectId: activeId,
+    });
+    navigate(ROUTES.chat);
+  };
+
+  /**
+   * 在项目里新建任务。
+   *
+   * **`projectId` 只在这里写一次**，表单 `initial` 刻意**不带**它：
+   * 两处都写的话，拆掉任意一处用例都不会红（另处在兜底）—— 看似更稳，实际让
+   * 「归属从哪来」变成两个来源。表单里的 `projectId` 字段只是让用户能看见
+   * 「这条会归属本项目」，落库以这里为准。
+   */
+  const createTaskInProject = (draft: TaskDraft) => {
+    if (!activeId) return;
+    const created = useTasksStore.getState().addTask({ ...draft, projectId: activeId });
+    if (created) toast.success("已在项目里创建任务");
+    else toast.error("创建失败（该任务可能已被删除）");
+    setTaskOpen(false);
+  };
+
   if (client === null) {
     return (
       <Box sx={{ p: 3 }}>
@@ -488,6 +536,30 @@ export function ProjectsPage({
               </Typography>
               {detail.project.archivedAt && <Chip size="small" label="已归档" />}
               <Box sx={{ flex: 1 }} />
+              {/*
+               * 「新建会话 / 新建任务」对**项目成员或组织管理员**开放（`canContribute`）。
+               * 这不是权限校验（数据在本机，前端拦不住也不需要拦），而是**别提供做不了的动作**：
+               * 一个没加入项目的组织成员在这里点新建，成果会出现在别人的项目看板里。
+               */}
+              {canContribute && (
+                <>
+                  <Button
+                    size="small"
+                    variant="contained"
+                    startIcon={<AddIcon />}
+                    onClick={createSessionInProject}
+                  >
+                    新建会话
+                  </Button>
+                  <Button
+                    size="small"
+                    startIcon={<PlaylistAddIcon />}
+                    onClick={() => setTaskOpen(true)}
+                  >
+                    新建任务
+                  </Button>
+                </>
+              )}
               {detail.project.canManage && (
                 <>
                   <Button
@@ -720,6 +792,21 @@ export function ProjectsPage({
           <Button onClick={() => setKbOpen(false)}>关闭</Button>
         </DialogActions>
       </Dialog>
+
+      {/*
+       * 复用任务表单，只把 `projectId` 预填进去 —— 不另建一个小表单：
+       * 调度 / 权限 / 推送这一整套校验只有一份实现，复制一份必然漂移。
+       * `key` 绑项目 id：切项目后再打开必须是空表单，不能留着上一个项目的预填值。
+       */}
+      <TaskFormDialog
+        key={activeId || "new-task"}
+        open={taskOpen}
+        title="新建任务（归属本项目）"
+        submitLabel="创建任务"
+        initial={{ agentId: defaultAgentId }}
+        onSubmit={createTaskInProject}
+        onClose={() => setTaskOpen(false)}
+      />
     </Stack>
   );
 }

@@ -21,7 +21,17 @@ import type {
 } from '@/lib/project/projectClient';
 import { PROJECT_LOGIN_REQUIRED } from '@/lib/project/projectClient';
 import type { KbGateway, KbOrg, KbOrgMember } from '@/lib/kb/kbClient';
-import { buttonByText, click, flush, mount, unmount, waitForSettled } from './helpers/reactMount';
+import {
+  buttonByText,
+  click,
+  dialogRoot,
+  fieldByLabel,
+  flush,
+  mount,
+  setInputValue,
+  unmount,
+  waitForSettled,
+} from './helpers/reactMount';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -250,6 +260,77 @@ describe('项目空间页', () => {
     expect(text).not.toContain('别的任务');
     // 不再是「尚未接入」：功能已经接上了
     expect(text).not.toContain('尚未接入');
+    unmount();
+  });
+
+  it('「新建会话」真的把 projectId 写进会话（不是只跳页）', async () => {
+    const p = project();
+    const { gateway } = fakeProjectGateway({ list: [p], detail: detailOf(p) });
+    useSessionsStore.setState({ sessions: [], activeId: null, sessionTombstones: {} });
+
+    render(gateway, fakeKbGateway());
+    await waitForSettled(() => (document.body.textContent ?? '').includes('登月计划'));
+    click(listItemByText('登月计划'));
+    await waitForSettled(() => (document.body.textContent ?? '').includes('成员（2）'));
+
+    const btn = buttonByText(document, '新建会话');
+    expect(btn, '项目成员应当能看到「新建会话」').not.toBeNull();
+    click(btn);
+    await flush();
+
+    const created = useSessionsStore.getState().sessions[0];
+    expect(created, '应当真的建了一个会话').toBeTruthy();
+    expect(created.projectId, '会话必须归属这个项目').toBe('p1');
+    // 建完切过去：createSession 会把新会话设为 active
+    expect(useSessionsStore.getState().activeId).toBe(created.id);
+    unmount();
+  });
+
+  it('「新建任务」提交后真的把 projectId 落到任务上（单一来源，不靠表单兜底）', async () => {
+    const p = project();
+    const { gateway } = fakeProjectGateway({ list: [p], detail: detailOf(p) });
+    useTasksStore.setState({ tasks: [], tombstones: {}, runs: [] });
+
+    render(gateway, fakeKbGateway());
+    await waitForSettled(() => (document.body.textContent ?? '').includes('登月计划'));
+    click(listItemByText('登月计划'));
+    await waitForSettled(() => (document.body.textContent ?? '').includes('成员（2）'));
+
+    click(buttonByText(document, '新建任务'));
+    await waitForSettled(() => (document.body.textContent ?? '').includes('新建任务（归属本项目）'));
+
+    // 真的填一个名字并提交：只验标题的话，「提交时把 projectId 丢了」这类回归抓不住
+    // `fieldByLabel` 返回 HTMLElement（它能查到 label 包裹的任意控件），
+    // 而 `setInputValue` 只接受 input / textarea：这里按后者收窄，收窄失败即说明表单换了控件
+    const nameInput = fieldByLabel('名称', dialogRoot()) as HTMLInputElement | null;
+    expect(nameInput, '表单里应有「名称」输入框').toBeTruthy();
+    setInputValue(nameInput, '项目里的新任务');
+
+    click(buttonByText(dialogRoot(), '创建任务'));
+    await flush();
+
+    const created = useTasksStore.getState().tasks[0];
+    expect(created, '应当真的建了一个任务').toBeTruthy();
+    expect(created.name).toBe('项目里的新任务');
+    expect(created.projectId, '任务必须归属这个项目').toBe('p1');
+    unmount();
+  });
+
+  it('没加入项目的人看不到「新建会话 / 新建任务」（别提供做不了的动作）', async () => {
+    const readonlyProject = project({ myRole: '', canManage: false });
+    const { gateway } = fakeProjectGateway({
+      list: [readonlyProject],
+      detail: detailOf(readonlyProject),
+    });
+    // `fakeKbGateway` 的入参是**成员列表**（不是组织）；组织由它内部固定返回 ORG。
+    // 这里传空成员即可 —— 本用例关心的是「没加入项目」而不是「组织里有哪些人」
+    render(gateway, fakeKbGateway());
+    await waitForSettled(() => (document.body.textContent ?? '').includes('登月计划'));
+    click(listItemByText('登月计划'));
+    await waitForSettled(() => (document.body.textContent ?? '').includes('成员（2）'));
+
+    expect(buttonByText(document, '新建会话')).toBeNull();
+    expect(buttonByText(document, '新建任务')).toBeNull();
     unmount();
   });
 });
