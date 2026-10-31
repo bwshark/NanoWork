@@ -16,3 +16,4 @@ export * from './runtime';
 export * from './useSyncRuntime';
 export * from './useSyncStatus';
 export * from './kbGateway';
+export * from './builtinModelsGateway';

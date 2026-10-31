@@ -137,18 +137,30 @@ describe('compareVersions / pickWinner：三级 tie-break', () => {
     ...over,
   });
 
-  it('第一级：updatedAt 大者胜', () => {
+  it('第一级：rev 大者胜（即使本机时钟比服务端慢）', () => {
+    // 服务端的 updatedAt 是服务器时间（可能比本地快），所以 rev 必须排在时间之前：
+    // 否则客户端刚改完的 rev=2 会被 rev=1 的旧行按「时间更早」压掉
     expect(
-      compareVersions(stamp({ updatedAt: '2026-01-02T00:00:00.000Z' }), stamp()),
+      compareVersions(
+        stamp({ rev: 2, updatedAt: '2026-01-01T00:00:00.000Z' }),
+        stamp({ rev: 1, updatedAt: '2026-01-02T00:00:00.000Z' }),
+      ),
     ).toBe(1);
     expect(
-      compareVersions(stamp(), stamp({ updatedAt: '2026-01-02T00:00:00.000Z' })),
+      compareVersions(
+        stamp({ rev: 1, updatedAt: '2026-01-02T00:00:00.000Z' }),
+        stamp({ rev: 2, updatedAt: '2026-01-01T00:00:00.000Z' }),
+      ),
     ).toBe(-1);
   });
 
-  it('第二级：时间相等则 rev 大者胜', () => {
-    expect(compareVersions(stamp({ rev: 2 }), stamp({ rev: 1 }))).toBe(1);
-    expect(compareVersions(stamp({ rev: 1 }), stamp({ rev: 2 }))).toBe(-1);
+  it('第二级：rev 相等则 updatedAt 大者胜', () => {
+    expect(
+      compareVersions(stamp({ rev: 2, updatedAt: '2026-01-02T00:00:00.000Z' }), stamp({ rev: 2 })),
+    ).toBe(1);
+    expect(
+      compareVersions(stamp({ rev: 2 }), stamp({ rev: 2, updatedAt: '2026-01-02T00:00:00.000Z' })),
+    ).toBe(-1);
   });
 
   it('第三级：时间与 rev 都相等则 id 字典序大者胜', () => {

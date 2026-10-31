@@ -17,6 +17,9 @@
  *    对用户是两句不同的话，不能被压成「请求失败」。
  */
 
+import type { ApiResult } from '@/lib/net/authedRequest';
+import { authedRequest } from '@/lib/net/authedRequest';
+
 import type { KbWorkbook } from './workbook';
 
 export interface KbClientConfig {
@@ -46,9 +49,7 @@ export interface KbClientConfig {
   fetchImpl?: typeof fetch;
 }
 
-export type KbApiResult<T> =
-  | { ok: true; data: T }
-  | { ok: false; status: number; message: string; unauthorized: boolean };
+export type KbApiResult<T> = ApiResult<T>;
 
 export interface KbOrg {
   id: string;
@@ -290,97 +291,18 @@ export const KB_SESSION_EXPIRED = '登录状态已过期，需要重新登录';
 export const KB_OFFLINE_HINT =
   '本地开发请在 cloud/ 目录启动服务：.venv/Scripts/python.exe -m uvicorn app.main:app --port 8910（生产请检查 VITE_SYNC_BASE_URL 是否指向可达地址）';
 
-function normalizeBaseUrl(baseUrl: string): string {
-  return baseUrl.replace(/\/+$/, '');
-}
-
 /**
- * 取这次请求该用的票。
+ * 本模块的请求入口：**实现在 `lib/net/authedRequest.ts`**（与项目空间共用同一份）。
  *
- * `getToken` 存在时**只信它**（哪怕它回 `null`）：`token` 是快照，快照过期后继续拿它
- * 去请求，就会得到一串「明知道会 401 的请求」。
+ * ⚠️ 不要在这里再写一份「401 → 换票 → 重放一次」：两份实现会出现「知识库页正常、
+ * 项目页停在未登录」这种两边日志都干净的症状，几乎无法现场排查。
  */
-function currentToken(config: KbClientConfig): string | null {
-  if (config.getToken) return config.getToken();
-  return config.token;
-}
-
-async function request<T>(
+function request<T>(
   config: KbClientConfig,
   path: string,
   init: { method?: string; body?: unknown; parse?: 'json' | 'blob' } = {},
 ): Promise<KbApiResult<T>> {
-  const fetchImpl = config.fetchImpl ?? fetch;
-  const baseHeaders: Record<string, string> = {};
-  if (init.body !== undefined) baseHeaders['Content-Type'] = 'application/json';
-  const url = `${normalizeBaseUrl(config.baseUrl)}${path}`;
-
-  const send = (token: string | null): Promise<Response> =>
-    fetchImpl(url, {
-      method: init.method ?? 'GET',
-      headers: token ? { ...baseHeaders, Authorization: `Bearer ${token}` } : baseHeaders,
-      body: init.body === undefined ? undefined : JSON.stringify(init.body),
-    });
-
-  let response: Response;
-  try {
-    response = await send(currentToken(config));
-    /*
-     * 401 → 刷新一次 → 重放一次（与 `SyncClient.request` 同一套语义，只重试一次）。
-     *
-     * 重放前必须**重新取票**：刷新成功后新票在 account 里，config 上的快照还是旧的。
-     * 刷新后仍 401 说明不是「access 过期」而是「凭据整体失效」（refresh 被吊销 /
-     * 账户已删），此时继续重试只会把无效凭据反复打上去。
-     *
-     * 并发安全由 `refreshToken` 的实现方负责（`syncAccount.refresh()` 是单飞的）：
-     * 本层的 3~4 个并发请求会**等同一个**刷新结果，不会把同一张 refresh 用两次。
-     */
-    if (response.status === 401 && config.refreshToken) {
-      // 刷新抛错与返回 false 等价（都是「拿不到新票」）：不能让它落进下面的 catch，
-      // 那会把「票过期」误报成「无法连接云端服务」
-      const refreshed = await config.refreshToken().catch(() => false);
-      if (refreshed) response = await send(currentToken(config));
-    }
-  } catch {
-    // 网络层失败（断网 / 服务未起）：不给 status，让界面说「连不上」而不是「500」。
-    // 文案带上**实际请求的地址**：同一个界面可能连本机 / 联调 / 正式三台，
-    // 不写地址时「连不上」只能靠猜是哪一台没起。
-    return {
-      ok: false,
-      status: 0,
-      message: `无法连接云端服务（${normalizeBaseUrl(config.baseUrl)}）`,
-      unauthorized: false,
-    };
-  }
-
-  if (!response.ok) {
-    const detail = await readDetail(response);
-    return {
-      ok: false,
-      status: response.status,
-      message: detail ?? `请求失败（${response.status}）`,
-      unauthorized: response.status === 401,
-    };
-  }
-  if (response.status === 204) return { ok: true, data: undefined as T };
-  try {
-    // 图片要的是二进制：`<img src>` 不能带 Authorization 头，所以由这里带票取回
-    // 字节，再在页面里换成 blob URL（见 `lib/kb/assetLoader.ts`）
-    if (init.parse === 'blob') return { ok: true, data: (await response.blob()) as T };
-    return { ok: true, data: (await response.json()) as T };
-  } catch {
-    return { ok: false, status: response.status, message: '响应格式异常', unauthorized: false };
-  }
-}
-
-async function readDetail(response: Response): Promise<string | null> {
-  try {
-    const body = (await response.json()) as { detail?: unknown };
-    if (typeof body.detail === 'string' && body.detail.trim()) return body.detail;
-  } catch {
-    // 非 JSON 错误体（网关 502 页面等）：交给调用方显示状态码
-  }
-  return null;
+  return authedRequest<T>(config, path, init);
 }
 
 /**

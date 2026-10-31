@@ -9,7 +9,8 @@
     }
   ],
   "directories": {
-    "output": "release"
+    "output": "release",
+    "buildResources": "electron/assets"
   },
   "publish": [
     {
@@ -37,17 +38,19 @@
   "asar": true,
   "npmRebuild": false,
   "artifactName": "nanowork-${version}-${os}-${arch}.${ext}",
+  "afterSign": "scripts/sign-engine-macos.mjs",
   "mac": {
-    "target": [
-      { "target": "dmg", "arch": ["arm64", "x64"] },
-      { "target": "zip", "arch": ["arm64", "x64"] }
-    ],
+    "target": [{ "target": "dmg" }, { "target": "zip" }],
     "category": "public.app-category.productivity",
     "icon": "electron/assets/icon.icns",
     "hardenedRuntime": true,
     "gatekeeperAssess": false,
     "entitlements": "electron/assets/entitlements.mac.plist",
-    "entitlementsInherit": "electron/assets/entitlements.mac.plist"
+    "entitlementsInherit": "electron/assets/entitlements.mac.plist",
+    "notarize": false
+  },
+  "dmg": {
+    "title": "NanoWork"
   },
   "win": {
     "target": [
@@ -64,9 +67,19 @@
     "allowToChangeInstallationDirectory": true
   },
   "linux": {
+    "maintainer": "bwshark <bwshark@users.noreply.github.com>",
     "target": ["AppImage", "deb"],
     "category": "Utility",
-    "icon": "electron/assets/icon.png"
+    "synopsis": "NanoWork 智能体客户端",
+    "description": "基于 nanobot 引擎的桌面智能体客户端：会话、任务、知识库与模型渠道统一管理。",
+    "icon": "electron/assets/icon.png",
+    "desktop": {
+      "entry": {
+        "Name": "NanoWork",
+        "Comment": "NanoWork 智能体客户端",
+        "Categories": "Utility;Development;"
+      }
+    }
   },
   "electronDownload": {
     "mirror": "https://npmmirror.com/mirrors/electron/"

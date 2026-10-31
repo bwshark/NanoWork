@@ -32,6 +32,7 @@ import GridViewIcon from "@mui/icons-material/GridView";
 import AutoFixHighIcon from "@mui/icons-material/AutoFixHigh";
 import HubIcon from "@mui/icons-material/Hub";
 import MenuBookIcon from "@mui/icons-material/MenuBook";
+import WorkOutlineIcon from "@mui/icons-material/WorkOutline";
 import HistoryIcon from "@mui/icons-material/History";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import FolderIcon from "@mui/icons-material/Folder";
@@ -115,6 +116,7 @@ const LIBRARY_ITEMS: NavRouteItem[] = [
   { label: "技能", icon: <AutoFixHighIcon />, to: ROUTES.skills },
   { label: "连接器", icon: <HubIcon />, to: ROUTES.mcp },
   { label: "知识库", icon: <MenuBookIcon />, to: ROUTES.knowledge },
+  { label: "项目", icon: <WorkOutlineIcon />, to: ROUTES.projects },
 ];
 
 /** 侧边栏主组件 */

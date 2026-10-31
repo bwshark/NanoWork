@@ -30,6 +30,15 @@ services:
       # 需要从**浏览器**直连时填这里（Electron 走主进程不受 CORS 限制）。
       # 逗号分隔，必须写全 `scheme://host:port`。
       NANOWORK_CLOUD_ORIGINS: "${NANOWORK_CLOUD_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173,http://localhost:5176,http://127.0.0.1:5176}"
+      # 内置模型（`app/catalog/`）：
+      # - `NANOWORK_BUILTIN_AGNES_API_KEY`：agnes 系模型的密钥，**种子插入时**写库。
+      #   表里已有行之后它不再生效（改密钥请用管理员端点或直接改库）——这条规则见
+      #   `app/catalog/seed.py`，是为了不让一次重启把运维的改动冲回出厂值。
+      # - `NANOWORK_BUILTIN_ADMIN_TOKEN`：写接口的准入令牌。**不配就是 404**
+      #   （接口等同于不存在），配了才需要 `X-Builtin-Admin-Token` 头。
+      # 两个都从 `cloud/.env` 读（该文件已被 .gitignore 忽略），仓库里不出现真实密钥。
+      NANOWORK_BUILTIN_AGNES_API_KEY: "${NANOWORK_BUILTIN_AGNES_API_KEY:-}"
+      NANOWORK_BUILTIN_ADMIN_TOKEN: "${NANOWORK_BUILTIN_ADMIN_TOKEN:-}"
     volumes:
       # 命名卷而不是 bind mount：bind mount 的属主是宿主机用户，容器内的
       # uid 10001 常常写不进去（症状是「上传成功但重启后文档全没了」——

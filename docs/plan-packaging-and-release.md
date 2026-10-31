@@ -588,6 +588,33 @@ done      耗时 9 分 57 秒，尝试 2 次 → 218642308 字节（209 MiB）
 | 杀软 | `python.exe` 落盘易被拦；预编译 pyc 减少首启写盘；签名可显著降低误报 |
 | 判据 | 关闭长路径 + 无 Python 的干净机冷启成功 |
 
+#### 7.1.1 「Windows 安全警报：python 被防火墙阻止」
+
+现象：装完后第一次对话（或模型跑脚本）弹出一个系统框 —— 标题是 *Windows Security Alert*，
+里面写着 `python` / `Publisher: Unknown` / 一个 `.exe` 路径。**这个框不是我们画的，也没有 API 能拦截**。
+
+它出现的**唯一条件**是：某个进程在**非回环地址**上 `listen()`（`0.0.0.0` / `::`）。
+绑 `127.0.0.1` 的监听**不会**弹（微软 WFP 的 `NotifyOnListen` 只对可被外部访问的监听触发）。
+
+我们自己的链路是安全的，实测（2026-10-31，本机）：
+`nanobot serve` 只监听 `127.0.0.1:19911`，`nanobot gateway` 只监听 `127.0.0.1:9903` 与 `127.0.0.1:18793`。
+默认配置里唯一默认 `0.0.0.0` 的是 **MS Teams 渠道**（`channels.msteams.host`，且 `enabled=false`）。
+
+所以这个框通常来自**模型通过 shell 工具跑起来的子进程**，典型是 `python -m http.server 8000`
+（`http.server` 默认绑 `0.0.0.0`）。这时框里显示的路径就是 PATH 上第一个 `python` ——
+真机上可能是用户自己装的 `C:\python27\python.exe`（实测截图即如此），跟我们的运行时无关。
+
+处理（按优先级）：
+
+| 手段 | 效果 | 代价 |
+|---|---|---|
+| 随包运行时前置到 PATH（`engineEnv.ts` 已做） | 裸 `python` 命中 `rt\python\python.exe`，不再出现野路径；脚本也不会因 py2 语法失败 | 无 |
+| 让脚本显式绑 `127.0.0.1`（`python -m http.server --bind 127.0.0.1`） | 不弹框，本机预览照常 | 需要模型/脚本配合 |
+| 安装期预置入站放行规则（`netsh advfirewall ... program="…\rt\python\python.exe"`） | 不再弹框，且允许局域网访问 | **需要管理员**（UAC），与 per-user 免 UAC 冲突；且放宽了入站面 |
+| 签名 `rt\python\python.exe` | 仍然弹，但 `Publisher` 变成我们的名字 | 需要证书 |
+
+**不要**在应用里静默改用户的防火墙规则：那是安全边界，必须由用户在 UAC 上明确同意。
+
 ### 7.2 macOS（最容易翻车）
 
 | 项 | 内容 |
@@ -625,14 +652,31 @@ reduced示例（`scripts/sign-engine-macos.mjs`，由 `afterSign` 调用）：
 |---|---|---|
 | `windows-latest` | `nanowork-x.y.z-win-x64.exe` | 签名用 `CSC_LINK` / `CSC_KEY_PASSWORD` |
 | `macos-14` | `…-mac-arm64.dmg/.zip` | arm64 原生 |
-| `macos-13` | `…-mac-x64.dmg/.zip` | x64 |
-| `ubuntu-22.04` | `…-linux-x86_64.AppImage` / `.deb` | — |
+| `macos-15-intel` | `…-mac-x64.dmg/.zip` | x64（`macos-13` 已于 2025-12-04 退役） |
+| `ubuntu-22.04` | `…-linux-x86_64.AppImage` / `.deb` | glibc 下限基线 |
 
-每个 job：`npm ci` → `node scripts/build-engine.mjs` → `npm run build:electron -- --publish always`。
+每个 job：`npm ci` → `node scripts/build-engine.mjs --ensure` → `node scripts/build-installer.mjs --platform <p> --arch <a>`；
+产物由 `actions/upload-artifact` 收齐后，再由单独的 `publish` job 用 `gh release create/upload` 统一发布
+（**不让 4 个 job 并发往同一个 release 写**，否则会出现互相覆盖 `latest*.yml` 的竞态）。
+
+两条与"产物正确性"直接相关的约束：
+
+1. **架构与 `build/rt` 必须成对**。便携 Python 按 triple 分发，所以 mac 两个架构各用一台 runner
+   各自重建运行时；`build-installer.mjs` 会从 `build/rt/manifest.json` 的 `pbsAsset` 反查平台/架构，
+   和目标不一致就**直接失败**（这种包在构建日志里一切正常，只有用户装完才会发现引擎起不来）。
+   `builder.config.json` 的 `mac.target` 因此**不写 arch 数组**，架构只由 `--arch` 决定。
+2. **macOS 的 `rt/**` 必须单独签名**。electron-builder 的签名范围不含 `extraResources`，
+   `scripts/sign-engine-macos.mjs` 作为 `afterSign` 钩子递归补签 `Contents/Resources/rt` 下的
+   Mach-O 并重签 `.app`，否则 notarytool 报 `code object is not signed at all`。
+
+引擎源码不在本仓库（`nanobot/` 被忽略），workflow 用 `secrets.NANOBOT_TOKEN`（默认回退
+`GITHUB_TOKEN`）单独 clone；仓库变量 `NANOBOT_REPOSITORY` 可覆盖地址。
 
 ### 8.2 版本与 tag
 
-- tag 形如 `v0.1.0`；`package.json.version`、`manifest.engineVersion`、release tag **三者必须一致**（写进 CI 断言）。
+- tag 形如 `v0.1.0`；`package.json.version`、`manifest.engineVersion`、release tag **三者必须一致**
+  （`release.yml` 里只断言 tag 与 `package.json`；引擎版本在 `build-engine.mjs` 的 manifest 里，
+  由"产物同一 tag 一次构建"保证）。
 - 引擎版本不一致 → 直接 fail，不产包。
 
 ### 8.3 发布渠道

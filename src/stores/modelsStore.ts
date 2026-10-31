@@ -10,6 +10,14 @@ import type {
 } from '@/platform/types';
 import { DEFAULT_PROVIDER_RETRY_MODE } from '@/lib/model/modelFallbacks';
 import { normalizePricing, type ModelPricing } from '@/lib/model/modelPricing';
+import {
+  builtinModelIds,
+  groupCatalog,
+  missingBuiltinModels,
+  type BuiltinModel,
+  type ModelCatalogGroups,
+} from '@/lib/model/builtinModels';
+import type { BuiltinModelsResult } from '@/lib/model/builtinModelsClient';
 import type { ModelInfo } from '@/types';
 import {
   AUTO_PROVIDER_VALUE,
@@ -117,6 +125,21 @@ export interface ModelFormValue {
   apiKey: string;
   /** 模型名；**同时就是预设名**，因此也是模型选择器里显示的那行字 */
   model: string;
+  /**
+   * 预设名（可选，缺省 = `model`）。
+   *
+   * 只有一处需要它：**云端下发的内置模型**。云端把「预设名」与「上游模型名」分成
+   * 两个字段（`id` / `model`），因为同一上游模型可以有两个预设。表单里两者仍绑在一起
+   * ——用户手动加模型时不需要理解这个区分。
+   */
+  presetName?: string;
+  /**
+   * 供应商 config key（可选，缺省按 `customProviderName` / `apiBase` / `model` 推导）。
+   *
+   * 同样只为内置模型：云端已经定好了 key（如 `agnes`），客户端再 slug 一遍
+   * 只会引入「展示名一改，key 就漂了，于是写出一份新的 providers 条目」这种事故。
+   */
+  providerKey?: string;
   /** 上下文窗口（tokens）；`null` = 写引擎默认值（即不覆盖供应商默认） */
   contextWindowTokens: number | null;
   /** 单次最大输出（tokens）；`null` = 写引擎默认值 */
@@ -154,6 +177,31 @@ interface ModelsState {
    * @param force 是否强制重新拉取（网关配置变更后使用）
    */
   refresh: (force?: boolean) => Promise<void>;
+
+  // —— 云端下发的内置模型目录 ——
+  /**
+   * 内置模型（来源：云端 `GET /api/models/builtin`）。
+   *
+   * 与 `models` 是**两个维度**：这里说的是「产品提供哪些模型」，`models` 说的是
+   * 「这台机器此刻能用哪些预设」。两者交集才是选择器里「内置模型」那一组 ——
+   * 云端有、本机还没播种成功时不进菜单（选了也发不出请求）。
+   */
+  builtin: BuiltinModel[];
+  builtinLoading: boolean;
+  /**
+   * 云端目录是否真的取到了。
+   *
+   * 与「取到了但是空的」必须分开：前者说明云端/登录有问题，后者是云端确实没配。
+   * 界面在 false 时**不显示**「内置模型」这个标题，而不是显示一个空分组。
+   */
+  builtinAvailable: boolean;
+  /**
+   * 拉取内置目录，并把本机缺失的条目自动播种进引擎配置。
+   *
+   * 幂等：已在 `managed` 里的预设不会被改写（用户换过自己的密钥要保留）。
+   * 未登录 / 断网时静默返回 —— 内置模型是增强能力，不该让应用启动报错。
+   */
+  loadBuiltin: () => Promise<void>;
 
   // —— 可写的那一半：引擎 config.json 里的 modelPresets ——
   /** 引擎配置中的模型预设（设置页「模型」分区的数据源） */
@@ -207,6 +255,104 @@ interface ModelsState {
 let inflight: Promise<void> | null = null;
 /** `loadManaged` 的飞行中请求（与 `inflight` 分开：两者数据源完全不同） */
 let managedInflight: Promise<void> | null = null;
+/** `loadBuiltin` 的飞行中请求（第三个数据源：云端目录） */
+let builtinInflight: Promise<void> | null = null;
+
+/** 内置目录的取数器（装配处注入，见 `sync/builtinModelsGateway`） */
+export type BuiltinModelsFetcher = () => Promise<BuiltinModelsResult>;
+
+let builtinFetcher: BuiltinModelsFetcher | null = null;
+
+/**
+ * 注入内置目录取数器（只由 `App.tsx` 在同步运行时就绪后调用一次）。
+ *
+ * **为什么是注入而不是 import**：`modelsStore` 被大量 UI 依赖，让它 import
+ * `sync/runtime` 会形成 `runtime → store → modelsStore → runtime` 的环。
+ * 与知识库检索的 `setKnowledgeSearchProvider` 是同一手法，也是本仓既有的唯一解法。
+ */
+export function setBuiltinModelsFetcher(fetcher: BuiltinModelsFetcher | null): void {
+  builtinFetcher = fetcher;
+}
+
+/**
+ * 云端条目 → 一次 upsert 的表单值。
+ *
+ * `provider` 分两种情况，**不能一律按自定义供应商写**：
+ * - 云端说的是注册表里的内置供应商（`openai` / `deepseek`…）→ 传供应商名，`apiBase`
+ *   留空让引擎用注册表默认值（写了旧地址会永久压着它）；
+ * - 其它（如 `agnes` 这种动态供应商）→ 传 `CUSTOM_PROVIDER_VALUE` + 显式
+ *   `providerKey`，这样 `providers.agnes` 的 apiKey / apiBase / displayName 才会被建出来。
+ */
+function seedFormValue(item: BuiltinModel): ModelFormValue {
+  const registryProvider = item.provider && isBuiltinProvider(item.provider);
+  return {
+    provider: registryProvider ? item.provider : CUSTOM_PROVIDER_VALUE,
+    providerKey: item.provider || undefined,
+    customProviderName: item.providerLabel || item.provider,
+    apiBase: item.apiBase,
+    apiKey: item.apiKey,
+    model: item.model,
+    // 预设名与上游模型名分开传：云端 `id` 才是请求里发出的那个键
+    presetName: item.id,
+    contextWindowTokens: item.contextWindowTokens,
+    maxTokens: item.maxTokens,
+    reasoningEffort: item.reasoningEffort,
+    supportsTools: item.supportsTools,
+    supportsVision: item.supportsVision,
+    supportsReasoning: item.supportsReasoning,
+    customProtocol: item.customProtocol,
+    pricing: item.pricing,
+    // 播种**绝不改默认模型**：用户可能已经选了别的，「装个新版本后默认模型被换掉」
+    // 是最难解释的一类回归
+    setDefault: false,
+  };
+}
+
+/**
+ * 补齐本机缺失的内置模型；返回是否真的写过盘。
+ *
+ * 两条纪律：
+ * 1. **只补缺**（`missingBuiltinModels`）——用户可能在本机把某个内置模型的密钥
+ *    换成了自己的（额度隔离），那种改动必须保留；
+ * 2. **写盘后重新拉目录**：`/v1/models` 是 serve 启动时的快照，不重拉的话菜单里
+ *    仍然看不到刚播种的模型（与 `saveModel` 同一条收尾）。
+ */
+async function seedBuiltinModels(list: readonly BuiltinModel[]): Promise<boolean> {
+  const state = useModelsStore.getState();
+  // Web 端读不到 config.json：只展示不播种（`syncNanobotModels` 在 Web 会降级成
+  // 「下载配置片段」，那不是用户此刻想要的东西）
+  if (!state.managedAvailable) return false;
+
+  const missing = missingBuiltinModels(
+    list,
+    state.managed.map((item) => item.name),
+  );
+  if (missing.length === 0) return false;
+
+  let wrote = false;
+  for (const item of missing) {
+    // 逐条 upsert：主进程的合并指令是「一个预设一条」，批量语义不存在。
+    // 代价是首装时每条都会重启一次 serve（主进程在 changed 时就会重启）——
+    // 内置模型只有个位数，且只在缺失时发生，换来的是不需要改主进程协议。
+    const result = await platform.syncNanobotModels(
+      JSON.stringify(buildMutation(seedFormValue(item))),
+    );
+    if (result.ok) wrote = true;
+  }
+  if (!wrote) return false;
+
+  await useModelsStore.getState().loadManaged(true);
+  await useModelsStore.getState().refresh(true);
+  return true;
+}
+
+/** 目录分组（内置 / 自定义）。UI 用它渲染菜单，判据集中在 `lib/model/builtinModels` */
+export function modelGroups(
+  models: readonly ModelInfo[],
+  builtin: readonly BuiltinModel[],
+): ModelCatalogGroups {
+  return groupCatalog(models, builtinModelIds(builtin));
+}
 
 /** 配置里的 provider 名 → providers 里的 config key（内置大小写/连字符都可能不同） */
 export function resolveProviderKey(provider: string, keys: string[]): string {
@@ -302,18 +448,23 @@ export function buildManaged(snapshot: NanobotModelsSnapshot): ManagedModel[] {
  */
 export function buildMutation(value: ModelFormValue): NanobotModelsMutation {
   const model = value.model.trim();
+  // 预设名缺省等于模型名（表单里两者是同一个输入框）；内置模型才显式分开
+  const preset = (value.presetName ?? model).trim() || model;
   const custom = value.provider === CUSTOM_PROVIDER_VALUE;
   // auto 不落任何 providers 条目：引擎自己按模型名反查供应商
   const auto = value.provider === AUTO_PROVIDER_VALUE;
-  const providerKey = custom
-    ? slugifyProviderKey(value.customProviderName || value.apiBase || model)
-    : toProviderConfigKey(value.provider);
+  const explicitKey = value.providerKey?.trim();
+  const providerKey = explicitKey
+    ? explicitKey
+    : custom
+      ? slugifyProviderKey(value.customProviderName || value.apiBase || model)
+      : toProviderConfigKey(value.provider);
   return {
     op: 'upsert',
-    preset: model,
+    preset,
     // 改名 = 换 key：预设没有 label 字段，多写的键会被 pydantic 静默丢弃
     previousPreset:
-      value.original && value.original.name !== model ? value.original.name : undefined,
+      value.original && value.original.name !== preset ? value.original.name : undefined,
     config: {
       model,
       provider: custom ? providerKey : value.provider,
@@ -444,6 +595,44 @@ export const useModelsStore = create<ModelsState>()((set, get) => ({
       }
     })();
     return managedInflight;
+  },
+
+  builtin: [],
+  builtinLoading: false,
+  builtinAvailable: false,
+
+  loadBuiltin: () => {
+    // 并发去重：启动期与「打开模型菜单」几乎同时触发，拉两次云端没有意义
+    if (builtinInflight) return builtinInflight;
+    const fetcher = builtinFetcher;
+    if (!fetcher) {
+      // 装配处还没注入（启动早期）：不是错误，稍后还会再调一次
+      set({ builtinAvailable: false });
+      return Promise.resolve();
+    }
+    set({ builtinLoading: true });
+    builtinInflight = (async () => {
+      try {
+        // 先读本机配置：播种的判据是「预设名是否已存在」，而 `managedAvailable`
+        // 决定这台机器到底能不能写盘（Web 端不能）
+        await get().loadManaged();
+        const result = await fetcher();
+        if (!result.ok) {
+          // 未登录 / 断网 / 云端没起：**保留上一份清单**。清空会让选择器里的
+          // 「内置模型」组瞬间消失，用户会以为模型被删了。
+          set({ builtinAvailable: false });
+          return;
+        }
+        set({ builtin: result.models, builtinAvailable: true });
+        await seedBuiltinModels(result.models);
+      } catch {
+        set({ builtinAvailable: false });
+      } finally {
+        set({ builtinLoading: false });
+        builtinInflight = null;
+      }
+    })();
+    return builtinInflight;
   },
 
   saveModel: async (value) => {

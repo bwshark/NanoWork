@@ -137,6 +137,8 @@ export const ROUTES = {
   /** 安全审计（FR-8.9）：工具网关审计日志检索 / 导出 */
   audit: '/audit',
   knowledge: '/knowledge',
+  /** 项目空间（FR-12.7）：成员 + 共享知识库的协作容器 */
+  projects: '/projects',
   /**
    * 登录 / 注册页（批次 4，FR-10）。
    *

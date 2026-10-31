@@ -17,13 +17,17 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlmodel import Session
 
 from app.account import routes as account_routes
 from app.auth import routes as auth_routes
-from app.db import create_db_and_tables
+from app.catalog import routes as catalog_routes
+from app.catalog.seed import ensure_seed
+from app.db import create_db_and_tables, engine
 from app.kb import routes as kb_routes
 from app.orgs import department_routes
 from app.orgs import routes as org_routes
+from app.projects import routes as project_routes
 from app.sync import routes as sync_routes
 
 
@@ -48,6 +52,10 @@ def _default_origins() -> list[str]:
 async def lifespan(_: FastAPI):  # type: ignore[misc]
     # `on_event("startup")` 已被 FastAPI 标记废弃，改用 lifespan
     create_db_and_tables()
+    # 内置模型种子：只补缺失的 id，绝不覆盖库里已有的行（运维改过的地址 / 密钥
+    # 不能被一次重启冲回出厂值）。见 `catalog/seed.py` 文件头。
+    with Session(engine) as session:
+        ensure_seed(session)
     yield
 
 
@@ -63,9 +71,11 @@ app.add_middleware(
 
 app.include_router(auth_routes.router)
 app.include_router(sync_routes.router)
+app.include_router(catalog_routes.router)
 app.include_router(org_routes.router)
 app.include_router(department_routes.router)
 app.include_router(kb_routes.router)
+app.include_router(project_routes.router)
 app.include_router(account_routes.router)
 
 

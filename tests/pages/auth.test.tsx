@@ -22,6 +22,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { resolveSyncBaseUrl } from '@/sync/baseUrl';
 
 const mocks = vi.hoisted(() => {
   type Session = { userId: string; email: string; access: string; refresh: string };
@@ -183,9 +184,10 @@ describe('AuthPage', () => {
     await submitCredentials(host, 'a@b.com', 'secret');
 
     expect(host.textContent).toContain('无法连接同步服务');
-    expect(host.textContent, '提示里没有地址，用户无从判断是哪台服务').toContain(
-      '127.0.0.1:8910',
-    );
+    // 断言期望值取自**同一个**地址解析口：出厂地址会随部署改（现在是局域网 IP），
+    // 硬编码任一个地址都会在下次换地址时假红；而「提示里到底有没有地址」仍然被抓得住
+    const hostPort = new URL(resolveSyncBaseUrl()).host;
+    expect(host.textContent, '提示里没有地址，用户无从判断是哪台服务').toContain(hostPort);
   });
 
   it('服务端 422 → 提示说出规则，而不是甩一个错误码', async () => {

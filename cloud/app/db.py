@@ -49,6 +49,7 @@ def create_db_and_tables() -> None:
     # 模型必须在建表前被 import，否则 SQLModel.metadata 里没有它们。
     # 这里显式 import：main.py 即便只 import db 也不会漏掉表。
     from app.auth import models as _auth_models  # noqa: F401
+    from app.catalog import models as _catalog_models  # noqa: F401
     from app.kb import models as _kb_models  # noqa: F401
     from app.migrations import ensure_columns
     from app.orgs import models as _org_models  # noqa: F401

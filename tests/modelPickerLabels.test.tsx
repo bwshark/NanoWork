@@ -89,11 +89,17 @@ function modelChip(host: HTMLElement): HTMLElement {
   return chip!;
 }
 
-/** 已打开菜单里的行文案（MUI Menu 走 Portal，不在挂载容器里） */
+/**
+ * 模型菜单里除了模型行，还有一个「配置自定义模型」入口（2026-10-31 内置模型那批加的）。
+ * 它不是模型，不该进「芯片与行同字」这类断言 —— 但也不能默默忽略：下面单独有一条用例钉住它。
+ */
+const CUSTOM_MODEL_ENTRY = '配置自定义模型';
+
+/** 已打开菜单里的**模型行**文案（MUI Menu 走 Portal，不在挂载容器里） */
 function menuRows(): string[] {
-  return Array.from(document.querySelectorAll('[role="menuitem"]')).map((n) =>
-    (n.textContent ?? '').trim(),
-  );
+  return Array.from(document.querySelectorAll('[role="menuitem"]'))
+    .map((n) => (n.textContent ?? '').trim())
+    .filter((text) => text !== CUSTOM_MODEL_ENTRY);
 }
 
 /** 点 chip 展开模型菜单 */
@@ -179,5 +185,18 @@ describe('模型选择器的文案', () => {
     expect((modelChip(host).textContent ?? '').trim()).toBe('Auto');
     const rows = await openMenu(host);
     expect(rows).toEqual(['Auto']);
+  });
+
+  it('菜单底部保留「配置自定义模型」入口（内置模型批次加的，别被当成多余的模型行）', async () => {
+    useModelsStore.setState({ models: FIXED_CONFIG_CATALOG });
+    const host = mountComposer();
+    await openMenu(host);
+
+    const all = Array.from(document.querySelectorAll('[role="menuitem"]')).map((n) =>
+      (n.textContent ?? '').trim(),
+    );
+    // 它是**最后一个**入口，且只有一个（重复出现会让「点哪行算数」变得说不清）
+    expect(all.filter((text) => text === CUSTOM_MODEL_ENTRY)).toHaveLength(1);
+    expect(all[all.length - 1]).toBe(CUSTOM_MODEL_ENTRY);
   });
 });

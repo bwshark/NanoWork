@@ -771,8 +771,14 @@ let bootScreen: BootScreen | null = null;
  */
 let bootWatchdog: NodeJS.Timeout | null = null;
 
-/** 兜底闸时长：比 `SPLASH_ENGINE_TIMEOUT_MS` 更宽松，正常路径永远走不到它 */
-const BOOT_WATCHDOG_MS = 45_000;
+/**
+ * 兜底闸时长。
+ *
+ * 正常路径的最坏情况是「等引擎 30s + 等网关 12s」，再留一点余量。
+ * 它只该在**代码层面**出问题（await 永不返回、未捕获异常）时触发，
+ * 所以宁可宽一点，也不要误伤一台只是慢的机器。
+ */
+const BOOT_WATCHDOG_MS = 60_000;
 
 /**
  * 主窗口是否已经允许显示。
@@ -5955,11 +5961,11 @@ app.whenReady().then(async () => {
   const startupPair = Promise.all([serveBoot, gatewayBoot]);
   nanobotStartupPromise = startupPair.then(([serveOk]) => serveOk);
 
-  // 网关**不参与门禁**：它是 IM 长连接，等它会把首屏从 10 秒拖到十几秒，
-  // 而"能不能跟机器人说话"不影响"能不能用这个应用"。
-  // 启动屏会在主门禁满足后给它 2.5 秒宽限（见 `splash.ts` 的 `settleGatewayWithinGrace`），
-  // 通常足够让第 3 步真的打上勾；失败一律按"跳过"呈现，不画红叉——
-  // 那时已经要交接了，红叉只会让人以为整个应用起不来，IM 状态由应用内渠道页负责。
+  // 网关这一步是**门禁**：没有结论就不进第 4 行（「载入工作台」）。
+  // 但它带 12 秒上限（`SPLASH_GATEWAY_TIMEOUT_MS`）—— IM 长连接牵扯外部服务，
+  // 到点记「跳过 · 后台继续连接」继续走，不让一个通道把应用挡在启动屏后面。
+  // 失败一律按"跳过"呈现、不画红叉：红叉只会让人以为整个应用起不来，
+  // IM 渠道的真实状态由应用内的渠道页负责。
   void startupPair.then(([serveOk, gatewayOk]) => {
     // [LOCAL PATCH] 就绪提示必须**分别**报 serve 与网关。原写法只取 serve 的
     // 结果就打印「网关已在后台启动」：网关失败而 serve 成功时照样打这一句，
@@ -5985,7 +5991,7 @@ app.whenReady().then(async () => {
           ? serveBoot.then((ok): BootEngineOutcome => (ok ? 'ok' : 'failed'))
           : Promise.resolve<BootEngineOutcome>('skipped'),
         rendererReady: rendererReadySignal,
-        // 只用来给第 3 步打勾，不参与门禁（见上方注释）
+        // 第 3 步真门禁：网关有结论（或到上限）才进第 4 行
         gateway: engineInstalled ? gatewayBoot : undefined,
         describeEngineFailure: () => lastEngineStartError ?? '引擎进程未进入监听',
         // 重试前必须先收掉可能已半死的子进程：`startNanobot` 见到 `nanobotProcess`

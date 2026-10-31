@@ -34,7 +34,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, promises as fs } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -257,7 +257,73 @@ function pruneList() {
     join('python', 'Lib', 'idlelib'),
     join('python', 'lib', minor, 'idlelib'),
     join('python', 'tcl'), // tkinter 用不到，约 -25 MB
+    // terminfo / man：纯终端数据，引擎子进程不用（没有 TUI，也不调 curses）。
+    // 除了 -12 MB，它还带 1000+ 条别名链接 —— 是 electron-builder 复制 extraResources
+    // 时最容易炸的一棵树（见 relativizeSymlinks 的注释）。
+    join('python', 'share', 'terminfo'),
+    join('python', 'share', 'man'),
   ];
+}
+
+/**
+ * 把运行时里的**绝对**符号链接改写成相对链接。
+ *
+ * ## 为什么必须做（2026-10-31 在 Linux 容器里实测）
+ *
+ * `uv python install` 解出来的 PBS 是"安装到某处"的布局，**1049 个符号链接全部是绝对路径**，
+ * 指向 uv 的临时安装目录（`/tmp/nanowork-pbs-linux/cpython-3.12.16-linux-x86_64-gnu/...`）：
+ * `bin/python3`、`lib/libpython3.12.so`、`share/terminfo/**` 全在内。原样复制进 `build/rt` 之后：
+ *
+ * 1. **构建机能跑**（临时目录还在），所以导入自检会通过 —— 这是最坏的一种"假绿"；
+ * 2. 用户机器上没有那个目录 → `rt/python/bin/python3` 是悬空链接，引擎 exec 直接 ENOENT；
+ * 3. electron-builder 复制 `extraResources` 时按绝对目标建链接，两次落到同一目标就
+ *    `EEXIST: file already exists, symlink …`，整条打包链断在 AppImage 那一步。
+ *
+ * 改写成相对路径后三条同时消失，产物里也不再有任何指回构建机的路径。
+ *
+ * @param root 运行时根（`build/rt/python`）
+ * @param sourceRoot 被复制进来的源目录（uv 安装目录）；tar 解包时传 null
+ */
+async function relativizeSymlinks(root, sourceRoot) {
+  let rewritten = 0;
+  const stack = [root];
+  while (stack.length > 0) {
+    const dir = stack.pop();
+    let entries;
+    try {
+      entries = await fs.readdir(dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      const full = join(dir, entry.name);
+      if (entry.isSymbolicLink()) {
+        const target = await fs.readlink(full);
+        if (!isAbsolute(target)) continue;
+
+        let mapped = null;
+        if (sourceRoot && (target === sourceRoot || target.startsWith(sourceRoot + sep))) {
+          mapped = join(root, target.slice(sourceRoot.length).replace(/^[\\/]+/, ''));
+        } else if (target === root || target.startsWith(root + sep)) {
+          mapped = target;
+        }
+        if (!mapped) {
+          log('warn', `符号链接指向运行时之外，未改写：${full} -> ${target}`);
+          continue;
+        }
+        if (!existsSync(mapped)) {
+          log('warn', `符号链接目标不存在（保持绝对路径）：${full} -> ${target}`);
+          continue;
+        }
+        await fs.unlink(full);
+        await fs.symlink(relative(dir, mapped), full);
+        rewritten += 1;
+      } else if (entry.isDirectory()) {
+        stack.push(full);
+      }
+    }
+  }
+  return rewritten;
 }
 
 /** 递归剔除凭据键，并把 workspace 换成占位符 */
@@ -398,6 +464,8 @@ async function main() {
 
   let pbsAssetName;
   let pbsTag;
+  /** 被复制进 PYTHON_DIR 的源目录（仅 uv 分支有；tar 解包保留相对链接，不需要改） */
+  let symlinkSourceRoot = null;
   if (asset.kind === 'tarball') {
     pbsAssetName = asset.url.split('/').pop() ?? 'python.tar.gz';
     pbsTag = asset.tag;
@@ -424,11 +492,19 @@ async function main() {
     if (!picked) fail('uv python install 没有产出 cpython-* 目录');
     pbsAssetName = picked;
     pbsTag = 'uv-managed';
-    await fs.cp(join(uvDir, picked), PYTHON_DIR, { recursive: true });
+    symlinkSourceRoot = join(uvDir, picked);
+    await fs.cp(symlinkSourceRoot, PYTHON_DIR, { recursive: true });
   }
 
   if (!existsSync(pythonExecutable())) {
     fail(`找不到解释器：${pythonExecutable()}`, '检查 PBS 产物是否 install_only 布局');
+  }
+
+  // ②a 绝对符号链接 → 相对链接。必须在 pip/ensurepip/自检**之前**做：
+  //     那几步要用 bin/python3，而它正是绝对链接之一（改完才好判断是否真的可用）。
+  const rewrittenLinks = await relativizeSymlinks(PYTHON_DIR, symlinkSourceRoot);
+  if (rewrittenLinks > 0) {
+    log('symlink', `${rewrittenLinks} 个绝对符号链接已改写为相对路径（避免产物指向构建机临时目录）`);
   }
 
   // ②b 确保运行期有 pip：插件安装走 `PIP_USER=1` + `python -m pip`，没有 pip 就等于

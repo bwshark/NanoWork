@@ -28,7 +28,13 @@
  *
  * ## LWW 三级 tie-break（与服务端 `merger.py` 同构）
  *
- * 1. `updatedAt` 大者胜；2. 相等则 `rev` 大者胜；3. 再相等则 `id` 字典序大者胜。
+ * 1. **`rev` 大者胜**；2. 相等则 `updatedAt` 大者胜；3. 再相等则 `id` 字典序大者胜。
+ *
+ * ⚠️ 顺序与最初的设计相反（2026-10-31 修正）：服务端把 `updatedAt` 归一为**服务端**
+ * 接收时刻，而本地写入用**本机时钟**。两侧只要有时钟偏差，本地刚改完的数据就会被判成
+ * 「比远端旧」→ 拉取时被远端旧 payload 覆盖（实测容器快约 1.1 秒时稳定复现，
+ * `integration.twoDevice` 门禁②因此一直红）。`rev` 是客户端自增的版本号、与时钟无关，
+ * 用它当第一裁决键才不会自己吃掉自己的修改。
  * 第三级存在的理由不是「分出高下」，而是**确定性**：前两级都相等时，两端各自执行
  * 必须得出同一个胜者。`compareVersions` 拆成独立函数，第三级才测得到。
  */
@@ -148,10 +154,11 @@ function timeOf(iso: string): number {
  * false → 老数据永远判「无版本」。
  */
 export function compareVersions(a: VersionStamp, b: VersionStamp): -1 | 0 | 1 {
+  // ⚠️ `rev` 必须在时间之前：见文件头。服务端时间与本地时钟不能直接比大小
+  if (a.rev !== b.rev) return a.rev > b.rev ? 1 : -1;
   const at = timeOf(a.updatedAt);
   const bt = timeOf(b.updatedAt);
   if (at !== bt) return at > bt ? 1 : -1;
-  if (a.rev !== b.rev) return a.rev > b.rev ? 1 : -1;
   if (a.id !== b.id) return a.id > b.id ? 1 : -1;
   return 0;
 }

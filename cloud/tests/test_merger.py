@@ -20,14 +20,19 @@ def stamp(
     return VersionStamp(entity_id=entity_id, rev=rev, updated_at=updated_at, deleted_at=deleted_at)
 
 
-def test_level1_newer_time_wins() -> None:
-    assert compare_versions(stamp(updated_at=T1), stamp(updated_at=T0)) > 0
-    assert compare_versions(stamp(updated_at=T0), stamp(updated_at=T1)) < 0
+def test_level1_newer_rev_wins_even_with_older_clock() -> None:
+    """`rev` 优先：客户端时钟比服务端慢（`updated_at` 更早）也必须赢。
+
+    这条不是口味：服务端把 `updated_at` 归一成服务器时间，客户端写入用本机时钟，
+    实测容器快约 1.1 秒。若时间优先，客户端 rev=2 的修改会被 rev=1 的旧行压掉。
+    """
+    assert compare_versions(stamp(rev=2, updated_at=T0), stamp(rev=1, updated_at=T1)) > 0
+    assert compare_versions(stamp(rev=1, updated_at=T1), stamp(rev=2, updated_at=T0)) < 0
 
 
-def test_level2_same_time_newer_rev_wins() -> None:
-    assert compare_versions(stamp(rev=5), stamp(rev=3)) > 0
-    assert compare_versions(stamp(rev=3), stamp(rev=5)) < 0
+def test_level2_same_rev_newer_time_wins() -> None:
+    assert compare_versions(stamp(rev=3, updated_at=T1), stamp(rev=3, updated_at=T0)) > 0
+    assert compare_versions(stamp(rev=3, updated_at=T0), stamp(rev=3, updated_at=T1)) < 0
 
 
 def test_level3_same_time_and_rev_entity_id_lexicographic() -> None:
@@ -37,6 +42,20 @@ def test_level3_same_time_and_rev_entity_id_lexicographic() -> None:
 
 def test_identical_version_is_zero() -> None:
     assert compare_versions(stamp(), stamp()) == 0
+
+
+def test_client_clock_behind_server_still_accepts_newer_rev() -> None:
+    """门禁② 的根因回归（2026-10-31）。
+
+    服务端行的 `updated_at` 是**服务器时间**（比客户端快约 1.1 秒），客户端刚改完的
+    实体 `rev=2` 但 `updated_at` 看起来更早。时间优先时它被判成「过期推送」，
+    服务端把旧 payload 回给客户端 → 用户修改被静默回滚、下次仍在同一处失败。
+    """
+    current = stamp(rev=1, updated_at=T1)  # 服务端旧行，时间看起来更新
+    incoming = stamp(rev=2, updated_at=T0)  # 客户端刚改，时间看起来更旧
+    verdict = resolve(current, incoming)
+    assert verdict.accepted is True
+    assert verdict.reason == "incoming_newer_rev"
 
 
 def test_create_when_no_current() -> None:

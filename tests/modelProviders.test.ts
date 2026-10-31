@@ -235,6 +235,34 @@ describe('buildMutation: 表单值 → 引擎变更指令', () => {
     ...overrides,
   });
 
+  it('显式 presetName：预设名与上游模型名可以分开（内置模型专用）', () => {
+    const mutation = buildMutation({
+      ...base,
+      model: 'agnes-3.0-flash',
+      presetName: 'agnes-fast',
+    });
+    if (mutation.op !== 'upsert') throw new Error('期望 upsert');
+    // 请求里发出去的是预设名，交给上游的是 config.model —— 写成同一个会让
+    // 「同一上游模型配两个预设」永远做不到
+    expect(mutation.preset).toBe('agnes-fast');
+    expect(mutation.config.model).toBe('agnes-3.0-flash');
+  });
+
+  it('显式 providerKey：不再按展示名 slug（否则改个显示名就多出一份 providers 条目）', () => {
+    const mutation = buildMutation({
+      ...base,
+      provider: CUSTOM_PROVIDER_VALUE,
+      providerKey: 'agnes',
+      customProviderName: 'Agnes AI',
+      apiBase: 'https://apihub.agnes-ai.com/v1',
+    });
+    if (mutation.op !== 'upsert') throw new Error('期望 upsert');
+    expect(mutation.config.provider).toBe('agnes');
+    expect(mutation.provider?.key).toBe('agnes');
+    // displayName 仍是给人看的那个
+    expect(mutation.provider?.displayName).toBe('Agnes AI');
+  });
+
   it('内置供应商：preset.provider 用 snake 名，providers.key 用 camelCase', () => {
     const mutation = buildMutation({
       ...base,

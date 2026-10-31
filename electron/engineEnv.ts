@@ -21,7 +21,7 @@
  */
 
 import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 import type { EngineLayout } from './engineSelfCheck';
 
 /** 指向证书文件的环境变量：值指向不存在的文件时，httpx 建连会直接抛错 */
@@ -56,6 +56,17 @@ function deleteEnvCaseInsensitive(env: NodeJS.ProcessEnv, name: string): void {
   for (const key of Object.keys(env)) {
     if (key.toUpperCase() === upper) delete env[key];
   }
+}
+
+/**
+ * 大小写不敏感地找环境变量的**实际键名**。
+ *
+ * Windows 上常见的是 `Path` 而不是 `PATH`：直接写 `env.PATH = ...` 会多出一个新键，
+ * 而 Windows 取的是第一个（大小写不敏感）匹配，于是我明明加进去了却不生效。
+ */
+function findEnvKey(env: NodeJS.ProcessEnv, name: string): string | undefined {
+  const upper = name.toUpperCase();
+  return Object.keys(env).find((key) => key.toUpperCase() === upper);
 }
 
 /**
@@ -94,6 +105,30 @@ export function buildEngineEnv(options: EngineEnvOptions): NodeJS.ProcessEnv {
   env['PYTHONDONTWRITEBYTECODE'] = '1';
   // tiktoken 首次 get_encoding 会联网下载 BPE；缓存预置在这里才算离线可用
   env['TIKTOKEN_CACHE_DIR'] = join(options.userData, 'tiktoken');
+
+  /*
+   * ③ 把随包解释器放到 PATH **最前面**。
+   *
+   * 为什么必须做：引擎的 shell 工具执行的是模型写的命令，里面常出现裸 `python`
+   * （`python -m http.server 8000`、`python build.py`）。真机上 PATH 第一个 `python`
+   * 是**用户自己装的那个** —— 实测踩到 `C:\python27\python.exe`：脚本因 Python 2 语法
+   * 直接失败，而 Windows 防火墙弹窗会把这个野路径亮给用户（"Publisher: Unknown"），
+   * 用户根本认不出那是谁的程序。
+   *
+   * 前置之后：裸 `python` 命中的是随包 3.12，路径落在安装目录内；功能与"弹窗里显示的
+   * 那个路径"都可预期。**不能覆盖已有的 PATH** —— 插件与工具还要用 curl、git、node。
+   */
+  const pythonDirs =
+    process.platform === 'win32'
+      ? [join(options.runtimeRoot, 'python'), join(options.runtimeRoot, 'python', 'Scripts')]
+      : [join(options.runtimeRoot, 'python', 'bin')];
+  const pathKey = findEnvKey(env, 'PATH') ?? 'PATH';
+  const inheritedPath = env[pathKey] ?? '';
+  const pathParts = inheritedPath.split(delimiter).filter(Boolean);
+  const alreadyFirst = pathParts[0] === pythonDirs[0];
+  if (!alreadyFirst) {
+    env[pathKey] = [...pythonDirs, ...pathParts].join(delimiter);
+  }
 
   return env;
 }

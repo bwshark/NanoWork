@@ -6,6 +6,11 @@
   "type": "module",
   "main": "electron/main.cjs",
   "description": "类 WorkBuddy 智能体客户端助手（基于 nanobot 引擎）— 跨端（Web + Electron）React 渲染层",
+  "homepage": "https://github.com/bwshark/nanowork",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bwshark/nanowork.git"
+  },
   "scripts": {
     "dev": "vite",
     "build": "npm run typecheck && npm run typecheck:electron && vite build",
@@ -20,6 +25,8 @@
     "build:electron": "npm run build:engine:ensure && vite build && node node_modules/esbuild/bin/esbuild electron/main.ts --bundle --platform=node --format=cjs --external:electron --outfile=electron/main.cjs && node node_modules/esbuild/bin/esbuild electron/preload.ts --bundle --platform=node --format=cjs --external:electron --outfile=electron/preload.cjs && node node_modules/esbuild/bin/esbuild electron/splashPreload.ts --bundle --platform=node --format=cjs --external:electron --outfile=electron/splashPreload.cjs && electron-builder --config electron/builder.config.json",
     "build:installer": "node scripts/build-installer.mjs",
     "build:installer:strict": "node scripts/build-installer.mjs --strict --check",
+    "build:installer:mac": "node scripts/build-installer.mjs --platform mac",
+    "build:installer:linux": "node scripts/build-installer.mjs --platform linux",
     "release:electron": "npm run build:electron -- --publish always",
     "electron:serve": "vite build && node node_modules/esbuild/bin/esbuild electron/main.ts --bundle --platform=node --format=cjs --external:electron --outfile=electron/main.cjs && node node_modules/esbuild/bin/esbuild electron/preload.ts --bundle --platform=node --format=cjs --external:electron --outfile=electron/preload.cjs && node node_modules/esbuild/bin/esbuild electron/splashPreload.ts --bundle --platform=node --format=cjs --external:electron --outfile=electron/splashPreload.cjs && electron .",
     "verify:gateway": "vitest run tests/gateway.integration.test.ts"

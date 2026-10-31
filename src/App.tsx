@@ -5,7 +5,7 @@ import { ROUTES } from '@/lib/core/constants';
 import { connectionManager } from '@/ai/connectionManager';
 import { platform } from '@/platform';
 import { useSkillsStore } from '@/stores/skillsStore';
-import { useModelsStore } from '@/stores/modelsStore';
+import { useModelsStore, setBuiltinModelsFetcher } from '@/stores/modelsStore';
 import { useAgentsStore } from '@/stores/agentsStore';
 import { useChannelsStore } from '@/stores/channelsStore';
 import { useChannelSessionsStore } from '@/stores/channelSessionsStore';
@@ -18,6 +18,7 @@ import { log } from '@/observability/logger';
 import { IdentityService } from '@/lib/agent/identity';
 import { getDeviceId } from '@/lib/core/deviceId';
 import { disposeSyncRuntime, initSyncRuntime } from '@/sync';
+import { createBuiltinModelsFetcher } from '@/sync/builtinModelsGateway';
 import type { SyncRuntime } from '@/sync';
 
 /**
@@ -41,6 +42,8 @@ import type { SyncRuntime } from '@/sync';
 export function App() {
   // 同步运行时的持有引用：`dispose()` 在卸载清理函数里调用（见下）。
   const syncRuntimeRef = useRef<SyncRuntime | null>(null);
+  // 账户变化订阅的退订句柄（runtime 是异步建的，只能存 ref 供清理函数取用）
+  const builtinUnsubRef = useRef<(() => void) | null>(null);
   const navigate = useNavigate();
 
   /**
@@ -151,6 +154,23 @@ export function App() {
         return;
       }
       syncRuntimeRef.current = runtime;
+
+      /*
+       * 内置模型目录（云端下发）：
+       *
+       * 1. **注入取数器**：`modelsStore` 不能 import `sync/runtime`（会成环，见
+       *    `setBuiltinModelsFetcher` 的注释），所以由这里把两者接起来；
+       * 2. **启动即拉一次**：已登录的机器要立刻补齐缺失的内置模型（换机安装的
+       *    核心场景），而不是等用户点开模型菜单才发现自己没有可用模型；
+       * 3. **登录后再拉**：冷启动时多数是未登录态（首启装机），此时那一次必然
+       *    是 401。订阅是唯一入口（与 runtime 的 `onSession` 同一个理由），
+       *    登出（null）不拉——未登录拿不到云端目录，也没必要。
+       */
+      setBuiltinModelsFetcher(createBuiltinModelsFetcher(runtime));
+      void useModelsStore.getState().loadBuiltin();
+      builtinUnsubRef.current = runtime.account.subscribe((session) => {
+        if (session) void useModelsStore.getState().loadBuiltin();
+      });
     })();
     // 启动回读：本地缺失的渠道配置从 nanobot config.json 反向补齐（回显）；
     // 随后校准：把本地已保存的频道配置同步进 nanobot，保证历史配置自动生效。
@@ -184,6 +204,11 @@ export function App() {
     useChannelSessionsStore.getState().startPolling();
     return () => {
       unmounted = true;
+      builtinUnsubRef.current?.();
+      builtinUnsubRef.current = null;
+      // 取数器持有 runtime 实例：不同步置空的话，下一次挂载前若有迟到的
+      // `loadBuiltin` 会打到已 dispose 的账户上（表现为「登录了但内置模型没了」）
+      setBuiltinModelsFetcher(null);
       useChannelSessionsStore.getState().stopPolling();
       connectionManager.stopHeartbeat();
       // 释放同步运行时：取消 8 个 store 订阅 + 账户订阅并停调度（置空单例，可重 init）

@@ -71,12 +71,16 @@ export const SPLASH_ENGINE_TIMEOUT_MS = 30_000;
 export const SPLASH_ERROR_AUTO_ENTER_MS = 8_000;
 
 /**
- * 主门禁满足后，给 gateway 的宽限期。
+ * 等网关的上限。
  *
- * serve 与 gateway 是并行拉起的，绝大多数情况下后者在前者 listen 时就已有结论；
- * 2 秒足够吸收"晚一点点"的情况，又不至于让首屏为 IM 长连接多等。
+ * 网关这一步是**门禁**（见 `waitForBoot`）：它没有结论就不进第 4 行。但 IM 长连接牵扯
+ * 的是外部服务，谁也不敢保证它一定在合理时间内回答，所以必须带一个上限 ——
+ * 到点记成「跳过 · 后台继续连接」继续走，绝不让一个 IM 通道把整个应用挡在启动屏后面。
+ *
+ * 12 秒的取法：`startNanobotGateway` 内部对 health 端口的等待是 `LAUNCH_READY_TIMEOUT_MS`
+ * 量级，正常路径几秒内就有结论；超过 12 秒基本可以判定"这次不会好了"。
  */
-export const SPLASH_GATEWAY_GRACE_MS = 2_500;
+export const SPLASH_GATEWAY_TIMEOUT_MS = 12_000;
 
 /**
  * 四步全绿后的停留时长。
@@ -98,11 +102,11 @@ export interface WaitForBootInput {
   /** 主窗口渲染层报到（`app:renderer-ready`） */
   rendererReady: Promise<void>;
   /**
-   * gateway 的结果（可选）。
+   * gateway 的结果。
    *
-   * **不参与门禁**（它可能连几十秒外部服务），但主门禁满足后会给它一小段宽限
-   * （`SPLASH_GATEWAY_GRACE_MS`）：并行拉起的两个进程多半同时就绪，等 2 秒就能让
-   * 第 3 步真的打上勾，而不是永远停在空心圈上交接。
+   * **参与门禁**：没有结论就不进第 4 行（「载入工作台」），因为"网关还没起来就已经
+   * 显示工作台已载入"是顺序上的谎话。上限见 `SPLASH_GATEWAY_TIMEOUT_MS`：
+   * 到点仍无结论则记成「跳过 · 后台继续连接」继续走，不让 IM 通道挡住整个应用。
    */
   gateway?: Promise<boolean>;
   /** 用户在错误卡片上点「重试」时调用；返回新的引擎结果 */
@@ -217,7 +221,7 @@ class SplashWindow implements BootScreen {
   private engineSettled = false;
   /** 网关的真实结论：`pending` 表示还没动静 */
   private gatewayOutcome: 'pending' | 'ok' | 'failed' | 'skipped' = 'pending';
-  /** 网关那一行是否已经画出去（防止宽限超时后又被打回 `done`） */
+  /** 网关那一行是否已经画出去（防止超时落成 `skipped` 之后又被迟到的结果改回 `done`） */
   private gatewayMarked = false;
 
   /** 用户用 Alt+F4 关掉启动屏 = "别挡着我，直接进" */
@@ -345,8 +349,12 @@ class SplashWindow implements BootScreen {
     for (;;) {
       const outcome = await this.raceOutcome(engine, input.rendererReady);
       if (outcome === 'ready') {
-        // 主门禁已满足，但第 3 步可能还在跑：给它一个不伤首屏的宽限期
-        await this.settleGatewayWithinGrace(input.gateway);
+        // 引擎与界面都就绪了，但第 3 步（网关）还没结论：这一步是门禁，等它。
+        const gateway = await this.awaitGateway(input.gateway);
+        if (gateway === 'closed') return 'degraded';
+        if (gateway === 'timeout') {
+          this.log('warn', `网关 ${SPLASH_GATEWAY_TIMEOUT_MS / 1000} 秒内没有结论，按「跳过」继续`);
+        }
         return 'ready';
       }
       if (outcome === 'closed') return 'degraded';
@@ -416,28 +424,35 @@ class SplashWindow implements BootScreen {
     this.mark('gateway', this.gatewayOutcome === 'ok' ? 'done' : 'skipped');
   }
 
-  /** 主门禁满足后给网关的宽限：到点仍无结论就记成"跳过"，不让空心圈留到交接 */
-  private async settleGatewayWithinGrace(gateway?: Promise<boolean>): Promise<void> {
-    if (!gateway) return;
-    if (this.gatewayOutcome !== 'pending') return;
+  /**
+   * 第 3 步的门禁：等网关有结论，上限 `SPLASH_GATEWAY_TIMEOUT_MS`。
+   *
+   * 只在引擎与界面都就绪之后调用 —— 顺序不能反，否则又回到"引擎还在转、下面先绿"。
+   * 到点仍无结论就落成「跳过 · 后台继续连接」：语义上诚实（它确实还在连），
+   * 也保证四步不会在交接时留下一个空心圈。
+   */
+  private async awaitGateway(
+    gateway?: Promise<boolean>,
+  ): Promise<'ok' | 'timeout' | 'closed'> {
+    if (!gateway) return 'ok';
+    // 已有结论（`trackGateway` 已经把它画上去了），不必再等
+    if (this.gatewayOutcome !== 'pending') return 'ok';
 
     const settled = await Promise.race([
       gateway.then(
-        () => true,
-        () => true,
+        () => 'ok' as const,
+        () => 'ok' as const,
       ),
-      delay(SPLASH_GATEWAY_GRACE_MS).then(() => false),
+      delay(SPLASH_GATEWAY_TIMEOUT_MS).then(() => 'timeout' as const),
+      this.closedSignal.then(() => 'closed' as const),
     ]);
-    if (settled) {
-      // 让 trackGateway 里那次 await engine 先跑完，避免和这里抢着写状态
-      await Promise.resolve();
-      return;
+
+    if (settled === 'timeout') {
+      this.gatewayOutcome = 'skipped';
+      this.gatewayMarked = true;
+      this.mark('gateway', 'skipped', '后台继续连接');
     }
-    // 宽限用尽：标成「跳过 · 后台继续连接」，语义上诚实（它确实还在连），
-    // 又不会在四勾同框时留一个空心圈
-    this.gatewayOutcome = 'skipped';
-    this.gatewayMarked = true;
-    this.mark('gateway', 'skipped', '后台继续连接');
+    return settled;
   }
 
   private raceOutcome(

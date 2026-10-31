@@ -1,0 +1,215 @@
+name: Release
+
+# 三平台安装包流水线
+# ---------------
+# 每个平台各一个 job，**必须在各自的原生系统上构建**：
+#   · macOS 的 dmg 依赖 hdiutil、签名依赖 codesign
+#   · Linux 的 deb 依赖 fpm、AppImage 依赖 mksquashfs
+#   · Windows 的 NSIS 依赖 makensis
+# 交叉构建在 electron-builder 里不是"支持不好"，而是"没有"。
+#
+# 架构与 build/rt 必须成对：便携 Python 按 triple 分发，所以 mac 用两台 runner
+# （macos-14 = arm64 / macos-15-intel = x64），各自重建引擎运行时。
+# ⚠️ 不要再用 macos-13：该镜像已于 2025-12-04 退役，指向它的 job 会直接失败；
+#    x64 只剩 macos-15-intel（官方说明可用到 2027-08）。
+#
+# 引擎源码不在本仓库（nanobot/ 被 .gitignore 忽略），必须单独 checkout：
+#   · 同账号/同组织的私有仓库 → 用 secrets.GITHUB_TOKEN（需要给它 contents:read 访问）
+#   · 跨账号 → 建 secrets.NANOBOT_TOKEN（fine-grained PAT，只读该仓库）
+#   仓库地址可用仓库变量 NANOBOT_REPOSITORY 覆盖（默认 bwshark/nanobot）
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "把产物发布到这个 tag（留空则只构建、不发布）"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: win
+            arch: x64
+            label: Windows x64（NSIS）
+          - os: macos-14
+            platform: mac
+            arch: arm64
+            label: macOS arm64（dmg + zip）
+          - os: macos-15-intel
+            platform: mac
+            arch: x64
+            label: macOS x64（dmg + zip）
+          - os: ubuntu-22.04
+            platform: linux
+            arch: x64
+            label: Linux x64（AppImage + deb）
+    steps:
+      - uses: actions/checkout@v4
+
+      # ------------------------------------------------------------------
+      # 引擎源码：父仓库不含 nanobot/，没有它 build/rt 建不出来，
+      # 打出来的包能装但对话必失败（比构建失败更糟）。
+      # ------------------------------------------------------------------
+      - name: 取引擎源码
+        shell: bash
+        env:
+          NANOBOT_REPOSITORY: ${{ vars.NANOBOT_REPOSITORY || 'bwshark/nanobot' }}
+          NANOBOT_TOKEN: ${{ secrets.NANOBOT_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${NANOBOT_TOKEN}" ]; then
+            echo "::error title=缺少引擎访问凭据::配置 secrets.NANOBOT_TOKEN（或给 GITHUB_TOKEN 读权限）"
+            exit 1
+          fi
+          git clone --depth 1 \
+            "https://x-access-token:${NANOBOT_TOKEN}@github.com/${NANOBOT_REPOSITORY}.git" nanobot
+          test -f nanobot/pyproject.toml || {
+            echo "::error title=引擎仓库结构不对::${NANOBOT_REPOSITORY} 里没有 pyproject.toml"
+            exit 1
+          }
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      # 引擎运行时由 uv 拉 python-build-standalone 并安装依赖，不用系统 python
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 版本一致性（tag / package.json / 引擎）
+        shell: bash
+        run: |
+          set -euo pipefail
+          pkg=$(node -e "process.stdout.write(require('./package.json').version)")
+          echo "package.json = ${pkg}"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            tag="${GITHUB_REF_NAME#v}"
+            if [ "${tag}" != "${pkg}" ]; then
+              echo "::error title=版本不一致::tag=${GITHUB_REF_NAME} 与 package.json=${pkg} 不同，先改版本再打 tag"
+              exit 1
+            fi
+          fi
+
+      - name: 构建引擎运行时（build/rt）
+        # 这一步约 10 分钟（下载 PBS + 装 ~200 MB site-packages）。
+        # --ensure 只在没有 manifest 时才干活，避免重复消耗。
+        run: node scripts/build-engine.mjs --ensure
+
+      - name: 决定严格模式
+        id: strict
+        shell: bash
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+        run: |
+          set -euo pipefail
+          if [ "${{ matrix.platform }}" = "mac" ] && [ -z "${CSC_LINK}" ]; then
+            # 没有证书时 --strict 会让构建直接失败。内测包允许未签名，但要留一条醒目的告警。
+            echo "flag=" >> "$GITHUB_OUTPUT"
+            echo "::warning title=未签名 macOS 包::没有 CSC_LINK，产物需用户手动 xattr -dr com.apple.quarantine"
+          else
+            echo "flag=--strict" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 打包
+        shell: bash
+        env:
+          NANOWORK_ARTIFACT_REPORT: ${{ runner.temp }}/artifacts.json
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # macOS 签名（配置了才有值；没配置时 electron-builder 会跳过签名）
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          # macOS 公证（三个都配齐才会启用）
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          node scripts/build-installer.mjs \
+            --platform "${{ matrix.platform }}" \
+            --arch "${{ matrix.arch }}" \
+            --out out \
+            --publish never \
+            ${{ steps.strict.outputs.flag }}
+
+      - name: 收集产物（安装包 + electron-updater 元数据）
+        shell: bash
+        run: |
+          set -euo pipefail
+          # 统一收进 upload/ 再上传：
+          #   ① Windows 上产物可能因为受限目录被脚本挪到盘根，绝对路径不在 workspace 里，
+          #      upload-artifact 对 workspace 之外的路径行为不稳；
+          #   ② 更新元数据（latest*.yml / *.blockmap）必须跟安装包一起发，漏了客户端
+          #      就"能下载却判断不出有新版本"。
+          mkdir -p upload
+          node scripts/collect-artifacts.mjs "${{ runner.temp }}/artifacts.json" |
+            while IFS= read -r file; do cp "$file" upload/; done
+          ls -la upload
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nanowork-${{ matrix.platform }}-${{ matrix.arch }}
+          path: upload/*
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: 发布到 GitHub Releases
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.tag != ''
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: 校验产物齐全（三平台）
+        shell: bash
+        run: |
+          set -euo pipefail
+          ls -la dist
+          # 缺平台就发布，等于给用户一个"更新到一半没有包"的 release
+          for pattern in "*.exe" "*-mac-arm64.dmg" "*-mac-x64.dmg" "*.AppImage" "*.deb"; do
+            if ! compgen -G "dist/${pattern}" > /dev/null; then
+              echo "::error title=产物缺失::dist/${pattern} 不存在"
+              exit 1
+            fi
+          done
+
+      - name: 创建或更新 Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # 这个 job 不 checkout（不需要源码），gh 没有本地 git 上下文，
+          # 必须显式告诉它操作哪个仓库，否则报 "not a git repository"
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          if gh release view "${TAG}" > /dev/null 2>&1; then
+            gh release upload "${TAG}" dist/* --clobber
+          else
+            gh release create "${TAG}" dist/* \
+              --title "NanoWork ${TAG}" \
+              --generate-notes
+          fi

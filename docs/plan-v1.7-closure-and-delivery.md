@@ -31,7 +31,7 @@ V1.6 把「运行期工程」补齐了，但 **V1 本身仍未整体收口**（`
 | **B1 判据与文档收口** | ✅ **已完成（7/7）** | 2026-10-17 | **B1-01**：v2 §6 的 P1 基线表整块重写为「复核后真正剩余的 P1 共 4 条」并逐条给阻塞点与落点；`docs/README.md` §九 看板新增 **#35**（与 #34 同源的状态滞后，第二次发生）。**B1-02**：`FR-4.4` ⬜→🟡，写明「个人 / 项目两级已由记忆 v2 落地（`memoryPaths.ts` 两类根 + `workspaceIdFor` / `scopeIdFor`），只剩组织级 → V3」，**本轮零代码改动**。**B1-03**：`FR-8.6` 拆三件（彻底删除 ✅ / 检索前过滤被知识库阻塞 / 注入检测待做）并注明「不再计为整条欠账」。**B1-04**：`FR-3.9` 收窄为两块并给 ② 的降级口径。**B1-05**：**19 条 FR**（R13 全量 6 + R3 5 + R8 4 + R11 4）并入 v2 第 3 章，**新开 R13 域**并进域总览表；顺带校准「原文称 24 条 / 实为 19 条」的计数口径（v1.6 §〇 加勘误行）。**B1-06**：`OVERVIEW.md` 全篇重写（V1 收口口径、V1.6/V1.7 进度、已实现能力按域、遗留风险 10 条）。**B1-07**：本文件已登记进 `docs/README.md` §三。**门禁实测（零代码改动，用于确认基线）**：三套 `tsc` 均 0 错误；`CODEBUDDY_SAFE_DELETE_ENABLED=0 npm run build` **退出码 0**（24.43s）；首屏 `modulepreload` 0.61 MB / 合计 1.16 MB（两条预算内）；`vitest` **226 文件 3409 用例**中 **2 个红均已定位为夹具/环境类**（同步集成用例并发下健康检查超时、`fileBackup` 用例断言与 `list()` 契约冲突的确定性 flaky），证据见 `OVERVIEW.md` §2.1 —— **两条噪声建议在 B2 一并修掉** |
 | **B2 客户端补完** | ✅ **已完成（3/3 + 2 处门禁噪声）** | 2026-10-17 | **B2-01**：会话版本引用集进同步负载——`Session.pluginVersions` / `SessionMeta.pluginVersions` 声明字段 + `src/lib/agent/sessionPluginRefs.ts`（快照 / 解析 / GC 保护集，纯函数）+ 白名单 `pluginVersions`（**对象按内容比**，否则每轮发送都涨 `rev`）+ `toMeta` / `toMetaFromEntity` / `metaToSession` / `deriveMetaFromEvents` 往返 + `collectCache` 的引用集改为 **本机生效副本 ∪ 会话引用集**（换机 GC 不再删掉别的设备正在用的那一版）。**B2-02**：`src/lib/prompt/promptInjection.ts` 四类规则（指令覆盖 / 角色劫持 / 外泄诱导 / 编码混淆）+ `components/composer/InjectionNotice.tsx`，`Composer` 上方常驻提示、**只提示不拦截**；规则按「动作 + 对象」收紧，6 条「正常提问不误报」用例钉住误报率。**B2-03**：占位本就确定（`hashHue`），本轮补 `helperText` 写明「云端头像未接入」+ 9 条用例**锁定确定性**（同名同色同字；URL 头像退回名称首字），**不新增任何网络请求**。**门禁噪声（2 处，均非回归）**：① `fileBackupStore` 的 `BackupEntry` 加单调 `seq`，`list()` 改「`at` 倒序 → `seq` 倒序」的**全序**（同毫秒也确定），用例改为按契约断言「最新在前」；② 两个同步集成用例的健康检查与 `beforeAll` 超时 20s → 90s（全量并发下 uvicorn 首次 import 可被拖过 20s，单跑只要 2.9s）。**门禁**：三套 `tsc` 0 错误；全量 `vitest --maxWorkers=3` **229 文件 / 3454 用例 exit=0**（此前的两处红全消）；`CODEBUDDY_SAFE_DELETE_ENABLED=0 npm run build` exit=0；`electron/main.cjs` / `preload.cjs` 已重建（`indexFile.ts` 被主进程打包，改它必须重建）。**变异验证 3 项**：白名单去掉 `pluginVersions` → 4 条红；去掉 `seq` 兜底 → 2 条红；去掉中文指令覆盖规则 → 1 条红 |
 | **引擎统一收尾** | ✅ **已完成** | 2026-10-17 | 用户决策「统一到本仓 study 副本，桌面也跑本仓」。`$APPDATA/nanowork/nanowork.nanobot.json` 由坏掉的 `{}`（带 BOM→`JSON.parse` 抛错→fallback 到本仓 exe）改为显式 `{bin: study exe, host:127.0.0.1, port:8900}`（无 BOM）。study 引擎已自洽：`gitstore.py` 含 FileLock、`nanobot.exe` 启动器指向本仓 venv（`nanobot_ai 0.3.0` 已装）、`nanobot --version`→v0.3.0。凭据走环境变量 `DASHSCOPE_API_KEY`（两份 `nanowork.config.json` 均无内联密钥）→ 统一不丢凭据。本机无 codes 应用 userData（codes 副本未被使用），备份在 `codes/nanobot/.local-backup-eng-20261017_204905/`。B3 引擎改动落 study 即可，不再强制双副本同步 |
-| B3 引擎侧三件 | 🟡 **B3-01 / B3-02 已于 2026-10-23 真机验收通过**；B3-03 待飞书凭据 | 2026-10-23 | 三件代码均已落并有用例。**本轮真机（agnes-3.0-flash 通道）**：B3-01 子代理委派 6 条判据全过（结果回注 391、SSE `started→done`、三条权限单调递减含对照）；B3-02 Dream 闸门 11 条全过（采纳只写变化项 / 丢弃逐字节不变 / 三件套基线不被提前改动）+ 回退开关 2 条（关闸门后无候选且文件被直落改写）。脚本 `tasks/verify-b3-real.py`，证据 `tasks/evidence/b3-*.json`。**2026-10-23 补记**：B3-03 已于 **2026-10-20 真机闭环**（飞书审批卡文本生效、允许→工具执行、拒绝→未执行、桌面端同步弹卡，见 §九 看板 #37 与附录 C.3/C.8），期间修掉两处零报错缺陷（运行时渠道名 ≠ 配置段名导致审批开关查表 miss；网关路由漏 `await` 导致快照端点恒 500）。**B3 三件至此全部落地并通过真机** |
+| B3 引擎侧三件 | ✅ **三件均已真机通过**（B3-01 / B3-02 2026-10-23；B3-03 2026-10-20） | 2026-10-23 | 三件代码均已落并有用例。**本轮真机（agnes-3.0-flash 通道）**：B3-01 子代理委派 6 条判据全过（结果回注 391、SSE `started→done`、三条权限单调递减含对照）；B3-02 Dream 闸门 11 条全过（采纳只写变化项 / 丢弃逐字节不变 / 三件套基线不被提前改动）+ 回退开关 2 条（关闸门后无候选且文件被直落改写）。脚本 `tasks/verify-b3-real.py`，证据 `tasks/evidence/b3-*.json`。**2026-10-23 补记**：B3-03 已于 **2026-10-20 真机闭环**（飞书审批卡文本生效、允许→工具执行、拒绝→未执行、桌面端同步弹卡，见 §九 看板 #37 与附录 C.3/C.8），期间修掉两处零报错缺陷（运行时渠道名 ≠ 配置段名导致审批开关查表 miss；网关路由漏 `await` 导致快照端点恒 500）。**B3 三件至此全部落地并通过真机** |
 | B4 交付闭环 | ✅ 全部完成（B4-01 自动更新 / B4-02 深链 / B4-03 运行时自助安装 / B4-04 反馈包） | 2026-10-18 | B4-01 发布源 GitHub Releases（真机发版需 `GH_TOKEN`），B4-04 诊断含启动剖析+延迟摘要+脱敏清单可见，B4-03 一键修复状态机已落（仅当解释器/导入失败时出按钮） |
 | B5 数据驱动决策 | ✅ 已完成（4 项决策记录，均带数字） | 2026-10-18 | B5-01 关掉 CLI 预热池（首字延迟 p50 5s/p95 47s 由远端 LLM 主导，引擎启动 4.4s 已被 app 启动并行预热覆盖）；B5-02 采纳只读 sqlite 尺寸监控、拒绝跨进程 checkpoint（引擎确有 `llm_usage.sqlite3` 180KB）；B5-03 维持自助安装（本机自检 3/3 通过，未触发 <70% 阈值）；B5-04 续挂口袋清单（现有 `taskkill /T` 回收有效、无真实诉求） |
 
@@ -431,9 +431,16 @@ B1 ──┬─→ B2 ────────────────┐
 > （深链已执行 / selectSession / openExternal）+ **就绪态两个翻转点**（渲染层已就绪 / 文档已替换），
 > 另补 `rememberActiveSession` 写盘失败的 catch（fire-and-forget，失败时无调用方知道）。
 
-### C.6 B4-03 运行时自助安装
-- [ ] 干净机器 / 新用户目录首启：引擎未就绪时给「一键修复」引导（venv→`pip install -e`→verify，命令可见、可取消、原始输出透出）
-- [ ] 修复成功后自动重新自检
+### C.6 B4-03 运行时自助安装（⚠️ 2026-10-30 起**方案已被取代**：内置便携运行时随包发，用户机器不再需要有 Python，「venv→pip install -e→verify」这条链路不再是首启路径。下列两条判据**待按新方案重写**，不要当成「还没验」或「已通过」）
+> **旧判据（已作废，保留作历史）**：~~干净机器 / 新用户目录首启给「一键修复」引导（venv→`pip install -e`→verify）；修复成功后自动重新自检~~ —— 这两条按旧方案写，跑通也不证明现在的分发包能用。
+>
+> **新判据（2026-10-31 重写，按内置便携运行时）**：
+> - [ ] **干净机器首启**（无 Python / 无 venv / 无网络）：`resources/rt/python/bin/python3 -V` 可执行；`serve` 在其上 listening；启动屏第 2 个勾（引擎）落地、第 4 个勾出现后才交接窗口
+> - [ ] **进程归属**：任务管理器里 `serve` / `gateway` 的 python 路径指向 `resources/rt/python`，**不是**系统 Python（否则「内置」只是体积上的内置）
+> - [ ] **数据全外置**：首启后 `<userData>/nanowork.config.json`、`workspace/`、`pyuser/` 生成；`resources/rt` 无新增写入（运行时只读，per-user 与 per-machine 安装才能都跑）
+> - [ ] **损坏可诊断**：从 `resources/rt` 删一个文件 → 启动屏给「引擎不完整」而不是白屏；此时「重试」不改变判定（引擎未安装 = `skipped` 而非 `failed`，重试修不好缺文件）
+> - [ ] **端口顺延**：先占住默认端口 → 应用起来后启动屏与设置页显示**实际**端口，`nextGatewayEndpoint` 对齐到它（判据只看 port）
+> - [ ] **macOS**：`node scripts/build-installer.mjs --platform mac --arch arm64` 产出的 dmg 在干净 mac 上装一次并走完前两条（**FR-13.7 唯一的未验证项**）
 
 ### C.7 B4-04 反馈包（2026-10-21 真机验收通过）
 - [x] 生成反馈包 → 解压自查：无 API key、无 cookie、无绝对路径用户名；脱敏清单可见；含启动剖析 + `session-latency` 摘要
@@ -474,7 +481,7 @@ B1 ──┬─→ B2 ────────────────┐
 
 > ⚠️ 本轮修掉的真机 bug：`GET /v1/approvals` 恒 500 —— `async def _handle_approvals` 但路由处**漏 `await`** → 协程对象解包 → `cannot unpack non-iterable coroutine object` → 客户端把它当「网关不支持」静默吞 → **审批卡永远不出现，全程零报错**。已改为同步 `def`（只读注册表快照），AST 判据钉住「await 与否必须与 handler 的 async 性质一致」。
 
-### C.10 10-21 追加的 FR-8.4「默认拒绝写入」默认值收口（代码+判据完成，真机待补）
+### C.10 10-21 追加的 FR-8.4「默认拒绝写入」默认值收口（代码+判据完成，**真机已于 2026-10-31 补齐**）
 > 决策（用户）：PRD §11.2「白名单制=不配即从严」→ `defaultDenyWrite` 默认由 `false` 改 `true`。
 > 判据：引擎 `nanobot/tests/test_file_tool_toggle.py`（新增 2 例）+ `tests/security/` + `tests/tools/test_safe_delete_tool.py`（**292 passed / 2 skipped**）；
 > 客户端 `tests/electron/toolsPolicyConfig.test.ts`（新增 2 例）+ `tests/toolsPolicyStore.test.ts` + `tests/pathRulesEditor.test.tsx` + `tests/settingsDialogSections.test.tsx`（**49 passed**）；全量 **248 files / 3665 tests 全绿**。
@@ -487,8 +494,8 @@ B1 ──┬─→ B2 ────────────────┐
 - [x] PRD 同步：§11.2.1「待定（需产品决策）」→「已决策」+ 三层默认值表；§20.6.6「不改默认值到 True」→ 划掉并说明代价与出口；§11.2.2「默认关闭」→「默认开启」
 - [x] 三套 typecheck 全绿 + CI 平台边界两检查 **0 处** + 重建 `main.cjs`/`preload.cjs`
 - [x] **变异验证**（3 处破坏 → 判据精确变红）：引擎配置层改 False / 客户端常量改 false / 引擎参数层被 sed 误改成 True
-- [ ] **真机**：改默认后，桌面端发一条会写文件的消息 → 文件**真的没被写出来**（full 模式无 pathRules 时应被拒）；在「路径规则」里给目标目录加 `write=allow` → 再发 → 文件**真的被写出来**
-- [ ] **真机**：删除操作同样被拦（FR-8.4 覆盖 delete）
+- [x] **真机（2026-10-31，走 `/v1/chat/completions` 直连）**：`tools.file.defaultDenyWrite=true` 且目标目录不在 `pathRules` 里 → `write_file` 返回 `Refusing to write …: no writable allow-list is configured for this scope and writes default to denied (this is a hard policy boundary, not a transient failure; do not retry with shell tricks or alternative tools …)`，**文件确实没被创建**；把该目录加进 `pathRules`（`write=allow`）并重启 serve → 同一请求返回 `Successfully wrote 11 characters`，落盘内容 `c10-allowed` ✓。⚠️ 两条如实标注：① 走的是引擎 API 直连而非桌面端 UI（引擎是唯一强制点，桌面端只透传开关与规则；UI 侧唯一差异是「开关默认值读取」，已由 `tests/electron/toolsPolicyConfig.test.ts` + `tests/settingsDialogSections.test.tsx` 覆盖）；② 验证后配置已按备份还原并 `cmp` 校验字节一致。
+- [x] **真机（2026-10-31）**：同一目录下 `delete_file` 同样被这道闸拦住（错误原文与 write 完全一致，`victim.txt` 仍在）；放行后删除成功。**新观察（下次别踩）**：目标位于系统临时目录时工具**直接删除、不进回收站**（返回 `Deleted (temp directory, not recycled)`），与 FR-8.3「临时目录外才走回收站」一致 —— 拿 `%TEMP%` 下的路径去验「是否进回收站」会得出错误结论。
 
 > ⚠️ **本机所有会话都落 full 模式**（`restrictToWorkspace: false` ⇒ 普通会话不下发 `access_mode` ⇒ `default_access_mode(False)`=`"full"`，**含未勾「完全访问」的普通会话**）→ 改默认后没有 `pathRules` 放行时**写与删全被拒**。
 > ⚠️ 引擎全量 `pytest tests/` 有 **93 个既有 F**（与本改动无关，已用「改回 False 跑同命令」对照验证）。

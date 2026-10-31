@@ -10,7 +10,7 @@
  * 3. CA 变量清理在两种布局下都要做（原 `sanitizeGatewayEnv` 的行为不能丢）。
  */
 
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { buildEngineEnv } from '@/../electron/engineEnv';
 
@@ -112,5 +112,45 @@ describe('不修改传入的 baseEnv', () => {
 
     expect(base['PYTHONHOME']).toBe('x');
     expect(base['SSL_CERT_FILE']).toBe('y');
+  });
+});
+
+describe('PATH 收口（裸 python 必须命中随包解释器）', () => {
+  // 引擎的 shell 工具跑的是模型写的命令，里面常出现裸 `python`。
+  // 真机上 PATH 第一个 python 可能是 `C:/python27/python.exe`：脚本因 py2 语法失败，
+  // 防火墙弹窗还会把这个野路径当成"我们的程序"亮给用户看。
+  const pythonBin = join(RT, 'python');
+  const pythonScripts = join(RT, 'python', 'Scripts');
+
+  it('打包态：rt/python 与 rt/python/Scripts 排在 PATH 最前，原有项一个不丢', () => {
+    const inherited = ['C://Windows//system32', 'C://python27'].join(delimiter);
+    const env = buildEngineEnv({ ...bundleOptions, baseEnv: { Path: inherited } });
+
+    const parts = env['Path']?.split(delimiter) ?? [];
+    expect(parts.slice(0, 2)).toEqual([pythonBin, pythonScripts]);
+    expect(parts).toContain('C://Windows//system32');
+    expect(parts).toContain('C://python27');
+    // 键名必须复用已有的 `Path`，不能额外造一个 `PATH`（Windows 取第一个匹配）
+    expect(env['PATH']).toBeUndefined();
+  });
+
+  it('重复调用不会把目录越叠越多', () => {
+    const once = buildEngineEnv({ ...bundleOptions, baseEnv: { PATH: 'C://Windows' } });
+    const twice = buildEngineEnv({ ...bundleOptions, baseEnv: once });
+
+    const parts = twice['PATH']?.split(delimiter) ?? [];
+    expect(parts.filter((part) => part === pythonBin)).toHaveLength(1);
+  });
+
+  it('dev（repo）布局不碰 PATH：那个 venv 自己就是对的，改 PATH 只会串味', () => {
+    const inherited = 'C://Windows;C://python27';
+    const env = buildEngineEnv({
+      layout: 'repo',
+      runtimeRoot: RT,
+      userData: USER_DATA,
+      baseEnv: { PATH: inherited },
+    });
+
+    expect(env['PATH']).toBe(inherited);
   });
 });

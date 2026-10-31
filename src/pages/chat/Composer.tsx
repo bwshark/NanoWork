@@ -6,6 +6,7 @@ import {
   Chip,
   Divider,
   IconButton,
+  ListSubheader,
   Menu,
   MenuItem,
   Tooltip,
@@ -34,7 +35,8 @@ import { useAgentsStore } from "@/stores/agentsStore";
 import { useExpertGroupsStore } from "@/stores/expertGroupsStore";
 import { useSkillsStore } from "@/stores/skillsStore";
 import { useSettingsStore } from "@/stores/settingsStore";
-import { useModelsStore, describeModelId } from "@/stores/modelsStore";
+import { useModelsStore, describeModelId, modelGroups } from "@/stores/modelsStore";
+import { useSettingsUiStore } from "@/stores/settingsUiStore";
 import { useSessionUiStore } from "@/stores/sessionUiStore";
 import { ComposerMenu } from "./ComposerMenu";
 import { ComposerContextMenu } from "./ComposerContextMenu";
@@ -196,6 +198,25 @@ const EDITABLE_MAX_LINES = { hero: 10, floating: 6 } as const;
  *   写 `borderRadius: 999` 会渲染成 9990px，实测过。
  * 两者都不会报错，只是悄悄变样。写成 `'12px'` / `'999px'` 就没有这层语义。
  */
+/**
+ * 模型菜单里的分组标题（「内置模型」/「自定义模型」）。
+ *
+ * MUI 的 `ListSubheader` 默认是**吸顶**样式（带背景色 + z-index），放进 `Menu`
+ * 里会在滚动时盖住上面几行。这里压掉背景与吸顶语义，只留一行小字。
+ * 字号/行高的数字不走 spacing 换算（`fontSize` 是字号、`lineHeight` 是倍数约定外的
+ * 固定像素值必须带单位，见上面的盒子模型说明）。
+ */
+const modelGroupHeaderSx = {
+  fontSize: 11.5,
+  lineHeight: "24px",
+  minHeight: 24,
+  px: 2,
+  mt: 0.5,
+  bgcolor: "transparent",
+  color: "text.secondary",
+  fontWeight: 500,
+};
+
 const bindingChipSx = {
   cursor: "pointer",
   bgcolor: "action.hover",
@@ -1080,10 +1101,19 @@ export function Composer({
   const setSessionModel = useSessionsStore((s) => s.setSessionModel);
   const models = useModelsStore((s) => s.models);
   const refreshModels = useModelsStore((s) => s.refresh);
+  // 云端下发的内置模型：只用来给目录**分组**，条目本身仍以 `/v1/models` 为准
+  // ——后者才代表「这台机器此刻真的能调用」。
+  const builtinModels = useModelsStore((s) => s.builtin);
+  const loadBuiltin = useModelsStore((s) => s.loadBuiltin);
+  const openSettings = useSettingsUiStore((s) => s.openSettings);
   const [modelAnchor, setModelAnchor] = useState<null | HTMLElement>(null);
   // 展示名：与菜单行同源（未选模型 → `Auto · <默认模型名>`，已选 → `预设名 · <模型名>`）。
   // 这里不再自己写 `?? "Auto"` 兜底——文案口径只留一处，见 describeModelId 的说明。
   const effectiveModel = describeModelId(models, activeSession?.model);
+  const catalogGroups = useMemo(
+    () => modelGroups(models, builtinModels),
+    [models, builtinModels],
+  );
 
   /** 无活跃会话时先创建（继承当前全局活跃专家团 / 专家），返回会话 id */
   const ensureSessionId = (): string => {
@@ -2077,6 +2107,10 @@ export function Composer({
             onClick={(e) => {
               setModelAnchor(e.currentTarget);
               void refreshModels(true);
+              // 兜一次内置目录：首启装机时那次拉取必然 401（未登录），登录后若
+              // 账户订阅没触发到（例如登录发生在启动块之前），这里补上。
+              // 已取到过就不再打网络——菜单是高频交互。
+              if (!useModelsStore.getState().builtinAvailable) void loadBuiltin();
             }}
             sx={{
               cursor: "pointer",
@@ -2091,7 +2125,12 @@ export function Composer({
             anchorEl={modelAnchor}
             open={!!modelAnchor}
             onClose={() => setModelAnchor(null)}
-            slotProps={{ paper: { sx: { minWidth: 160 } } }}
+            // 菜单**向上展开**：chip 恒在输入框（窗口底部），向下会溢出底边——
+            // 实测在 632px 高的窗口里，默认的 flip 没有生效，末尾的「配置自定义模型」
+            // 被裁成半行。显式指定方向后不再依赖 MUI 的空间判断。
+            anchorOrigin={{ vertical: "top", horizontal: "right" }}
+            transformOrigin={{ vertical: "bottom", horizontal: "right" }}
+            slotProps={{ paper: { sx: { minWidth: 220, maxHeight: 420 } } }}
           >
             {/* Auto：请求不带 `model` 字段，实际生效的是隐式 default 预设。
                 文案与 chip 同源（describeModelId）——别在这里另拼一套「默认 X」：
@@ -2104,18 +2143,49 @@ export function Composer({
               {describeModelId(models, null)}
             </MenuItem>
             <Divider />
-            {models
-              .filter((m) => m.id !== "default")
-              .map((m) => (
-                <MenuItem
-                  key={m.id}
-                  selected={m.id === activeSession?.model}
-                  onClick={() => handleModelSelect(m.id)}
-                  sx={{ fontSize: 13 }}
-                >
-                  {describeModelId(models, m.id)}
-                </MenuItem>
-              ))}
+            {/* 目录分两组（内置 / 自定义），与设置页的「内置模型」卡片同源。
+                ⚠️ 标题只在**该组非空**时画：一个空标题等于告诉用户「内置模型全没了」，
+                而真实情况往往是「还没登录 / 云端目录没拉到」——那是两件不同的事，
+                前者要修数据，后者只需要重新登录一次。 */}
+            {catalogGroups.builtin.length > 0 && (
+              <ListSubheader sx={modelGroupHeaderSx}>内置模型</ListSubheader>
+            )}
+            {catalogGroups.builtin.map((m) => (
+              <MenuItem
+                key={m.id}
+                selected={m.id === activeSession?.model}
+                onClick={() => handleModelSelect(m.id)}
+                sx={{ fontSize: 13 }}
+              >
+                {describeModelId(models, m.id)}
+              </MenuItem>
+            ))}
+            {catalogGroups.custom.length > 0 && (
+              <ListSubheader sx={modelGroupHeaderSx}>自定义模型</ListSubheader>
+            )}
+            {catalogGroups.custom.map((m) => (
+              <MenuItem
+                key={m.id}
+                selected={m.id === activeSession?.model}
+                onClick={() => handleModelSelect(m.id)}
+                sx={{ fontSize: 13 }}
+              >
+                {describeModelId(models, m.id)}
+              </MenuItem>
+            ))}
+            <Divider />
+            {/* 与设置页的「自定义模型」分区同一个落点：这里不给「加模型」表单，
+                只做跳转——输入框边上弹一个带 API Base / 密钥的长表单会挡住对话。 */}
+            <MenuItem
+              onClick={() => {
+                setModelAnchor(null);
+                openSettings("models");
+              }}
+              sx={{ fontSize: 13, color: "text.secondary" }}
+            >
+              <TuneIcon sx={{ fontSize: 16, mr: 1 }} />
+              配置自定义模型
+            </MenuItem>
           </Menu>
 
           {/* 语音输入：未配置转录服务时禁用并提示去设置 */}

@@ -21,6 +21,7 @@ import { SettingsCard, SettingsRow } from '@/components/settings/SettingsPrimiti
 import { ModelDialog } from '@/components/settings/ModelDialog';
 import { FailoverCard } from '@/components/settings/FailoverCard';
 import { chainedPresetNames } from '@/lib/model/modelFallbacks';
+import { builtinModelIds } from '@/lib/model/builtinModels';
 import { toast } from '@/components/Toast';
 import {
   useModelsStore,
@@ -48,18 +49,28 @@ export function ModelsSection() {
   const removeModel = useModelsStore((s) => s.removeModel);
   const setDefaultModel = useModelsStore((s) => s.setDefaultModel);
   const managedFallbacks = useModelsStore((s) => s.managedFallbacks);
+  const builtin = useModelsStore((s) => s.builtin);
+  const builtinAvailable = useModelsStore((s) => s.builtinAvailable);
+  const loadBuiltin = useModelsStore((s) => s.loadBuiltin);
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<ManagedModel | undefined>(undefined);
   const [pendingDelete, setPendingDelete] = useState<ManagedModel | null>(null);
   const [busy, setBusy] = useState(false);
   const chained = chainedPresetNames(managedFallbacks);
+  // 内置模型在「内置模型」卡片里单独列，这里排除掉 —— 否则同一个预设会在页面上
+  // 出现两次（一次带云端说明，一次带编辑 / 删除按钮），用户无法判断哪一行才算数。
+  // 判据只有预设名，与选择器的分组同源（`lib/model/builtinModels`）。
+  const builtinIds = builtinModelIds(builtin);
+  const customModels = managed.filter((item) => !builtinIds.has(item.name));
 
   useEffect(() => {
     // force：进分区就读磁盘现状（用户可能在引擎 WebUI 里改过 config.json），
     // 而不是复用某次还没返回的读取
     void loadManaged(true);
-  }, [loadManaged]);
+    // 内置目录一起刷：在另一台机器上新增 / 改过的内置模型，进这个分区应当能看到
+    void loadBuiltin();
+  }, [loadManaged, loadBuiltin]);
 
   const handleSubmit = async (value: ModelFormValue): Promise<boolean> => {
     setBusy(true);
@@ -119,6 +130,67 @@ export function ModelsSection() {
 
   return (
     <Box>
+      {/* 内置模型：云端下发，**只读**。
+          为什么不给「添加 / 删除」：这份清单是产品级的（所有账号一致），改它等于
+          改所有人的选择器；而下架要做的是在云端 `enabled=false`，不是在某台机器上
+          删一条——删了之后下一次同步又会写回来，用户会以为「删不掉」。
+          星标仍开放：设为默认是本机行为，与清单归属无关。 */}
+      {builtinAvailable && builtin.length > 0 && (
+        <SettingsCard
+          title="内置模型"
+          description="由云端账号下发，随账号同步到每台机器。本机缺失时会自动写入引擎配置，换机安装后无需重新配置。"
+        >
+          {builtin.map((item) => {
+            // 云端有、本机还没写进去：播种是异步的（要写 config.json 并重启 serve），
+            // 这段时间里不能让它看起来「已经可用」——设默认会写出一个指向不存在预设的
+            // 指针，引擎下次启动会直接拒绝加载配置。
+            const local = managed.find((row) => row.name === item.id);
+            // 两种「本机还没有」要说清楚：Web 端根本写不了 config.json（这不是
+            // 暂时的），Electron 端则是播种还没跑完。
+            const pendingHint = managedAvailable ? ' · 正在写入本机…' : ' · 本机不可写（Web 端）';
+            return (
+              <SettingsRow
+                key={item.id}
+                label={item.id}
+                hint={
+                  [item.providerLabel || item.provider, item.description]
+                    .filter(Boolean)
+                    .join(' · ') + (local ? '' : pendingHint)
+                }
+                control={
+                  <Tooltip
+                    title={
+                      !local
+                        ? managedAvailable
+                          ? '还在写入本机配置'
+                          : 'Web 端无法写引擎配置'
+                        : local.isDefault
+                          ? '当前默认模型'
+                          : '设为默认模型'
+                    }
+                  >
+                    <span>
+                      <IconButton
+                        size="small"
+                        aria-label={local?.isDefault ? '当前默认模型' : '设为默认模型'}
+                        disabled={busy || !local || local.isDefault}
+                        onClick={() => local && void handleSetDefault(local)}
+                      >
+                        {local?.isDefault ? (
+                          <StarIcon sx={{ fontSize: 18, color: 'warning.main' }} />
+                        ) : (
+                          <StarBorderIcon sx={{ fontSize: 18 }} />
+                        )}
+                      </IconButton>
+                    </span>
+                  </Tooltip>
+                }
+              />
+            );
+          })}
+        </SettingsCard>
+      )}
+
       <SettingsCard
         title="自定义模型"
         description="添加的模型写入引擎配置的 modelPresets 与 providers，保存后引擎立即热加载；对话页顶部的模型选择器会立刻出现它们。设为默认后，新对话的「Auto」即指向它。"
@@ -150,7 +222,7 @@ export function ModelsSection() {
           </Box>
         )}
 
-        {managedAvailable && !managedLoading && managed.length === 0 && (
+        {managedAvailable && !managedLoading && customModels.length === 0 && (
           <Box sx={{ py: 3, textAlign: 'center' }}>
             <Typography sx={{ fontSize: 13, color: 'text.secondary' }}>
               还没有自定义模型
@@ -158,7 +230,7 @@ export function ModelsSection() {
           </Box>
         )}
 
-        {managed.map((item) => (
+        {customModels.map((item) => (
           <SettingsRow
             key={item.name}
             label={item.name}
