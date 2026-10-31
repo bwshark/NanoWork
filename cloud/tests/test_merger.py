@@ -77,8 +77,14 @@ def test_same_time_incoming_higher_rev_is_accepted() -> None:
 
 
 def test_server_newer_is_rejected_and_returns_server_stamp() -> None:
+    """服务端版本更新 → 拒绝 incoming，并回传服务端这一份。
+
+    ⚠️ **两边的 `rev` 必须相同**才能落到第二级（时间）裁决：`rev` 不同的话
+    `rev` 优先先把事定了，「服务端更新」这句话根本没机会说出口
+    （2026-10-31 的语义修正：裁决键顺序为 rev → 时间 → id）。
+    """
     server = stamp(updated_at=T1, rev=1)
-    verdict = resolve(server, stamp(updated_at=T0, rev=9))
+    verdict = resolve(server, stamp(updated_at=T0, rev=1))
     assert verdict.accepted is False
     assert verdict.reason == "server_newer_time"
     assert verdict.winner is server

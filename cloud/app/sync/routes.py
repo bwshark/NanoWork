@@ -3,10 +3,15 @@
 两条服务端不变量（m6 §3.1），这里各对应一处实现选择：
 
 1. **`updated_at` 取服务端接收时间**——不是「校验后取客户端的值」，而是**根本不信任**：
-   客户端上报的时间原样存进 `client_updated_at` 供审计，裁决与落库一律用
-   `utc_now()`。否则一台系统时间调快的设备会永久赢下所有 LWW。
+   客户端上报的时间原样存进 `client_updated_at`，落库一律用 `utc_now()`。
+   否则一台系统时间调快的设备会永久赢下所有 LWW。
    ⚠️ 落库前还会把 **payload 里的 `updatedAt` 也归一**成服务端接收时刻再序列化
    （见下面 `push`）：这样「pull 下发的也是归一后的值」才真正成立（m6 §5.3）。
+   ⚠️ **第二级 tie-break（时间比较）目前与落库同用服务端钟**，这与 incoming 的
+   客户端上报时刻**不同源** → 同 `rev` 的真并发会判反（后 push 的一方时间反而更小，
+   本机容器快约 1.1 秒），后改的修改被丢弃（`integration.twoDevice` 门禁② 稳定红）。
+   同源化要**连 payload 归一一起改**（推翻 §5.3），属架构级改动，见
+   `docs/fr-sync-lww-tiebreak.md`。
 2. **`server_seq` 每次写入都推进**——包括「客户端推了个一模一样的版本」这种情况。
    不推进的话，对端游标已越过该行 → 这次变更它永远拉不到。
    ⚠️ **例外**见 `push` 里的「完全同版幂等跳过」：当 payload 与已存内容除 `updatedAt`
@@ -216,12 +221,24 @@ def push(
             VersionStamp(
                 entity_id=row.entity_id,
                 rev=row.rev,
+                # ⚠️ 第二级 tie-break（时间比较）**必须同源**才有意义。
+                # 这里用的是**服务端落库时刻**（`updated_at`），而 incoming 的时间是
+                # **客户端上报值** —— 两者来自不同的钟（本机容器快约 1.1 秒），
+                # 于是同 `rev` 的真并发会被判反：后 push 的一方时间反而更小 → 后改的修改被丢弃
+                # （`integration.twoDevice` 门禁② 实测 2026-10-31，稳定红）。
+                # ⚠️ 2026-10-31 试过改成 `row.client_updated_at or row.updated_at`：
+                # **门禁①反而变红** —— 客户端侧拿到的 `updatedAt` 是服务端归一后的值
+                # （payload 落库时被归一，见文件头第 1 点）；服务端改用客户端钟、客户端仍用
+                # 服务端钟，两端不再同源，把「B 改 → A 换回拿到 B 改动」这条路打断了。
+                # 真正的同源化要**连 payload 归一一起去改**（下发值也用客户端钟），
+                # 那会推翻 m6 §5.3 的既定决策 —— 属架构级改动，单独立项：
+                # 见 `docs/fr-sync-lww-tiebreak.md`。
                 updated_at=row.updated_at,
                 deleted_at=row.deleted_at,
             )
-            if row is not None
-            else None
-        )
+        if row is not None
+        else None
+    )
 
         # 「完全同版」幂等跳过（见文件头第 2 点）：客户端 `collectChanges()` 是**全量 push**，
         # 归一 `updatedAt` 之后每一轮空闲同步都会「cmp==0 → 接受 → 写库 → seq+1 → 客户端

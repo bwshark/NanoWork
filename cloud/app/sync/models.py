@@ -7,8 +7,12 @@
   （id 没变，永远 `<= since`）——这是「同步一次成功、之后再也不动」的典型成因。
   所以每次写入都要**推进 seq**，让「变更」本身产生新的游标位置。
 - **`client_updated_at` 与 `updated_at` 并存**：`updated_at` 是**服务端接收时间**
-  （§5.3，抵御时钟漂移），`client_updated_at` 只作审计，不参与任何裁决。
+  （§5.3，抵御时钟漂移），只作审计与排序；`client_updated_at` 是**客户端上报时刻**，
+  **只作审计**，不参与任何裁决。
   只留一个的话，排查「这条到底是谁改的」时就无从下手。
+  ⚠️ 2026-10-31 试过让它参与第二级 tie-break（时间比较）：**门禁①反而变红** ——
+  客户端侧拿到的 `updatedAt` 是服务端归一后的值，两端仍不同源；
+  同源化要连 payload 归一一起改，见 `docs/fr-sync-lww-tiebreak.md`。
 
 `payload` 存 JSON 文本而非数据库原生 JSON 类型：MVP 不需要在 SQL 里查询 payload
 内部，而 SQLite 与 PostgreSQL 的 JSON 类型/算子并不一致，文本最省事也最好迁。
