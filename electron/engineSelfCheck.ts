@@ -46,15 +46,37 @@ export interface EngineSelfCheckIO {
   run(
     bin: string,
     args: string[],
-    options: { timeoutMs: number; cwd?: string },
+    options: { timeoutMs: number; cwd?: string; env?: NodeJS.ProcessEnv },
   ): Promise<EngineSelfCheckRunResult>;
 }
+
+/**
+ * 引擎运行时的两种布局。
+ *
+ * - `repo`：开发态。引擎是同级 git 仓库，venv 固定建在 `<root>/nanobot/nanobot/.venv`。
+ * - `bundle`：打包态。便携解释器与预装依赖都在 `<resources>/rt/` 下（`python/` + `site/`）。
+ *
+ * 为什么要显式区分而不是"探测哪个存在"：两种布局的**引导文案**必须不同 —— dev 态该教用户
+ * 建 venv，打包态让用户建 venv 是彻头彻尾的误导（安装包里根本没有引擎源码）。探测式实现
+ * 会让"文案该说什么"取决于磁盘巧合，那正是这类工单反复出现的原因。
+ */
+export type EngineLayout = 'repo' | 'bundle';
 
 /** 自检目标（由 `main.ts` 的启动配置解析给出，不在本模块里另算） */
 export interface EngineSelfCheckTarget {
   bin: string;
   config: string;
   engineRoot: string;
+  /** 缺省 `repo`：既有调用点与用例保持不变。 */
+  layout?: EngineLayout;
+  /**
+   * 子进程环境。
+   *
+   * 打包态**必须**带 `PYTHONPATH=<rt>/site`，否则 `import nanobot` 一定失败 ——
+   * 那种失败会显示成"引擎没装好"，而真实原因只是自检没带上运行时的 import 路径。
+   * dev 态留空，沿用进程环境。
+   */
+  env?: NodeJS.ProcessEnv;
 }
 
 /** 子进程超时。首次 `import nanobot` 要加载 pydantic 等一堆依赖，给足但不无限等。 */
@@ -67,10 +89,14 @@ const CONFIG_SENTINEL = 'nanowork-selfcheck-config-ok';
 /**
  * 解释器候选路径（**唯一真相**，`fallbackLaunchConfig()` 也用这一份）。
  *
- * ⚠️ 目录深度是**两层 `nanobot`**，别拍平：`<appRoot>/nanobot/` 是引擎仓库，
+ * ⚠️ dev 布局的目录深度是**两层 `nanobot`**，别拍平：`<appRoot>/nanobot/` 是引擎仓库，
  * 而 venv 建在**包目录的下一层** —— `<appRoot>/nanobot/nanobot/.venv/`（见
  * `docs/engine-dev-setup.md`）。少一层就会报出一个「根本没找过」的路径，
  * 而验收标准①要的恰恰是「文案含**实际**查找过的路径」。
+ *
+ * ⚠️ bundle 布局**没有**两层：`<resources>/rt/python/` 是便携解释器本体，
+ * `<resources>/rt/site/` 是引擎与依赖。`repo` 字段在 bundle 下就是 rt 根（自检把它
+ * 当作"引擎根"报给用户），`venv` 字段借位表示 site 目录 —— 调用方只关心"包在哪"。
  *
  * 返回顺序即优先级：先 venv 的 python（可以用 `-m nanobot`），再 venv 里的 console
  * script。调用方在两者都不存在时会退到 PATH 上的裸 `nanobot`。
@@ -78,8 +104,23 @@ const CONFIG_SENTINEL = 'nanowork-selfcheck-config-ok';
 export function engineInterpreterCandidates(
   appRoot: string,
   platform: NodeJS.Platform,
+  layout: EngineLayout = 'repo',
 ): { repo: string; venv: string; python: string; script: string } {
   const isWin = platform === 'win32';
+
+  if (layout === 'bundle') {
+    const python = isWin
+      ? join(appRoot, 'python', 'python.exe')
+      : join(appRoot, 'python', 'bin', 'python3');
+    return {
+      repo: appRoot,
+      venv: join(appRoot, 'site'),
+      python,
+      // 便携解释器没有 console script：`-m nanobot` 是唯一入口，两者同路径。
+      script: python,
+    };
+  }
+
   const repo = join(appRoot, 'nanobot');
   const venv = join(repo, 'nanobot', '.venv');
   return {
@@ -101,6 +142,9 @@ export const defaultSelfCheckIO: EngineSelfCheckIO = {
         {
           timeout: options.timeoutMs,
           cwd: options.cwd,
+          // 打包态必须用构造好的环境（含 PYTHONPATH=<rt>/site），否则 import 必失败；
+          // dev 态传 undefined，execFile 会自动沿用 process.env（保持原行为）。
+          ...(options.env ? { env: options.env } : {}),
           windowsHide: true,
           // 报错原文可能很长；给足缓冲，否则 stderr 被截断后引导就失去了「真实报错」
           maxBuffer: 1024 * 1024,
@@ -182,7 +226,29 @@ export function checkInterpreter(
   if (io.exists(target.bin)) {
     return { ...base, status: 'ok', summary: `解释器可用：${target.bin}` };
   }
-  const venv = engineInterpreterCandidates(target.engineRoot, process.platform);
+  const layout = target.layout ?? 'repo';
+  const venv = engineInterpreterCandidates(target.engineRoot, process.platform, layout);
+  if (layout === 'bundle') {
+    /*
+     * 打包态的引导**绝不能**出现 `python -m venv` / `pip install -e`：
+     * 安装包里没有引擎源码，让用户建 venv 只会把他引向一个必然失败的路径，
+     * 而真正该做的是覆盖安装。这条分叉是 FR-13.6 在打包形态下的唯一正确文案。
+     */
+    return {
+      ...base,
+      status: 'failed',
+      summary: `找不到随包的引擎运行时：${target.bin}`,
+      remedy: {
+        steps: [
+          '本应用自带引擎运行时（resources/rt），不依赖本机安装的 Python —— 所以「装个 Python」修不好它。',
+          '上面列出的路径都找过了，都没有：最常见的原因是安装目录被部分删除，或被安全软件隔离了文件。',
+          '重新运行安装包做一次覆盖安装即可恢复；若仍失败，请导出诊断包并附上本页报告。',
+        ],
+        commands: [`${quote(target.bin)} --version`],
+        docPath: docPathFor(target.engineRoot, io),
+      },
+    };
+  }
   return {
     ...base,
     status: 'failed',
@@ -205,13 +271,32 @@ export function checkInterpreter(
 }
 
 function interpreterCandidateList(target: EngineSelfCheckTarget, io: EngineSelfCheckIO): string[] {
-  const venv = engineInterpreterCandidates(target.engineRoot, process.platform);
+  const venv = engineInterpreterCandidates(
+    target.engineRoot,
+    process.platform,
+    target.layout ?? 'repo',
+  );
   const list = [target.bin, venv.python, venv.script];
   // 去重但保序：`bin` 常常就等于 venv.python，重复列出来会让「找过这些路径」看着
   // 像找了更多地方，反而掩盖了真实候选数
   const unique = [...new Set(list)];
   if (io.exists(target.bin) && !unique.includes(target.bin)) unique.unshift(target.bin);
   return unique;
+}
+
+/**
+ * 子进程的工作目录。
+ *
+ * dev 态指到引擎仓库根：`import nanobot` 在未 `pip install -e` 时靠 cwd 生效（装过则是
+ * site-packages 生效，两者都覆盖）。
+ *
+ * 打包态**不能**再用 `<rt>/nanobot` —— 那个目录不存在，`execFile` 会直接以
+ * `ENOENT` 失败，而报错内容与"引擎没装好"完全无关，只会把排查带偏。
+ */
+function engineCwd(target: EngineSelfCheckTarget): string {
+  return (target.layout ?? 'repo') === 'bundle'
+    ? target.engineRoot
+    : join(target.engineRoot, 'nanobot');
 }
 
 /** ② 引擎包可导入：`python -c "import nanobot"` */
@@ -230,13 +315,12 @@ export async function checkEngineImport(
       detail: null,
     };
   }
-  // cwd 指到引擎仓库根：`import nanobot` 要能找到包目录（开发态未 pip install -e
-  // 时，这一步靠 cwd 生效；装过则是解释器里的 site-packages 生效，两者都覆盖）
-  const engineRepo = join(target.engineRoot, 'nanobot');
+  // cwd 见 `engineCwd`：dev 指引擎仓库根，bundle 指 rt（`<rt>/nanobot` 不存在）
+  const engineRepo = engineCwd(target);
   const result = await io.run(
     target.bin,
     ['-c', `import nanobot; print('${IMPORT_SENTINEL}')`],
-    { timeoutMs: SELF_CHECK_TIMEOUT_MS, cwd: engineRepo },
+    { timeoutMs: SELF_CHECK_TIMEOUT_MS, cwd: engineRepo, env: target.env },
   );
   if (result.code === 0 && result.stdout.includes(IMPORT_SENTINEL)) {
     return {
@@ -273,7 +357,7 @@ export async function checkConfig(
   interpreterOk: boolean,
 ): Promise<EngineSelfCheckFinding> {
   const base = { id: 'config' as const, title: '配置文件校验', remedy: null };
-  const engineRepo = join(target.engineRoot, 'nanobot');
+  const engineRepo = engineCwd(target);
   const loadCommand = [
     'import sys',
     'from pathlib import Path',
@@ -302,6 +386,7 @@ export async function checkConfig(
   const result = await io.run(target.bin, ['-c', loadCommand, target.config], {
     timeoutMs: SELF_CHECK_TIMEOUT_MS,
     cwd: engineRepo,
+    env: target.env,
   });
   if (result.code === 0 && result.stdout.includes(CONFIG_SENTINEL)) {
     return {

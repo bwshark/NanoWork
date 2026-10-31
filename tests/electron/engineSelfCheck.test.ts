@@ -292,3 +292,81 @@ describe('引导里的文档路径', () => {
     expect(withoutDoc.findings[0].remedy?.docPath).toBeNull();
   });
 });
+
+/**
+ * 打包态（`layout: 'bundle'`）的四条判据。
+ *
+ * 这组用例存在的理由：dev 态与打包态的差异**不在路径本身**，而在"用户看到什么引导"。
+ * 打包后让用户 `python -m venv` 是纯粹的误导（安装包里没有引擎源码），而不带
+ * PYTHONPATH 去 import 则必然失败、却会显示成"引擎没装好"。
+ */
+describe('bundle（打包态）布局', () => {
+  const RT = join('C:', 'app', 'resources', 'rt');
+
+  function bundleTarget(overrides: Partial<EngineSelfCheckTarget> = {}): EngineSelfCheckTarget {
+    return {
+      bin: join(RT, 'python', 'python.exe'),
+      config: join('C:', 'userdata', 'nanowork.config.json'),
+      engineRoot: RT,
+      layout: 'bundle',
+      env: { PYTHONPATH: join(RT, 'site') },
+      ...overrides,
+    };
+  }
+
+  it('解释器与 site 都在 rt 下，没有双层 nanobot', () => {
+    const c = engineInterpreterCandidates(RT, 'win32', 'bundle');
+    expect(c.python).toBe(join(RT, 'python', 'python.exe'));
+    expect(c.venv).toBe(join(RT, 'site'));
+    expect(c.repo).toBe(RT);
+    // 便携解释器没有 console script：`-m nanobot` 是唯一入口
+    expect(c.script).toBe(c.python);
+  });
+
+  it('非 Windows 的便携解释器在 bin/python3', () => {
+    const c = engineInterpreterCandidates(RT, 'linux', 'bundle');
+    expect(c.python).toBe(join(RT, 'python', 'bin', 'python3'));
+  });
+
+  it('解释器缺失时的引导**不再**教用户建 venv / editable 安装', async () => {
+    const report = await runEngineSelfCheck(bundleTarget(), stubIO({ existing: [] }));
+
+    const interpreter = report.findings[0];
+    expect(interpreter.status).toBe('failed');
+    const commands = interpreter.remedy?.commands.join('\n') ?? '';
+    expect(commands).not.toContain('-m venv');
+    expect(commands).not.toContain('pip install -e');
+    // 该做的就是覆盖安装 —— 文案必须说出来，否则用户只会去装 Python
+    expect(interpreter.remedy?.steps.join('\n')).toContain('覆盖安装');
+  });
+
+  it('子进程拿到 PYTHONPATH（否则 import 必失败，却会显示成"引擎没装好"）', async () => {
+    const seen: Array<{ cwd?: string; env?: NodeJS.ProcessEnv }> = [];
+    await runEngineSelfCheck(bundleTarget(), {
+      exists: () => true,
+      run: async (bin, args, options) => {
+        seen.push({ cwd: options.cwd, env: options.env });
+        return passingRun(bin, args);
+      },
+    });
+
+    expect(seen.length).toBeGreaterThan(0);
+    for (const call of seen) {
+      expect(call.env?.PYTHONPATH).toBe(join(RT, 'site'));
+    }
+  });
+
+  it('cwd 是 rt 本身（`<rt>/nanobot` 不存在，execFile 会以 ENOENT 失败）', async () => {
+    const cwds: Array<string | undefined> = [];
+    await runEngineSelfCheck(bundleTarget(), {
+      exists: () => true,
+      run: async (bin, args, options) => {
+        cwds.push(options.cwd);
+        return passingRun(bin, args);
+      },
+    });
+
+    expect(cwds.length).toBeGreaterThan(0);
+    for (const cwd of cwds) expect(cwd).toBe(RT);
+  });
+});

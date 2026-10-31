@@ -68,22 +68,33 @@ async function waitFor(predicate: () => boolean): Promise<void> {
   throw new Error('waitFor timed out');
 }
 
-function harness(options: { venvExists?: boolean; platform?: NodeJS.Platform } = {}) {
+function harness(
+  options: {
+    venvExists?: boolean;
+    platform?: NodeJS.Platform;
+    target?: EngineSelfCheckTarget;
+    env?: NodeJS.ProcessEnv;
+  } = {},
+) {
   const spawned: FakeChild[] = [];
   const emitted: EngineInstallState[] = [];
   const killed: InstallChildProcess[] = [];
+  const calls: Array<{ bin: string; args: string[]; options?: { env?: NodeJS.ProcessEnv } }> = [];
 
-  const spawnFake: SpawnInstallProcess = () => {
+  const spawnFake: SpawnInstallProcess = (bin, args, spawnOptions) => {
+    calls.push({ bin, args, options: spawnOptions });
     const child = new FakeChild();
     spawned.push(child);
     return child as unknown as InstallChildProcess;
   };
 
   const installer = createEngineInstaller({
-    resolveTarget: async () => TARGET,
+    resolveTarget: async () => options.target ?? TARGET,
     emit: (state) => emitted.push(state),
     spawn: spawnFake,
     exists: () => options.venvExists ?? false,
+    // env 是惰性函数：主进程在模块加载期就创建 installer，此时取 userData 不可靠
+    env: options.env ? () => options.env as NodeJS.ProcessEnv : undefined,
     killTree: (proc) => {
       killed.push(proc);
       // 真实实现会 taskkill / proc.kill；替身里显式调用，让「确实杀了」可断言。
@@ -93,7 +104,7 @@ function harness(options: { venvExists?: boolean; platform?: NodeJS.Platform } =
     now: () => new Date('2026-10-18T00:00:00.000Z'),
   });
 
-  return { installer, spawned, emitted, killed };
+  return { installer, spawned, emitted, killed, calls };
 }
 
 describe('buildEngineInstallRecipe', () => {
@@ -240,5 +251,80 @@ describe('createEngineInstaller', () => {
     expect(final.phase).toBe('failed');
     expect(final.steps[0].outputTail).toContain('spawn ENOENT');
     expect(installer.getState().phase).toBe('idle');
+  });
+});
+
+/**
+ * 打包态（`layout: 'bundle'`）：
+ *
+ * 安装包里没有引擎源码、Python 也是随包的，所以「一键修复」**没有可安装的东西**。
+ * 唯一有意义的动作是校验随包运行时是否完好；失败就引导覆盖安装。
+ *
+ * 这条分叉做错的后果很具体：会去 `pip install -e <rt>/nanobot`（目录不存在），
+ * 用户看到一串和真实原因无关的报错，最后只能来问客服。
+ */
+describe('bundle（打包态）', () => {
+  const RT = 'C:\\app\\resources\\rt';
+  const BUNDLE_TARGET: EngineSelfCheckTarget = {
+    bin: `${RT}\\python\\python.exe`,
+    config: 'C:\\userdata\\nanowork.config.json',
+    engineRoot: RT,
+    layout: 'bundle',
+  };
+
+  it('recipe 只有一步校验，绝不出现 venv / editable 安装', () => {
+    const recipe = buildEngineInstallRecipe(BUNDLE_TARGET, { platform: 'win32' });
+
+    expect(recipe.map((step) => step.id)).toEqual(['verify']);
+    const display = recipe.map((step) => step.display).join('\n');
+    expect(display).not.toContain('venv');
+    expect(display).not.toContain('pip install');
+    expect(display).toContain(INSTALL_VERIFY_SENTINEL);
+  });
+
+  it('校验步骤用随包解释器，并带上运行时环境（否则 import 必失败）', () => {
+    const env = { PYTHONPATH: `${RT}\\site` };
+    const recipe = buildEngineInstallRecipe(BUNDLE_TARGET, { platform: 'win32', env });
+
+    expect(recipe[0].bin).toBe(`${RT}\\python\\python.exe`);
+    expect(recipe[0].env).toBe(env);
+  });
+
+  it('校验通过 → succeeded，并说明"安装包自带、无需安装"', async () => {
+    const { installer, spawned } = harness({ target: BUNDLE_TARGET, venvExists: true });
+    const done = installer.start();
+    await waitFor(() => spawned.length > 0);
+    spawned[0].close(0);
+    const final = await done;
+
+    expect(final.phase).toBe('succeeded');
+    expect(final.message).toContain('安装包自带');
+  });
+
+  it('校验失败 → failed，并引导覆盖安装（而不是让用户装 Python）', async () => {
+    const { installer, spawned } = harness({ target: BUNDLE_TARGET, venvExists: true });
+    const done = installer.start();
+    await waitFor(() => spawned.length > 0);
+    spawned[0].close(1);
+    const final = await done;
+
+    expect(final.phase).toBe('failed');
+    expect(final.message).toContain('覆盖安装');
+    expect(final.message).not.toContain('Python');
+  });
+
+  it('env 真的传给了子进程', async () => {
+    const env = { PYTHONPATH: `${RT}\\site`, PIP_USER: '1' };
+    const { installer, spawned, calls } = harness({
+      target: BUNDLE_TARGET,
+      venvExists: true,
+      env,
+    });
+    const done = installer.start();
+    await waitFor(() => spawned.length > 0);
+    spawned[0].close(0);
+    await done;
+
+    expect(calls[0].options?.env).toBe(env);
   });
 });

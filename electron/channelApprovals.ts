@@ -43,11 +43,13 @@ export interface ChannelApprovalRequest {
 export function buildChannelApprovalsRequest(
   channel: string,
   chatId: string,
+  /** 实际使用的 health 端口（可能被顺延，见 `enginePorts.ts`）；缺省用默认值 */
+  port: number = GATEWAY_HEALTH_PORT,
 ): ChannelApprovalRequest {
   const query = new URLSearchParams({ channel, chat_id: chatId });
   return {
     host: GATEWAY_HEALTH_HOST,
-    port: GATEWAY_HEALTH_PORT,
+    port,
     path: `/v1/approvals?${query.toString()}`,
     method: 'GET',
   };
@@ -65,10 +67,12 @@ export function buildChannelApprovalResolveRequest(params: {
   requestId: string;
   decision: string;
   reason?: string;
+  /** 实际使用的 health 端口（可能被顺延）；缺省用默认值 */
+  port?: number;
 }): ChannelApprovalRequest & { body: string } {
   return {
     host: GATEWAY_HEALTH_HOST,
-    port: GATEWAY_HEALTH_PORT,
+    port: params.port ?? GATEWAY_HEALTH_PORT,
     path: '/v1/approvals/resolve',
     method: 'POST',
     body: JSON.stringify({

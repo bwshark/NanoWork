@@ -24,8 +24,12 @@ import type { DeepLinkAction } from '../src/types/deepLink';
 import {
   engineInterpreterCandidates,
   runEngineSelfCheck,
+  type EngineLayout,
   type EngineSelfCheckTarget,
 } from './engineSelfCheck';
+import { buildEngineEnv } from './engineEnv';
+import { bootstrapEngineRuntime } from './engineBootstrap';
+import { ensureServicePorts } from './enginePorts';
 import { createEngineInstaller } from './engineInstall';
 import type { EngineSelfCheckReport } from '../src/types/engine';
 import { normalizeEngineChannelAllowFrom } from './channelAllowFrom';
@@ -868,7 +872,33 @@ async function createWindow(): Promise<void> {
 
   // FR-13.6：引擎自检排在**窗口已创建之后**（异步、不 await）——它要起子进程，
   // 放在窗口显示前会把首屏拖长数秒，而那正是这条需求本身要治好的一种卡顿。
-  scheduleEngineSelfCheck();
+  //
+  // 但顺序必须先引导再自检：打包态首启时配置文件还不存在（要由模板生成），
+  // 先跑自检只会拿到一条"配置文件还不存在"的 skipped，界面看着正常、
+  // 实际引擎会用 ~/.nanobot 的默认 workspace 起在别处。
+  void bootstrapEngineRuntime({
+    runtimeRoot: engineRootPath(),
+    userData: app.getPath('userData'),
+    configPath: engineConfigPath(),
+  })
+    .then((result) => {
+      if (result.configCreated) {
+        console.log(`[nanobot] 已生成首份配置：${result.configPath}`);
+      }
+      if (result.mergedKeys.length > 0) {
+        // 引擎升级补字段：进日志，便于排查"某个新开关为什么不生效"
+        console.log(
+          `[nanobot] 引擎 ${result.engineVersion ?? '?'} 升级，配置补入 ${result.mergedKeys.length} 个缺失键：` +
+            result.mergedKeys.slice(0, 8).join(', '),
+        );
+      }
+      for (const warning of result.warnings) console.warn(`[nanobot] 引导：${warning}`);
+    })
+    .catch((error: unknown) => {
+      // 引导失败不该让应用打不开：真正的结论由自检报告给出
+      console.warn(`[nanobot] 首启引导失败：${String(error)}`);
+    })
+    .finally(() => scheduleEngineSelfCheck());
 }
 
 // ——————————————————————————————————————————————
@@ -905,6 +935,16 @@ const DEFAULT_GATEWAY_PORT = 18900;
 let nanobotServeHost = '127.0.0.1';
 let nanobotServePort: number | null = null;
 
+/**
+ * 网关实际使用的两个端口。
+ *
+ * **不是常量**：`ensureServicePorts()` 会在每次拉起 gateway 前探测可绑定性，必要时顺延
+ * 并把结果写回配置。引擎一旦启动就固定了端口，所以这里的值必须与配置里的一致 ——
+ * 两处不同步的症状是"进程在跑，但就绪探测永远等不到"。
+ */
+let gatewayHealthPort = GATEWAY_HEALTH_PORT;
+let gatewayWsPort = 9900;
+
 /** nanobot 启动配置（bin/host/port 与可选的 config.json 路径） */
 interface NanobotLaunchConfig {
   bin: string;
@@ -923,20 +963,68 @@ interface NanobotLaunchConfig {
   config?: string;
 }
 
-/** 项目本地兜底配置：nanobot/nanobot/.venv 里的解释器 + 项目根 nanowork.config.json */
+/**
+ * 引擎运行时的根目录（**唯一真相**）。
+ *
+ * - 开发态：项目根（`electron/main.cjs` 的上一级），引擎是同级 git 仓库 `nanobot/`。
+ * - 打包态：`<resources>/rt`。**绝不能**再用 `join(__dirname, '..')` —— 打包后那是
+ *   `resources/app.asar`，一个只读压缩包，Python 无法从中执行，候选路径会全部落空。
+ */
+function engineRootPath(): string {
+  return app.isPackaged ? join(process.resourcesPath, 'rt') : join(__dirname, '..');
+}
+
+/** 引擎布局（决定候选路径形状与自检引导文案） */
+function engineLayout(): EngineLayout {
+  return app.isPackaged ? 'bundle' : 'repo';
+}
+
+/**
+ * 引擎配置文件路径（**唯一真相**：现有 6 处写回逻辑全部经 `resolveNanobotConfigPath`）。
+ *
+ * 打包态必须落在 userData：安装目录可能只读（AppImage squashfs / deb 的 /opt /
+ * per-machine 安装的 Program Files），而设置页要**写回**这个文件。
+ *
+ * 附带效果（很重要）：引擎的 `get_data_dir()` 就是 config 的父目录，所以把 config
+ * 挪到 userData 之后，`audit/` `media/` `cron/` `logs/` `llm_usage.sqlite3` 会自动
+ * 跟着落到 userData —— 不需要再单独规划数据目录。
+ */
+function engineConfigPath(): string {
+  return app.isPackaged
+    ? join(app.getPath('userData'), 'nanowork.config.json')
+    : join(__dirname, '..', 'nanowork.config.json');
+}
+
+/**
+ * 兜底启动配置：解释器候选与配置文件路径都取自上面三个函数。
+ *
+ * 打包态 = 随包便携解释器（`<resources>/rt/python`）+ `-P -m nanobot`；
+ * 开发态 = 项目内 venv（`nanobot/nanobot/.venv`）+ `-m nanobot`。
+ */
 function fallbackLaunchConfig(): NanobotLaunchConfig {
-  const root = join(__dirname, '..');
+  const root = engineRootPath();
+  const layout = engineLayout();
   // 候选路径**只此一份**（FR-13.6）：自检要把它列给用户看，而「自检列出的路径」
   // 与「启动器真正找的路径」一旦分叉，那份引导就是误导。
-  const { python: venvPython, script: venvBin } = engineInterpreterCandidates(root, process.platform);
-  // 首选：venv 的解释器 + `-m nanobot`（原因见 NanobotLaunchConfig.args）
+  const { python: venvPython, script: venvBin } = engineInterpreterCandidates(
+    root,
+    process.platform,
+    layout,
+  );
+  /*
+   * 打包态多一个 `-P`：`-m` 会把 **cwd** 放进 `sys.path[0]`，而引擎的 cwd 是用户可写
+   * 工作区 —— 那里出现一个 `nanobot.py` 就能顶掉真包。`-P`（3.11+ safe path）关掉这个
+   * 隐式路径，代价为零。开发态不加，保持与既有调试习惯一致。
+   */
+  const moduleArgs = layout === 'bundle' ? ['-P', '-m', 'nanobot'] : ['-m', 'nanobot'];
+  // 首选：解释器 + `-m nanobot`（原因见 NanobotLaunchConfig.args）
   if (existsSync(venvPython)) {
     return {
       bin: venvPython,
-      args: ['-m', 'nanobot'],
+      args: moduleArgs,
       host: '127.0.0.1',
       port: String(DEFAULT_GATEWAY_PORT),
-      config: join(root, 'nanowork.config.json'),
+      config: engineConfigPath(),
     };
   }
   // 退路：console script，或 PATH 上的 nanobot
@@ -945,7 +1033,7 @@ function fallbackLaunchConfig(): NanobotLaunchConfig {
     args: [],
     host: '127.0.0.1',
     port: String(DEFAULT_GATEWAY_PORT),
-    config: join(root, 'nanowork.config.json'),
+    config: engineConfigPath(),
   };
 }
 
@@ -1035,22 +1123,18 @@ let engineSelfCheckInflight: Promise<EngineSelfCheckReport> | null = null;
  * 表现为「装完了自检还是红」。
  */
 function resolveEngineSelfCheckTarget(): Promise<EngineSelfCheckTarget> {
+  // 三个字段与启动器共用同一份解析（`engineRootPath` / `engineLayout` / `engineConfigPath`），
+  // 否则「自检说没问题、引擎照旧起不来」会变成常态。
+  const shared = {
+    config: engineConfigPath(),
+    engineRoot: engineRootPath(),
+    layout: engineLayout(),
+    // 打包态自检必须带 PYTHONPATH=<rt>/site，否则 import 一定失败
+    env: sanitizeGatewayEnv(),
+  };
   return readNanobotConfig()
-    .then((launch) => ({
-      bin: launch.bin,
-      // `config` 在启动配置里是可选的；兜底到引擎默认那份路径 —— 自检要能报出
-      // 「我在看哪个文件」，而 `undefined` 在报告里会变成一句没法行动的空白。
-      config: launch.config ?? join(__dirname, '..', 'nanowork.config.json'),
-      engineRoot: join(__dirname, '..'),
-    }))
-    .catch(() => {
-      const fallback = fallbackLaunchConfig();
-      return {
-        bin: fallback.bin,
-        config: fallback.config ?? join(__dirname, '..', 'nanowork.config.json'),
-        engineRoot: join(__dirname, '..'),
-      };
-    });
+    .then((launch) => ({ ...shared, bin: launch.bin, config: launch.config ?? shared.config }))
+    .catch(() => ({ ...shared, bin: fallbackLaunchConfig().bin }));
 }
 
 function engineSelfCheck(refresh = false): Promise<EngineSelfCheckReport> {
@@ -1095,24 +1179,18 @@ function scheduleEngineSelfCheck(): void {
 }
 
 /**
- * 清理传给 nanobot 子进程的环境：
- * 删除指向不存在文件的 CA 证书环境变量（SSL_CERT_FILE / REQUESTS_CA_BUNDLE 等）。
- * 这些变量若指向缺失文件，httpx 建立 HTTPS 连接时会抛
- * `FileNotFoundError: [Errno 2] No such file or directory`，导致对话全部失败。
- * 删掉后 Python 会回退到 venv 内 certifi 自带的有效证书包。
- * 代理变量（HTTPS_PROXY 等）予以保留，避免破坏需要代理才能出网的场景。
+ * 清理传给 nanobot 子进程的环境（**已迁至 `engineEnv.ts`**）。
+ *
+ * 保留这个薄封装只为不改变既有调用点语义：CA 清理与"打包态注入运行时变量"是同一件
+ * 事的两个步骤，拆成两份实现迟早会出现"serve 设了、gateway 没设"这类只有环境不同
+ * 的诡异故障。真正的实现在 `buildEngineEnv()`。
  */
 function sanitizeGatewayEnv(): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...process.env };
-  const caFileVars = ['SSL_CERT_FILE', 'REQUESTS_CA_BUNDLE', 'CURL_CA_BUNDLE', 'HTTPLIB2_CA_CERTS'];
-  for (const key of caFileVars) {
-    const val = env[key];
-    if (val && !existsSync(val)) delete env[key];
-  }
-  // SSL_CERT_DIR 是目录，缺失同样会让 ssl 上下文初始化失败
-  const certDir = env['SSL_CERT_DIR'];
-  if (certDir && !existsSync(certDir)) delete env['SSL_CERT_DIR'];
-  return env;
+  return buildEngineEnv({
+    layout: engineLayout(),
+    runtimeRoot: engineRootPath(),
+    userData: app.getPath('userData'),
+  });
 }
 
 /** 探测 host:port 是否已有服务在监听（避免重复拉起 nanobot 造成端口冲突） */
@@ -1340,9 +1418,32 @@ async function stopNanobotAndWait(timeoutMs: number): Promise<number> {
 async function startNanobotGateway(): Promise<boolean> {
   if (nanobotGatewayProcess) return true;
   const { bin, args, config } = await readNanobotConfig();
+
+  /*
+   * 端口必须在 spawn **之前**定好并写回配置：gateway 启动时读一次配置就固定了端口，
+   * 跑起来之后再改文件只会让「进程实际监听的端口」与「我们探测的端口」分叉，
+   * 症状是进程明明在跑、就绪探测却永远等不到。
+   *
+   * 顺延的必要性见 `enginePorts.ts`：health(18790) 或 webui(9900) 任一被占，
+   * 引擎会直接拒绝启动，而界面只会显示「网关离线」。
+   */
+  const ports = await ensureServicePorts({
+    configPath: config ?? engineConfigPath(),
+    host: '127.0.0.1',
+  });
+  if (ports.gatewayPort !== gatewayHealthPort || ports.webuiPort !== gatewayWsPort) {
+    console.log(
+      `[nanobot] gateway 端口顺延：health ${gatewayHealthPort}→${ports.gatewayPort}，` +
+        `webui ${gatewayWsPort}→${ports.webuiPort}`,
+    );
+  }
+  gatewayHealthPort = ports.gatewayPort;
+  gatewayWsPort = ports.webuiPort;
+  if (ports.warning) console.warn(`[nanobot] ${ports.warning}`);
+
   // 网关已在本机运行（用户手动拉起 / 上一实例未退出）→ 复用，不重复拉起
-  if (await isPortInUse('127.0.0.1', 18790)) {
-    console.log('[nanobot] gateway 18790 已在监听，复用既有网关，不重复拉起');
+  if (await isPortInUse('127.0.0.1', gatewayHealthPort)) {
+    console.log(`[nanobot] gateway ${gatewayHealthPort} 已在监听，复用既有网关，不重复拉起`);
     return true;
   }
   try {
@@ -1368,13 +1469,13 @@ async function startNanobotGateway(): Promise<boolean> {
       nanobotGatewayProcess = null;
     });
     // 同 serve：等到 health 端口真正进入监听再返回，避免"进程在跑但网关未就绪"
-    const ready = await waitForPort('127.0.0.1', 18790, GATEWAY_READY_TIMEOUT_MS, () =>
+    const ready = await waitForPort('127.0.0.1', gatewayHealthPort, GATEWAY_READY_TIMEOUT_MS, () =>
       nanobotGatewayProcess === null,
     );
     startupProfile.end('gateway.spawn→listen');
     if (!ready) {
       console.warn(
-        `[nanobot] gateway 18790 在 ${GATEWAY_READY_TIMEOUT_MS / 1000} 秒内未进入监听（进程可能已退出）`,
+        `[nanobot] gateway ${gatewayHealthPort} 在 ${GATEWAY_READY_TIMEOUT_MS / 1000} 秒内未进入监听（进程可能已退出）`,
       );
     }
     return ready;
@@ -1498,7 +1599,7 @@ async function mergeChannelsIntoConfig(
  */
 async function restartNanobotGateway(): Promise<boolean> {
   stopNanobotGateway();
-  await waitForPortFree('127.0.0.1', 18790, 5000);
+  await waitForPortFree('127.0.0.1', gatewayHealthPort, 5000);
   await startNanobotGateway();
   return nanobotGatewayProcess !== null;
 }
@@ -1510,9 +1611,8 @@ async function restartNanobotGateway(): Promise<boolean> {
 // 再发 webui_request 帧。桥单例懒加载：连接断开后下次调用重新签发重连。
 // ——————————————————————————————————————————————
 
-/** 网关 websocket 频道监听地址（与 serve DEFAULT_GATEWAY_PORT / health 18790 均不冲突） */
+/** 网关 websocket 频道监听地址（与 serve DEFAULT_GATEWAY_PORT / health 端口均不冲突） */
 const GATEWAY_WS_HOST = '127.0.0.1';
-const GATEWAY_WS_PORT = 9900;
 
 /**
  * 清理 `<config 所在目录>/run/` 里的僵尸网关状态文件（FR-13.4）。
@@ -1648,7 +1748,7 @@ function bootstrapGatewayToken(
     const req = httpRequest(
       {
         host: GATEWAY_WS_HOST,
-        port: GATEWAY_WS_PORT,
+        port: gatewayWsPort,
         path: '/webui/bootstrap',
         method: 'GET',
         headers: { Authorization: `Bearer ${issueSecret}` },
@@ -1692,7 +1792,7 @@ async function getGatewayBridge(): Promise<GatewayBridge> {
     const secret = await readTokenIssueSecret();
     if (!secret) throw new Error('config.json 缺少 channels.websocket.tokenIssueSecret');
     const { token } = await bootstrapGatewayToken(secret);
-    const ws = new WebSocket(`ws://${GATEWAY_WS_HOST}:${GATEWAY_WS_PORT}/?token=${token}`);
+    const ws = new WebSocket(`ws://${GATEWAY_WS_HOST}:${gatewayWsPort}/?token=${token}`);
     const bridge: GatewayBridge = { ws, pending: new Map() };
     // close / error 清理监听在握手前注册：握手失败路径也能清在途请求并释放连接，
     // 避免孤儿连接泄漏。此时 gatewayBridge 尚未赋值，
@@ -1843,7 +1943,8 @@ function httpGetJson(url: string, timeoutMs: number): Promise<unknown> {
 /**
  * 解析 FR-6.6 查询所用的网关 HTTP 地址。
  *
- * ⚠️ **必须指向 gateway 进程（GATEWAY_WS_PORT=9900），而非 serve（DEFAULT_GATEWAY_PORT=18900）**：
+ * ⚠️ **必须指向 gateway 进程（`gatewayWsPort`，默认 9900；冲突时会被顺延），而非 serve
+ * （`DEFAULT_GATEWAY_PORT`，默认 18900）**：
  * - serve 仅提供 OpenAI 兼容的 `/v1` API，**不承载** `/webui/bootstrap` 与 `/api/settings/*`；
  * - gateway 进程同时托管 websocket 频道（9900）、health（18790）与 **WebUI 设置路由**
  *   （含 `/webui/bootstrap` 与 `/api/settings/nanobot-features`）；
@@ -1856,7 +1957,7 @@ function httpGetJson(url: string, timeoutMs: number): Promise<unknown> {
  * （与 bootstrapGatewayToken / getGatewayBridge 的硬编码端口一致）。
  */
 async function gatewayHttpEndpoint(): Promise<{ host: string; port: number }> {
-  return { host: GATEWAY_WS_HOST, port: GATEWAY_WS_PORT };
+  return { host: GATEWAY_WS_HOST, port: gatewayWsPort };
 }
 
 /** 仅取 bootstrap 签发的 API token（HTTP `/api/*` 鉴权用）。失败返回 null。 */
@@ -2079,14 +2180,14 @@ async function restartOrEnsureGateway(ensureChannelEnabled?: string): Promise<{ 
         ? { ok: true, message: '网关已重启，新通道配置已生效' }
         : { ok: false, message: '网关重启失败，请检查 nanowork 日志' };
     }
-    if (await isPortInUse('127.0.0.1', 18790)) {
+    if (await isPortInUse('127.0.0.1', gatewayHealthPort)) {
       return { ok: true, needsRestart: true, message: '网关由外部进程托管，请手动重启后生效' };
     }
     const started = await startNanobotGateway();
     if (started && nanobotGatewayProcess) {
       return { ok: true, message: '网关已启动并加载新配置' };
     }
-    if (await isPortInUse('127.0.0.1', 18790)) {
+    if (await isPortInUse('127.0.0.1', gatewayHealthPort)) {
       return { ok: true, needsRestart: true, message: '网关由外部进程托管，请手动重启后生效' };
     }
     return { ok: false, message: '网关启动失败，请检查 nanowork 日志' };
@@ -2154,13 +2255,13 @@ async function disconnectNanobotChannel(kind: string): Promise<ChannelDisconnect
     // 外部托管判定（同 restartOrEnsureGateway）：无托管进程且 18790 被占用。
     // 此时无法保证「停止后再删」，仅删文件 + 写配置并提示手动重启（见函数注释 5）
     const externallyManaged =
-      !nanobotGatewayProcess && (await isPortInUse('127.0.0.1', 18790));
+      !nanobotGatewayProcess && (await isPortInUse('127.0.0.1', gatewayHealthPort));
 
     // 托管场景：先彻底停掉旧网关进程并等端口释放，再删凭证文件，
     // 避免引擎优雅关停时 _save_state() 把活 token 写回 account.json 复活断开结果
     if (!externallyManaged) {
       stopNanobotGateway();
-      await waitForPortFree('127.0.0.1', 18790, 5000);
+      await waitForPortFree('127.0.0.1', gatewayHealthPort, 5000);
     }
 
     // 读配置：微信需从中解析状态文件路径（stateDir 兼容）；后续清洗基于同一快照落盘
@@ -2227,7 +2328,7 @@ async function disconnectNanobotChannel(kind: string): Promise<ChannelDisconnect
       return { ok: true, message: `${label}已断开，网关已重启生效，可重新扫码接入` };
     }
     // 拉起失败但端口又被占用：可能被外部进程接管，降级为 needsRestart 提示
-    if (await isPortInUse('127.0.0.1', 18790)) {
+    if (await isPortInUse('127.0.0.1', gatewayHealthPort)) {
       return {
         ok: true,
         needsRestart: true,
@@ -2304,7 +2405,7 @@ async function syncNanobotChannels(channelsJson: string): Promise<ChannelSyncRes
         await startNanobotGateway();
       } else if (!(await restartNanobotGateway())) {
         // 重启失败且端口仍被占用：外部进程接管了网关，配置已落盘但需外部重启
-        if (await isPortInUse('127.0.0.1', 18790)) {
+        if (await isPortInUse('127.0.0.1', gatewayHealthPort)) {
           return {
             ok: true,
             message: '频道配置已写入，网关由外部进程托管，请重启该网关后生效',
@@ -3546,10 +3647,7 @@ async function resolveAuditLogPath(): Promise<string> {
     return join(envOverride.trim());
   }
   const cfg = await readLaunchConfigFromDisk();
-  const cfgPath =
-    cfg.config && cfg.config.trim()
-      ? cfg.config.trim()
-      : join(app.getPath('userData'), 'nanowork.config.json');
+  const cfgPath = cfg.config && cfg.config.trim() ? cfg.config.trim() : engineConfigPath();
   return join(dirname(cfgPath), 'audit', 'tool-gateway.ndjson');
 }
 
@@ -3855,6 +3953,8 @@ ipcMain.handle('engine:selfCheck', (_e, refresh: unknown) => engineSelfCheck(ref
 // （`engineInstall.ts`），与自检 remedy 用同一套路径与引号规则。
 const engineInstaller = createEngineInstaller({
   resolveTarget: resolveEngineSelfCheckTarget,
+  // 惰性求值：模块加载期 app 还没 ready，此时取 userData 不可靠
+  env: () => sanitizeGatewayEnv(),
   emit: (state) => {
     mainWindow?.webContents.send('engine:install-progress', state);
     // 装成功后让下一次自检重新跑：否则界面拿到的还是安装前那份缓存报告，
@@ -4397,11 +4497,11 @@ ipcMain.handle('nanobot:getChannelSession', async (_e, key: string) => {
 /**
  * 诊断快照关心的三个引擎端口：serve /v1、gateway health、gateway WS 频道。
  *
- * ⚠️ `GATEWAY_HEALTH_PORT` 现在从 `./channelApprovals.ts` import（审批端点与它同源），
- * import 声明在模块顶部，**没有 TDZ 问题**；而 `DEFAULT_GATEWAY_PORT` 与
- * `GATEWAY_WS_PORT` 都在前面，正好。
+ * 三个端口都取「本次实际使用」的值：`gatewayHealthPort` / `gatewayWsPort` 会在拉起网关前
+ * 被 `ensureServicePorts()` 顺延（见 enginePorts.ts）。诊断页要报的是**真实端口**，
+ * 否则用户照着报出来的端口去查占用，查的是一段早就不用的端口。
  */
-const DIAGNOSTIC_PORTS = [DEFAULT_GATEWAY_PORT, GATEWAY_HEALTH_PORT, GATEWAY_WS_PORT];
+const DIAGNOSTIC_PORTS = [DEFAULT_GATEWAY_PORT, gatewayHealthPort, gatewayWsPort];
 
 /**
  * gateway 出站端点 POST（health server 同端口，仅本地回环监听）。
@@ -4421,7 +4521,7 @@ function postGateway(
     const req = httpRequest(
       {
         host: GATEWAY_HEALTH_HOST,
-        port: GATEWAY_HEALTH_PORT,
+        port: gatewayHealthPort,
         path,
         method: 'POST',
         headers: {
@@ -4535,7 +4635,7 @@ function getChannelTurnProgress(
     const req = httpRequest(
       {
         host: GATEWAY_HEALTH_HOST,
-        port: GATEWAY_HEALTH_PORT,
+        port: gatewayHealthPort,
         path: `/v1/turn/progress?${query.toString()}`,
         method: 'GET',
         timeout: 3000,
@@ -4663,7 +4763,7 @@ ipcMain.handle(
 function getChannelApprovals(
   params: ChannelApprovalsParams,
 ): Promise<ChannelApprovalsResult> {
-  const target = buildChannelApprovalsRequest(params.channel, params.chatId);
+  const target = buildChannelApprovalsRequest(params.channel, params.chatId, gatewayHealthPort);
 
   return new Promise((resolve) => {
     const req = httpRequest(
@@ -4726,7 +4826,7 @@ function getChannelApprovals(
 function resolveChannelApproval(
   params: ChannelApprovalResolveParams,
 ): Promise<ChannelApprovalResolveResult> {
-  const target = buildChannelApprovalResolveRequest(params);
+  const target = buildChannelApprovalResolveRequest({ ...params, port: gatewayHealthPort });
   const body = target.body;
 
   return new Promise((resolve) => {
@@ -4929,7 +5029,7 @@ function requestCronReload(): Promise<boolean> {
     const req = httpRequest(
       {
         host: GATEWAY_HEALTH_HOST,
-        port: GATEWAY_HEALTH_PORT,
+        port: gatewayHealthPort,
         path: '/v1/cron/reload',
         method: 'POST',
         headers: { 'Content-Length': 0 },

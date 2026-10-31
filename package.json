@@ -14,7 +14,11 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "build:electron": "vite build && node node_modules/esbuild/bin/esbuild electron/main.ts --bundle --platform=node --format=cjs --external:electron --outfile=electron/main.cjs && node node_modules/esbuild/bin/esbuild electron/preload.ts --bundle --platform=node --format=cjs --external:electron --outfile=electron/preload.cjs && electron-builder --config electron/builder.config.json",
+    "build:engine": "node scripts/build-engine.mjs --force",
+    "build:engine:ensure": "node scripts/build-engine.mjs --ensure",
+    "build:electron": "npm run build:engine:ensure && vite build && node node_modules/esbuild/bin/esbuild electron/main.ts --bundle --platform=node --format=cjs --external:electron --outfile=electron/main.cjs && node node_modules/esbuild/bin/esbuild electron/preload.ts --bundle --platform=node --format=cjs --external:electron --outfile=electron/preload.cjs && electron-builder --config electron/builder.config.json",
+    "build:installer": "node scripts/build-installer.mjs",
+    "build:installer:strict": "node scripts/build-installer.mjs --strict --check",
     "release:electron": "npm run build:electron -- --publish always",
     "electron:serve": "vite build && node node_modules/esbuild/bin/esbuild electron/main.ts --bundle --platform=node --format=cjs --external:electron --outfile=electron/main.cjs && node node_modules/esbuild/bin/esbuild electron/preload.ts --bundle --platform=node --format=cjs --external:electron --outfile=electron/preload.cjs && electron .",
     "verify:gateway": "vitest run tests/gateway.integration.test.ts"

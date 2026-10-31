@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  打包态 Hermes/主进程之外还要拉起一个 CPython 子进程（resources/rt/python）。
+
+  - allow-jit / allow-unsigned-executable-memory：V8 与部分 C 扩展需要可执行内存
+  - disable-library-validation：rt/site 里的 .so 不是用本机证书签的，缺这条会被
+    Gatekeeper 拦在加载阶段（症状是引擎进程起来立刻退出，日志里只有 Killed: 9）
+  - allow-dyld-environment-variables：引擎通过 PYTHONPATH 等变量注入运行时路径
+-->
+<plist version="1.0">
+<dict>
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+  <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+  <true/>
+</dict>
+</plist>

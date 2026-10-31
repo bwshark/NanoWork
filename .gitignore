@@ -27,6 +27,10 @@ electron/preload.cjs
 release/
 run/
 
+# 打包态引擎运行时（scripts/build-engine.mjs 产出：便携 python + wheel + 模板）
+# 体积数百 MB 且可按 manifest 复现，绝不入库
+/build/
+
 # Env / secrets
 .env
 .env.*

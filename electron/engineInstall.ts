@@ -55,6 +55,13 @@ export interface InstallCommand {
   args: string[];
   /** 展示用命令（含真实路径；与 remedy 里的命令同源） */
   display: string;
+  /**
+   * 该步的子进程环境。
+   *
+   * 打包态必须带 `PYTHONPATH=<rt>/site`（便携解释器没有 venv 的 site-packages），
+   * 否则"验证导入"这一步必然失败 —— 而那会被读成"引擎装坏了"。
+   */
+  env?: NodeJS.ProcessEnv;
 }
 
 /**
@@ -66,10 +73,36 @@ export interface InstallCommand {
  */
 export function buildEngineInstallRecipe(
   target: EngineSelfCheckTarget,
-  options: { platform?: NodeJS.Platform; venvExists?: boolean } = {},
+  options: {
+    platform?: NodeJS.Platform;
+    venvExists?: boolean;
+    env?: NodeJS.ProcessEnv;
+  } = {},
 ): InstallCommand[] {
   const platform = options.platform ?? process.platform;
-  const venv = engineInterpreterCandidates(target.engineRoot, platform);
+  const layout = target.layout ?? 'repo';
+  const venv = engineInterpreterCandidates(target.engineRoot, platform, layout);
+
+  /*
+   * 打包态**没有可安装的东西**：引擎与依赖都在安装包里（只读），Python 也是随包的。
+   * 唯一有意义的动作是"验证随包运行时是否完好"，失败就引导覆盖安装。
+   *
+   * 这里绝不能退化去建 venv：安装包里没有引擎源码，`pip install -e <repo>` 会指向
+   * 一个不存在的目录，用户会看到一串和真正原因无关的报错。
+   */
+  if (layout === 'bundle') {
+    return [
+      {
+        id: 'verify',
+        title: '校验随包运行时',
+        bin: venv.python,
+        args: ['-c', `import nanobot; print('${INSTALL_VERIFY_SENTINEL}')`],
+        display: `${quote(venv.python)} -c "import nanobot; print('${INSTALL_VERIFY_SENTINEL}')"`,
+        env: options.env,
+      },
+    ];
+  }
+
   const repo = join(target.engineRoot, 'nanobot');
   const steps: InstallCommand[] = [];
 
@@ -123,7 +156,7 @@ export interface InstallChildProcess {
 export type SpawnInstallProcess = (
   bin: string,
   args: string[],
-  options: { windowsHide: boolean },
+  options: { windowsHide: boolean; env?: NodeJS.ProcessEnv },
 ) => InstallChildProcess;
 
 const defaultSpawn: SpawnInstallProcess = (bin, args, options) =>
@@ -134,6 +167,14 @@ export interface EngineInstallerDeps {
   resolveTarget: () => Promise<EngineSelfCheckTarget>;
   /** 状态推送（生产环境是 `webContents.send`）。 */
   emit: (state: EngineInstallState) => void;
+  /**
+   * 子进程环境（生产环境传 `() => buildEngineEnv(...)`）。
+   *
+   * 做成**函数**而不是对象：主进程在模块加载期就创建了 installer，而 `app.getPath('userData')`
+   * 要等 app ready 才可靠。打包态的验证步骤靠它拿到 `PYTHONPATH`，否则 import 必失败、
+   * 且看起来像"引擎坏了"。
+   */
+  env?: () => NodeJS.ProcessEnv;
   spawn?: SpawnInstallProcess;
   exists?: (path: string) => boolean;
   killTree?: (proc: InstallChildProcess) => void;
@@ -198,7 +239,11 @@ export function createEngineInstaller(deps: EngineInstallerDeps): EngineInstalle
 
       let child: InstallChildProcess;
       try {
-        child = spawnProcess(command.bin, command.args, { windowsHide: true });
+        child = spawnProcess(command.bin, command.args, {
+          windowsHide: true,
+          // 打包态的验证步骤要靠 PYTHONPATH 才能 import 到引擎
+          ...(command.env ? { env: command.env } : {}),
+        });
       } catch (err) {
         append(err instanceof Error ? err.message : String(err));
         finish(1);
@@ -219,10 +264,12 @@ export function createEngineInstaller(deps: EngineInstallerDeps): EngineInstalle
     running = (async () => {
       canceled = false;
       const target = await deps.resolveTarget();
-      const venv = engineInterpreterCandidates(target.engineRoot, platform);
+      const layout = target.layout ?? 'repo';
+      const venv = engineInterpreterCandidates(target.engineRoot, platform, layout);
       const recipe = buildEngineInstallRecipe(target, {
         platform,
         venvExists: exists(venv.python),
+        env: deps.env?.(),
       });
 
       state = {
@@ -272,8 +319,16 @@ export function createEngineInstaller(deps: EngineInstallerDeps): EngineInstalle
         state.message = state.message ?? '已取消。';
       } else if (failed) {
         state.phase = 'failed';
+        if (layout === 'bundle') {
+          // 打包态没有"安装"这个动作：运行时是安装包的一部分，只能覆盖安装
+          state.message =
+            '随包运行时校验失败：请重新运行安装包做覆盖安装（应用自带的运行时无法单独安装）。';
+        }
       } else {
         state.phase = 'succeeded';
+        if (layout === 'bundle') {
+          state.message = '随包运行时校验通过（安装包自带，无需安装）。';
+        }
       }
       state.endedAt = now().toISOString();
       push(true);
