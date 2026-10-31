@@ -23,6 +23,8 @@
     "dist/**/*",
     "electron/main.cjs",
     "electron/preload.cjs",
+    "electron/splashPreload.cjs",
+    "electron/splash.html",
     "electron/assets/**/*",
     "resources/**/*"
   ],

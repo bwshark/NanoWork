@@ -293,7 +293,7 @@ function preflight(options) {
 
 function buildFrontend() {
   run(process.execPath, [requireModule('vite/bin/vite.js'), 'build', '--emptyOutDir', 'false']);
-  for (const entry of ['main', 'preload']) {
+  for (const entry of ['main', 'preload', 'splashPreload']) {
     run(process.execPath, [
       requireModule('esbuild/bin/esbuild'),
       join(REPO_ROOT, 'electron', `${entry}.ts`),

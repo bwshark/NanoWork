@@ -34,13 +34,14 @@ function prefsFor(kind: WindowKind, extra: Partial<Parameters<typeof createWindo
 }
 
 describe('WINDOW_KINDS 常量与档位表不漂移', () => {
-  it('五个角色都有档位（漏一个就是漏一档）', () => {
+  it('六个角色都有档位（漏一个就是漏一档）', () => {
     expect([...WINDOW_KINDS].sort()).toEqual([
       'artifact-preview',
       'first-party',
       'guest-popup',
       'image-decoder',
       'main',
+      'splash',
     ]);
     for (const kind of WINDOW_KINDS) {
       expect(() => prefsFor(kind)).not.toThrow();

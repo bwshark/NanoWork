@@ -1,0 +1,482 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <!--
+      启动屏是**本地静态页**：不联网、不 eval、不加载任何外部资源。
+      因此 CSP 直接把 default-src 关到 'none'，只留内联样式与内联脚本。
+      （脚本内联是刻意的：为几行 DOM 更新再加一个 splash.js 文件，
+        会让打包清单多一个容易漏的条目，而漏了它的症状是"启动屏全白"。）
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:;"
+    />
+    <title>NanoWork</title>
+    <style>
+      :root {
+        --bg: #0b1120;
+        --fg: #e8edf7;
+        --muted: #8b98ad;
+        --line: #1e293b;
+        --accent: #5b8cff;
+        --accent-2: #8b5cf6;
+        --ok: #34d399;
+        --danger: #f87171;
+        --ghost: rgba(255, 255, 255, 0.06);
+      }
+
+      html[data-theme='light'] {
+        --bg: #f5f7fa;
+        --fg: #0f172a;
+        --muted: #64748b;
+        --line: #e2e8f0;
+        --accent: #2563eb;
+        --accent-2: #7c3aed;
+        --ok: #059669;
+        --danger: #dc2626;
+        --ghost: rgba(15, 23, 42, 0.05);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      /* ⚠️ 必须显式声明：`.error` / `footer` 这些类里写了 `display:flex`，
+         而 `[hidden]` 只是 UA 样式（优先级更低）—— 不写这条，"隐藏"根本不生效，
+         启动中会同时看到错误卡片（真机上是 100% 复现的一屏重叠）。 */
+      [hidden] {
+        display: none !important;
+      }
+
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+        overflow: hidden;
+      }
+
+      body {
+        background: var(--bg);
+        color: var(--fg);
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei',
+          'Noto Sans SC', sans-serif;
+        font-size: 13px;
+        /* 无边框窗口：整块可拖动，用户能把启动屏挪开看后面的东西 */
+        -webkit-app-region: drag;
+        user-select: none;
+        /* 极淡的顶部光晕：让纯色背景不显得像"没画完" */
+        background-image: radial-gradient(120% 80% at 50% -20%, rgba(91, 140, 255, 0.16), transparent 60%);
+      }
+
+      main {
+        height: 100%;
+        padding: 22px 26px 20px;
+        display: flex;
+        flex-direction: column;
+      }
+
+      header {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 20px;
+      }
+
+      .logo {
+        width: 42px;
+        height: 42px;
+        flex: 0 0 auto;
+        border-radius: 13px;
+        background: linear-gradient(135deg, var(--accent), var(--accent-2));
+        color: #fff;
+        font-size: 21px;
+        font-weight: 700;
+        letter-spacing: -0.5px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        box-shadow: 0 6px 18px rgba(91, 140, 255, 0.28);
+      }
+
+      .titles {
+        min-width: 0;
+        flex: 1 1 auto;
+      }
+
+      .titles h1 {
+        margin: 0;
+        font-size: 15px;
+        font-weight: 600;
+        letter-spacing: 0.2px;
+      }
+
+      .version {
+        margin: 3px 0 0;
+        font-size: 11px;
+        color: var(--muted);
+        font-variant-numeric: tabular-nums;
+      }
+
+      /* —— 阶段清单 —— */
+      .stages {
+        flex: 1 1 auto;
+        display: flex;
+        flex-direction: column;
+        /* 垂直居中：阶段只有 4 行，顶对齐会让下半屏空出一大片（看着像没加载完） */
+        justify-content: center;
+        gap: 9px;
+      }
+
+      .stage {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-size: 12.5px;
+        color: var(--muted);
+        transition: color 0.2s ease;
+      }
+
+      .mark {
+        width: 15px;
+        height: 15px;
+        flex: 0 0 auto;
+        border-radius: 50%;
+        border: 1.5px solid var(--line);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 10px;
+        line-height: 1;
+        color: transparent;
+        transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+      }
+
+      .stage[data-status='active'] {
+        color: var(--fg);
+      }
+
+      .stage[data-status='active'] .mark {
+        border-color: var(--accent);
+        animation: pulse 1.4s ease-in-out infinite;
+      }
+
+      .stage[data-status='done'] {
+        color: var(--fg);
+      }
+
+      .stage[data-status='done'] .mark {
+        background: var(--ok);
+        border-color: var(--ok);
+        color: #fff;
+      }
+
+      .stage[data-status='skipped'] .mark {
+        border-color: var(--line);
+        color: var(--muted);
+      }
+
+      .stage[data-status='failed'] .mark {
+        background: var(--danger);
+        border-color: var(--danger);
+        color: #fff;
+      }
+
+      @keyframes pulse {
+        0%,
+        100% {
+          box-shadow: 0 0 0 0 rgba(91, 140, 255, 0.45);
+        }
+        50% {
+          box-shadow: 0 0 0 4px rgba(91, 140, 255, 0);
+        }
+      }
+
+      /* —— 进度 —— */
+      footer {
+        margin-top: 18px;
+      }
+
+      .bar {
+        height: 3px;
+        border-radius: 3px;
+        background: var(--ghost);
+        overflow: hidden;
+      }
+
+      .fill {
+        height: 100%;
+        width: 2%;
+        border-radius: 3px;
+        background: linear-gradient(90deg, var(--accent), var(--accent-2));
+        transition: width 0.45s cubic-bezier(0.22, 0.61, 0.36, 1);
+      }
+
+      .message {
+        margin: 10px 0 0;
+        font-size: 12px;
+        color: var(--fg);
+        opacity: 0.9;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .hint {
+        margin: 6px 0 0;
+        font-size: 11px;
+        line-height: 1.55;
+        color: var(--muted);
+        min-height: 17px;
+      }
+
+      /* —— 错误卡片 —— */
+      .error {
+        flex: 1 1 auto;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        gap: 8px;
+        padding: 4px 0 0;
+      }
+
+      .error h2 {
+        margin: 0;
+        font-size: 14.5px;
+        font-weight: 600;
+        color: var(--fg);
+      }
+
+      .error p {
+        margin: 0;
+        font-size: 12px;
+        line-height: 1.65;
+        color: var(--muted);
+      }
+
+      .actions {
+        display: flex;
+        gap: 8px;
+        margin-top: 10px;
+        -webkit-app-region: no-drag;
+      }
+
+      button {
+        -webkit-app-region: no-drag;
+        font: inherit;
+        font-size: 12px;
+        padding: 7px 14px;
+        border-radius: 8px;
+        border: 1px solid var(--line);
+        background: transparent;
+        color: var(--fg);
+        cursor: pointer;
+        transition: background 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
+      }
+
+      button:hover {
+        background: var(--ghost);
+      }
+
+      button.primary {
+        border-color: transparent;
+        background: var(--accent);
+        color: #fff;
+      }
+
+      button.primary:hover {
+        opacity: 0.9;
+      }
+
+      button:disabled {
+        opacity: 0.5;
+        cursor: default;
+      }
+
+      #countdown {
+        margin-left: 4px;
+        font-variant-numeric: tabular-nums;
+        opacity: 0.75;
+      }
+
+      .link {
+        margin-top: 10px;
+        align-self: flex-start;
+        font-size: 11px;
+        color: var(--muted);
+        background: none;
+        border: none;
+        padding: 0;
+        text-decoration: underline;
+        cursor: pointer;
+      }
+
+      /* 尊重系统的"减少动态效果"：这块屏只活几秒，抖动对前庭敏感人群尤其难受 */
+      @media (prefers-reduced-motion: reduce) {
+        * {
+          animation: none !important;
+          transition: none !important;
+        }
+      }
+    </style>
+    <script>
+      // 主题必须在首帧之前落地：CSS 只认 html[data-theme]，
+      // 放到 body 末尾再设就会出现"先白后黑"的一帧闪烁。
+      (function () {
+        try {
+          var theme = new URLSearchParams(location.search).get('theme');
+          if (theme === 'light' || theme === 'dark') {
+            document.documentElement.dataset.theme = theme;
+          }
+        } catch (error) {
+          /* 参数坏了就用默认（深色），不必为此打断启动 */
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <main>
+      <header>
+        <div class="logo" aria-hidden="true">N</div>
+        <div class="titles">
+          <h1>NanoWork</h1>
+          <p class="version" id="version"></p>
+        </div>
+      </header>
+
+      <section class="stages" id="stages" aria-live="polite" aria-label="启动进度"></section>
+
+      <section class="error" id="error" hidden>
+        <h2 id="error-title">启动未完成</h2>
+        <p id="error-advice"></p>
+        <div class="actions">
+          <button type="button" class="primary" id="retry">重试</button>
+          <button type="button" id="enter">先进入应用<span id="countdown"></span></button>
+        </div>
+        <button type="button" class="link" id="logs">打开日志目录</button>
+      </section>
+
+      <footer id="footer">
+        <div class="bar"><div class="fill" id="fill"></div></div>
+        <p class="message" id="message">正在启动…</p>
+        <p class="hint" id="hint"></p>
+      </footer>
+    </main>
+
+    <script>
+      (function () {
+        var bridge = window.nanoworkSplash;
+        var el = {
+          version: document.getElementById('version'),
+          stages: document.getElementById('stages'),
+          error: document.getElementById('error'),
+          errorTitle: document.getElementById('error-title'),
+          errorAdvice: document.getElementById('error-advice'),
+          countdown: document.getElementById('countdown'),
+          footer: document.getElementById('footer'),
+          fill: document.getElementById('fill'),
+          message: document.getElementById('message'),
+          hint: document.getElementById('hint'),
+          retry: document.getElementById('retry'),
+          enter: document.getElementById('enter'),
+          logs: document.getElementById('logs'),
+        };
+
+        /* 阶段行只建一次：每秒的重绘若重建 DOM，进行中那行的脉冲动画会被反复重启，
+           视觉上就是"抖"。建好后只改 data-status。 */
+        var rows = {};
+        var built = false;
+
+        function ensureRows(phases) {
+          if (built) return;
+          built = true;
+          for (var i = 0; i < phases.length; i += 1) {
+            var phase = phases[i];
+            var row = document.createElement('div');
+            row.className = 'stage';
+            row.dataset.status = 'pending';
+            var mark = document.createElement('span');
+            mark.className = 'mark';
+            var label = document.createElement('span');
+            label.className = 'label';
+            label.textContent = phase.label;
+            row.appendChild(mark);
+            row.appendChild(label);
+            el.stages.appendChild(row);
+            rows[phase.id] = { row: row, mark: mark };
+          }
+        }
+
+        var MARKS = { done: '✓', failed: '×', skipped: '–' };
+
+        function applyRows(phases) {
+          ensureRows(phases);
+          for (var i = 0; i < phases.length; i += 1) {
+            var phase = phases[i];
+            var target = rows[phase.id];
+            if (!target) continue;
+            if (target.row.dataset.status !== phase.status) {
+              target.row.dataset.status = phase.status;
+            }
+            var text = MARKS[phase.status] || '';
+            if (target.mark.textContent !== text) target.mark.textContent = text;
+          }
+        }
+
+        function apply(view) {
+          if (!view) return;
+          el.version.textContent = view.version ? 'v' + view.version : '';
+          applyRows(view.phases || []);
+
+          var failed = Boolean(view.error);
+          el.stages.hidden = failed;
+          el.footer.hidden = failed;
+          el.error.hidden = !failed;
+
+          if (failed) {
+            el.errorTitle.textContent = view.error.title || '启动未完成';
+            el.errorAdvice.textContent = view.error.advice || '';
+            var seconds = view.autoEnterInSec;
+            el.countdown.textContent =
+              typeof seconds === 'number' ? '（' + seconds + 's）' : '';
+            return;
+          }
+
+          var percent = Math.round((view.progress || 0) * 100);
+          el.fill.style.width = (percent < 2 ? 2 : percent) + '%';
+          el.message.textContent = view.message || '正在启动…';
+          el.hint.textContent = view.hint || '';
+        }
+
+        if (!bridge) {
+          // preload 没挂上（打包漏了文件）：至少别显示"正在启动"直到天荒地老
+          el.message.textContent = '启动屏组件加载异常，可直接继续';
+          return;
+        }
+
+        bridge.onState(apply);
+
+        el.retry.addEventListener('click', function () {
+          el.retry.disabled = true;
+          el.enter.disabled = true;
+          bridge.retry();
+        });
+
+        el.enter.addEventListener('click', function () {
+          el.retry.disabled = true;
+          el.enter.disabled = true;
+          bridge.enterApp();
+        });
+
+        el.logs.addEventListener('click', function () {
+          bridge.openLogs();
+        });
+
+        // Esc = 别挡着我；错误态之外没有意义（正常启动时用户想跳过就直接关窗口）
+        document.addEventListener('keydown', function (event) {
+          if (event.key === 'Escape' && !el.error.hidden) bridge.enterApp();
+        });
+      })();
+    </script>
+  </body>
+</html>

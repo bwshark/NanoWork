@@ -33,7 +33,8 @@ export type WindowKind =
   | 'first-party'
   | 'guest-popup'
   | 'image-decoder'
-  | 'artifact-preview';
+  | 'artifact-preview'
+  | 'splash';
 
 /** 全部角色（测试遍历用；漏一个就是漏一档） */
 export const WINDOW_KINDS: readonly WindowKind[] = [
@@ -42,6 +43,7 @@ export const WINDOW_KINDS: readonly WindowKind[] = [
   'guest-popup',
   'image-decoder',
   'artifact-preview',
+  'splash',
 ];
 
 /** 默认就关掉 sandbox 的角色（需要直接碰本地文件/协议） */
@@ -142,6 +144,15 @@ export function createWindowPreferences(
       prefs.sandbox = false;
       prefs.webSecurity = false;
       prefs.partition = req.partition;
+      break;
+    }
+    case 'splash': {
+      // 启动屏：本地静态页，不联外网、不碰文件、只收一条 IPC 状态。
+      // 因此**最严档**——沙箱 + 同源策略全开，且没有任何关闭它们的入口
+      // （`WEB_SECURITY_OPT_OUT_KINDS` 里没有它，认领也拿不到）。
+      // 唯一要压掉的是 backgroundThrottling 之外的默认值，这里不改。
+      prefs.sandbox = true;
+      prefs.webSecurity = true;
       break;
     }
     default: {

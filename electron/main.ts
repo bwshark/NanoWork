@@ -1,5 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, Notification, safeStorage, shell } from 'electron';
-import { basename, dirname, extname, join, resolve } from 'node:path';
+import { basename, dirname, extname, isAbsolute, join, resolve } from 'node:path';
 import { promises as fs, appendFileSync, existsSync, readFileSync, watch as fsWatch, type Dirent } from 'node:fs';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createConnection } from 'node:net';
@@ -29,6 +29,13 @@ import {
 } from './engineSelfCheck';
 import { buildEngineEnv } from './engineEnv';
 import { bootstrapEngineRuntime } from './engineBootstrap';
+import {
+  createBootScreen,
+  type BootEngineOutcome,
+  type BootHandoffReason,
+  type BootScreen,
+} from './splash';
+import { isSplashEnabled } from './splashState';
 import { ensureServicePorts } from './enginePorts';
 import { createEngineInstaller } from './engineInstall';
 import type { EngineSelfCheckReport } from '../src/types/engine';
@@ -283,6 +290,26 @@ ipcMain.handle('app:renderer-ready', () => {
   // 症状是「窗口亮了、目标会话没打开」，且全程零报错。所以两处都要留日志。
   userDataLog('app', 'info', '深链路由：渲染层已就绪', {});
   deepLinkRouter.markRendererReady();
+  // 同一个信号复用给启动屏门禁：界面已画出来，可以放开窗口了
+  resolveRendererReady?.();
+});
+
+// —— 启动屏的交互回传 ——
+//
+// 用 `send` 而不是 `invoke`：这三条都是"用户点了一下"的一次性动作，没有返回值可等。
+// 每条都要校验发送方 —— 主窗口的 preload 也能伪造这些通道名，而启动屏的按钮
+// 在交接之后就没有任何合法用途了（不校验 = 给主窗口留了一个"让门禁放行"的后门）。
+ipcMain.on('splash:retry', (event) => {
+  if (!bootScreen?.owns(event.sender)) return;
+  bootScreen.requestRetry();
+});
+ipcMain.on('splash:continue', (event) => {
+  if (!bootScreen?.owns(event.sender)) return;
+  bootScreen.requestContinue();
+});
+ipcMain.on('splash:open-logs', (event) => {
+  if (!bootScreen?.owns(event.sender)) return;
+  void shell.openPath(DIAGNOSTICS_USER_DATA);
 });
 
 // 注册协议处理器。
@@ -650,6 +677,16 @@ function pickInitialBackgroundColor(): string {
   return nativeTheme.shouldUseDarkColors ? '#0b1120' : '#f5f7fa';
 }
 
+/**
+ * 启动屏主题。
+ *
+ * 必须与 `pickInitialBackgroundColor` 同一个判据：启动屏是深色而主窗口是浅色
+ * （或反过来），交接那一瞬就是一次全屏反色闪白 —— 比没有启动屏更刺眼。
+ */
+function pickSplashTheme(): 'light' | 'dark' {
+  return pickInitialBackgroundColor() === '#0b1120' ? 'dark' : 'light';
+}
+
 // ——————————————————————————————————————————————
 // 事件流存储（D2）：append-only 事件流成为事实源
 //
@@ -714,6 +751,52 @@ function desktopConfigSnapshot(): DesktopConfig {
 
 let mainWindow: BrowserWindow | null = null;
 
+/**
+ * 启动屏（冷启动门禁）。
+ *
+ * 冷启动时 `nanobot serve` 要十秒上下才 listen，而主窗口原本是**立刻显示**的：
+ * 用户先看到空列表与 `Failed to fetch`，等引擎起来才"活"过来。启动屏把这段等待
+ * 变成可解释的过程，代价是主窗口要晚几秒出现 —— 所以它必须随时能放手：
+ * 引擎失败 / 超时 / 用户关掉它，三条路都会立刻交接（见 `electron/splash.ts`）。
+ */
+let bootScreen: BootScreen | null = null;
+
+/**
+ * 启动兜底闸：到点无条件交接。
+ *
+ * `waitForBoot` 自己有三条退路（失败 / 超时 / 用户跳过），但它依赖"那条 await 能被走到"。
+ * 万一启动链路上有任何一处抛出或永久挂起（新增的 await、某个 IPC 不再回），
+ * 后果不是"启动屏卡住"，而是**主窗口永远 hidden** —— 应用彻底打不开。
+ * 这条定时器不依赖任何业务逻辑，是最后一道保险。
+ */
+let bootWatchdog: NodeJS.Timeout | null = null;
+
+/** 兜底闸时长：比 `SPLASH_ENGINE_TIMEOUT_MS` 更宽松，正常路径永远走不到它 */
+const BOOT_WATCHDOG_MS = 45_000;
+
+/**
+ * 主窗口是否已经允许显示。
+ *
+ * 门禁期间窗口是**建好但 hidden** 的（渲染层照常挂载、拉数据，只是没人看见）。
+ * 任何"把窗口显示出来"的入口（托盘、全局快捷键、第二个实例、深链）都必须先看
+ * 这个标志，否则用户会在启动屏还在转圈时看到一个半成品窗口 —— 那正是本功能要消灭的画面。
+ */
+let mainWindowRevealed = false;
+
+/**
+ * 渲染层首次报到（`app:renderer-ready`）。
+ *
+ * 启动屏等「引擎就绪」与「界面已画出来」两件事，齐了才交接。用 Promise 而不是布尔：
+ * 交接要 `await`，而报到可能早于引擎，也可能晚于引擎。
+ */
+let resolveRendererReady: (() => void) | null = null;
+const rendererReadySignal = new Promise<void>((resolve) => {
+  resolveRendererReady = resolve;
+});
+
+/** 最近一次引擎启动失败的原因（只用于启动屏错误卡片的那句话，不参与控制流） */
+let lastEngineStartError: string | null = null;
+
 /** 托盘提示是否已提示过（只在首次隐藏时告知用户，避免反复打扰） */
 let trayHintShown = false;
 
@@ -737,12 +820,53 @@ function trayHintOnce(): void {
 /** 显示并聚焦主窗口（窗口被隐藏、最小化或失焦时唤起；已销毁则重建） */
 function showMainWindow(): void {
   if (!mainWindow) {
-    void createWindow();
+    // 门禁没结束就重建窗口时同样要 hidden：否则重建出来的窗口不等启动屏收尾就露面
+    void createWindow({ hidden: !mainWindowRevealed });
+    return;
+  }
+  // 启动门禁期间：窗口还在启动屏后面，现在显示等于让用户看到半成品。
+  // 但"点了图标完全没反应"同样不能接受 —— 把启动屏提到前面，至少证明它还活着。
+  if (!mainWindowRevealed) {
+    bootScreen?.focus();
     return;
   }
   if (mainWindow.isMinimized()) mainWindow.restore();
   if (!mainWindow.isVisible()) mainWindow.show();
   mainWindow.focus();
+}
+
+/**
+ * 交接：显示主窗口 → 收掉启动屏。
+ *
+ * **顺序不能反**：先关启动屏再显示主窗口，中间那一帧会露出桌面（用户看到窗口"闪没了"）。
+ * 最短可见时长由 `finish()` 内部补足，这里只负责先后。
+ */
+async function revealMainWindow(reason: BootHandoffReason | 'renderer-failed'): Promise<void> {
+  if (mainWindowRevealed) return;
+  mainWindowRevealed = true;
+
+  if (bootWatchdog) {
+    clearTimeout(bootWatchdog);
+    bootWatchdog = null;
+  }
+
+  // 退出流程里不要再显示窗口：用户已经关了它，这时 show() 会让窗口凭空闪一下
+  if (isQuitting) {
+    bootScreen?.destroy();
+    bootScreen = null;
+    return;
+  }
+
+  const win = mainWindow;
+  if (win && !win.isDestroyed()) {
+    if (win.isMinimized()) win.restore();
+    win.show();
+    win.focus();
+  }
+  startupProfile.end('splash.show→reveal');
+  userDataLog('app', 'info', '启动屏已交接', { reason });
+  await bootScreen?.finish();
+  bootScreen = null;
 }
 
 /**
@@ -752,7 +876,12 @@ function showMainWindow(): void {
  */
 function toggleMainWindow(): void {
   if (!mainWindow) {
-    void createWindow();
+    void createWindow({ hidden: !mainWindowRevealed });
+    return;
+  }
+  // 与 showMainWindow 同一道门禁：启动屏还在时，"切换显隐"没有意义
+  if (!mainWindowRevealed) {
+    bootScreen?.focus();
     return;
   }
   if (mainWindow.isVisible() && mainWindow.isFocused()) {
@@ -765,12 +894,20 @@ function toggleMainWindow(): void {
   refreshTrayMenu();
 }
 
-async function createWindow(): Promise<void> {
+/**
+ * 创建主窗口。
+ *
+ * @param options.hidden 建好但不显示。启动屏期间用它：渲染层照常挂载、拉数据，
+ *   窗口只是没人看见 —— 启动屏消失时界面已经是"热"的，而不是刚开始加载。
+ */
+async function createWindow(options: { hidden?: boolean } = {}): Promise<void> {
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 800,
     // 初始背景色：优先读持久化偏好，其次跟随系统外观，避免冷启动闪烁（渲染层后续自行应用主题）
     backgroundColor: pickInitialBackgroundColor(),
+    // 默认是"就绪即显示"；门禁期间必须显式压住，否则启动屏后面会先冒出半个窗口
+    ...(options.hidden ? { show: false } : {}),
     icon: join(__dirname, 'assets', 'icon.png'),
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'hidden',
     ...(process.platform === 'darwin'
@@ -848,6 +985,18 @@ async function createWindow(): Promise<void> {
     startupProfile.end('window.create→firstPaint');
   });
 
+  // 界面根本没加载出来（产物缺失 / 被安全软件拦）时，启动屏不能替它一直等：
+  // 硬超时是"等引擎"用的，用户会在那之前就以为应用挂了。这里立刻交接。
+  // `errorCode === -3` 是 ABORTED —— dev 下切换 devUrl / HMR 重载的正常中断，不算失败。
+  win.webContents.on(
+    'did-fail-load',
+    (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+      if (!isMainFrame || errorCode === -3) return;
+      userDataLog('app', 'error', '主窗口加载失败', { errorCode, errorDescription, validatedURL });
+      void revealMainWindow('renderer-failed');
+    },
+  );
+
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
@@ -870,13 +1019,28 @@ async function createWindow(): Promise<void> {
   mainWindow.on('maximize', () => mainWindow?.webContents.send('window:maximize-change', true));
   mainWindow.on('unmaximize', () => mainWindow?.webContents.send('window:maximize-change', false));
 
-  // FR-13.6：引擎自检排在**窗口已创建之后**（异步、不 await）——它要起子进程，
-  // 放在窗口显示前会把首屏拖长数秒，而那正是这条需求本身要治好的一种卡顿。
-  //
-  // 但顺序必须先引导再自检：打包态首启时配置文件还不存在（要由模板生成），
-  // 先跑自检只会拿到一条"配置文件还不存在"的 skipped，界面看着正常、
-  // 实际引擎会用 ~/.nanobot 的默认 workspace 起在别处。
-  void bootstrapEngineRuntime({
+  // 首启引导与引擎自检都不在这里 —— 见 `bootstrapEngineOnce()`。
+  // 它们原先挂在这个函数末尾，导致「配置文件写好」与「引擎 spawn」之间隔着一次
+  // `loadFile`：谁先跑完看运气。首启时引擎可能拿着不存在的配置起来（数据落到
+  // `~/.nanobot`），而界面上看不出任何异常。
+}
+
+/**
+ * 首启引导（配置模板 → 真实配置）。
+ *
+ * 三件事的先后是**硬约束**，不是风格：
+ * 1. 配置文件必须先存在 —— 否则引擎按 `~/.nanobot` 的默认 workspace 起在别处；
+ * 2. 引擎 spawn 必须在 1 之后（引擎启动时只读一次配置）；
+ * 3. 自检在**主窗口交接之后**（它要起子进程，与引擎争 CPU 会把首屏拖慢，FR-13.6）。
+ *
+ * 幂等：`bootstrapEngineRuntime` 本身重复调用零成本，这里再加一层缓存是因为
+ * `createWindow` 可能被反复调用（托盘重建窗口），没必要每次都跑一遍 IO。
+ */
+let engineBootstrapPromise: Promise<void> | null = null;
+
+function bootstrapEngineOnce(): Promise<void> {
+  if (engineBootstrapPromise) return engineBootstrapPromise;
+  engineBootstrapPromise = bootstrapEngineRuntime({
     runtimeRoot: engineRootPath(),
     userData: app.getPath('userData'),
     configPath: engineConfigPath(),
@@ -897,8 +1061,8 @@ async function createWindow(): Promise<void> {
     .catch((error: unknown) => {
       // 引导失败不该让应用打不开：真正的结论由自检报告给出
       console.warn(`[nanobot] 首启引导失败：${String(error)}`);
-    })
-    .finally(() => scheduleEngineSelfCheck());
+    });
+  return engineBootstrapPromise;
 }
 
 // ——————————————————————————————————————————————
@@ -1341,6 +1505,9 @@ async function startNanobot(): Promise<boolean> {
       console.warn(
         `[nanobot] ${host}:${listenPort} 在 ${LAUNCH_READY_TIMEOUT_MS / 1000} 秒内未进入监听（进程可能已退出）`,
       );
+      // 启动屏的错误卡片要拿这一句去分类（端口冲突 / 超时 / 未知），
+      // 否则用户只能看到一句"引擎启动失败"——那等于没告诉他任何事
+      lastEngineStartError = `${host}:${listenPort} 在 ${LAUNCH_READY_TIMEOUT_MS / 1000} 秒内未进入监听`;
       userDataLog('engine', 'error', '网关未在超时内进入监听', {
         host,
         port: listenPort,
@@ -1351,10 +1518,12 @@ async function startNanobot(): Promise<boolean> {
       // 未就绪就改写地址会让界面指向一个暂时没人监听的端口。
       nanobotServeHost = host;
       nanobotServePort = listenPort;
+      lastEngineStartError = null;
     }
     return ready;
   } catch (err) {
     console.warn(`[nanobot] 启动失败（可能未安装 nanobot）：${String(err)}`);
+    lastEngineStartError = String(err);
     userDataLog('engine', 'error', '网关启动失败', { error: String(err) });
     nanobotProcess = null;
     return false;
@@ -5653,8 +5822,44 @@ app.whenReady().then(async () => {
   // 必须早于 createWindow：建窗时会同步读主题偏好，迁移完成后即可直接命中新落点。
   await migrateLegacyStore();
 
+  // ——— 启动屏（冷启动门禁） ———
+  // 位置有讲究：**迁移之后**（主题偏好要读迁移后的落点，否则启动屏与主窗口会一深一浅）、
+  // **建窗之前**（主窗口要按 hidden 建），且必须早于下面任何一个耗时步骤 ——
+  // 否则用户在最需要反馈的那几秒里，看到的是"什么都没发生"。
+  bootScreen = createBootScreen({
+    enabled: isSplashEnabled(),
+    htmlPath: join(__dirname, 'splash.html'),
+    preloadPath: join(__dirname, 'splashPreload.cjs'),
+    iconPath: join(__dirname, 'assets', 'icon.png'),
+    theme: pickSplashTheme(),
+    version: app.getVersion(),
+    onOpenLogs: () => {
+      void shell.openPath(DIAGNOSTICS_USER_DATA);
+    },
+    log: (level, message) => userDataLog('app', level, message, {}),
+  });
+  if (bootScreen.active) {
+    bootScreen.mark('env', 'active');
+    startupProfile.begin('splash.show→reveal');
+    // 兜底闸（见 `bootWatchdog` 的注释）：只有启动屏在场时才需要
+    bootWatchdog = setTimeout(() => {
+      bootWatchdog = null;
+      if (mainWindowRevealed) return;
+      userDataLog('app', 'error', '启动流程超时，强制显示主窗口', {});
+      void revealMainWindow('degraded');
+    }, BOOT_WATCHDOG_MS);
+    bootWatchdog.unref?.();
+  } else {
+    // 排障开关关掉启动屏时，门禁必须一并关掉：否则没有任何人负责 reveal，
+    // 窗口会永远 hidden —— 那比启动屏卡住更像"应用坏了"。
+    mainWindowRevealed = true;
+  }
+
   startupProfile.begin('window.create→firstPaint');
-  void createWindow();
+  void createWindow({ hidden: bootScreen.active });
+  // ⚠️ 这里**不**给 `ui` 打 active/done：主窗口是并行加载的，渲染层早在引擎起来前
+  // 就挂完了。按"报到即完成"打勾会让第 4 步先绿（真机复现的乱序）。
+  // 「载入工作台」的勾在交接那一刻落（`bootScreen.complete()`）。
 
   // 诊断产物的保留清理（FR-11.2 / FR-11.3）：启动时各扫一次，之后在 trace 写入侧
   // 按小时顺带做（见 TRACE_PRUNE_INTERVAL_MS 的说明）。
@@ -5725,10 +5930,36 @@ app.whenReady().then(async () => {
     userDataLog('engine', 'warn', '已回收上一实例遗留的引擎进程', { reaped: reaped.reaped });
   }
 
+  // ① 首启引导必须早于 spawn：打包态首启时配置还不存在（要由模板生成），
+  //    引擎先起就会按 ~/.nanobot 的默认 workspace 跑，用户数据与应用目录从此分家。
+  await bootstrapEngineOnce();
+  bootScreen.mark('env', 'done');
+
+  // ② 引擎没装（全新机器 / 用户删了 rt 目录）时，「这一步跳过」比「启动失败」有用：
+  //    错误卡片上的重试永远修不好缺文件，而应用内的安装器能。所以直接进应用。
+  const launchConfig = await readNanobotConfig();
+  const engineInstalled = !isAbsolute(launchConfig.bin) || existsSync(launchConfig.bin);
+  if (engineInstalled) {
+    bootScreen.mark('engine', 'active');
+    bootScreen.mark('gateway', 'active');
+  } else {
+    userDataLog('engine', 'warn', '未找到引擎可执行文件，跳过自动启动', { bin: launchConfig.bin });
+    bootScreen.mark('engine', 'skipped');
+    bootScreen.mark('gateway', 'skipped');
+  }
+
   // 桌面端：并行拉起 serve（/v1 API）与 gateway（IM channels 长连接），
   // 两者齐备智能体才能既对话又与飞书等机器人互通（失败不影响主程序，仅记录警告）
-  const startupPair = Promise.all([startNanobot(), startNanobotGateway()]);
+  const serveBoot: Promise<boolean> = engineInstalled ? startNanobot() : Promise.resolve(false);
+  const gatewayBoot: Promise<boolean> = engineInstalled ? startNanobotGateway() : Promise.resolve(false);
+  const startupPair = Promise.all([serveBoot, gatewayBoot]);
   nanobotStartupPromise = startupPair.then(([serveOk]) => serveOk);
+
+  // 网关**不参与门禁**：它是 IM 长连接，等它会把首屏从 10 秒拖到十几秒，
+  // 而"能不能跟机器人说话"不影响"能不能用这个应用"。
+  // 启动屏会在主门禁满足后给它 2.5 秒宽限（见 `splash.ts` 的 `settleGatewayWithinGrace`），
+  // 通常足够让第 3 步真的打上勾；失败一律按"跳过"呈现，不画红叉——
+  // 那时已经要交接了，红叉只会让人以为整个应用起不来，IM 状态由应用内渠道页负责。
   void startupPair.then(([serveOk, gatewayOk]) => {
     // [LOCAL PATCH] 就绪提示必须**分别**报 serve 与网关。原写法只取 serve 的
     // 结果就打印「网关已在后台启动」：网关失败而 serve 成功时照样打这一句，
@@ -5743,9 +5974,55 @@ app.whenReady().then(async () => {
     const flushTimer = setTimeout(() => startupProfile.flush(), 3000);
     flushTimer.unref?.();
   });
+
+  // ③ 交接。启动屏等「引擎有结论」+「界面已报到」，两者齐了才放开主窗口；
+  //    引擎失败/超时/用户跳过都会走同一条出口（见 `splash.ts` 的三条退路）。
+  let handoff: BootHandoffReason = 'disabled';
+  if (bootScreen.active) {
+    try {
+      handoff = await bootScreen.waitForBoot({
+        engine: engineInstalled
+          ? serveBoot.then((ok): BootEngineOutcome => (ok ? 'ok' : 'failed'))
+          : Promise.resolve<BootEngineOutcome>('skipped'),
+        rendererReady: rendererReadySignal,
+        // 只用来给第 3 步打勾，不参与门禁（见上方注释）
+        gateway: engineInstalled ? gatewayBoot : undefined,
+        describeEngineFailure: () => lastEngineStartError ?? '引擎进程未进入监听',
+        // 重试前必须先收掉可能已半死的子进程：`startNanobot` 见到 `nanobotProcess`
+        // 非空会直接返回 true，对着一个已崩的进程"重试成功"是最坏的假绿。
+        retryEngine: async () => {
+          stopNanobot();
+          const ok = await startNanobot();
+          return ok ? 'ok' : 'failed';
+        },
+      });
+    } catch (error) {
+      // 启动屏自己的逻辑出错，绝不能演变成"应用永远不显示"——那是最坏的一种失败模式
+      userDataLog('app', 'error', '启动屏交接异常，直接显示主窗口', { error: String(error) });
+      handoff = 'degraded';
+    }
+  }
+
+  // ④ 最后一个勾与停留，必须在交接**之前**（否则被主窗口盖住，等于没画）
+  if (handoff === 'ready') {
+    try {
+      await bootScreen.complete(true);
+    } catch {
+      /* 庆祝动作失败不影响交接 */
+    }
+  }
+
+  await revealMainWindow(handoff);
+
+  // 自检放在**交接之后**（FR-13.6）：它要起子进程，早跑只会与引擎抢 CPU，
+  // 把首屏拖长几百毫秒——而那正是这条需求要治好的那类卡顿。
+  scheduleEngineSelfCheck();
 });
 
 app.on('window-all-closed', () => {
+  // 启动屏还在 = 交接没发生：此刻"窗口全关"只可能是主窗口创建失败的异常路径，
+  // 直接退出会留下一个没人管的启动屏。让交接流程自己收尾。
+  if (bootScreen?.isShowing()) return;
   // 窗口被真正关闭（非隐藏到托盘）时：非 macOS 直接退出。
   // macOS 遵循"关闭最后一个窗口不退出应用"的惯例，保留进程等待 activate 重建。
   if (process.platform !== 'darwin') app.quit();
@@ -5761,6 +6038,10 @@ app.on('before-quit', () => {
   // 关闭网关认证 WS 桥连接，避免退出时残留孤儿连接；在途请求随桥一并作废
   gatewayBridge?.ws.terminate();
   gatewayBridge = null;
+  // 启动屏是**同步可销毁**的纯 UI：留着它会让"最后关掉的窗口"变成它，
+  // 而那时 `window-all-closed` 早已过点，用户看到的是一个关不掉的启动屏。
+  bootScreen?.destroy();
+  bootScreen = null;
   // ⚠️ 这里**不再**调 stopNanobot / stopNanobotGateway：那俩是「发起即返回」的
   // 同步 taskkill，放在同步监听器里等于发起了但没等——主进程会在进程树还没死透时
   // 退出，留下孤儿占住 18900 / 18790。真正的清理在下面的 will-quit 里等完再走。
@@ -5836,5 +6117,5 @@ process.on('SIGTERM', () => {
 app.on('activate', () => {
   // 点击 Dock 图标 / 任务栏重新激活：窗口可能只是被隐藏到托盘，需重新显示而非重建
   if (mainWindow) showMainWindow();
-  else void createWindow();
+  else void createWindow({ hidden: !mainWindowRevealed });
 });
