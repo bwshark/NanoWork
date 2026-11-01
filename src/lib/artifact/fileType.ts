@@ -53,7 +53,11 @@ const LANGUAGE_ALIASES: Record<string, string | null> = {
   console: 'bash',
   yml: 'yaml',
   md: 'markdown',
-  htm: 'html',
+  // ⚠️ `html` **不是** Prism 的注册名（Prism 的叫 `markup`，`html` 只是它的别名）。
+  // 漏这两条时 `.html` 产物 / ```html 围栏会走到「不认识 → undefined → 纯文本」，
+  // 症状是源码视图整屏白字（2026-11-01 用户截图）。别把它当成「已注册」放过。
+  html: 'markup',
+  htm: 'markup',
   xhtml: 'markup',
   xml: 'markup',
   svg: 'markup',
@@ -95,7 +99,7 @@ const LANGUAGE_EXTENSION: Record<string, string> = {
   'shell-session': 'sh',
   powershell: 'ps1',
   markdown: 'md',
-  html: 'html',
+  // 只有 `markup`（html 归一化后就叫这个名字，见上面的别名表）
   markup: 'html',
   xml: 'xml',
   css: 'css',
