@@ -6,8 +6,8 @@
  * 客户端对 assistant 最终文本做轻量启发式提取——识别常见的围栏代码块：
  *   - ```mermaid   → mermaid 图
  *   - ```html      → html 片段
- *   - ```<lang>    → code（语言高亮）
- *   - ```（无语言）→ code（纯文本）
+ *   - ```<lang>    → code（语言高亮；语言名经 `lib/artifact/fileType` 归一化）
+ *   - ```（无语言）→ code（正文像 JSON 就按 json 着色，否则纯文本）
  * 提取出的每个块转为 ArtifactEvent 交给上层渲染。
  *
  * 设计原则：
@@ -18,19 +18,27 @@
 
 import type { ArtifactEvent } from '../types';
 import { genId } from '@/lib/core/id';
+import { normalizeCodeLanguage } from '@/lib/artifact/fileType';
 
 /** 围栏块匹配：```lang\n ... \n``` 或 ```\n ... \n``` */
 const FENCE_RE = /```([a-zA-Z0-9+#-]*)\n([\s\S]*?)```/g;
 
 /** 语言关键字 → ArtifactType 映射 */
-function mapType(lang: string): { type: ArtifactEvent['type']; language?: string } {
+function mapType(lang: string, content: string): { type: ArtifactEvent['type']; language?: string } {
   const l = lang.toLowerCase();
   if (l === 'mermaid') return { type: 'mermaid' };
   if (l === 'html' || l === 'xml') return { type: 'html', language: 'html' };
   if (l === 'svg') return { type: 'svg' };
   if (l === 'markdown' || l === 'md') return { type: 'markdown' };
-  if (l) return { type: 'code', language: l };
-  return { type: 'code' };
+  // ⚠️ 存**归一化后**的语言（`nanowork-expert` → `json`）：产物面板的源码视图、
+  // 下载扩展名都读这个字段，存原始围栏名会让它们双双落空（下载变 .txt、代码不着色）。
+  // 标题仍用原始围栏名（见 `titleFor`），「它是模型写的哪种围栏」这件事不能丢。
+  if (l) {
+    const language = normalizeCodeLanguage(l, content);
+    return language ? { type: 'code', language } : { type: 'code' };
+  }
+  const language = normalizeCodeLanguage(undefined, content);
+  return language ? { type: 'code', language } : { type: 'code' };
 }
 
 function titleFor(type: ArtifactEvent['type'], lang: string | undefined, index: number): string {
@@ -62,7 +70,7 @@ export function extractArtifacts(text: string): ArtifactEvent[] {
     idx += 1;
     const lang = (m[1] ?? '').trim();
     const content = m[2].replace(/\n$/, '');
-    const { type, language } = mapType(lang);
+    const { type, language } = mapType(lang, content);
     out.push({
       id: genId(),
       type,

@@ -19,6 +19,7 @@ import {
   extractRawToolCalls,
 } from './sseToolCalls';
 import { extractArtifacts } from './artifactExtractor';
+import { deltaContentText } from './deltaContent';
 import {
   readPluginIndex,
   setPluginEnabledInEngine,
@@ -863,7 +864,12 @@ export class NanobotClient {
         const json = JSON.parse(data) as {
           choices?: Array<{
             delta?: {
-              content?: string;
+              /**
+               * 规范是 string，但真实提供方会给内容块数组（多模态 / 代理形态）。
+               * 声明成 `unknown` 是**故意**的：让每个取值点都必须过
+               * `deltaContentText`，而不是靠类型断言假装它是字符串。
+               */
+              content?: unknown;
               tool_calls?: unknown;
               nanobot_event?: NanobotStreamEvent;
             };
@@ -882,12 +888,15 @@ export class NanobotClient {
         onPayload();
 
         // 1) 文本流
-        if (delta.content) {
+        // ⚠️ 必须经 `deltaContentText` 归一化：提供方可能把正文包成内容块数组，
+        // 直接 `+=` 会得到 `[object Object],…`（正文与围栏产物一起毁掉，见该模块注释）。
+        const text = deltaContentText(delta.content);
+        if (text !== '') {
           // 先打点再回调：`onToken` 会把内容写进 store 并触发渲染，之后再打点
           // 等于把「渲染开销」也算进了首字延迟。
           latency.markFirstToken();
-          fullText += delta.content;
-          handlers.onToken(delta.content);
+          fullText += text;
+          handlers.onToken(text);
           handlers.onStatus('streaming');
         }
 
@@ -1130,13 +1139,16 @@ export class NanobotClient {
     try {
       const json = JSON.parse(trimmed) as {
         choices?: Array<{
-          message?: { content?: string; role?: string };
-          delta?: { content?: string };
+          // 提供方并不总是给 string（多模态 / 代理形态会给内容块数组），
+          // 交给 `deltaContentText` 统一收口，别在这里断言 string。
+          message?: { content?: unknown; role?: string };
+          delta?: { content?: unknown };
         }>;
       };
-      const content =
-        json.choices?.[0]?.message?.content ?? json.choices?.[0]?.delta?.content;
-      if (content) {
+      const content = deltaContentText(
+        json.choices?.[0]?.message?.content ?? json.choices?.[0]?.delta?.content,
+      );
+      if (content !== '') {
         // 伪装成一个 SSE delta 事件，让 onMessage 统一解析 content + nanobot_event
         onMessage(JSON.stringify({ choices: [{ delta: { content } }] }));
       }

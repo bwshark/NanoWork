@@ -76,6 +76,79 @@ describe('HTML 产物：页面 / 源码', () => {
   });
 });
 
+describe('代码产物：着色的语言判据 / 下载文件类型', () => {
+  const JSON_BODY = '{\n  "kind": "agent",\n  "name": "Web GIS"\n}';
+
+  /** 点一下 `下载`，把锚点上的 `download` 抓回来（jsdom 不真落盘） */
+  function captureDownloadName(host: HTMLElement): string {
+    const names: string[] = [];
+    const original = HTMLAnchorElement.prototype.click;
+    HTMLAnchorElement.prototype.click = function capture(this: HTMLAnchorElement) {
+      names.push(this.download);
+    };
+    try {
+      const button = [...host.querySelectorAll('button')].find((b) =>
+        (b.textContent ?? '').includes('下载'),
+      );
+      expect(button).toBeTruthy();
+      act(() => {
+        click(button);
+      });
+    } finally {
+      HTMLAnchorElement.prototype.click = original;
+    }
+    expect(names).toHaveLength(1);
+    return names[0];
+  }
+
+  it('自造围栏名（nanowork-expert）按内容着色，而不是一整块白字', async () => {
+    const host = mount(
+      <ArtifactRenderer
+        artifact={artifact({
+          id: 'c1',
+          type: 'code',
+          title: '代码块 (nanowork-expert) 1',
+          language: 'nanowork-expert',
+          content: JSON_BODY,
+        })}
+        header={false}
+      />,
+    );
+    // 高亮在懒加载分包里，等 token 落地
+    await waitForSettled(() => Boolean(host.querySelector('.token')));
+    // Prism 给 JSON 的 key / 字符串都挂 token 类；没归一化时这里一个 token 都没有
+    expect(host.querySelector('.token')).toBeTruthy();
+  });
+
+  it('下载按真实类型命名：json 片段是 .json 而不是 .txt', () => {
+    const host = mount(
+      <ArtifactRenderer
+        artifact={artifact({
+          id: 'c2',
+          type: 'code',
+          title: '代码块 (json) 1',
+          language: 'json',
+          content: JSON_BODY,
+        })}
+      />,
+    );
+    expect(captureDownloadName(host)).toBe('代码块 (json) 1.json');
+  });
+
+  it('html / markdown 产物各自落到 .html / .md', () => {
+    const html = mount(<ArtifactRenderer artifact={artifact({ id: 'c3' })} />);
+    expect(captureDownloadName(html)).toBe('snake.html');
+    unmount();
+
+    const md = mount(
+      <ArtifactRenderer
+        artifact={artifact({ id: 'c4', type: 'markdown', title: 'Markdown 文档 1', content: '# t' })}
+      />,
+    );
+    expect(captureDownloadName(md)).toBe('Markdown 文档 1.md');
+  });
+});
+
 describe('markdown / mermaid：同样有「预览 / 源码」', () => {
   const MD = '# 标题\n\n- 一\n- 二\n';
 

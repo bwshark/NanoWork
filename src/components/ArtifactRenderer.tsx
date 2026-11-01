@@ -5,6 +5,7 @@ import DownloadIcon from '@mui/icons-material/Download';
 import { CodeBlockView } from './CodeBlockView';
 import type { Artifact } from '@/types';
 import { isHtmlArtifact } from '@/lib/artifact/fileArtifact';
+import { downloadSpecFor } from '@/lib/artifact/fileType';
 import { MarkdownView } from './MarkdownView';
 import { ARTIFACT_PREVIEW_CSP } from './artifacts/artifactCsp';
 import { ExtensionPreviewAction } from './extensions/ExtensionPreviewAction';
@@ -240,12 +241,30 @@ export function ArtifactRenderer({ artifact, header = true }: ArtifactRendererPr
       break;
   }
 
+  /**
+   * 下载：文件名与 MIME 都按**正文的真实类型**给（见 `lib/artifact/fileType`）。
+   *
+   * 原先一律 `text/plain` + 用标题当文件名 → 每个产物都存成 `.txt`，
+   * 一份 JSON 片段存出来编辑器不认、双击不开。
+   *
+   * 外链类（图片 / 视频）不能走 Blob：它们的 `content` 是空的，旧代码存下去的
+   * 其实是**那段 URL 文本**。这类直接让浏览器按地址另存。
+   */
   const handleDownload = () => {
-    const blob = new Blob([artifact.url ?? artifact.content], { type: 'text/plain' });
-    const url = URL.createObjectURL(blob);
+    const { fileName, mimeType } = downloadSpecFor(artifact);
     const a = document.createElement('a');
+    a.download = fileName;
+
+    if (artifact.url) {
+      a.href = artifact.url;
+      a.target = '_blank';
+      a.rel = 'noopener';
+      a.click();
+      return;
+    }
+
+    const url = URL.createObjectURL(new Blob([artifact.content], { type: mimeType }));
     a.href = url;
-    a.download = artifact.title ?? artifact.id;
     a.click();
     URL.revokeObjectURL(url);
   };

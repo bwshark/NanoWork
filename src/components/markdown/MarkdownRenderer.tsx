@@ -4,6 +4,7 @@ import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { Link, Box } from '@mui/material';
 import { FIGURE_CAPTION_FONT_SIZE } from '@/components/knowledge/docFigureSx';
+import { normalizeCodeLanguage } from '@/lib/artifact/fileType';
 
 /**
  * 需要 `markdown` 分包（react-markdown + remark-gfm + react-syntax-highlighter，
@@ -32,10 +33,14 @@ import { FIGURE_CAPTION_FONT_SIZE } from '@/components/knowledge/docFigureSx';
 const CODE_STYLE = { borderRadius: 8, fontSize: 13, maxWidth: '100%', overflowX: 'auto' } as const;
 
 export function CodeBlock({ language, source }: { language?: string; source: string }) {
+  // 围栏语言是模型自由写的（`nanowork-expert`、`ts`、`yml`…），Prism 只认注册名，
+  // 直接透传会**静默**退化成无着色。归一化收在 `lib/artifact/fileType`（下载扩展名
+  // 用的是同一份判据），这里只做一次转换。
+  const normalized = normalizeCodeLanguage(language, source);
   return (
     <SyntaxHighlighter
       style={oneDark}
-      language={language || undefined}
+      language={normalized}
       PreTag="div"
       customStyle={CODE_STYLE}
     >
