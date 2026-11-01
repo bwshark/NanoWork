@@ -139,4 +139,34 @@ describe('VoiceDiscussionDialog', () => {
     click(byAria('结束语音讨论', root));
     expect(props.onFinish).not.toHaveBeenCalled();
   });
+
+  it('调工具时状态行说清在做什么，而不是笼统的「正在想」', () => {
+    mount(
+      themed(
+        <VoiceDiscussionDialog
+          {...dialogProps({ phase: 'thinking', liveText: '', activeTool: 'web_search' })}
+        />,
+      ),
+    );
+    const text = dialogRoot().textContent ?? '';
+    expect(text).toContain('正在使用 web_search');
+    expect(text).not.toContain('正在想…');
+  });
+
+  it('字幕模式里工具调用也有一条可见的标记', () => {
+    mount(
+      themed(
+        <VoiceDiscussionDialog
+          {...dialogProps({
+            subtitles: true,
+            liveText: '',
+            turns: [
+              { id: 'a1', role: 'assistant', text: '', streaming: true, tool: 'shell' },
+            ],
+          })}
+        />,
+      ),
+    );
+    expect(dialogRoot().textContent).toContain('shell');
+  });
 });

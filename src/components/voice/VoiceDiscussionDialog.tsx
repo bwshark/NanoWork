@@ -19,6 +19,7 @@ import { useEffect, useRef } from "react";
 import { Box, Dialog, IconButton, Tooltip, Typography } from "@mui/material";
 import { alpha } from "@mui/material/styles";
 import CloseIcon from "@mui/icons-material/Close";
+import BuildIcon from "@mui/icons-material/Build";
 import GraphicEqIcon from "@mui/icons-material/GraphicEq";
 import MicIcon from "@mui/icons-material/Mic";
 import MicOffIcon from "@mui/icons-material/MicOff";
@@ -37,6 +38,8 @@ export interface VoiceDiscussionDialogProps {
   muted: boolean;
   subtitles: boolean;
   notice: string | null;
+  /** 正在执行的工具名（有值 = 这一轮在调工具，状态行改为「正在使用 xxx」） */
+  activeTool?: string | null;
   onToggleMute: () => void;
   onToggleSubtitles: () => void;
   /** 结束并生成纪要 */
@@ -46,7 +49,15 @@ export interface VoiceDiscussionDialogProps {
 }
 
 /** 面板状态文案（`说点什么` / `可以继续说话来打断` 与参考视频一字不差） */
-function statusText(phase: VoiceDiscussionPhase, muted: boolean, hasLive: boolean): string {
+function statusText(
+  phase: VoiceDiscussionPhase,
+  muted: boolean,
+  hasLive: boolean,
+  activeTool: string | null,
+): string {
+  // 工具执行时优先说「在做什么」：讨论允许调工具后，一次查询可能几秒没声音，
+  // 不给具体动作的话用户只看到「正在想…」，会以为它卡住了
+  if (activeTool !== null) return `正在使用 ${activeTool}…`;
   switch (phase) {
     case "starting":
       return "正在打开麦克风…";
@@ -74,6 +85,7 @@ export function VoiceDiscussionDialog({
   muted,
   subtitles,
   notice,
+  activeTool = null,
   onToggleMute,
   onToggleSubtitles,
   onFinish,
@@ -209,6 +221,24 @@ export function VoiceDiscussionDialog({
                 }}
               >
                 {turn.text}
+                {turn.tool !== undefined && (
+                  // 字幕模式下也要看得见「它在干活」：一段纯工具执行可能几秒没有文本
+                  <Box
+                    component="span"
+                    sx={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 0.5,
+                      ml: turn.text !== "" ? 0.75 : 0,
+                      fontSize: 11.5,
+                      color: "text.secondary",
+                      verticalAlign: "middle",
+                    }}
+                  >
+                    <BuildIcon sx={{ fontSize: 12 }} />
+                    {turn.tool}
+                  </Box>
+                )}
                 {turn.streaming && (
                   <Box
                     component="span"
@@ -255,7 +285,7 @@ export function VoiceDiscussionDialog({
         <Box sx={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 1 }}>
           <GraphicEqIcon sx={{ fontSize: 16, color: "text.disabled" }} />
           <Typography sx={{ fontSize: 12.5, color: "text.secondary", userSelect: "none" }}>
-            {statusText(phase, muted, liveText !== "")}
+            {statusText(phase, muted, liveText !== "", activeTool)}
           </Typography>
         </Box>
         {notice && (

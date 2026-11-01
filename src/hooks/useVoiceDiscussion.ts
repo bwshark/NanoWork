@@ -27,6 +27,21 @@
  * 2. 播报期间 VAD 用 `BARGE_IN_PROFILE`（更高门槛）：否则麦克风收到自己的
  *    外放就会一直自我打断。
  *
+ * ## ⚠️ 音频闸门：播报期间麦克风的音频**不进识别**
+ * 上面那两条只能降低「被自己打断」的概率，挡不住更致命的一条：外放时
+ * 扬声器的声音被麦克风收到、送进实时识别、commit 回来变成一整条**用户发言**
+ * ——界面上的表现就是「助手的话变成了输入」。更糟的是模型看到用户复述它
+ * 刚说的话，会顺着解释/道歉/复述，几轮就把讨论带进死循环。
+ *
+ * 因此 `capture.onPcm` 全程订阅（打断要在用户开口那一刻生效，不能临时 attach
+ * 一个 Worklet 再等它加载），但**只有 `gateOpenRef` 为真时**才把帧喂给识别：
+ * - 播报中 → 关闸，只周期性推一片静音保活（长时间无音频服务端会断会话）；
+ * - 用户插话 / 播报播完（再等 `TAIL_GUARD_MS` 吃掉扬声器尾音）→ 开闸。
+ * 代价是插话开头约 `minSpeechMs`（320ms）会丢——用户接着说就能被完整识别，
+ * 而这远比「把自己说的话当用户输入」可接受。
+ *
+ * 第三道防线是 `isEchoTranscript`：闸门偶有漏网时把回声文本直接丢掉。
+ *
  * ## 卸载安全
  * 每个 await 之后都检查 `alive`：`getUserMedia`、WS 握手、模型流都是异步的，
  * 用户随时可能关掉面板。漏检的后果是**麦克风不停**（用户以为在偷听）与
@@ -37,10 +52,12 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { connectionManager } from '@/ai/connectionManager';
 import { genId } from '@/lib/core/id';
 import { acquireMicrophone, isRecordingSupported, type AudioCapture } from '@/lib/voice/capture';
+import { isEchoTranscript } from '@/lib/voice/echo';
 import { describeVoiceError } from '@/lib/voice/errors';
 import { bandLevels, smoothLevels, VOICE_BAR_COUNT } from '@/lib/voice/levels';
 import { openRealtimeAsr, toRealtimeUrl, type RealtimeAsrSession } from '@/lib/voice/realtime';
-import { createSpeaker, type Speaker } from '@/lib/voice/speaker';
+import { createSentenceSplitter } from '@/lib/voice/sentences';
+import { createSpeaker, type Speaker, type SpeakerStream } from '@/lib/voice/speaker';
 import { resolveTtsConfig } from '@/lib/voice/tts';
 import { BARGE_IN_PROFILE, createTurnDetector, type TurnDetector } from '@/lib/voice/vad';
 import { canUseRealtime } from '@/hooks/useVoiceInput';
@@ -64,6 +81,13 @@ export interface DiscussionTurn {
   text: string;
   /** 助手还在流式生成 */
   streaming?: boolean;
+  /**
+   * 正在执行的工具名（有值 = 这一轮正在调工具）。
+   *
+   * 讨论允许调工具后，用户看不到屏幕上的过程行——不给这个信号的话，
+   * 「查一下今天的天气」会有好几秒的纯静默，用户只会以为它卡住了。
+   */
+  tool?: string;
 }
 
 /** 讨论所依赖的会话上下文（由 Composer 传入，与当前会话保持一致） */
@@ -77,7 +101,15 @@ export interface VoiceDiscussionContext {
   persona?: string;
   /** 主对话的最近几条消息（讨论要能接上「我们刚才在聊什么」） */
   history?: ChatMessageParam[];
-  /** 与主对话同一份工具黑名单（`toolAllow` 恒为空数组，讨论不执行任何工具） */
+  /**
+   * 与主对话同一份工具授权（`Agent.toolAllow`）。
+   *
+   * `undefined` = 该 Agent 未声明限制；空数组 = 一个工具都不许。
+   * 讨论**不再强制锁死工具**：用户会问「现在几点」「帮我看下这个文件」，
+   * 没有工具就只能瞎编或推给「结束后我来做」。
+   */
+  toolAllow?: string[];
+  /** 与主对话同一份工具黑名单（优先级高于 `toolAllow`） */
   toolDeny?: string[];
 }
 
@@ -109,6 +141,8 @@ export interface UseVoiceDiscussionResult {
   turns: DiscussionTurn[];
   /** 当前这句的中间识别结果（边说边出字） */
   liveText: string;
+  /** 正在执行的工具名（无 = 没在调工具）；面板状态行据此显示「正在使用 xxx」 */
+  activeTool: string | null;
   muted: boolean;
   /** 字幕开关（默认关：只看点阵环，与参考视频一致） */
   subtitles: boolean;
@@ -130,19 +164,53 @@ export interface UseVoiceDiscussionResult {
 /** 讨论轮次上限：防止离开时对话无限长（上下文与界面都会失控） */
 const MAX_TURNS = 40;
 
+/**
+ * 每次提问带给模型的历史轮数上限。
+ *
+ * 与 `MAX_TURNS`（界面/纪要用）分开：那个是「讨论能有多长」，这个是
+ * 「这一轮带多少上下文」。全量塞进去会让首 token 逐轮变慢，而语音场景里
+ * 首 token 延迟直接就是「它怎么不说话了」。
+ */
+const DISCUSSION_CONTEXT_TURNS = 20;
+
 /** 电平上报给 UI 的节流间隔（ms）：与语音输入的波形同一档 */
 const LEVEL_UI_MS = 66;
+
+/**
+ * 播报结束后的「尾音保护期」（ms）。
+ *
+ * `speaker` 的 `onEnd` 来自 `<audio>` 的 `ended` 或 `speechSynthesis` 的 `utterance.onend`，
+ * 这两个事件都在**最后一个字已经送出**时触发，扬声器物理上还会响一小段
+ * （蓝牙耳机 100~300ms，系统语音在 Windows 上尤其明显）。这段时间开闸
+ * 就是把尾音喂给识别——短回复能凑出半句，正好又是「助手的话变成用户输入」。
+ */
+const TAIL_GUARD_MS = 180;
+
+/**
+ * 关闸期间推静音保活的间隔（ms）。
+ *
+ * 实时识别会话靠 append 维持，长时间一片音频都不送会被服务端判为闲置断开
+ * （断了要重新握手 300ms，用户插话的开头就丢得更多）。推静音既保活又不会
+ * 产生任何识别结果，是这里唯一的低成本选择。
+ */
+const KEEPALIVE_MS = 400;
+
+/** 一片 100ms 的 16kHz 静音（与 pcm.ts 的回传帧长一致） */
+function silentFrame(): Int16Array {
+  return new Int16Array(1600);
+}
 
 /** 讨论的系统提示词 */
 function buildSystemPrompt(persona?: string): string {
   const lines = [
-    '你正在和用户进行**实时语音讨论**（不是文字聊天）。',
+    '你正在和用户进行**实时语音讨论**（不是文字聊天）。你的回复会被念出来。',
     '要求：',
     '1. 口语化、简短：每次回复控制在 2~3 句（约 80 字以内），像面对面说话。',
-    '2. 不要输出 Markdown 标题、列表、表格、代码块或表情符号——这段话会被念出来。',
-    '3. 不要调用任何工具，也不要声称已经执行了操作。需要动手时，告诉用户「结束后我来做」。',
-    '4. 用户可能在你说话时插话打断：被插话就顺着新话题继续，不要重复被打断的内容。',
-    '5. 用户没听清会追问，回答要能独立成立（不要用「上面那个」这类指代）。',
+    '2. 不要输出 Markdown 标题、列表、表格、代码块或表情符号——这些念不出来。',
+    '3. 需要时间、事实、文件内容、网络信息时**直接调用工具**；拿到结果后用一句话说结论，不要把 JSON、路径、命令行参数原样念出来。',
+    '4. 写文件、执行命令、发消息这类有副作用的操作：先用一句话说清你要做什么再动手；用户说「等一下」「别做」就立刻停下。',
+    '5. 用户可能在你说话时插话打断：被插话就顺着新话题继续，不要重复被打断的内容。',
+    '6. 用户没听清会追问，回答要能独立成立（不要用「上面那个」这类指代）。',
   ];
   if (persona && persona.trim() !== '') {
     lines.push('', '你的人设：', persona.trim());
@@ -153,6 +221,7 @@ function buildSystemPrompt(persona?: string): string {
 /** 纪要提示词：要求短、有结论、可执行 */
 const SUMMARY_PROMPT = [
   '把刚才这段语音讨论整理成纪要，用中文，不要客套话。',
+  '不要调用任何工具，直接根据下面给出的对话内容来写。',
   '输出两段：',
   '第一段「讨论内容」：3~5 句话，说明讨论了什么、结论是什么、有没有待办。',
   '第二段「待办」：如果有明确的下一步就逐条列出（最多 3 条）；没有就写「无」。',
@@ -212,8 +281,25 @@ export function useVoiceDiscussion(
   const chatSessionRef = useRef<string | null>(null);
   /** 模型回合是否在流式中（结束时要 abort） */
   const streamingRef = useRef(false);
+  /**
+   * 当前正在生成的助手气泡。
+   *
+   * 流式播报把「生成」与「播报」并行后，用户完全可能在整个回复还没生成完时
+   * 就插话打断。此时这一轮必须**立刻哑掉**：不继续回填文字、不再念后续句子、
+   * 也不和新一轮并发占同一条会话。
+   */
+  const liveTurnRef = useRef<{ id: string; aborted: boolean } | null>(null);
   const levelsRef = useRef<number[]>(new Array<number>(VOICE_BAR_COUNT).fill(0));
   const lastUiRef = useRef(0);
+  /**
+   * 音频闸门：`true` = 麦克风的帧可以进识别。
+   *
+   * 播报中必须为 `false`（见文件头「音频闸门」）。用 ref 而不是 state：
+   * 它每帧被读一次，进 state 会让面板按音频帧率重渲染。
+   */
+  const gateOpenRef = useRef(false);
+  /** 上次推静音保活的时间 */
+  const lastKeepAliveRef = useRef(0);
   /** 提示只报一次（降级/额度），否则每句都弹 */
   const noticedRef = useRef(false);
   const contextRef = useRef(context);
@@ -269,6 +355,9 @@ export function useVoiceDiscussion(
       window.clearInterval(timerRef.current);
       timerRef.current = null;
     }
+    // 闸门回到「关」：下次讨论由 `start` 显式打开，避免沿用上一场的状态
+    gateOpenRef.current = false;
+    lastKeepAliveRef.current = 0;
     unsubLevelRef.current?.();
     unsubLevelRef.current = null;
     closeAsr();
@@ -280,19 +369,99 @@ export function useVoiceDiscussion(
     levelsRef.current = new Array<number>(VOICE_BAR_COUNT).fill(0);
     const sessionId = chatSessionRef.current;
     chatSessionRef.current = null;
+    // 讨论结束：正在生成的这一轮不再回填（气泡已经随面板清空）
+    liveTurnRef.current = null;
     if (sessionId && streamingRef.current) {
       streamingRef.current = false;
       void connectionManager.getClient().then((c) => c.abort(sessionId)).catch(() => undefined);
     }
   }, [closeAsr]);
 
-  /** 模型回合：把讨论历史送给引擎，流式回填到最后一条助手气泡 */
+  /**
+   * 进入播报态：关闸 + 换打断门槛 + 开麦。
+   *
+   * ⚠️ 顺序不能反：`openAsr` 会按 `phaseRef` 兜底开闸，必须**先**把 phase 设成
+   * `speaking` 再开麦，否则这一轮的识别会话会带着「开闸」建立，播报期间送进去
+   * 的全是扬声器的声音。
+   */
+  const enterSpeaking = useCallback(() => {
+    gateOpenRef.current = false;
+    detectorRef.current?.configure(BARGE_IN_PROFILE);
+    setPhaseSafe('speaking');
+    // 先把麦开好：打断要在用户开口那一刻生效
+    if (!mutedRef.current) openAsrRef.current?.();
+  }, [setPhaseSafe]);
+
+  /** 退出播报态：还门槛 + 复位断句器 + 延时开闸（吃掉扬声器尾音） */
+  const exitSpeaking = useCallback(
+    (sessionId: string) => {
+      if (chatSessionRef.current !== sessionId) return;
+      detectorRef.current?.configure(null);
+      /**
+       * 立刻复位断句器，不能留到延时之后再 reset。
+       *
+       * 播报自然结束时断句器若还是「已开口」，只可能是播报期间被回声顶起来的
+       * 假状态（用户插话会走 `speaker.stop()`，那条路径不回调 onEnd）：不清掉的话，
+       * 用户一句话都不说也会在 `silenceMs` 后 commit 出一段空音频。
+       */
+      detectorRef.current?.reset();
+      setPhaseSafe('listening');
+      // 开闸要晚一步：扬声器还有尾音，见 `TAIL_GUARD_MS`
+      window.setTimeout(() => {
+        if (chatSessionRef.current !== sessionId) return;
+        if (phaseRef.current !== 'listening') return;
+        gateOpenRef.current = true;
+      }, TAIL_GUARD_MS);
+    },
+    [setPhaseSafe],
+  );
+
+  /**
+   * 模型回合：把讨论历史送给引擎，**边生成边播报**。
+   *
+   * ## 为什么不等整段回复再念
+   * 原来是 `ask().then(reply => speak(reply))`——用户说完话到听见第一声，
+   * 要经过「VAD 断句 + ASR 收尾 + 模型生成完整段 + TTS 首段合成」，
+   * 实测 4~8 秒。语音场景下超过 2 秒就是「它是不是卡住了」。
+   * 现在按句切分，模型吐出第一句就开念，后面几句在播放期间陆续到位。
+   */
   const ask = useCallback(
-    async (sessionId: string, messages: ChatMessageParam[]): Promise<string> => {
+    async (sessionId: string, messages: ChatMessageParam[]): Promise<void> => {
       const client = await connectionManager.getClient();
-      if (chatSessionRef.current !== sessionId) return '';
+      if (chatSessionRef.current !== sessionId) return;
       const assistantId = genId();
       pushTurn({ id: assistantId, role: 'assistant', text: '', streaming: true });
+      /** 这一轮的身份与「是否已被插话打断」；`interruptTurn` 会把 aborted 置位 */
+      const turnState = { id: assistantId, aborted: false };
+      liveTurnRef.current = turnState;
+
+      /**
+       * 播报器**惰性创建**：只有真的凑出一句要念的话才进播报态。
+       * 模型先去调工具时还没有任何文本，此时该继续显示「正在想…」，
+       * 而不是提前宣布「可以打断」——那会让用户以为它在自说自话。
+       */
+      const splitter = createSentenceSplitter();
+      /**
+       * 用对象持有而不是 `let stream`：赋值发生在下面这个闭包里，TS 的控制流
+       * 分析不做跨闭包推导，会认定它恒为 null（`stream?.end()` 直接被收窄成 never）。
+       */
+      const speech: { stream: SpeakerStream | null } = { stream: null };
+      const speakSentence = (sentence: string) => {
+        // 已被插话打断：绝不能再开新播报（否则会和用户的新一轮抢麦）
+        if (turnState.aborted) return;
+        if (chatSessionRef.current !== sessionId) return;
+        if (!speech.stream) {
+          const speaker = speakerRef.current;
+          if (!speaker) return;
+          enterSpeaking();
+          speech.stream = speaker.stream({
+            onEnd: () => exitSpeaking(sessionId),
+            onNotice: (message) => notify(message),
+          });
+        }
+        speech.stream.push(sentence);
+      };
+
       let acc = '';
       let failure: string | null = null;
       streamingRef.current = true;
@@ -307,8 +476,11 @@ export function useVoiceDiscussion(
             ...(contextRef.current.model ? { model: contextRef.current.model } : {}),
             ...(contextRef.current.workspace ? { workspace: contextRef.current.workspace } : {}),
             ...(contextRef.current.fullAccess ? { accessMode: 'full' as const } : {}),
-            // 讨论不执行任何工具：`toolAllow: []` = 一个都不许（与 undefined 语义相反）
-            toolAllow: [],
+            // 工具授权与主对话同一份：`undefined` = 该 Agent 未声明限制，
+            // 空数组 = 一个都不许。省略而不是传 undefined，才会走到「未设置」分支。
+            ...(contextRef.current.toolAllow !== undefined
+              ? { toolAllow: contextRef.current.toolAllow }
+              : {}),
             ...(contextRef.current.toolDeny && contextRef.current.toolDeny.length > 0
               ? { toolDeny: contextRef.current.toolDeny }
               : {}),
@@ -316,11 +488,21 @@ export function useVoiceDiscussion(
           },
           {
             onToken: (chunk) => {
+              if (turnState.aborted) return;
               acc += chunk;
               if (chatSessionRef.current !== sessionId) return;
               updateTurn(assistantId, { text: acc });
+              // 成句就念：播放时间正好盖住后续 token 的生成时间
+              for (const sentence of splitter.feed(chunk)) speakSentence(sentence);
             },
-            onToolCall: () => undefined,
+            onToolCall: (ev) => {
+              if (chatSessionRef.current !== sessionId) return;
+              // 只用于给用户一个「它在干活」的信号，不参与播报。
+              // 终态（done / error / rejected）要清掉，否则状态行会一直挂着工具名
+              const pending =
+                ev.status === 'pending' || ev.status === 'approved' || ev.status === 'running';
+              updateTurn(assistantId, { tool: pending ? ev.tool : undefined });
+            },
             onArtifact: () => undefined,
             onStatus: () => undefined,
             onDone: () => undefined,
@@ -333,44 +515,39 @@ export function useVoiceDiscussion(
         failure = err instanceof Error ? err.message : String(err);
       } finally {
         streamingRef.current = false;
-        updateTurn(assistantId, { streaming: false });
+        if (liveTurnRef.current === turnState) liveTurnRef.current = null;
+        if (turnState.aborted) {
+          /**
+           * 被用户插话打断：静默收尾。
+           *
+           * 这里**不能**当失败处理（abort 会让 chat 抛错）：用户是主动打断的，
+           * 弹一条「回复失败」只会让人莫名其妙。已经显示出来的文字保留，
+           * 声音早在 `interruptTurn` 里停了。
+           */
+          updateTurn(assistantId, { streaming: false, tool: undefined });
+        } else if (failure) {
+          // 已经念出去的部分立刻截断，气泡也删掉——失败的半截不该被用户当成原话
+          speakerRef.current?.stop();
+          if (speech.stream) exitSpeaking(sessionId);
+          turnsRef.current = turnsRef.current.filter((t) => t.id !== assistantId);
+          if (mountedRef.current) setTurns(turnsRef.current);
+          notify(`回复失败：${failure}`);
+        } else {
+          const rest = splitter.flush();
+          if (rest !== '') speakSentence(rest);
+          updateTurn(assistantId, { streaming: false, tool: undefined });
+          speech.stream?.end();
+          // 全程没有要念的句子（只调了工具 / 空回复）：直接回到监听，
+          // 不能停在 thinking——那样麦克风闸门一直关着，用户说什么都进不去
+          if (!speech.stream && phaseRef.current === 'thinking') {
+            detectorRef.current?.reset();
+            gateOpenRef.current = true;
+            setPhaseSafe('listening');
+          }
+        }
       }
-      if (chatSessionRef.current !== sessionId) return acc;
-      if (failure) {
-        notify(`回复失败：${failure}`);
-        // 失败的半截回复不留在气泡里（用户会以为 AI 就是这么说的）
-        turnsRef.current = turnsRef.current.filter((t) => t.id !== assistantId);
-        if (mountedRef.current) setTurns(turnsRef.current);
-        return '';
-      }
-      return acc;
     },
-    [notify, pushTurn, updateTurn],
-  );
-
-  /** 结束一轮后的播报 + 开启下一轮监听 */
-  const speakAndListen = useCallback(
-    (sessionId: string, text: string) => {
-      const speaker = speakerRef.current;
-      if (chatSessionRef.current !== sessionId) return;
-      // 先把麦开好：打断要在用户开口那一刻生效，等播报结束才连就晚了 300ms
-      if (!mutedRef.current) openAsrRef.current?.();
-      if (!text.trim() || !speaker) {
-        setPhaseSafe('listening');
-        return;
-      }
-      detectorRef.current?.configure(BARGE_IN_PROFILE);
-      setPhaseSafe('speaking');
-      void speaker.speak(text, {
-        onEnd: () => {
-          if (chatSessionRef.current !== sessionId) return;
-          detectorRef.current?.configure(null);
-          setPhaseSafe('listening');
-        },
-        onNotice: (message) => notify(message),
-      });
-    },
-    [notify, setPhaseSafe],
+    [enterSpeaking, exitSpeaking, notify, pushTurn, setPhaseSafe, updateTurn],
   );
 
   /** 识别结果落地：入气泡 → 问模型 → 播报 */
@@ -380,8 +557,27 @@ export function useVoiceDiscussion(
       if (mountedRef.current) setLiveText('');
       const clean = text.trim();
       detectorRef.current?.reset();
+      // 识别已交付，闸门回到开启（下一句要能进来）
+      gateOpenRef.current = true;
       if (clean === '') {
         // 只识别到噪声：不算一轮，继续听
+        if (!mutedRef.current) openAsrRef.current?.();
+        setPhaseSafe('listening');
+        return;
+      }
+      /**
+       * 自激回声兜底。
+       *
+       * 音频闸门是主防线，但它有两个漏口：闸门刚打开时扬声器可能还有一点余响、
+       * 用户把音量开到极大时 `BARGE_IN` 门槛也挡不住。这一层的代价只有一次
+       * 字符串比较，却能挡住「助手的话被当成用户输入」这条最伤体验的链路。
+       */
+      const recentAssistant = turnsRef.current
+        .filter((t) => t.role === 'assistant' && t.text.trim() !== '')
+        .slice(-2)
+        .map((t) => t.text);
+      if (isEchoTranscript(clean, recentAssistant)) {
+        // 丢掉这段回声，继续听：不能让它成为一轮（模型会顺着复述自己的话）
         if (!mutedRef.current) openAsrRef.current?.();
         setPhaseSafe('listening');
         return;
@@ -393,14 +589,24 @@ export function useVoiceDiscussion(
         return;
       }
       setPhaseSafe('thinking');
+      /**
+       * 上下文只带最近若干轮：讨论轮次上限是 40 轮，全塞进去会让每一轮的
+       * 首 token 越来越慢（语音场景下首 token 延迟就是「它不说话了」）。
+       * 十轮足够接住「我们刚才在聊什么」。
+       */
+      const recentTurns = turnsRef.current
+        .filter((t) => t.text.trim() !== '')
+        .slice(-DISCUSSION_CONTEXT_TURNS)
+        .map((t) => ({ role: t.role, content: t.text }));
       const messages: ChatMessageParam[] = [
         { role: 'system', content: buildSystemPrompt(contextRef.current.persona) },
         ...(contextRef.current.history ?? []),
-        ...turnsRef.current.map((t) => ({ role: t.role, content: t.text })),
+        ...recentTurns,
       ];
-      void ask(sessionId, messages).then((reply) => speakAndListen(sessionId, reply));
+      // 播报由 `ask` 内部流式驱动（第一句一好就念），这里不等它返回
+      void ask(sessionId, messages);
     },
-    [ask, notify, pushTurn, setPhaseSafe, speakAndListen],
+    [ask, notify, pushTurn, setPhaseSafe],
   );
 
   handleFinalRef.current = handleFinal;
@@ -416,6 +622,14 @@ export function useVoiceDiscussion(
     const gen = genRef.current;
     const capture = captureRef.current;
     if (!capture || mutedRef.current) return;
+    /**
+     * 闸门兜底：只有「播报中」才该关着。
+     *
+     * 重连（识别报错后 600ms 重开）、静音解锁后重开、空识别后重开，
+     * 全都发生在非播报态。若沿用上一轮关闸的状态，用户说话会被静默吞掉，
+     * 表现为「面板显示正在听，但说多久都没反应」——这种假死比回声更难查。
+     */
+    if (phaseRef.current !== 'speaking') gateOpenRef.current = true;
     closeAsr();
     const cfg = useSettingsStore.getState().settings.transcription;
     const url = toRealtimeUrl(cfg.endpoint, cfg.model, cfg.apiToken);
@@ -454,7 +668,18 @@ export function useVoiceDiscussion(
         if (gen !== genRef.current) return;
         // 服务端就绪后才灌音频（早了开头几片会被吞，见 realtime.ts 文件头）
         unsubPcmRef.current = capture.onPcm((frame) => {
-          asrRef.current?.push(frame);
+          const current = asrRef.current;
+          if (!current) return;
+          if (gateOpenRef.current) {
+            current.push(frame);
+            return;
+          }
+          // 关闸（播报中）：这一帧里装的是扬声器的回声，送进识别就会变成
+          // 「用户发言」。只按节拍推静音保活，见文件头「音频闸门」。
+          const now = Date.now();
+          if (now - lastKeepAliveRef.current < KEEPALIVE_MS) return;
+          lastKeepAliveRef.current = now;
+          current.push(silentFrame());
         });
       },
     });
@@ -473,6 +698,29 @@ export function useVoiceDiscussion(
     setPhaseSafe('thinking');
     asr.finish();
   }, [setPhaseSafe]);
+
+  /**
+   * 掐掉正在跑的模型回合。
+   *
+   * 打断播报时如果不 abort，旧轮的 token 会继续进来（气泡文字还在长、声音却停了），
+   * 紧接着用户的新一轮又发同一 `sessionId`——两条流挤在一起，引擎侧谁先回不确定。
+   */
+  const abortStreaming = useCallback(() => {
+    const sessionId = chatSessionRef.current;
+    if (!sessionId || !streamingRef.current) return;
+    streamingRef.current = false;
+    void connectionManager
+      .getClient()
+      .then((c) => c.abort(sessionId))
+      .catch(() => undefined);
+  }, []);
+
+  /** 用户插话打断：静音、停止回填、掐掉模型回合 */
+  const interruptTurn = useCallback(() => {
+    if (liveTurnRef.current) liveTurnRef.current.aborted = true;
+    speakerRef.current?.stop();
+    abortStreaming();
+  }, [abortStreaming]);
 
   /** 电平 → VAD → 起说/说完 */
   const onFrame = useCallback(
@@ -498,8 +746,13 @@ export function useVoiceDiscussion(
       if (signal === 'start') {
         // 播报中被用户开口打断：立刻闭嘴，识别会话本来就在跑，继续用
         if (phaseRef.current === 'speaking') {
-          speakerRef.current?.stop();
+          // 不止停声音：这一轮的模型还在生成，必须一起掐掉（见 `interruptTurn`）
+          interruptTurn();
           detector.configure(null);
+          // 打断这一刻才开闸：播报期间的音频一律没进识别。
+          // 丢掉的是插话开头约 minSpeechMs（VAD 的起说迟滞），换来的是
+          // 识别里绝不会混进 AI 自己的声音——这个取舍不能反过来。
+          gateOpenRef.current = true;
           setPhaseSafe('listening');
         }
         return;
@@ -507,12 +760,18 @@ export function useVoiceDiscussion(
       if (signal === 'end') {
         const p = phaseRef.current;
         if (p === 'listening' || p === 'speaking') {
-          if (p === 'speaking') speakerRef.current?.stop();
+          if (p === 'speaking') {
+            interruptTurn();
+            // 播报态下直接走到 end（正常流程会先 start 再 end）时同样要把
+            // 门槛与闸门恢复，否则后续整场都用 0.34 的打断门槛判句
+            detector.configure(null);
+            gateOpenRef.current = true;
+          }
           commit();
         }
       }
     },
-    [commit, setPhaseSafe],
+    [commit, interruptTurn, setPhaseSafe],
   );
 
   const start = useCallback(async () => {
@@ -571,6 +830,7 @@ export function useVoiceDiscussion(
       }, 1000);
 
       chatSessionRef.current = `voice-discussion:${genId()}`;
+      gateOpenRef.current = true;
       openAsrRef.current?.();
       setPhaseSafe('listening');
     } catch (err) {
@@ -705,8 +965,12 @@ export function useVoiceDiscussion(
       if (mountedRef.current) setLiveText('');
     } else {
       detectorRef.current?.reset();
-      // 播报中解锁：只开麦不抢 phase（播报还没结束）
-      if (phaseRef.current !== 'speaking') setPhaseSafe('listening');
+      // 播报中解锁：只开麦不抢 phase（播报还没结束）。闸门仍关着——
+      // 那段时间麦克风收到的是扬声器的声音，不属于用户。
+      if (phaseRef.current !== 'speaking') {
+        gateOpenRef.current = true;
+        setPhaseSafe('listening');
+      }
       openAsrRef.current?.();
     }
   }, [closeAsr, setPhaseSafe]);
@@ -725,6 +989,15 @@ export function useVoiceDiscussion(
     };
   }, [teardown]);
 
+  /**
+   * 当前正在执行的工具。
+   *
+   * 取「仍在流式生成、且有工具名」的最后一条：工具只在某一轮里出现，
+   * 不需要额外的 state——`turns` 本来就会随 token 重渲染。
+   */
+  const activeTool =
+    turns.find((t) => t.streaming === true && (t.tool ?? '') !== '')?.tool ?? null;
+
   return {
     phase,
     open: phase !== 'idle',
@@ -732,6 +1005,7 @@ export function useVoiceDiscussion(
     level,
     turns,
     liveText,
+    activeTool,
     muted,
     subtitles,
     notice,

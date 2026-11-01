@@ -49,10 +49,20 @@ const CONNECT_TIMEOUT_MS = 8000;
  * 兜底超时（ms）：commit 后**一片 completed 都没回来**时的最终期限。
  *
  * 主路径不是它——实测服务端在 commit 后 ~300ms 就发 completed，随后
- * 由「completed 静默 600ms」判定收尾（见 onmessage 的注释）。这个值只防
+ * 由「completed 静默」判定收尾（见 onmessage 的注释）。这个值只防
  * 网络丢包 / 服务端异常，给足余量但不让用户干等。
  */
 const FINISH_TIMEOUT_MS = 12000;
+
+/**
+ * commit 之后「多久没有新的 completed 就认定说完了」（ms）。
+ *
+ * 实测一次 commit 可能因停顿切成多条 completed，间隔通常 <300ms。
+ * 这个值**直接计入用户说完到 AI 开口的延迟**，所以不能图稳给大：
+ * 600ms 时体感是「我说完了它还在等」，压到 400ms 仍能覆盖多段下发，
+ * 而不会把长句切成两条（真的超出就是那段停顿够长，切成两条也合理）。
+ */
+const SETTLE_SILENCE_MS = 400;
 
 export interface RealtimeAsrOptions {
   /** 服务商 WebSocket 地址（已含 model 与 api_key 查询参数） */
@@ -320,7 +330,7 @@ export function openRealtimeAsr(options: RealtimeAsrOptions): RealtimeAsrSession
        */
       if (finished && !disposed) {
         if (finishTimer !== null) window.clearTimeout(finishTimer);
-        finishTimer = window.setTimeout(() => settle(), 600);
+        finishTimer = window.setTimeout(() => settle(), SETTLE_SILENCE_MS);
       }
       return;
     }

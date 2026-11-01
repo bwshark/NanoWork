@@ -1268,6 +1268,9 @@ export function Composer({
       fullAccess: activeSession?.fullAccess,
       persona: effectiveAgent?.systemPrompt,
       history: discussionHistory,
+      // 工具授权与主对话同一份：讨论允许调工具（「现在几点」「看下这个文件」
+      // 是语音里最常见的问题，禁掉工具只能得到瞎编或「结束后我来做」）
+      toolAllow: effectiveAgent?.toolAllow,
       toolDeny: effectiveAgent?.toolDeny,
     }),
     [
@@ -1277,6 +1280,7 @@ export function Composer({
       discussionHistory,
       effectiveAgent?.model,
       effectiveAgent?.systemPrompt,
+      effectiveAgent?.toolAllow,
       effectiveAgent?.toolDeny,
       effectiveAgentId,
       models,
@@ -2518,6 +2522,7 @@ export function Composer({
           level={voiceDiscussion.level}
           turns={voiceDiscussion.turns}
           liveText={voiceDiscussion.liveText}
+          activeTool={voiceDiscussion.activeTool}
           muted={voiceDiscussion.muted}
           subtitles={voiceDiscussion.subtitles}
           notice={voiceDiscussion.notice}
