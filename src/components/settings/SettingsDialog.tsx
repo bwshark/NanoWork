@@ -1,6 +1,17 @@
-import { Box, Dialog, IconButton, ListItemButton, Tooltip, Typography } from '@mui/material';
+import { useMemo, useState } from 'react';
+import {
+  Box,
+  Dialog,
+  IconButton,
+  InputAdornment,
+  ListItemButton,
+  TextField,
+  Tooltip,
+  Typography,
+} from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
-import { SETTINGS_NAV, SETTINGS_NAV_ITEMS } from '@/components/settings/settingsNav';
+import SearchIcon from '@mui/icons-material/Search';
+import { SETTINGS_NAV } from '@/components/settings/settingsNav';
 import { AboutSection } from '@/components/settings/sections/AboutSection';
 import { AccountSection } from '@/components/settings/sections/AccountSection';
 import { AssistantSection } from '@/components/settings/sections/AssistantSection';
@@ -43,7 +54,22 @@ export function SettingsDialog() {
   const closeSettings = useSettingsUiStore((s) => s.closeSettings);
   const setSection = useSettingsUiStore((s) => s.setSection);
 
-  const current = SETTINGS_NAV_ITEMS[section];
+  const [query, setQuery] = useState('');
+
+  /**
+   * 按名字过滤左侧菜单（只过滤菜单，不改右侧内容）。
+   *
+   * 分区已经到 15 个，靠肉眼在一条竖排里找「用量」「诊断」开始变慢；
+   * 过滤菜单是零风险的最小实现——搜索不会让任何分区消失，只是把不相关的收起来。
+   */
+  const filteredGroups = useMemo(() => {
+    const keyword = query.trim();
+    if (keyword === '') return SETTINGS_NAV;
+    return SETTINGS_NAV.map((group) => ({
+      ...group,
+      items: group.items.filter((item) => item.label.includes(keyword)),
+    })).filter((group) => group.items.length > 0);
+  }, [query]);
 
   return (
     <Dialog
@@ -57,7 +83,8 @@ export function SettingsDialog() {
           height: 640,
           maxWidth: '94vw',
           maxHeight: '88vh',
-          borderRadius: 3,
+          // 16px：参考图的弹窗是"大面板"而不是"对话框"，圆角太大（24px）会显得像个气泡
+          borderRadius: 2,
           overflow: 'hidden',
           display: 'flex',
           // ⚠️ 必须显式声明方向。MUI 的 `MuiDialog-paper`（`scroll="paper"`，即默认值）
@@ -75,30 +102,60 @@ export function SettingsDialog() {
         component="nav"
         aria-label="配置项"
         sx={{
-          width: 200,
+          width: 216,
           flexShrink: 0,
           height: '100%',
           overflowY: 'auto',
-          bgcolor: 'action.hover',
+          /*
+           * 侧栏与内容区**同色**（`background.default`），只用一条发丝线分隔。
+           *
+           * 原来用 `action.hover`：那是一层白色叠加，深色主题下会把侧栏提亮成
+           * 一整块浅灰面板，比弹窗主体还抢眼——参考图里侧栏是"退到背景里"的，
+           * 只有选中项和 hover 才浮起来。
+           */
+          bgcolor: 'background.default',
           borderRight: '1px solid',
           borderColor: 'divider',
-          px: 1,
+          px: 1.25,
           py: 1.5,
         }}
       >
-        <Typography
-          sx={{
-            px: 1.5,
-            pb: 1,
-            fontSize: 13.5,
-            fontWeight: 700,
-            color: 'text.primary',
+        {/* 顶部是搜索框而不是「设置」大标题：弹窗自己就是设置，再写一遍只是占高度。
+            参考图同款布局，且分区一多（现在 15 个）之后，按名字过滤是唯一快的找法。 */}
+        <TextField
+          size="small"
+          fullWidth
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="搜索设置项"
+          aria-label="搜索设置项"
+          InputProps={{
+            startAdornment: (
+              <InputAdornment position="start">
+                <SearchIcon sx={{ fontSize: 16, color: 'text.disabled' }} />
+              </InputAdornment>
+            ),
           }}
-        >
-          设置
-        </Typography>
+          sx={{
+            px: 0.5,
+            pb: 1.5,
+            '& .MuiOutlinedInput-root': {
+              fontSize: 13,
+              borderRadius: 2,
+              bgcolor: 'background.paper',
+            },
+            // 搜索框在左侧栏里是「工具」而不是表单字段：不画外框，靠面色区分
+            '& .MuiOutlinedInput-notchedOutline': { borderColor: 'transparent' },
+          }}
+        />
 
-        {SETTINGS_NAV.map((group, gi) => (
+        {filteredGroups.length === 0 && (
+          <Typography sx={{ px: 1.5, pt: 1, fontSize: 12.5, color: 'text.disabled' }}>
+            没有匹配的设置项
+          </Typography>
+        )}
+
+        {filteredGroups.map((group, gi) => (
           <Box key={group.label ?? `group-${gi}`} sx={{ mb: 1 }}>
             {group.label && (
               <Typography
@@ -123,16 +180,20 @@ export function SettingsDialog() {
                   onClick={() => setSection(item.id)}
                   sx={{
                     borderRadius: 2,
-                    py: 0.75,
+                    // 参考图一项约 36~40px 高：太紧会让 15 个分区挤成一片，
+                    // 扫读时找不到落点
+                    py: 1,
                     mb: 0.25,
                     gap: 1.25,
                     color: active ? 'text.primary' : 'text.secondary',
+                    // 选中项比侧栏底色**亮**一档（`action.selected`）。
+                    // 原来用 `background.paper`：在 `action.hover` 的底上它反而是**暗**的，
+                    // 看起来像被压下去而不是被选中。
                     '&.Mui-selected': {
-                      bgcolor: 'background.paper',
-                      boxShadow: '0 1px 2px rgba(15,23,42,0.08)',
-                      '&:hover': { bgcolor: 'background.paper' },
+                      bgcolor: 'action.selected',
+                      '&:hover': { bgcolor: 'action.selected' },
                     },
-                    '&:hover': { bgcolor: 'action.selected' },
+                    '&:hover': { bgcolor: 'action.hover' },
                   }}
                 >
                   <Box
@@ -147,7 +208,7 @@ export function SettingsDialog() {
                   </Box>
                   <Typography
                     sx={{
-                      fontSize: 13,
+                      fontSize: 13.5,
                       fontWeight: active ? 600 : 500,
                       color: 'inherit',
                       whiteSpace: 'nowrap',
@@ -165,6 +226,7 @@ export function SettingsDialog() {
       {/* —— 右侧：当前分区的具体配置 —— */}
       <Box
         sx={{
+          position: 'relative',
           flex: 1,
           minWidth: 0,
           height: '100%',
@@ -173,35 +235,30 @@ export function SettingsDialog() {
           bgcolor: 'background.default',
         }}
       >
-        <Box
-          sx={{
-            flexShrink: 0,
-            display: 'flex',
-            alignItems: 'center',
-            gap: 1,
-            px: 2.5,
-            py: 1.5,
-            borderBottom: '1px solid',
-            borderColor: 'divider',
-          }}
-        >
-          <Typography sx={{ fontSize: 15, fontWeight: 700 }}>
-            {current?.label}
-          </Typography>
-          <Box sx={{ flex: 1 }} />
-          <Tooltip title="关闭设置">
-            <IconButton size="small" aria-label="关闭设置" onClick={closeSettings}>
-              <CloseIcon fontSize="small" />
-            </IconButton>
-          </Tooltip>
-        </Box>
+        {/*
+         * 关闭按钮**浮在**内容区右上角，不再占一条标题栏。
+         *
+         * 参考图里右侧从第一个分组标题（「常规」）直接开始，没有「通用」那样一条
+         * 带下边框的大标题——分区身份由左侧菜单的高亮承担，重复一遍只是占高度。
+         * 内容区顶部留出的 padding（见下方 `pt`）就是给这颗按钮避让用的。
+         */}
+        <Tooltip title="关闭设置">
+          <IconButton
+            size="small"
+            aria-label="关闭设置"
+            onClick={closeSettings}
+            sx={{ position: 'absolute', top: 6, right: 6, zIndex: 2 }}
+          >
+            <CloseIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
 
         {/* key={section}：切分区时重挂载滚动容器，让每次进入新分区都从顶部开始。
             不这么做的话滚动位置会跨分区继承——在「连接」拉到一半再切到「关于」，
             会直接落在半空中。 */}
         <Box
           key={section}
-          sx={{ flex: 1, minHeight: 0, overflowY: 'auto', px: 2.5, py: 2.5 }}
+          sx={{ flex: 1, minHeight: 0, overflowY: 'auto', px: 3.5, pt: 3, pb: 3 }}
         >
           <SectionBody section={section} />
         </Box>

@@ -64,7 +64,7 @@ export function SettingsCard({
   const dark = theme.palette.mode === 'dark';
 
   return (
-    <Box sx={{ mb: 2.5 }}>
+    <Box sx={{ mb: 3 }}>
       {/* 标题渲染在卡片**之外**（对齐 WorkBuddy「存储」的写法）。
           放卡片里会让「边框」看起来是在包标题：同一个分区有多张卡片时，会出现
           一串带框的标题与内容行混在一起，层级读不出来；标题是分组标签，不是卡片内容。
@@ -86,7 +86,7 @@ export function SettingsCard({
           // **布局**宽度，卡片内的文字因此比卡片外的标题右移 1px——肉眼看不出，但
           // 「标题与卡片内容左对齐」这条约定就被悄悄破坏了。圆环只画不占位。
           boxShadow: dark
-            ? `0 0 0 1px ${alpha(theme.palette.common.white, 0.06)}`
+            ? `0 0 0 1px ${alpha(theme.palette.common.white, 0.04)}`
             : `0 0 0 1px ${alpha(theme.palette.text.primary, 0.05)}, ` +
               '0 1px 2px rgba(15,23,42,0.04), 0 2px 8px rgba(15,23,42,0.05)',
           overflow: 'hidden',
@@ -96,7 +96,14 @@ export function SettingsCard({
         <Box
           sx={{
             px: CARD_PX,
-            '& > * + *': { borderTop: '1px solid', borderColor: 'divider' },
+            /**
+             * 行与行之间**不画分割线**。
+             *
+             * 参考图里卡片内部是一块连续的「面」，靠行高与留白分组；用线把每一行
+             * 切开会把卡片读成表格，而且线一多，真正需要分隔的「卡片边界」就失效了。
+             * 这条是样式层唯一的结构性约定，改它之前先看一眼参考图。
+             */
+            py: 0.75,
           }}
         >
           {action && (
@@ -129,8 +136,11 @@ export function SettingsCard({
  *
  * 不带水平内边距——那属于卡片，见 `CARD_PX`。
  *
- * 标签用 14px/600 + `text.primary`，比区块标题（13.5px/600 + `text.secondary`）
+ * 标签 15px/600 + `text.primary`，比区块标题（13px/600 + `text.secondary`）
  * 大一号且更亮：卡片外的标题是**分组**，卡片里的这个才是**内容**，两者不能长得一样。
+ *
+ * 行高（`py`）比常规列表大一档：参考图里一行两段文字（标题 + 说明）之间有明确的
+ * 呼吸感，行与行之间又**没有分割线**，留白是唯一的分组手段——压紧就会糊成一片。
  */
 export function SettingsRow({
   label,
@@ -152,20 +162,20 @@ export function SettingsRow({
         display: 'flex',
         flexDirection: stacked ? 'column' : 'row',
         alignItems: stacked ? 'stretch' : 'center',
-        gap: stacked ? 1.25 : 2,
-        py: 2,
+        gap: stacked ? 1.5 : 2,
+        py: 2.25,
       }}
     >
       <Box sx={{ minWidth: 0, flex: 1 }}>
-        <Typography sx={{ fontSize: 14, fontWeight: 600, lineHeight: 1.5 }}>
+        <Typography sx={{ fontSize: 15, fontWeight: 600, lineHeight: 1.5 }}>
           {label}
         </Typography>
         {hint && (
           <Typography
             sx={{
-              fontSize: 12.5,
+              fontSize: 13,
               color: 'text.secondary',
-              mt: 0.375,
+              mt: 0.5,
               lineHeight: 1.65,
             }}
           >
@@ -209,10 +219,10 @@ export function SettingsBlockLabel({
   sx?: SxProps<Theme>;
 }) {
   return (
-    <Box sx={{ mb: 1.25, ...(sx as object) }}>
+    <Box sx={{ mb: 1.5, ...(sx as object) }}>
       {children && (
         <Typography
-          sx={{ fontSize: 13.5, fontWeight: 600, color: 'text.secondary' }}
+          sx={{ fontSize: 13, fontWeight: 600, color: 'text.secondary' }}
         >
           {children}
         </Typography>
@@ -220,10 +230,13 @@ export function SettingsBlockLabel({
       {description && (
         <Typography
           sx={{
+            // 卡片级说明是**注释**，不是副标题：字号比行内 hint（13px）还小一档，
+            // 并压到一个明显的弱层级。之前 12.5px + 0.85 透明度，在深色下几乎和
+            // 分组标题一样重，读起来像「标题 + 副标题」两行并列。
             fontSize: 12,
             color: 'text.secondary',
-            opacity: 0.85,
-            mt: children ? 0.5 : 0,
+            opacity: 0.72,
+            mt: children ? 0.375 : 0,
             lineHeight: 1.7,
           }}
         >

@@ -205,7 +205,11 @@ describe('设置弹窗的默认分区', () => {
     await flush();
 
     const panel = rightPanel().textContent ?? '';
-    expect(panel, '分区标题没显示「通用」').toContain('通用');
+    // 分区身份由**左侧高亮**承担（右侧不再有「通用」标题栏，见 SettingsDialog 注释）
+    expect(
+      navItem(SETTINGS_NAV_ITEMS.general.label)?.className,
+      '左侧没有高亮到「通用」',
+    ).toContain('Mui-selected');
     expect(panel, '通用分区内容未渲染').toContain(CONTENT_ANCHORS.general);
   });
 
@@ -222,7 +226,10 @@ describe('设置弹窗的默认分区', () => {
     ).toBe('general');
 
     const panel = rightPanel().textContent ?? '';
-    expect(panel, '右侧面板是空白：标题无文案').toContain('通用');
+    expect(
+      navItem(SETTINGS_NAV_ITEMS.general.label)?.className,
+      '左侧没有高亮到「通用」',
+    ).toContain('Mui-selected');
     expect(panel, '右侧内容区为空').toContain(CONTENT_ANCHORS.general);
   });
 

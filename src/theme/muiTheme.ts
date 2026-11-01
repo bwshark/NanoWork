@@ -80,6 +80,14 @@ export function buildMuiTheme(mode: ThemeMode): Theme {
     components: {
       MuiButton: { defaultProps: { disableElevation: true } },
       MuiPaper: { styleOverrides: { root: { backgroundImage: 'none' } } },
+      /**
+       * 开关统一用次要色（青）表示「已开启」。
+       *
+       * 主色是灰阶（`#e2e8f0`），开与关在深色底上只差一个把手位置，
+       * 扫一眼几乎分不出来；设置页里成排的开关尤其需要一眼可读的「开」态。
+       * 全局统一而不是逐处传 `color`——零散的例外迟早漏掉一两个。
+       */
+      MuiSwitch: { defaultProps: { color: 'secondary' } },
       MuiOutlinedInput: {
         styleOverrides: {
           root: { borderRadius: 8 },
