@@ -869,6 +869,23 @@ function SessionList() {
   const [editingTitle, setEditingTitle] = useState("");
   /** 当前悬停的会话行 id：右侧固定槽在「运行状态图标 / 三点菜单按钮」间切换 */
   const [hoverId, setHoverId] = useState<string | null>(null);
+  /**
+   * 任务列表里**当前唯一允许展开**的 Tooltip（key 形如 `time:<id>` / `more:<id>`）。
+   *
+   * 存在的理由：MUI Tooltip 只在 **window** 滚动时重新定位，侧边栏自己这个
+   * `overflowY: auto` 容器滚动时它既不跟随、也不关闭 —— 于是行滚走了，那块浮层
+   * 还悬在列表中间，看起来像凭空冒出来的一坨日期（2026-11-02 用户截图）。
+   * 受控成「一个 key 一个 tooltip」，容器一滚动就清空（见 `dismissPinnedTip`）。
+   */
+  const [pinnedTip, setPinnedTip] = useState<string | null>(null);
+  /** 把某个 tip 绑成受控：重复 hover 同一行时返回原值，避免无意义重渲染 */
+  const tipBinding = (key: string) => ({
+    open: pinnedTip === key,
+    onOpen: () => setPinnedTip((cur) => (cur === key ? cur : key)),
+    onClose: () => setPinnedTip((cur) => (cur === key ? null : cur)),
+  });
+  /** 滚动即收起：函数式 set 返回同一值时 React 直接 bail out，滚动不额外渲染 */
+  const dismissPinnedTip = () => setPinnedTip((cur) => (cur === null ? cur : null));
   /** 行内输入框 ref：菜单完全退出后再聚焦，避免与 MUI 焦点回收竞争 */
   const editingInputRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
@@ -1227,7 +1244,12 @@ function SessionList() {
 
   return (
     <>
-      <Box sx={{ flex: 1, overflowY: "auto" }}>
+      {/* `onScroll` 只做一件事：收起可能已经飘在列表中间的 Tooltip（见 `pinnedTip`） */}
+      <Box
+        data-testid="session-list-scroll"
+        sx={{ flex: 1, overflowY: "auto" }}
+        onScroll={dismissPinnedTip}
+      >
         {/* 一个分组都没有（全新用户 / 清空过 / 从没聊过）：给一句话兜底。
             分组现在完全由「有对话记录的任务」推导，没有分组就等于没有任务 */}
         {groups.length === 0 && (
@@ -1268,6 +1290,7 @@ function SessionList() {
                       : g.fullPath || DEFAULT_WORKSPACE_LABEL
                   }
                   placement="top-start"
+                  {...tipBinding(`group:${g.key}`)}
                 >
                   {/* `flex: 0 1 auto` 让标题**按内容收缩**而不是吃满整行：
                       箭头才能紧跟在标题末尾（标题过长时才 ellipsis 并让箭头跟着后退）。
@@ -1324,7 +1347,11 @@ function SessionList() {
                       flexShrink: 0,
                     }}
                   >
-                    <Tooltip title="更多操作" placement="top">
+                    <Tooltip
+                      title="更多操作"
+                      placement="top"
+                      {...tipBinding(`group-more:${g.key}`)}
+                    >
                       <IconButton
                         size="small"
                         aria-label="更多操作"
@@ -1348,7 +1375,11 @@ function SessionList() {
                         <MoreVertIcon sx={{ fontSize: 16 }} />
                       </IconButton>
                     </Tooltip>
-                    <Tooltip title="新建任务" placement="top">
+                    <Tooltip
+                      title="新建任务"
+                      placement="top"
+                      {...tipBinding(`group-new:${g.key}`)}
+                    >
                       <IconButton
                         size="small"
                         aria-label="新建任务"
@@ -1482,7 +1513,11 @@ function SessionList() {
                                   <EditIcon sx={{ fontSize: 14 }} />
                                 </IconButton>
                               </Tooltip> */}
-                              <Tooltip title="更多操作" placement="top">
+                              <Tooltip
+                                title="更多操作"
+                                placement="top"
+                                {...tipBinding(`row-more:${s.id}`)}
+                              >
                                 <IconButton
                                   size="small"
                                   sx={{ p: 0.25, width: 22, height: 22 }}
@@ -1502,6 +1537,7 @@ function SessionList() {
                             <Tooltip
                               title={new Date(s.updatedAt).toLocaleString()}
                               placement="top"
+                              {...tipBinding(`row-time:${s.id}`)}
                             >
                               <Typography
                                 noWrap
