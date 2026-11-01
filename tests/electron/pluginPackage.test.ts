@@ -10,6 +10,7 @@ import {
   isPluginInstalled,
   parseVersion,
   readInstalledPlugins,
+  readPluginExpertPackages,
   readPluginManifest,
   satisfiesRange,
   uninstallPluginPackage,
@@ -530,5 +531,120 @@ describe('版本比较', () => {
     expect(satisfiesRange('1.5.0', '>=1.0.0 <2.0.0')).toBe(true);
     expect(satisfiesRange('2.0.0', '>=1.0.0 <2.0.0')).toBe(false);
     expect(satisfiesRange('1.0.0', 'not-a-range')).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 包内专家（随包专家 → 我的专家）
+// ---------------------------------------------------------------------------
+
+/**
+ * 这里钉住的是「插件带来的专家能不能真变成可用专家」这条链路的前半段。
+ *
+ * 两处最容易被写错的地方：
+ * 1. **包根就是一位专家**（WorkBuddy `my-experts` 的形态）与**`experts/<dir>/` 多专家**
+ *    是两种布局，只认一种就会让另一类包"装上了但没有专家"；
+ * 2. **团队顺序 = 清单 `agents` 声明顺序**，退回字典序会让主理人跑到成员后面去。
+ */
+describe('readPluginExpertPackages', () => {
+  const agentMd = (zh: string, body: string, name = 'agent'): string =>
+    [
+      '---',
+      `name: ${name}`,
+      'description: "demo"',
+      'displayName:',
+      '  en: "Demo"',
+      `  zh: "${zh}"`,
+      'profession:',
+      '  en: "Engineer"',
+      '  zh: 工程师',
+      'maxTurns: 50',
+      '---',
+      '',
+      body,
+    ].join('\n');
+
+  it('包根即专家包：解析出展示名与正文（WorkBuddy 的 experts 目录布局）', async () => {
+    writeJson(sourceRoot, '.codebuddy-plugin/plugin.json', {
+      name: 'ml-python-expert',
+      description: 'demo',
+      expertType: 'agent',
+      displayName: { en: 'Machine Learning Expert', zh: '机器学习专家' },
+      displayDescription: { zh: '精通 Python 深度学习' },
+      agents: ['./agents/ml-python-expert.md'],
+    });
+    writeFile(sourceRoot, 'agents/ml-python-expert.md', agentMd('机器学习专家', '你是机器学习专家。'));
+
+    const packages = await readPluginExpertPackages(sourceRoot);
+    expect(packages).toHaveLength(1);
+    expect(packages[0].expertType).toBe('agent');
+    expect(packages[0].displayName).toBe('机器学习专家');
+    expect(packages[0].description).toBe('精通 Python 深度学习');
+    expect(packages[0].agents[0].name).toBe('机器学习专家');
+    expect(packages[0].agents[0].profession).toBe('工程师');
+    expect(packages[0].agents[0].systemPrompt).toBe('你是机器学习专家。');
+  });
+
+  it('experts/<dir>/ 多专家：每位一份，互不混入', async () => {
+    writeJson(sourceRoot, 'plugin.json', validManifest());
+    writeJson(sourceRoot, 'experts/alpha/plugin.json', {
+      name: 'alpha',
+      expertType: 'agent',
+      displayName: { zh: '阿尔法' },
+    });
+    writeFile(sourceRoot, 'experts/alpha/agents/alpha.md', agentMd('阿尔法', 'a'));
+    writeJson(sourceRoot, 'experts/beta/plugin.json', {
+      name: 'beta',
+      expertType: 'agent',
+      displayName: { zh: '贝塔' },
+    });
+    writeFile(sourceRoot, 'experts/beta/agents/beta.md', agentMd('贝塔', 'b'));
+
+    const packages = await readPluginExpertPackages(sourceRoot);
+    expect(packages.map((p) => p.displayName).sort()).toEqual(['阿尔法', '贝塔'].sort());
+  });
+
+  it('团队顺序按清单 agents 声明，而不是文件名字典序', async () => {
+    writeJson(sourceRoot, 'plugin.json', validManifest());
+    writeJson(sourceRoot, 'experts/team/plugin.json', {
+      name: 'team',
+      expertType: 'team',
+      displayName: { zh: '作战团' },
+      agents: ['./agents/zzz-lead.md', './agents/aaa-member.md'],
+    });
+    writeFile(sourceRoot, 'experts/team/agents/zzz-lead.md', agentMd('齐活林', 'lead', 'zzz-lead'));
+    writeFile(sourceRoot, 'experts/team/agents/aaa-member.md', agentMd('许清楚', 'member', 'aaa-member'));
+
+    const packages = await readPluginExpertPackages(sourceRoot);
+    expect(packages[0].expertType).toBe('team');
+    expect(packages[0].agents.map((a) => a.name)).toEqual(['齐活林', '许清楚']);
+  });
+
+  it('没有 agents/*.md 的普通插件不产生专家（别把包根当成专家）', async () => {
+    writeJson(sourceRoot, 'plugin.json', validManifest());
+    writeFile(sourceRoot, 'SKILL.md', '# 只是个技能插件');
+    expect(await readPluginExpertPackages(sourceRoot)).toEqual([]);
+  });
+
+  it('包根有 agents 但清单没声明 expertType 时不算专家（那是插件的内部子代理）', async () => {
+    writeJson(sourceRoot, 'plugin.json', validManifest());
+    writeFile(sourceRoot, 'agents/writer.md', agentMd('写作代理', '你是写作代理。'));
+    expect(await readPluginExpertPackages(sourceRoot)).toEqual([]);
+  });
+
+  it('readInstalledPlugins 会把专家一并带出来', async () => {
+    const packageRoot = join(pluginsRoot, 'demo-plugin');
+    writeJson(packageRoot, 'plugin.json', validManifest());
+    writeFile(packageRoot, 'agents/demo.md', agentMd('演示专家', '正文'));
+    writeJson(packageRoot, '.codebuddy-plugin/plugin.json', {
+      name: 'demo-plugin',
+      expertType: 'agent',
+      displayName: { zh: '演示专家包' },
+    });
+
+    const { plugins } = await readInstalledPlugins(pluginsRoot);
+    expect(plugins).toHaveLength(1);
+    expect(plugins[0].expertPackages).toHaveLength(1);
+    expect(plugins[0].expertPackages[0].displayName).toBe('演示专家包');
   });
 });

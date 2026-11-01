@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Avatar,
   Box,
@@ -29,6 +29,8 @@ import { CronTaskCard } from '@/components/chat/CronTaskCard';
 import { MarkdownView } from '@/components/MarkdownView';
 import { ArtifactRenderer } from '@/components/ArtifactRenderer';
 import { MessageArtifacts } from '@/components/artifacts/MessageArtifacts';
+import { ExpertBlueprintCard } from '@/components/agents/ExpertBlueprintCard';
+import { extractExpertBlueprints } from '@/lib/agent/expertBlueprint';
 import { ProcessView } from './ProcessView';
 import { ToolCallCard } from './ToolCallCard';
 import { PlanCard } from './PlanCard';
@@ -125,6 +127,20 @@ export function AssistantMessage({ message, agentId, sessionId }: AssistantMessa
   const elapsedText = formatDuration(elapsedMs);
 
   const hasContent = message.content.trim().length > 0;
+
+  /**
+   * 专家蓝图（自动创建专家 / 专家团的落地通道）。
+   *
+   * 先做一次 `includes` 短路再进正则：流式输出期间本组件每帧重算，
+   * 而绝大多数消息里根本没有这个围栏 —— 让它们只付一次子串查找的代价。
+   */
+  const blueprintExtract = useMemo(
+    () =>
+      message.content.includes('```nanowork-expert')
+        ? extractExpertBlueprints(message.content)
+        : null,
+    [message.content],
+  );
 
   // 筛出「cron add 成功且可解析出引擎 job id」的工具行 → 渲染任务确认卡片；
   // 这些行从过程时间线中排除，避免与卡片重复展示同一创建事件。
@@ -365,9 +381,18 @@ export function AssistantMessage({ message, agentId, sessionId }: AssistantMessa
             borderRadius: '12px 12px 12px 2px',
           }}
         >
-          <MarkdownView content={message.content} />
+          <MarkdownView content={blueprintExtract?.stripped ?? message.content} />
         </Paper>
       )}
+
+      {/* 专家蓝图卡片：放在正文**之后**而不是塞进 Markdown。
+          卡片带按钮（会写 store），塞进 markdown 的 code 渲染器里就得把 store
+          依赖牵进 772KB 的懒加载边界；放在这里两者互不干扰。
+          流式期间代码块未闭合 → 解析不到蓝图 → 原样显示 JSON，
+          闭合后才「变成卡片」，这是可接受的渐进过程（不会闪现半张卡）。 */}
+      {blueprintExtract?.blueprints.map((bp, index) => (
+        <ExpertBlueprintCard key={`${bp.name}-${index}`} blueprint={bp} />
+      ))}
 
       {message.aborted && (
         <Typography

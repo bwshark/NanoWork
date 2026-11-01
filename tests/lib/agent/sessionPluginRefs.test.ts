@@ -43,6 +43,7 @@ function view(overrides: {
       },
       root: overrides.root ?? `/plugins/${name}`,
       resources: [],
+      expertPackages: [],
     },
     activation: 'inactive',
     intended: overrides.intended ?? true,

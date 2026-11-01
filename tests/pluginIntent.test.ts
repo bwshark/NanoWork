@@ -48,6 +48,7 @@ function installed(patch: Partial<PluginManifest> = {}): InstalledPlugin {
     manifest: manifest(patch),
     root: `C:/Users/u/.nanowork/plugins/${patch.name ?? 'demo-plugin'}`,
     resources: [],
+    expertPackages: [],
   };
 }
 

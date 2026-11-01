@@ -32,8 +32,14 @@
 import { promises as fs } from 'node:fs';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { safeDelete } from './safeDelete';
+import {
+  expertAgentDisplayName,
+  parseExpertAgentMarkdown,
+} from '../src/lib/agent/expertAgentMarkdown';
 import type {
   InstalledPlugin,
+  PluginExpertDraft,
+  PluginExpertPackage,
   PluginInstallResult,
   PluginManifest,
   PluginResourceGroup,
@@ -44,6 +50,8 @@ import type {
 // 只用**类型导入**：esbuild 会整段擦除，渲染层代码不会被打进 `main.cjs`。
 export type {
   InstalledPlugin,
+  PluginExpertDraft,
+  PluginExpertPackage,
   PluginInstallResult,
   PluginManifest,
   PluginResourceGroup,
@@ -333,6 +341,188 @@ async function fileNames(dir: string): Promise<string[]> {
 }
 
 // ---------------------------------------------------------------------------
+// 包内专家（专家包）
+// ---------------------------------------------------------------------------
+
+/**
+ * 专家子包的清单候选。
+ *
+ * 顺序刻意把 `.codebuddy-plugin` 放在最前：WorkBuddy 的专家包（`my-experts`
+ * marketplace 里那些）就是这个布局，而同一目录下如果再有一份包根 `plugin.json`
+ * （插件清单，字段完全不同），先读它就会把展示名读丢。
+ */
+const EXPERT_MANIFEST_RELPATHS = [
+  '.codebuddy-plugin/plugin.json',
+  '.nanowork-plugin/plugin.json',
+  'plugin.json',
+] as const;
+
+/** 单篇专家定义的读取上限；超过就跳过（提示词不该有 200KB，多半是塞了别的东西） */
+const MAX_EXPERT_MD_BYTES = 200 * 1024;
+
+async function readJsonObject(file: string): Promise<Record<string, unknown> | null> {
+  try {
+    const raw = await fs.readFile(file, 'utf-8');
+    const parsed: unknown = JSON.parse(raw);
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    return parsed as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+/** 取 `{zh,en}` 或裸字符串的中文优先展示值 */
+function pickLocalized(value: unknown): string {
+  if (typeof value === 'string') return value.trim();
+  if (value && typeof value === 'object') {
+    const src = value as Record<string, unknown>;
+    for (const key of ['zh', 'en'] as const) {
+      const hit = src[key];
+      if (typeof hit === 'string' && hit.trim()) return hit.trim();
+    }
+  }
+  return '';
+}
+
+/** 一个职业头衔字段（`profession: {zh,en}`） */
+function pickProfession(value: unknown): string | undefined {
+  const hit = pickLocalized(value);
+  return hit || undefined;
+}
+
+/**
+ * 读 `agents/*.md`。
+ *
+ * `declaredOrder` 来自清单的 `agents` 数组：团队型专家团的**顺序就是协作顺序**，
+ * 落在后面的成员不该因为文件名字母序跑到主理人前面去。清单没声明时才退回字典序。
+ */
+async function readExpertAgents(
+  dir: string,
+  declaredOrder?: string[],
+): Promise<PluginExpertDraft[]> {
+  const names = await markdownNames(dir);
+  const ranked = [...names].sort((a, b) => {
+    if (declaredOrder && declaredOrder.length > 0) {
+      const ia = declaredOrder.indexOf(a);
+      const ib = declaredOrder.indexOf(b);
+      const ra = ia < 0 ? Number.MAX_SAFE_INTEGER : ia;
+      const rb = ib < 0 ? Number.MAX_SAFE_INTEGER : ib;
+      if (ra !== rb) return ra - rb;
+    }
+    return a.localeCompare(b);
+  });
+
+  const out: PluginExpertDraft[] = [];
+  for (const agentName of ranked) {
+    const file = join(dir, `${agentName}.md`);
+    try {
+      const stat = await fs.stat(file);
+      if (!stat.isFile() || stat.size > MAX_EXPERT_MD_BYTES) continue;
+      const text = await fs.readFile(file, 'utf-8');
+      const parsed = parseExpertAgentMarkdown(text);
+      const profession = pickProfession(parsed.frontmatter.profession);
+      out.push({
+        agentName,
+        name: expertAgentDisplayName(parsed, agentName),
+        ...(profession ? { profession } : {}),
+        systemPrompt: parsed.body,
+      });
+    } catch {
+      // 单篇坏掉不影响同包的其余定义——「少一位成员」比「整包不见了」可接受
+    }
+  }
+  return out;
+}
+
+/** 读一个专家子目录；没有可用的 `agents/*.md` 时返回 null（不是专家包） */
+async function readOneExpertPackage(
+  dir: string,
+  fallbackName: string,
+  options?: { requireExpertType?: boolean },
+): Promise<PluginExpertPackage | null> {
+  let manifest: Record<string, unknown> | null = null;
+  for (const relPath of EXPERT_MANIFEST_RELPATHS) {
+    const candidate = join(dir, relPath);
+    if (!(await isFile(candidate))) continue;
+    manifest = await readJsonObject(candidate);
+    if (manifest) break;
+  }
+
+  /**
+   * 包根场景必须由清单**自己承认**是专家包（`expertType` 字段）。
+   *
+   * 不这么卡的话，任何「带子代理的普通插件」（`agents/*.md` 是它的内部角色）
+   * 都会在插件页多出一位凭空出现的「专家」——而它的提示词本来是给插件内部用的。
+   * `experts/<dir>/` 场景不需要这条：那个目录本身就是「这里放的是专家」的声明。
+   */
+  if (
+    options?.requireExpertType &&
+    manifest?.expertType !== 'agent' &&
+    manifest?.expertType !== 'team'
+  ) {
+    return null;
+  }
+
+  const declaredOrder = Array.isArray(manifest?.agents)
+    ? (manifest?.agents as unknown[])
+        .filter((value): value is string => typeof value === 'string')
+        .map((relPath) => {
+          const file = relPath.split(/[\\/]/).pop() ?? relPath;
+          return file.replace(/\.md$/i, '');
+        })
+    : undefined;
+
+  const agents = await readExpertAgents(join(dir, 'agents'), declaredOrder);
+  if (agents.length === 0) return null;
+
+  const rawName = typeof manifest?.name === 'string' ? manifest.name.trim() : '';
+  const name = rawName || fallbackName;
+  const expertType: PluginExpertPackage['expertType'] =
+    manifest?.expertType === 'team' || agents.length > 1 ? 'team' : 'agent';
+  const description =
+    pickLocalized(manifest?.displayDescription) ||
+    (typeof manifest?.description === 'string' ? manifest.description.trim() : '');
+
+  return {
+    name,
+    displayName: pickLocalized(manifest?.displayName) || name,
+    description,
+    expertType,
+    agents,
+  };
+}
+
+/**
+ * 盘点一个插件包带来的专家。
+ *
+ * 两种布局都认：
+ * 1. `<root>/experts/<dir>/` —— 一个插件里带多位专家（每位一个子目录）；
+ * 2. 包根本身就是一个专家包（`<root>/agents/*.md` **且清单声明了 `expertType`**）
+ *    —— 这正是 WorkBuddy `my-experts` marketplace 里每个专家的形态，
+ *    也是「专家即插件」的最小单位。`expertType` 那半句是必须的：
+ *    普通插件也常有 `agents/`（它的内部子代理），不加这层判定就会凭空多出专家。
+ *
+ * 先看 (1)：只要有任何一份解析成功就不再走 (2)，避免把「带专家的插件」的
+ * 包根 agents 目录当成一位额外专家凭空多出来。
+ */
+export async function readPluginExpertPackages(root: string): Promise<PluginExpertPackage[]> {
+  const out: PluginExpertPackage[] = [];
+  const expertsDir = join(root, 'experts');
+  for (const entry of await listEntries(expertsDir)) {
+    const dir = join(expertsDir, entry);
+    if (!(await isDirectory(dir))) continue;
+    const pkg = await readOneExpertPackage(dir, entry);
+    if (pkg) out.push(pkg);
+  }
+  if (out.length > 0) return out;
+
+  const single = await readOneExpertPackage(root, basename(root), {
+    requireExpertType: true,
+  });
+  return single ? [single] : [];
+}
+
+// ---------------------------------------------------------------------------
 // 扫描已安装
 // ---------------------------------------------------------------------------
 
@@ -360,6 +550,9 @@ export async function readInstalledPlugins(
       manifest,
       root,
       resources: await inventoryPluginResources(root),
+      // 专家内容在扫描时一次读完：渲染层没有文件系统权限，
+      // 等用户点「导入」再读就得新增一条 IPC 通道（见类型注释）。
+      expertPackages: await readPluginExpertPackages(root),
     };
     try {
       plugin.installedAt = (await fs.stat(root)).mtime.toISOString();

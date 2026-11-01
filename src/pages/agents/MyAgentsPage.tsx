@@ -41,6 +41,11 @@ import { AgentFormDialog } from "@/components/agents/AgentFormDialog";
 import { AgentKnowledgeChip } from "@/components/agents/AgentKnowledgeChip";
 import { ExpertPackageImportDialog } from "@/components/agents/ExpertPackageImportDialog";
 import { useExpertPackageExport } from "@/components/agents/useExpertPackageExport";
+import { CreateExpertDialog } from "@/components/agents/CreateExpertDialog";
+import {
+  useExpertAutoCreate,
+  type AutoCreateKind,
+} from "@/components/agents/useExpertAutoCreate";
 import { PLATFORM_LABEL } from "@/lib/channel/imPlatform";
 import { ROUTES } from "@/lib/core/constants";
 import {
@@ -115,6 +120,10 @@ export function MyAgentsPage() {
   const [editingGroup, setEditingGroup] = useState<ExpertGroup | null>(null);
   const [groupForm, setGroupForm] = useState<Partial<ExpertGroup>>(EMPTY_GROUP);
   const [groupToDelete, setGroupToDelete] = useState<string | null>(null);
+
+  /** 创建模式选择：取值即「要创建的类型」，与专家管理页同构 */
+  const [createKind, setCreateKind] = useState<AutoCreateKind | null>(null);
+  const { startAutoCreate } = useExpertAutoCreate();
 
   // 「我的专家」只展示用户自建条目：内置模板不在此页出现（内置在专家管理首页可见）。
   const myAgents = useMemo(
@@ -574,6 +583,15 @@ export function MyAgentsPage() {
         >
           导入专家包
         </Button>
+        <Button
+          size="small"
+          variant="contained"
+          startIcon={<AddIcon sx={{ fontSize: 18 }} />}
+          onClick={() => setCreateKind(tab === "agents" ? "agent" : "team")}
+          sx={{ textTransform: "none" }}
+        >
+          {tab === "agents" ? "创建专家" : "创建专家团"}
+        </Button>
         <TextField
           size="small"
           placeholder={tab === "agents" ? "检索专家" : "检索专家团"}
@@ -620,7 +638,7 @@ export function MyAgentsPage() {
             : filteredGroups.map(renderGroupCard)}
           <Card
             variant="outlined"
-            onClick={tab === "agents" ? openNew : openNewGroup}
+            onClick={() => setCreateKind(tab === "agents" ? "agent" : "team")}
             sx={[
               hoverCardSx,
               {
@@ -684,6 +702,24 @@ export function MyAgentsPage() {
       <ExpertPackageImportDialog
         open={importOpen}
         onClose={() => setImportOpen(false)}
+      />
+
+      {/** 创建入口的模式选择：与专家管理页共用同一个弹层 */}
+      <CreateExpertDialog
+        open={createKind !== null}
+        kind={createKind ?? "agent"}
+        onClose={() => setCreateKind(null)}
+        onManual={() => {
+          const kind = createKind;
+          setCreateKind(null);
+          if (kind === "team") openNewGroup();
+          else openNew();
+        }}
+        onAuto={() => {
+          const kind = createKind ?? "agent";
+          setCreateKind(null);
+          startAutoCreate(kind);
+        }}
       />
 
       <Dialog

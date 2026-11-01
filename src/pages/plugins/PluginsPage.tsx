@@ -20,6 +20,12 @@ import ExtensionOutlinedIcon from "@mui/icons-material/ExtensionOutlined";
 import { usePluginsStore } from "@/stores/pluginsStore";
 import { useSessionsStore } from "@/stores/sessionsStore";
 import { useAgentsStore } from "@/stores/agentsStore";
+import { useExpertGroupsStore } from "@/stores/expertGroupsStore";
+import { useSkillsStore } from "@/stores/skillsStore";
+import {
+  applyExpertBlueprint,
+  blueprintFromPluginExpert,
+} from "@/lib/agent/expertBlueprint";
 import { collectMissingSessionPluginRefs } from "@/lib/agent/sessionPluginRefs";
 import { SessionPluginRefNotice } from "./SessionPluginRefNotice";
 import { computePluginToolGaps } from "@/lib/agent/pluginToolGaps";
@@ -124,6 +130,43 @@ export function PluginsPage({ embedded = false }: { embedded?: boolean }) {
   const [installing, setInstalling] = useState(false);
   /** 待卸载的插件（非空即打开确认框） */
   const [pendingRemoval, setPendingRemoval] = useState<PluginView | null>(null);
+
+  // —— 随包专家 → 我的专家 ——
+  // 导入动作与「AI 自动创建」共用 `applyExpertBlueprint`（技能过滤 / 不改活跃专家
+  // 这些规则只在一处维护）。这里只需要记住本次会话里已导入过哪些，
+  // 免得同一份专家被连点出三份同名副本。
+  const importAgent = useAgentsStore((s) => s.importAgent);
+  const createGroup = useExpertGroupsStore((s) => s.createGroup);
+  const skills = useSkillsStore((s) => s.skills);
+  const [importedExperts, setImportedExperts] = useState<Set<string>>(
+    () => new Set(),
+  );
+
+  const importPluginExpert = (
+    pluginName: string,
+    pkg: NonNullable<PluginView["plugin"]["expertPackages"]>[number],
+  ) => {
+    const key = `${pluginName}::${pkg.name}`;
+    const result = applyExpertBlueprint(
+      blueprintFromPluginExpert(pkg),
+      { importAgent, createGroup },
+      { knownSkillIds: skills.map((s) => s.id) },
+    );
+    setImportedExperts((prev) => {
+      const next = new Set(prev);
+      next.add(key);
+      return next;
+    });
+    if (result.warnings.length > 0) {
+      toast.warning(`已导入「${pkg.displayName}」：${result.warnings[0]}`);
+    } else {
+      toast.success(
+        `已导入「${pkg.displayName}」到我的专家${
+          result.groupId ? `（含 ${result.agentIds.length} 位成员）` : ""
+        }`,
+      );
+    }
+  };
 
   // 进页面才扫：扫描要读盘、查引擎要发 HTTP，绝大多数会话根本不看这一页
   useEffect(() => {
@@ -527,6 +570,58 @@ export function PluginsPage({ embedded = false }: { embedded?: boolean }) {
                     />
                   ))}
                 </Stack>
+              )}
+
+              {/* 随包专家：插件带来的是「可直接用的专家」，不是一堆 md 文件。
+                  没有这一块，用户只能看到「子代理 3」这种计数，然后自己去别处猜
+                  怎么把它们变成能召唤的专家（此前就是如此）。 */}
+              {view.plugin.expertPackages.length > 0 && (
+                <Box
+                  sx={{
+                    border: "1px dashed",
+                    borderColor: "divider",
+                    borderRadius: 1.5,
+                    px: 1.25,
+                    py: 1,
+                  }}
+                >
+                  <Typography variant="caption" color="text.secondary">
+                    随包专家（可一键加入「我的专家」）
+                  </Typography>
+                  <Stack spacing={0.5} sx={{ mt: 0.75 }}>
+                    {view.plugin.expertPackages.map((pkg) => {
+                      const key = `${manifest.name}::${pkg.name}`;
+                      const done = importedExperts.has(key);
+                      return (
+                        <Box
+                          key={pkg.name}
+                          sx={{ display: "flex", alignItems: "center", gap: 0.75 }}
+                        >
+                          <Chip
+                            size="small"
+                            variant="outlined"
+                            label={pkg.expertType === "team" ? "专家团" : "专家"}
+                            sx={{ ...cardChipOutlinedSx, height: 20 }}
+                          />
+                          <Typography
+                            variant="caption"
+                            sx={{ flex: 1, minWidth: 0, ...clampLines(1) }}
+                          >
+                            {pkg.displayName}
+                          </Typography>
+                          <Button
+                            size="small"
+                            disabled={done}
+                            onClick={() => importPluginExpert(manifest.name, pkg)}
+                            sx={{ textTransform: "none", fontSize: 12, minWidth: 0 }}
+                          >
+                            {done ? "已导入" : "导入"}
+                          </Button>
+                        </Box>
+                      );
+                    })}
+                  </Stack>
+                </Box>
               )}
 
               {(manifest.permissions.tools.length > 0 ||

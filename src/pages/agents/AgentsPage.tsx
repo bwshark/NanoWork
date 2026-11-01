@@ -40,6 +40,11 @@ import { AgentFormDialog } from "@/components/agents/AgentFormDialog";
 import { AgentKnowledgeChip } from "@/components/agents/AgentKnowledgeChip";
 import { ExpertPackageImportDialog } from "@/components/agents/ExpertPackageImportDialog";
 import { useExpertPackageExport } from "@/components/agents/useExpertPackageExport";
+import { CreateExpertDialog } from "@/components/agents/CreateExpertDialog";
+import {
+  useExpertAutoCreate,
+  type AutoCreateKind,
+} from "@/components/agents/useExpertAutoCreate";
 import { PLATFORM_LABEL } from "@/lib/channel/imPlatform";
 import { ROUTES } from "@/lib/core/constants";
 import {
@@ -114,6 +119,15 @@ export function AgentsPage() {
   const [editingGroup, setEditingGroup] = useState<ExpertGroup | null>(null);
   const [groupForm, setGroupForm] = useState<Partial<ExpertGroup>>(EMPTY_GROUP);
   const [groupToDelete, setGroupToDelete] = useState<string | null>(null);
+
+  /**
+   * 创建模式选择（手动 / AI 自动）。
+   *
+   * `null` = 未打开；打开时的取值就是**要创建的类型**——这样「专家 tab 点创建」
+   * 与「专家团 tab 点创建」共用一个弹层，不必再传第二个状态。
+   */
+  const [createKind, setCreateKind] = useState<AutoCreateKind | null>(null);
+  const { startAutoCreate } = useExpertAutoCreate();
 
   const filteredAgents = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -256,7 +270,7 @@ export function AgentsPage() {
         <Button
           variant="contained"
           startIcon={<AddIcon />}
-          onClick={tab === "agents" ? openNew : openNewGroup}
+          onClick={() => setCreateKind(tab === "agents" ? "agent" : "team")}
           sx={{ textTransform: "none" }}
         >
           {tab === "agents" ? "创建专家" : "创建专家团"}
@@ -349,6 +363,24 @@ export function AgentsPage() {
       <ExpertPackageImportDialog
         open={importOpen}
         onClose={() => setImportOpen(false)}
+      />
+
+      {/** 创建入口的模式选择：手动（表单）或 AI 自动（对话 + 专家创建技能） */}
+      <CreateExpertDialog
+        open={createKind !== null}
+        kind={createKind ?? "agent"}
+        onClose={() => setCreateKind(null)}
+        onManual={() => {
+          const kind = createKind;
+          setCreateKind(null);
+          if (kind === "team") openNewGroup();
+          else openNew();
+        }}
+        onAuto={() => {
+          const kind = createKind ?? "agent";
+          setCreateKind(null);
+          startAutoCreate(kind);
+        }}
       />
 
       {/** 专家团创建/编辑弹窗 */}

@@ -85,6 +85,45 @@ export interface InstalledPlugin {
   resources: PluginResourceGroup[];
   /** 安装时间（取自包根 mtime，ISO 字符串） */
   installedAt?: string;
+  /**
+   * 包内随包分发的专家定义（`experts/<dir>/` 或包根 `agents/*.md`）。
+   *
+   * 为什么要在**扫描时**就解析出来，而不是等用户点「导入」再读文件：
+   * 渲染层没有文件系统权限，读一个 `.md` 就得再加一条 IPC 通道；而扫描本来
+   * 就在主进程里跑、本来就遍历了这些目录，顺手读掉的边际成本几乎为零。
+   *
+   * 内容是**已解析**的（名字 / 职业 / 系统提示词正文），不是文件名列表——
+   * 界面上要能直接预览「这个包带来一位什么专家」，而不是让用户先导入再判断。
+   */
+  expertPackages: PluginExpertPackage[];
+}
+
+/** 插件包内的一位专家定义（`agents/<agentName>.md` 的解析结果） */
+export interface PluginExpertDraft {
+  /** 定义文件名（不含 `.md`），也是该 Agent 的标识 */
+  agentName: string;
+  /** 可读名（displayName.zh > name > 文件名） */
+  name: string;
+  /** 职业头衔（展示用；缺省时退化为「专家」） */
+  profession?: string;
+  /** 系统提示词正文（frontmatter 之后的部分） */
+  systemPrompt: string;
+}
+
+/** 插件包里的一份可导入专家（团队时 `agents` 含全部成员，首位为主理人） */
+export interface PluginExpertPackage {
+  /** 清单里的标识（缺省为目录名） */
+  name: string;
+  displayName: string;
+  description: string;
+  expertType: 'agent' | 'team';
+  /**
+   * 成员列表。
+   *
+   * 团队时按清单 `agents` 的声明顺序排列——那个顺序就是协作顺序，
+   * 落地成专家团时直接沿用，不重排（重排会让主理人跑到中间去）。
+   */
+  agents: PluginExpertDraft[];
 }
 
 /** 安装结果 */

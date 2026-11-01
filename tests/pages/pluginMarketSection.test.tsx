@@ -57,7 +57,7 @@ function manifest(patch: Partial<PluginManifest> = {}): PluginManifest {
 }
 
 function installedPlugin(name: string, root: string): InstalledPlugin {
-  return { manifest: manifest({ name }), root, resources: [] };
+  return { manifest: manifest({ name }), root, resources: [], expertPackages: [] };
 }
 
 /** 一条注册表条目 */

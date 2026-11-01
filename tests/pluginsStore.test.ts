@@ -46,6 +46,7 @@ function installed(patch: Partial<PluginManifest> = {}): InstalledPlugin {
     manifest: manifest(patch),
     root: `${PLUGINS_ROOT}/${patch.name ?? 'demo-plugin'}`,
     resources: [],
+    expertPackages: [],
   };
 }
 
