@@ -144,6 +144,8 @@ const api: ElectronAPI = {
   showItemInFolder: (path: string) => ipcRenderer.invoke('shell:showItemInFolder', path),
   /** 用系统默认浏览器打开 http(s) 链接（主进程侧有协议白名单） */
   openUrl: (url: string) => ipcRenderer.invoke('shell:openUrl', url),
+  /** 读系统剪贴板快照（原生模块；`navigator.clipboard.read()` 因权限被拒时的兜底） */
+  clipboardRead: () => ipcRenderer.invoke('clipboard:read'),
   /** 读取本地文件为 base64（复制消息粘贴恢复附件用） */
   readFileAsBase64: (path: string) =>
     ipcRenderer.invoke('fs:readFileAsBase64', path),

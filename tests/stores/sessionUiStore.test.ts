@@ -6,6 +6,7 @@ function reset() {
   useSessionUiStore.setState({
     artifactPanelOpen: false,
     artifactPanelSessionId: null,
+    panelBySession: {},
     artifactPanelTabs: [],
     artifactPanelActiveTabId: null,
     artifactPanelFullscreen: false,
@@ -51,6 +52,85 @@ describe('sessionUiStore: 产物面板开关', () => {
     useSessionUiStore.getState().openArtifactPanel('s1');
     useSessionUiStore.getState().closeArtifactPanel();
     expect(useSessionUiStore.getState().artifactPanelOpen).toBe(false);
+  });
+});
+
+describe('sessionUiStore: 边栏开合跟随会话', () => {
+  beforeEach(reset);
+
+  it('切到的会话没开过边栏 → 收起；切回原会话 → 恢复展开与标签', () => {
+    const ui = () => useSessionUiStore.getState();
+    ui().openArtifactPanel('s1', { previewId: 'a1' });
+    expect(ui().artifactPanelOpen).toBe(true);
+
+    // 左侧点了另一条会话：B 从没开过边栏 → 收起
+    ui().switchPanelSession('s2');
+    expect(ui().artifactPanelOpen).toBe(false);
+    expect(ui().artifactPanelSessionId).toBe('s2');
+    expect(ui().artifactPanelTabs).toEqual([]);
+
+    // 切回 A：它记的是「开着」，标签也一起回来
+    ui().switchPanelSession('s1');
+    expect(ui().artifactPanelOpen).toBe(true);
+    expect(ui().artifactPanelTabs.map((t) => t.id)).toEqual(['a1']);
+    expect(ui().artifactPanelActiveTabId).toBe('a1');
+  });
+
+  it('一方收起后切换，回来仍是收起（开合按会话各自记）', () => {
+    const ui = () => useSessionUiStore.getState();
+    ui().toggleArtifactPanel('s1');
+    ui().closeArtifactPanel();
+    ui().switchPanelSession('s2');
+    ui().toggleArtifactPanel('s2');
+    expect(ui().artifactPanelOpen).toBe(true);
+
+    ui().switchPanelSession('s1');
+    expect(ui().artifactPanelOpen).toBe(false);
+  });
+
+  it('同会话重复 switch 不动开合（不能把自己刚存的现场覆盖成收起）', () => {
+    const ui = () => useSessionUiStore.getState();
+    ui().openArtifactPanel('s1');
+    ui().switchPanelSession('s1');
+    expect(ui().artifactPanelOpen).toBe(true);
+    expect(ui().artifactPanelSessionId).toBe('s1');
+  });
+
+  it('两条会话的标签不串台：各开各的，切回来互不影响', () => {
+    const ui = () => useSessionUiStore.getState();
+    ui().openArtifactPanel('s1', { previewId: 'a1' });
+    ui().switchPanelSession('s2');
+    ui().openArtifactPanel('s2', { previewId: 'b1' });
+    expect(ui().artifactPanelTabs.map((t) => t.id)).toEqual(['b1']);
+
+    ui().switchPanelSession('s1');
+    expect(ui().artifactPanelTabs.map((t) => t.id)).toEqual(['a1']);
+  });
+
+  it('全屏不跟着会话跑：切到另一条会话即退出全屏', () => {
+    const ui = () => useSessionUiStore.getState();
+    ui().openArtifactPanel('s1');
+    ui().toggleArtifactPanelFullscreen();
+    expect(ui().artifactPanelFullscreen).toBe(true);
+
+    ui().switchPanelSession('s2');
+    expect(ui().artifactPanelFullscreen).toBe(false);
+  });
+
+  it('切回停在「变更」口径的会话 → 口径跟着回来，且不会被误当成「开变更标签」', () => {
+    const ui = () => useSessionUiStore.getState();
+    ui().openArtifactPanel('s1', { view: 'changes' });
+    expect(ui().artifactPanelView).toBe('changes');
+
+    // 另一条会话从「查看所有产物」进来：它自己没记录 → 落到新标签页，口径为全部
+    ui().switchPanelSession('s2');
+    ui().openArtifactPanel('s2');
+    const active = ui().artifactPanelTabs.find((t) => t.id === ui().artifactPanelActiveTabId);
+    expect(active?.kind).toBe('list');
+    expect(ui().artifactPanelView).toBe('all');
+
+    ui().switchPanelSession('s1');
+    expect(ui().artifactPanelView).toBe('changes');
   });
 });
 

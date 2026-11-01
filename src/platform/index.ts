@@ -470,6 +470,19 @@ export const platform: PlatformAdapter = {
     window.open(url, '_blank', 'noopener,noreferrer');
     return Promise.resolve({ ok: true });
   },
+  /**
+   * 读系统剪贴板快照（右键菜单「粘贴」的原生兜底）。
+   *
+   * 只在桌面端存在：Web 端唯一可用的就是 `navigator.clipboard`，没有第二条路，
+   * 所以如实返回 `null` 让调用方按「这条路不存在」处理，而不是伪造一份空快照
+   * （空快照会被读成「剪贴板是空的」，与「这条路没有」是两回事）。
+   */
+  readClipboard: () => {
+    if (isElectron() && window.electronAPI) {
+      return window.electronAPI.clipboardRead();
+    }
+    return Promise.resolve(null);
+  },
   /** 读取本地文件为 base64（桌面端专属；Web 无文件系统权限） */
   readFileAsBase64: (path: string) => {
     if (isElectron() && window.electronAPI) {

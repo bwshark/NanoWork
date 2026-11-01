@@ -10,6 +10,9 @@ import type { QuoteRef } from '@/lib/editor/selectionQuote';
  * - 产物面板挂载在 AppLayout 右侧；
  * - 搜索条与三个入口按钮都挂在 ChatHeader（会话标题右侧）；
  * - 关键词命中高亮与消息定位由 MessageStream 消费。
+ *
+ * 面板还有一个**会话级**的口径：它记住「这条会话上次是开着还是收着」，切换会话时
+ * 按对方的记录还原（`panelBySession` + `switchPanelSession`）。
  */
 /** 产物面板的列表口径：全部产物 / 只看被再次编辑过的（变更） */
 export type ArtifactPanelView = 'all' | 'changes';
@@ -109,18 +112,88 @@ function makeListTab(): ArtifactPanelTab {
   return { id: `list-${genId()}`, kind: 'list' };
 }
 
-interface SessionUiState {
-  /** 右侧产物面板是否展开 */
-  artifactPanelOpen: boolean;
-  /** 面板当前跟随的会话 id（未展开时为 null） */
+/**
+ * 一条会话的右侧边栏**现场**。
+ *
+ * 面板是会话级的：在 A 会话里开了「文件」标签、又点了产物预览，然后收起；切到 B
+ * 再切回 A，看到的仍该是 A 那一套。因此现场（开合 / 标签 / 激活项 / 列表口径）
+ * 按会话 id 存一份——切走时存、换入时取。
+ *
+ * 宽度与全屏刻意**不入现场**：
+ * - 宽度是用户对窗口的偏好（拖一次就该到处生效），跟着会话来回跳像是拖动失效；
+ * - 全屏是「这一次查看」的临时模式，带进新会话等于一进来就铺满整窗。
+ */
+interface PanelSnapshot {
+  open: boolean;
+  tabs: ArtifactPanelTab[];
+  activeTabId: string | null;
+  view: ArtifactPanelView;
+}
+
+/** `migratePanel` 的补丁：字段都给全，调用方可直接读而不用非空断言 */
+interface PanelMigrated {
+  panelBySession: Record<string, PanelSnapshot>;
   artifactPanelSessionId: string | null;
+  artifactPanelOpen: boolean;
+  artifactPanelTabs: ArtifactPanelTab[];
+  artifactPanelActiveTabId: string | null;
+  artifactPanelView: ArtifactPanelView;
+  artifactPanelFullscreen: boolean;
+}
+
+/** 从当前 state 摘一份现场 */
+function snapshotPanel(s: SessionUiState): PanelSnapshot {
+  return {
+    open: s.artifactPanelOpen,
+    tabs: s.artifactPanelTabs,
+    activeTabId: s.artifactPanelActiveTabId,
+    view: s.artifactPanelView,
+  };
+}
+
+/**
+ * 换会话：把当前会话的现场存回快照表，再把目标会话的现场换进来。
+ *
+ * 目标会话没有快照 = 它从没在这里开过面板 → 收起、空标签（面板层会自动补落地页）。
+ * 调用方必须先确认「当前跟随的会话 ≠ 目标会话」，否则会把目标会话自己的现场覆盖掉。
+ */
+function migratePanel(s: SessionUiState, toSessionId: string | null): PanelMigrated {
+  const from = s.artifactPanelSessionId;
+  const table =
+    from === null ? s.panelBySession : { ...s.panelBySession, [from]: snapshotPanel(s) };
+  const snap = toSessionId === null ? undefined : table[toSessionId];
+  return {
+    panelBySession: table,
+    artifactPanelSessionId: toSessionId,
+    artifactPanelOpen: snap?.open ?? false,
+    artifactPanelTabs: snap?.tabs ?? [],
+    artifactPanelActiveTabId: snap?.activeTabId ?? null,
+    artifactPanelView: snap?.view ?? 'all',
+    // 切会话顺带退出全屏：否则「在 A 全屏 → 切到 B」会让 B 一进来就铺满整窗，
+    // 而 B 自己从没要求过全屏
+    artifactPanelFullscreen: false,
+  };
+}
+
+interface SessionUiState {
+  /** 右侧产物面板是否展开（**当前跟随会话**的现场） */
+  artifactPanelOpen: boolean;
+  /** 面板当前跟随的会话 id；面板收起时也保留，供同会话重新展开时续上标签 */
+  artifactPanelSessionId: string | null;
+  /**
+   * 每个会话各自的右侧边栏现场，键为会话 id。
+   *
+   * 只存内存：面板开合是「这次运行里看到哪儿」的临时状态，落盘后重启会凭空展开一块
+   * 用户没有要求过的面板（与 `quotes` 不持久化同理）。
+   */
+  panelBySession: Record<string, PanelSnapshot>;
   /**
    * 面板内已打开的**标签页**（顺序 = 打开顺序；产物按 id 去重）。
    *
    * 面板不再是「列表 / 预览」二态互斥，而是「常驻标签栏 + 列表」：
    * 用户可以同时打开多个产物 / 网页，靠顶部标签栏来回切。
-   * 标签是**会话级**的——换会话时上一会话的产物 id 在新会话里没有任何意义，必须整体重置
-   * （网页标签同样重置：它的地址栏属于这一次浏览）。
+   * 标签是**会话级**的——换会话时上一会话的产物 id 在新会话里没有任何意义，
+   * 因此整套标签跟着现场一起换出 / 换入（见 `panelBySession`），而不是留下来串台。
    */
   artifactPanelTabs: ArtifactPanelTab[];
   /**
@@ -131,8 +204,15 @@ interface SessionUiState {
   /** 面板列表口径（产物 / 变更） */
   artifactPanelView: ArtifactPanelView;
   openArtifactPanel: (sessionId: string, opts?: ArtifactPanelOpenOptions) => void;
-  /** 再次点击同一会话的按钮则收起；换会话则直接切换 */
+  /** 再次点击同一会话的按钮则收起；换会话则换入对方的现场并展开 */
   toggleArtifactPanel: (sessionId: string) => void;
+  /**
+   * 会话切换时让面板跟随（由布局层订阅 `sessionsStore.activeId` 调用）。
+   *
+   * 与 `toggleArtifactPanel(sessionId)` 分开：那个是「用户点了这条会话的边栏按钮」，
+   * 语义是**展开**；这里只是跟随激活会话——它记的是开着就开着、记的是收起就收起。
+   */
+  switchPanelSession: (sessionId: string | null) => void;
   closeArtifactPanel: () => void;
   /**
    * 面板是否**全屏**（铺满整个窗口，对话区让位）。
@@ -261,20 +341,24 @@ interface SessionUiState {
 export const useSessionUiStore = create<SessionUiState>()((set, get) => ({
   artifactPanelOpen: false,
   artifactPanelSessionId: null,
+  panelBySession: {},
   artifactPanelTabs: [],
   artifactPanelActiveTabId: null,
   artifactPanelFullscreen: false,
   artifactPanelView: 'all',
 
   openArtifactPanel: (sessionId, opts) => {
-    const { artifactPanelSessionId, artifactPanelTabs } = get();
+    const state = get();
     // 判据是**会话**而不是「面板是否开着」：同一会话收起面板再打开，标签应当还在
     // （否则「看列表 → 收起 → 再打开」会丢掉刚开的一堆产物）；
-    // 换了会话才重置——上一会话的产物 id 在新会话里指不到任何东西
-    const sameSession = artifactPanelSessionId === sessionId;
-    const kept = sameSession ? artifactPanelTabs : [];
+    // 换了会话才换现场——上一会话的产物 id 在新会话里指不到任何东西
+    const migrated = state.artifactPanelSessionId === sessionId ? null : migratePanel(state, sessionId);
+    const kept = migrated ? migrated.artifactPanelTabs : state.artifactPanelTabs;
     const id = opts?.previewId;
+    // 决定「开哪一类标签」只看调用方意图；写进 store 的列表口径则可以继承换入的会话
+    // （切回一条停在「变更」口径的会话，不该被顺手复位成「全部」）
     const view = opts?.view ?? 'all';
+    const listView = opts?.view ?? migrated?.artifactPanelView ?? 'all';
 
     let tabs: ArtifactPanelTab[] = kept;
     let activeId: string | null;
@@ -295,38 +379,44 @@ export const useSessionUiStore = create<SessionUiState>()((set, get) => ({
     }
 
     set({
+      // 换了会话就顺带换入它的快照表与现场（含退出全屏），下面几项再覆盖
+      ...(migrated ?? {}),
       artifactPanelOpen: true,
       artifactPanelSessionId: sessionId,
       artifactPanelTabs: tabs,
       artifactPanelActiveTabId: activeId,
-      artifactPanelView: view,
+      artifactPanelView: listView,
     });
   },
 
   toggleArtifactPanel: (sessionId) => {
-    const { artifactPanelOpen, artifactPanelSessionId } = get();
-    // 同一会话再点一次 = 收起；不同会话则直接切过去（保持展开）
-    if (artifactPanelOpen && artifactPanelSessionId === sessionId) {
+    const state = get();
+    // 同一会话再点一次 = 收起；现场留在内存里，下次展开仍是那套标签
+    if (state.artifactPanelOpen && state.artifactPanelSessionId === sessionId) {
       // 收起时一并退出全屏：否则下次打开会毫无征兆地铺满整个窗口
       set({ artifactPanelOpen: false, artifactPanelFullscreen: false });
       return;
     }
-    // 展开（或切到另一个会话）：同会话续用标签，换会话整体重置
-    const sameSession = artifactPanelSessionId === sessionId;
-    if (sameSession) {
+    if (state.artifactPanelSessionId === sessionId) {
       set({ artifactPanelOpen: true, artifactPanelSessionId: sessionId });
       return;
     }
-    // 换会话时给一个「新标签页」当落地页：空标签数组会让面板内容区一片空白，
-    // 用户第一眼看到的是「坏了」而不是「可以点这里」
-    const tab = makeListTab();
+    // 换会话：换入目标会话的现场后**强制展开**（用户点的是「打开边栏」）。
+    // 目标会话从没开过面板 → 给一个「新标签页」当落地页：空标签数组会让面板
+    // 内容区一片空白，用户第一眼看到的是「坏了」而不是「可以点这里」
+    const migrated = migratePanel(state, sessionId);
+    const landing = migrated.artifactPanelTabs.length > 0 ? null : makeListTab();
     set({
+      ...migrated,
       artifactPanelOpen: true,
-      artifactPanelSessionId: sessionId,
-      artifactPanelTabs: [tab],
-      artifactPanelActiveTabId: tab.id,
-      artifactPanelView: 'all' as ArtifactPanelView,
+      ...(landing ? { artifactPanelTabs: [landing], artifactPanelActiveTabId: landing.id } : {}),
     });
+  },
+
+  switchPanelSession: (sessionId) => {
+    // 面板已经在跟这条会话 → 开合由用户（或快捷入口）决定，这里不动
+    if (get().artifactPanelSessionId === sessionId) return;
+    set(migratePanel(get(), sessionId));
   },
 
   closeArtifactPanel: () =>

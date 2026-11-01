@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, Notification, safeStorage, session, shell, systemPreferences } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeTheme, Notification, safeStorage, session, shell, systemPreferences } from 'electron';
 import { basename, dirname, extname, isAbsolute, join, resolve } from 'node:path';
 import { promises as fs, appendFileSync, existsSync, readFileSync, watch as fsWatch, type Dirent } from 'node:fs';
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -66,6 +66,7 @@ import type {
   ChannelTurnProgress,
   ChannelTurnProgressEvent,
   ChannelTurnProgressParams,
+  ClipboardSnapshot,
   DesktopConfig,
   DesktopConfigResult,
   DiskUsage,
@@ -3846,6 +3847,37 @@ ipcMain.handle('file-backup:put', async (_e, hash: string, content: string) => {
   await eventStore.putBackup(hash, content);
 });
 ipcMain.handle('file-backup:get', async (_e, hash: string) => eventStore.getBackup(hash));
+
+// —— 系统剪贴板快照（输入框右键菜单「粘贴」）——
+/**
+ * 位图回传的体积上限（PNG 字节数）。
+ *
+ * 不是「附件上限」——那条在渲染层 `fileToAttachment`（10MB）。这里只是防止一次
+ * 荒唐的大图把 base64 字符串（1.37 倍膨胀）连同结构化克隆的副本一起顶进内存；
+ * 超限时不返回图片，界面按「剪贴板里只有图但太大」走既有提示。
+ */
+const MAX_CLIPBOARD_IMAGE_BYTES = 64 * 1024 * 1024;
+
+/**
+ * 读一份系统剪贴板快照。
+ *
+ * 为什么不交给渲染层的 `navigator.clipboard.read()`：它要 `clipboard-read` 权限，
+ * 而本应用的权限处理器**只放行 `media`**（最小授权面，见下方
+ * `setPermissionRequestHandler` 的注释）；被拒之后的降级路径 `readText()` 在
+ * 「剪贴板里是截图」时返回**空串** —— 于是右键「粘贴」永远落到「无法读取剪贴板
+ * 内容」，哪怕用户刚截了一张图。原生 `clipboard` 模块不受这套权限约束，
+ * `readImage()` 还能直接把位图取出来。
+ */
+ipcMain.handle('clipboard:read', (): ClipboardSnapshot => {
+  const image = clipboard.readImage();
+  const png = image.isEmpty() ? null : image.toPNG();
+  return {
+    text: clipboard.readText() ?? '',
+    imageBase64:
+      png && png.byteLength <= MAX_CLIPBOARD_IMAGE_BYTES ? png.toString('base64') : null,
+    formats: clipboard.availableFormats(),
+  };
+});
 
 // —— FR-8.9 工具网关审计日志（只读）——
 /**

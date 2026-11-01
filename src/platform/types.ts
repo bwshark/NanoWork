@@ -1287,6 +1287,18 @@ export interface PlatformAdapter {
    */
   openUrl(url: string): Promise<{ ok: boolean; error?: string }>;
   /**
+   * 读一份系统剪贴板快照（右键菜单「粘贴」用）。
+   *
+   * 与渲染层直接调 `navigator.clipboard.read()` 的关系是**主路与兜底**：前者能拿到
+   * 应用自定义 MIME（内部富复制的正常路径），但需要 `clipboard-read` 权限，
+   * 而桌面端主进程**只放行 `media`**，所以在 Electron 里它恒定被拒、只能退到
+   * `readText()`（剪贴板里是截图时返回空串）。这条通道走原生模块，不看权限，
+   * 且能直接读到位图。
+   * - electron：`clipboard:read` IPC（`readText` / `readImage` / `availableFormats`）；
+   * - web：返回 `null`（浏览器里只有 `navigator.clipboard` 一条路，没有原生兜底）。
+   */
+  readClipboard(): Promise<ClipboardSnapshot | null>;
+  /**
    * 读取本地文件为 base64（复制消息后粘贴恢复附件内容用）。
    * - electron：主进程 fs.readFile；
    * - web：无文件系统权限，返回 ok=false。
@@ -1585,6 +1597,37 @@ export interface PlatformAdapter {
 export interface AuditAppendResult {
   ok: boolean;
   error?: string;
+}
+
+/**
+ * 桌面端**原生**剪贴板快照（`clipboard:read`）。
+ *
+ * 存在的理由：渲染层的 `navigator.clipboard.read()` 需要 `clipboard-read` 权限，
+ * 而主进程的权限处理器只放行 `media`（最小授权面，见 `electron/main.ts` 的
+ * `setPermissionRequestHandler`）—— 被拒之后降级到 `readText()` 只能拿到纯文本，
+ * 「剪贴板里是截图」时它返回空串，于是右键「粘贴」永远报「无法读取剪贴板内容」，
+ * 哪怕用户刚截了一张图。原生 `clipboard` 模块不受这套权限约束。
+ *
+ * 只带界面真正会消费的三项：**为什么不做成通用的 `readBuffer(format)` 透传** ——
+ * 那等于把任意格式的剪贴板内容搬进渲染层，却没有一处用它。
+ */
+export interface ClipboardSnapshot {
+  /** 纯文本（`text/plain`）；没有则为空串 */
+  text: string;
+  /**
+   * 位图（PNG 的 base64 载荷，**不带** `data:` 前缀）；没有位图则为 null。
+   *
+   * 不带前缀是为了让调用方直接 `atob()` 还原字节；拼 dataUrl 只需加个常量前缀，
+   * 而把前缀塞进主进程会让「载荷」与「展示形式」耦合在一起。
+   */
+  imageBase64: string | null;
+  /**
+   * 系统报告的可用格式名（如 `text/plain` / `CF_DIB` / `image/png`）。
+   *
+   * 不解码、不判断，只用于回答「剪贴板里到底有没有东西」——空数组时界面可以
+   * 直接说「剪贴板是空的」，而不必再猜是读失败还是真没有。
+   */
+  formats: string[];
 }
 
 /** 本地文件 base64 读取结果 */
@@ -1974,6 +2017,8 @@ export interface ElectronAPI {
   showItemInFolder(path: string): Promise<{ ok: boolean; error?: string }>;
   /** 用系统默认浏览器打开 http(s) 链接；协议不合法或打开失败返回 ok=false */
   openUrl(url: string): Promise<{ ok: boolean; error?: string }>;
+  /** 读系统剪贴板快照（原生模块，不受 `clipboard-read` 权限约束） */
+  clipboardRead(): Promise<ClipboardSnapshot>;
   /** 读取本地文件为 base64；失败返回 ok=false 与错误描述 */
   readFileAsBase64(path: string): Promise<ReadFileBase64Result>;
   /** 扫描本地技能目录并解析 SKILL.md（用户级 + 指定工作区的项目级） */

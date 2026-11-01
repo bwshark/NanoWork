@@ -109,6 +109,7 @@ import {
   type UndoStack,
 } from "@/lib/editor/undoStack";
 import { toast } from "@/components/Toast";
+import { platform } from "@/platform";
 import type { Attachment, AttachmentKind, ChatMessageParam } from "@/types";
 
 export { detectTrigger, type TriggerState } from "@/lib/editor/composerTrigger";
@@ -1771,14 +1772,18 @@ export function Composer({
   /**
    * 菜单「粘贴」：菜单触发没有 `ClipboardEvent`，只能主动读剪贴板。
    *
-   * 优先级与 `handlePaste` **保持一致**，保证「键盘 Ctrl+V」与「右键粘贴」
+   * 三条通道按**能力从强到弱**排，落到哪条都要和 `handlePaste`（键盘 Ctrl+V）
    * 得到同一结果：
-   *   ① 自定义 MIME 直命中（应用内富复制的正常路径）
-   *   ② 剪贴板里是图片（截图 / 复制图片）→ 作为附件插入
-   *   ③ 纯文本键命中应用层富缓存 → 还原内联附件布局
-   *   ④ 纯文本按光标处插入
-   * `clipboard.read()` 被拒（无权限 / 非安全上下文）时降级到 `readText()`，
-   * 仍能走通 ③ / ④。
+   *   ① `navigator.clipboard.read()` —— 能拿到应用自定义 MIME（内部富复制的
+   *      正常路径）与图片；
+   *   ② 桌面端原生剪贴板（`platform.readClipboard()`）—— ① 在 Electron 里
+   *      **恒被拒**：主进程权限处理器只放行 `media`，`clipboard-read` 拿不到，
+   *      而此时降级去 `readText()` 只能拿到纯文本，剪贴板里是截图就返回空串，
+   *      于是「右键 → 粘贴」永远报「无法读取剪贴板内容」。原生模块不看这套权限，
+   *      且 `readImage()` 能直接把位图取出来；
+   *   ③ `readText()` —— Web 端 ① 被拒（无用户手势 / 权限策略）时的最后兜底。
+   *
+   * 三种来源最终只落三个动作：还原富布局 / 图片进附件 / 文本插入光标处。
    */
   const pasteFromClipboard = async () => {
     /** ③④ 纯文本落点：先试应用层富缓存，命不中再按纯文本插入 */
@@ -1791,11 +1796,19 @@ export function Composer({
       insertAtCaret(plain);
     };
 
-    const clip = navigator.clipboard;
+    /** 位图落点：走与键盘粘贴图片完全相同的附件通道（含体积 / 数量校验） */
+    const insertImageBytes = (base64: string): void => {
+      const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+      void addFiles([
+        new File([bytes], `pasted-${Date.now()}.png`, { type: "image/png" }),
+      ]);
+    };
+
+    // ① 标准异步剪贴板
     try {
-      if (clip?.read) {
-        const items = await clip.read();
-        // ① 自定义 MIME 直命中
+      const items = await navigator.clipboard?.read?.();
+      if (items) {
+        // ①-1 自定义 MIME 直命中
         for (const item of items) {
           if (!item.types.includes(RICH_CLIP_MIME)) continue;
           const raw = await (await item.getType(RICH_CLIP_MIME)).text();
@@ -1804,7 +1817,7 @@ export function Composer({
             return;
           }
         }
-        // ② 图片文件
+        // ①-2 图片文件
         for (const item of items) {
           const imageType = item.types.find((t) => t.startsWith("image/"));
           if (!imageType) continue;
@@ -1815,7 +1828,7 @@ export function Composer({
           ]);
           return;
         }
-        // ③④ 纯文本
+        // ①-3 纯文本
         for (const item of items) {
           if (!item.types.includes("text/plain")) continue;
           const plain = await (await item.getType("text/plain")).text();
@@ -1826,12 +1839,38 @@ export function Composer({
         }
       }
     } catch (err) {
-      // 读权限被拒 / 非安全上下文：降级到 readText（只拿得到纯文本）
-      console.warn("[composer] clipboard.read 不可用，降级为纯文本:", err);
+      // 读权限被拒 / 非安全上下文：交给 ②③
+      console.warn("[composer] clipboard.read 不可用，走原生兜底:", err);
     }
 
+    // ② 桌面端原生剪贴板（Electron 常态走这条；Web 端返回 null）
     try {
-      const plain = await clip?.readText?.();
+      const snapshot = await platform.readClipboard();
+      if (snapshot) {
+        if (snapshot.imageBase64) {
+          insertImageBytes(snapshot.imageBase64);
+          return;
+        }
+        if (snapshot.text) {
+          insertPlain(snapshot.text);
+          return;
+        }
+        // 图片与文本都没有：`formats` 空才算「真的空」——否则说明系统里只有
+        // 本应用不消费的格式（如纯文件列表），此时说「空」是错话
+        toast.error(
+          snapshot.formats.length === 0
+            ? "剪贴板是空的"
+            : "剪贴板内容暂不支持粘贴（仅支持文本与图片）",
+        );
+        return;
+      }
+    } catch (err) {
+      console.warn("[composer] 原生剪贴板读取失败:", err);
+    }
+
+    // ③ 纯文本兜底（Web 端 navigator.read 被拒时仍能粘上文字）
+    try {
+      const plain = await navigator.clipboard?.readText?.();
       if (plain) {
         insertPlain(plain);
         return;

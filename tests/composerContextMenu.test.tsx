@@ -33,6 +33,8 @@ import {
   DEFAULT_DESKTOP,
 } from '@/stores/settingsStore';
 import { _clearForTest, stashRichPayload } from '@/lib/editor/richClipboard';
+import { platform } from '@/platform';
+import { useToastStore } from '@/components/Toast';
 import { resetEventStream } from './helpers/eventStream';
 import { click, mount, unmount } from './helpers/reactMount';
 import { DEFAULT_MEMORY_POLICY } from '@/types';
@@ -85,6 +87,7 @@ beforeEach(() => {
     error: null,
   });
   useAgentsStore.setState({ agents: [], activeAgentId: null });
+  useToastStore.setState({ items: [] });
   resetEventStream();
 });
 
@@ -375,6 +378,57 @@ describe('输入区右键：菜单动作', () => {
     // 命中的是富 payload（rich 字段），不是把缓存键本身当文本贴进去
     expect(editable.textContent).toContain('富内容');
     expect(editable.textContent).not.toContain('cache-key');
+  });
+
+  /**
+   * ⚠️ 真机故障回归：桌面端 `navigator.clipboard.read()` 恒被拒
+   * （主进程权限处理器只放行 `media`，`clipboard-read` 拿不到），而降级路径
+   * `readText()` 在「剪贴板里是截图」时返回**空串** —— 于是右键粘贴一张刚截的图
+   * 只会看到「无法读取剪贴板内容」。这条钉住原生快照这条兜底通道真的接上了。
+   */
+  it('粘贴：渲染层读不到剪贴板时，走桌面端原生快照把截图收成附件', async () => {
+    const nativeRead = vi.spyOn(platform, 'readClipboard').mockResolvedValue({
+      text: '',
+      // 只要是非空字节即可 —— 这条路径不校验 PNG 结构
+      imageBase64: 'iVBORw0KGgoAAAANSUhEUg==',
+      formats: ['image/png', 'CF_DIB'],
+    });
+    installClipboard({ readText: vi.fn().mockResolvedValue('') });
+
+    const host = mountComposer();
+    const editable = editableOf(host);
+    setEditableText(editable, '');
+    rightClick(editable);
+
+    click(menuItem('粘贴'));
+    // 附件转换链是 FileReader + 异步 state 提交，多等几拍
+    await new Promise((r) => setTimeout(r, 40));
+
+    expect(nativeRead).toHaveBeenCalledTimes(1);
+    expect(editable.querySelector('[data-att-id]')).toBeTruthy();
+    // 修好之后不该再冒出这句「什么都读不到」
+    expect(useToastStore.getState().items.map((t) => t.message)).not.toContain(
+      '无法读取剪贴板内容',
+    );
+  });
+
+  it('粘贴：剪贴板整份是空的时候说「空」，而不是「无法读取」', async () => {
+    vi.spyOn(platform, 'readClipboard').mockResolvedValue({
+      text: '',
+      imageBase64: null,
+      formats: [],
+    });
+    installClipboard({ readText: vi.fn().mockResolvedValue('') });
+
+    const host = mountComposer();
+    rightClick(editableOf(host));
+
+    click(menuItem('粘贴'));
+    await new Promise((r) => setTimeout(r, 40));
+
+    const messages = useToastStore.getState().items.map((t) => t.message);
+    expect(messages).toContain('剪贴板是空的');
+    expect(messages).not.toContain('无法读取剪贴板内容');
   });
 
   it('全选：选中输入区全部内容', () => {
