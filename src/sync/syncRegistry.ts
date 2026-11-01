@@ -38,6 +38,7 @@ import { isTombstone, normalizeMeta, withTombstone, withoutTombstone } from '@/l
 import { pickSyncable } from '@/lib/sync/syncSelect';
 import { toChannelSyncPayload, toMcpSyncPayload } from '@/lib/sync/syncPayloads';
 import { toSyncPayload } from '@/lib/sync/settingsSync';
+import { DEFAULT_TTS } from '@/lib/voice/tts';
 import { pickSyncFields } from '@/lib/session/sessionSyncMeta';
 import { applyOverrides, pinnedSkillIds } from '@/lib/agent/skillOverrideTable';
 import type {
@@ -52,6 +53,7 @@ import type {
   SyncTombstones,
   TaskConfig,
   TranscriptionConfig,
+  TtsConfig,
 } from '@/types';
 import type { SyncCollection } from './types';
 
@@ -350,9 +352,11 @@ export function createDefaultRegistry(): SyncRegistry {
         updatedBy,
         deletedAt,
         transcription,
+        tts,
         ...rest
       } = inc;
       const state = useSettingsStore.getState();
+      const remoteTts = tts as Partial<TtsConfig> | undefined;
       const nextSettings: Settings = {
         ...state.settings, // 本机字段（网关 / 路径 / 桌面）全部保留
         ...(rest as Partial<Settings>), // 只覆盖对端带来的偏好字段
@@ -362,6 +366,14 @@ export function createDefaultRegistry(): SyncRegistry {
           ...(state.settings.transcription ?? ({} as TranscriptionConfig)),
           ...((transcription as Partial<TranscriptionConfig>) ?? {}),
         },
+        // `tts` 同理（见 `TTS_SYNC_OMIT_KEYS`）。三值合并：本机没有、对端也没有时
+        // 保持 `undefined`（= 跟随 transcription），不要造出一个空配置改变语义。
+        // 补 `DEFAULT_TTS` 是因为裁剪后的对端负载可能缺必填字段，而 `TtsConfig`
+        // 是全必填的——缺字段硬转会让 resolve 阶段读到 undefined。
+        tts:
+          state.settings.tts || remoteTts
+            ? { ...DEFAULT_TTS, ...(state.settings.tts ?? {}), ...(remoteTts ?? {}) }
+            : undefined,
       };
       useSettingsStore.setState({
         settings: nextSettings,

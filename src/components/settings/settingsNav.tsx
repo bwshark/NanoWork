@@ -9,6 +9,7 @@ import InsightsOutlinedIcon from '@mui/icons-material/InsightsOutlined';
 import ShieldOutlinedIcon from '@mui/icons-material/ShieldOutlined';
 import KeyboardAltOutlinedIcon from '@mui/icons-material/KeyboardAltOutlined';
 import PortraitOutlinedIcon from '@mui/icons-material/PortraitOutlined';
+import RecordVoiceOverOutlinedIcon from '@mui/icons-material/RecordVoiceOverOutlined';
 import SmartToyOutlinedIcon from '@mui/icons-material/SmartToyOutlined';
 import SmartphoneIcon from '@mui/icons-material/Smartphone';
 import StorageIcon from '@mui/icons-material/Storage';
@@ -64,6 +65,11 @@ export const SETTINGS_NAV: SettingsNavGroup[] = [
       // 模型紧挨「助理设置」：两者回答的是同一个问题「这个助手用哪个脑子想」，
       // 人格管怎么说、模型管用什么算
       { id: 'models', label: '模型', icon: <SmartToyOutlinedIcon /> },
+      // 语音紧跟模型：模型回答「怎么想」，语音回答「怎么听进去、怎么念出来」。
+      // 独立成区而不是挂在「连接」里——那里是网关（本机进程），语音是直连
+      // 第三方服务商的另一套凭据，混在一起时「改网关」和「配麦克风」互相挤版面，
+      // 而合成（TTS）压根没地方放，用户只能去配置文件里手写。
+      { id: 'voice', label: '语音', icon: <RecordVoiceOverOutlinedIcon /> },
       { id: 'assistant', label: '助理设置', icon: <SmartphoneIcon /> },
       { id: 'plugins', label: '插件', icon: <ExtensionIcon /> },
     ],

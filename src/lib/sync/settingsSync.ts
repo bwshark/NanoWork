@@ -23,7 +23,7 @@
  */
 
 import { pickSyncable } from './syncSelect';
-import type { Settings, TranscriptionConfig } from '@/types';
+import type { Settings, TranscriptionConfig, TtsConfig } from '@/types';
 
 /**
  * `Settings` 顶层不同步的字段。
@@ -76,21 +76,39 @@ export const SETTINGS_SYNC_OMIT_KEYS: readonly string[] = [
 export const TRANSCRIPTION_SYNC_OMIT_KEYS: readonly string[] = ['endpoint', 'apiToken'];
 
 /**
+ * 语音合成里不同步的两个字段——与 `TRANSCRIPTION_SYNC_OMIT_KEYS` 同一口径：
+ *
+ * - `endpoint`：留空 = 沿用转录的工作区地址，这个「留空」必须跟着本机网关走；
+ * - `apiToken`：凭据，绝不上行。
+ *
+ * 保留 `enabled` / `model` / `voice` / `fallbackToSystem`：它们表达「要不要念出来、
+ * 用什么音色」，是跨设备成立的偏好。
+ *
+ * ⚠️ `tts` **不能**进顶层的 `SETTINGS_SYNC_OMIT_KEYS`：整块剔掉会把这些偏好
+ * 一起扔掉（与 `transcription` 完全相同的理由）。
+ */
+export const TTS_SYNC_OMIT_KEYS: readonly string[] = ['endpoint', 'apiToken'];
+
+/**
  * 设置的可上云负载。
  *
  * 返回 `Partial` 而不是 `Settings`：裁剪后的对象**必然缺**若干必填字段，
  * 硬转成 `Settings` 只会让调用方以为拿到了一份完整设置，然后在某处把
  * `gatewayEndpoint` 读成 `undefined` 写回去——那是一种比缺字段更难查的损坏。
  */
-export type SettingsSyncPayload = Omit<Partial<Settings>, 'transcription'> & {
+export type SettingsSyncPayload = Omit<Partial<Settings>, 'transcription' | 'tts'> & {
   transcription?: Partial<TranscriptionConfig>;
+  tts?: Partial<TtsConfig>;
 };
 
 /** `Settings` → 可上云负载（只含偏好，不含本机环境与凭据） */
 export function toSyncPayload(settings: Settings): SettingsSyncPayload {
-  const { transcription, ...rest } = pickSyncable(settings, SETTINGS_SYNC_OMIT_KEYS);
+  const { transcription, tts, ...rest } = pickSyncable(settings, SETTINGS_SYNC_OMIT_KEYS);
   return {
     ...rest,
     transcription: pickSyncable(transcription ?? {}, TRANSCRIPTION_SYNC_OMIT_KEYS),
+    // `tts` 整段缺失 = 「跟随 transcription」，此时**不要**凭空造一个空对象出来：
+    // 对端会因此从「跟随」变成「显式配了一份空配置」，语义就变了。
+    ...(tts ? { tts: pickSyncable(tts, TTS_SYNC_OMIT_KEYS) } : {}),
   };
 }

@@ -15,6 +15,7 @@ import { PluginsSection } from '@/components/settings/sections/PluginsSection';
 import { SecuritySection } from '@/components/settings/sections/SecuritySection';
 import { ShortcutsSection } from '@/components/settings/sections/ShortcutsSection';
 import { UsageSection } from '@/components/settings/sections/UsageSection';
+import { VoiceSection } from '@/components/settings/sections/VoiceSection';
 import {
   useSettingsUiStore,
   type SettingsSectionId,
@@ -224,6 +225,8 @@ function SectionBody({ section }: { section: SettingsSectionId }) {
       return <PersonaSection />;
     case 'models':
       return <ModelsSection />;
+    case 'voice':
+      return <VoiceSection />;
     case 'assistant':
       return <AssistantSection />;
     case 'plugins':

@@ -15,10 +15,21 @@ import { DEFAULT_DESKTOP, DEFAULT_TRANSCRIPTION } from '@/stores/settingsStore';
 import {
   SETTINGS_SYNC_OMIT_KEYS,
   TRANSCRIPTION_SYNC_OMIT_KEYS,
+  TTS_SYNC_OMIT_KEYS,
   toSyncPayload,
 } from '@/lib/sync/settingsSync';
-import type { Settings } from '@/types';
+import type { Settings, TtsConfig } from '@/types';
 import { DEFAULT_MEMORY_POLICY } from '@/types';
+
+/** 一份配好的语音合成（含凭据，用来验证它们不上行） */
+const TTS_WITH_SECRETS: TtsConfig = {
+  enabled: true,
+  endpoint: 'https://dashscope.aliyuncs.com',
+  model: 'qwen3-tts-flash',
+  voice: 'Cherry',
+  apiToken: 'secret-tts-token',
+  fallbackToSystem: true,
+};
 
 /** 一份「什么都有」的设置：机器字段、凭据、偏好全占满 */
 function fullSettings(overrides: Partial<Settings> = {}): Settings {
@@ -100,6 +111,30 @@ describe('toSyncPayload：本机环境与凭据都不上行', () => {
     // 省略 = 不参与同步，对端保留自己的本机值；置空 = 把空串当真实值推过去
     expect('apiToken' in payload).toBe(false);
     expect('endpoint' in (payload.transcription ?? {})).toBe(false);
+  });
+
+  it('语音合成的 endpoint / apiToken 不上行，音色等偏好留着', () => {
+    const payload = toSyncPayload(fullSettings({ tts: TTS_WITH_SECRETS }));
+
+    // 合成凭据和转录凭据同级敏感：整块同步会把 Key 推到云端
+    expect(payload.tts).not.toHaveProperty('apiToken');
+    expect(payload.tts).not.toHaveProperty('endpoint');
+    expect(payload.tts).toMatchObject({
+      enabled: true,
+      model: 'qwen3-tts-flash',
+      voice: 'Cherry',
+      fallbackToSystem: true,
+    });
+    for (const key of TTS_SYNC_OMIT_KEYS) {
+      expect(payload.tts, `合成排除表列了 ${key}，负载里却还在`).not.toHaveProperty(key);
+    }
+  });
+
+  it('没配语音合成时负载里不出现 tts（保持「跟随转录」的语义）', () => {
+    const payload = toSyncPayload(fullSettings({ tts: undefined }));
+
+    // 造一个空 tts 对象会让对端从「跟随 transcription」变成「显式配了一份空配置」
+    expect('tts' in payload).toBe(false);
   });
 });
 

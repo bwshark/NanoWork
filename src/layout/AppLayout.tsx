@@ -2,7 +2,7 @@ import { Suspense, useEffect } from "react";
 import { Box } from "@mui/material";
 import { Outlet, useNavigate } from "react-router-dom";
 import { SidebarNav } from "./SidebarNav";
-import { ConnectionBanner } from "./ConnectionBanner";
+/* import { ConnectionBanner } from "./ConnectionBanner"; */
 import { RouteFallback } from "./RouteFallback";
 import { TitleBar } from "@/components/TitleBar";
 import { ArtifactPanel } from "@/components/artifacts/ArtifactPanel";
@@ -51,7 +51,7 @@ export function AppLayout() {
             height: "100%",
           }}
         >
-          {platform.env === "electron" && <ConnectionBanner />}
+          {/* {platform.env === "electron" && <ConnectionBanner />} */}
           <Box sx={{ flex: 1, display: "flex", minHeight: 0 }}>
             <Box sx={{ flex: 1, overflow: "auto", minWidth: 0 }}>
               {/* FR-13.5 路由懒加载的边界。**放在这里而不是路由表上**：侧栏 / 标题栏 /

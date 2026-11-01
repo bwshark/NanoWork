@@ -387,6 +387,53 @@ describe('A.6 / C：settings 单例', () => {
     const entity = { id: 'local', theme: 'dark', rev: 1 };
     expect(spec.payload(entity)).toBe(entity);
   });
+
+  it('落地对端负载时保住本机的合成凭据（tts 内层合并，不能整块替换）', () => {
+    useSettingsStore.setState({
+      settings: {
+        ...baseSettingsForRegistryTest(),
+        tts: {
+          enabled: true,
+          endpoint: 'https://local.example.com',
+          model: 'qwen3-tts-flash',
+          voice: 'Cherry',
+          apiToken: 'local-tts-key',
+          fallbackToSystem: true,
+        },
+      },
+      syncMeta: { rev: 1, updatedAt: '', updatedBy: '', deletedAt: null },
+    });
+
+    const spec = createDefaultRegistry().get('settings')!;
+    // 对端负载的形状与 `toSyncPayload` 一致：只有偏好，没有 endpoint / apiToken
+    spec.apply({
+      id: 'local',
+      rev: 2,
+      updatedAt: '2026-09-02T00:00:00.000Z',
+      updatedBy: 'dev-b',
+      tts: { enabled: false, model: 'qwen3-tts-flash', voice: 'Ethan', fallbackToSystem: false },
+    });
+
+    const after = useSettingsStore.getState().settings.tts;
+    // 凭据与本机地址必须原样保留，否则对端一同步就把本机配好的合成打空
+    expect(after?.apiToken).toBe('local-tts-key');
+    expect(after?.endpoint).toBe('https://local.example.com');
+    // 偏好以对端为准
+    expect(after?.voice).toBe('Ethan');
+    expect(after?.enabled).toBe(false);
+  });
+
+  it('两边都没有 tts 时保持 undefined（不放一个空配置改变「跟随转录」语义）', () => {
+    useSettingsStore.setState({
+      settings: baseSettingsForRegistryTest(),
+      syncMeta: { rev: 1, updatedAt: '', updatedBy: '', deletedAt: null },
+    });
+
+    const spec = createDefaultRegistry().get('settings')!;
+    spec.apply({ id: 'local', rev: 2, updatedAt: '', updatedBy: 'dev-b' });
+
+    expect(useSettingsStore.getState().settings.tts).toBeUndefined();
+  });
 });
 
 /** 最小合法 `Settings`（仅为让 settingsEntity 的 `toSyncPayload` 有输入）。 */

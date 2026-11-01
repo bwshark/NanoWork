@@ -15,6 +15,10 @@ export const SETTINGS_SECTION_IDS = [
   'memory',
   'persona',
   'models',
+  // 语音（STT 输入 / TTS 合成）：原本「语音输入」塞在「连接」里，而合成
+  // 干脆没有入口——用户只能在配置文件里手写 `tts`。两者共用同一套服务商
+  // 凭据与同一个「我说的话 / 它说的话」场景，拆在两个分区最难自证到底在用哪个 key。
+  'voice',
   'assistant',
   'plugins',
   // 安全（FR-8.4）：引擎侧的写策略与凭据目录边界，夹在「插件」与「数据管理」之间。
