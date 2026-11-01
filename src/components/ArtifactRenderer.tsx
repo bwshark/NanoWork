@@ -256,33 +256,64 @@ export function ArtifactRenderer({ artifact, header = true }: ArtifactRendererPr
   // 自带头的关闭态：文件产物在面板里由外层提供标题与操作，这里直接给正文
   if (!header)
     return (
-      <Box>
+      <Box sx={{ width: '100%', minWidth: 0 }}>
         {extensionAction}
         {body}
       </Box>
     );
 
   return (
-    <Paper variant="outlined" sx={{ p: 1.5, my: 1, bgcolor: 'background.paper' }}>
+    <Paper
+      variant="outlined"
+      /**
+       * ⚠️ `width: '100%'` 与 `minWidth: 0` 都不能省。
+       *
+       * 消息流里的本卡片是「列向 flex + `alignItems: 'flex-start'`」的子项，交叉轴
+       * 不给宽度时尺寸退化为 fit-content；而卡片内部的代码块只有 `maxWidth: '100%'`
+       * ——百分比在父宽**不定**时按 auto 处理，于是一行长代码（实测 `systemPrompt`
+       * 那条）的 max-content 宽度一路顶上来，整张卡片被撑到 1000px 开外，右边界
+       * 越过对话列、盖住窗口右侧（截图中被圈出的那个框）。
+       *
+       * 给成定宽后，内部 `maxWidth: 100% + overflowX: auto` 才真正生效：卡片右边界
+       * 与正文 Paper / 用户气泡齐平，超长代码改为在卡片内横向滚动。
+       */
+      sx={{ width: '100%', minWidth: 0, p: 1.5, my: 1, bgcolor: 'background.paper' }}
+      // 列宽对齐的回归钩子（tasks/verify-chat-column-align.mjs 直接量这一层）
+      data-artifact-card=""
+    >
       <Box
         sx={{
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'center',
           mb: 1,
+          gap: 1,
         }}
       >
-        <Box sx={{ fontWeight: 600, fontSize: 13 }}>{artifact.title ?? artifact.type}</Box>
+        <Box
+          sx={{
+            fontWeight: 600,
+            fontSize: 13,
+            // 长标题（文件绝对路径）单行省略，不许把「下载」挤出卡片
+            minWidth: 0,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {artifact.title ?? artifact.type}
+        </Box>
         <Button
           size="small"
           startIcon={<DownloadIcon />}
           onClick={handleDownload}
+          sx={{ flexShrink: 0 }}
         >
           下载
         </Button>
       </Box>
-      <Box>{extensionAction}</Box>
-      <Box>{body}</Box>
+      <Box sx={{ minWidth: 0 }}>{extensionAction}</Box>
+      <Box sx={{ minWidth: 0 }}>{body}</Box>
     </Paper>
   );
 }
