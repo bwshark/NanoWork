@@ -140,6 +140,14 @@ export const ROUTES = {
   /** 项目空间（FR-12.7）：成员 + 共享知识库的协作容器 */
   projects: '/projects',
   /**
+   * 能力扩展（Extension）：对齐 WorkBuddy `resources/extensions/` 的宿主资产。
+   *
+   * 与插件（`~/.nanowork/plugins`）分开：插件改 AI 的技能与工具面（文本资产），
+   * 扩展给应用加界面与后台服务（可执行代码）。两条链路的信任模型完全不同，
+   * 混在一个页面里会让人分不清"我装的到底是提示词还是程序"。
+   */
+  extensions: '/extensions',
+  /**
    * 登录 / 注册页（批次 4，FR-10）。
    *
    * **不是受保护页**——它就是登录页本身：未登录时不拦截本地使用，只把入口收在

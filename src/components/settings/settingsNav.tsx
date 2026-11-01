@@ -14,6 +14,7 @@ import SmartToyOutlinedIcon from '@mui/icons-material/SmartToyOutlined';
 import SmartphoneIcon from '@mui/icons-material/Smartphone';
 import StorageIcon from '@mui/icons-material/Storage';
 import TuneIcon from '@mui/icons-material/Tune';
+import WidgetsOutlinedIcon from '@mui/icons-material/WidgetsOutlined';
 import type { SettingsSectionId } from '@/stores/settingsUiStore';
 
 /**
@@ -72,6 +73,9 @@ export const SETTINGS_NAV: SettingsNavGroup[] = [
       { id: 'voice', label: '语音', icon: <RecordVoiceOverOutlinedIcon /> },
       { id: 'assistant', label: '助理设置', icon: <SmartphoneIcon /> },
       { id: 'plugins', label: '插件', icon: <ExtensionIcon /> },
+      // 扩展紧挨插件：两者都是"往宿主里装东西"，但一个改 AI 的技能与工具面、
+      // 一个给应用加界面与后台服务。放一起便于对照，名字也要能一眼分开。
+      { id: 'extensions', label: '扩展', icon: <WidgetsOutlinedIcon /> },
     ],
   },
   {

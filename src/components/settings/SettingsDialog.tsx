@@ -23,6 +23,10 @@ import { MemorySection } from '@/components/settings/sections/MemorySection';
 import { ModelsSection } from '@/components/settings/sections/ModelsSection';
 import { PersonaSection } from '@/components/settings/sections/PersonaSection';
 import { PluginsSection } from '@/components/settings/sections/PluginsSection';
+import {
+  ExtensionSettingLinks,
+  ExtensionsSection,
+} from '@/components/settings/ExtensionSettings';
 import { SecuritySection } from '@/components/settings/sections/SecuritySection';
 import { ShortcutsSection } from '@/components/settings/sections/ShortcutsSection';
 import { UsageSection } from '@/components/settings/sections/UsageSection';
@@ -261,6 +265,10 @@ export function SettingsDialog() {
           sx={{ flex: 1, minHeight: 0, overflowY: 'auto', px: 3.5, pt: 3, pb: 3 }}
         >
           <SectionBody section={section} />
+          {/* 扩展挂到当前分区的设置项。放在分区正文**之后**（而不是最前）：
+              它们是"外来条目"，不该抢在本分区自己的设置前面。
+              `extensions` 分区本身就是全部条目的汇总，跳过避免重复渲染。 */}
+          {section !== 'extensions' && <ExtensionSettingLinks target={section} />}
         </Box>
       </Box>
     </Dialog>
@@ -288,6 +296,8 @@ function SectionBody({ section }: { section: SettingsSectionId }) {
       return <AssistantSection />;
     case 'plugins':
       return <PluginsSection />;
+    case 'extensions':
+      return <ExtensionsSection />;
     case 'security':
       return <SecuritySection />;
     case 'data':

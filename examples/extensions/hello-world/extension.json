@@ -1,0 +1,39 @@
+{
+  "id": "hello-world",
+  "name": "Hello 扩展",
+  "version": "0.1.0",
+  "description": "最小可用扩展：一块界面 + 一个后台服务 + 两个产物预览器。",
+  "permissions": [],
+  "ui": {
+    "entry": {
+      "title": "Hello",
+      "url": "./ui/index.html",
+      "keepAlive": true
+    },
+    "artifactPreviews": [
+      {
+        "id": "hello-log",
+        "label": "日志查看器",
+        "match": { "bizType": "ext:log" },
+        "url": "./ui/preview.html"
+      },
+      {
+        "id": "hello-csv",
+        "label": "表格查看器",
+        "match": { "bizType": "ext:csv" },
+        "url": "./ui/preview.html"
+      }
+    ],
+    "settings": [
+      {
+        "id": "hello-settings",
+        "label": "Hello 扩展示例设置",
+        "target": "data"
+      }
+    ]
+  },
+  "service": {
+    "entry": "./server/index.cjs",
+    "process": "fork"
+  }
+}

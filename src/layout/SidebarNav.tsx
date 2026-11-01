@@ -33,6 +33,7 @@ import AutoFixHighIcon from "@mui/icons-material/AutoFixHigh";
 import HubIcon from "@mui/icons-material/Hub";
 import MenuBookIcon from "@mui/icons-material/MenuBook";
 import WorkOutlineIcon from "@mui/icons-material/WorkOutline";
+import WidgetsOutlinedIcon from "@mui/icons-material/WidgetsOutlined";
 import HistoryIcon from "@mui/icons-material/History";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import FolderIcon from "@mui/icons-material/Folder";
@@ -117,6 +118,7 @@ const LIBRARY_ITEMS: NavRouteItem[] = [
   { label: "连接器", icon: <HubIcon />, to: ROUTES.mcp },
   { label: "知识库", icon: <MenuBookIcon />, to: ROUTES.knowledge },
   { label: "项目", icon: <WorkOutlineIcon />, to: ROUTES.projects },
+  { label: "扩展", icon: <WidgetsOutlinedIcon />, to: ROUTES.extensions },
 ];
 
 /** 侧边栏主组件 */

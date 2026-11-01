@@ -42,6 +42,7 @@ import { AgentKnowledgeChip } from "@/components/agents/AgentKnowledgeChip";
 import { ExpertPackageImportDialog } from "@/components/agents/ExpertPackageImportDialog";
 import { useExpertPackageExport } from "@/components/agents/useExpertPackageExport";
 import { CreateExpertDialog } from "@/components/agents/CreateExpertDialog";
+import { ImportableExpertsBar } from "@/components/agents/ImportableExpertsBar";
 import {
   useExpertAutoCreate,
   type AutoCreateKind,
@@ -607,6 +608,9 @@ export function MyAgentsPage() {
           sx={{ width: 220 }}
         />
       </Box>
+
+      {/** 插件带来的专家：直接给导入入口 */}
+      <ImportableExpertsBar />
 
       <TabsBlock
         tab={tab}

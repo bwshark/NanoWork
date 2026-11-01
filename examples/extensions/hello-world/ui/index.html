@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Hello 扩展</title>
+    <style>
+      /* 扩展自带样式：宿主不注入任何 CSS，也不假设扩展用什么框架。
+         主题通过 ?theme=dark|light 传入，并会在切换时收到一条 postMessage。 */
+      :root {
+        --bg: #ffffff;
+        --fg: #111827;
+        --muted: #6b7280;
+        --line: #e5e7eb;
+        --accent: #2563eb;
+      }
+      html[data-theme='dark'] {
+        --bg: #0f1115;
+        --fg: #e5e7eb;
+        --muted: #9ca3af;
+        --line: #262a33;
+        --accent: #60a5fa;
+      }
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: var(--bg);
+        color: var(--fg);
+        font: 14px/1.7 system-ui, -apple-system, 'Segoe UI', 'Microsoft YaHei', sans-serif;
+      }
+      main {
+        max-width: 720px;
+        margin: 0 auto;
+        padding: 32px 24px;
+      }
+      h1 {
+        font-size: 20px;
+        margin: 0 0 4px;
+      }
+      p.lead {
+        color: var(--muted);
+        margin: 0 0 24px;
+        font-size: 13px;
+      }
+      .card {
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 16px;
+        margin-bottom: 16px;
+      }
+      button {
+        font: inherit;
+        border: 1px solid var(--line);
+        background: transparent;
+        color: var(--fg);
+        border-radius: 8px;
+        padding: 6px 12px;
+        cursor: pointer;
+      }
+      button.primary {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: #fff;
+      }
+      pre {
+        margin: 8px 0 0;
+        padding: 10px;
+        background: rgba(127, 127, 127, 0.1);
+        border-radius: 8px;
+        font-size: 12px;
+        white-space: pre-wrap;
+        word-break: break-all;
+      }
+      code {
+        font-size: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Hello 扩展</h1>
+      <p class="lead">
+        这块界面跑在 <code>nanowork-ext://hello-world/</code> 这个独立源里，
+        拿不到主窗口的 DOM 与 <code>window.electronAPI</code>。
+      </p>
+
+      <div class="card">
+        <strong>1. 宿主信息</strong>
+        <pre id="host">（等待宿主握手…）</pre>
+      </div>
+
+      <div class="card">
+        <strong>2. 调自己的后台服务</strong>
+        <p class="lead" style="margin: 4px 0 8px">
+          服务是扩展目录下的 <code>server/index.cjs</code>，由用户在扩展页显式启动。
+        </p>
+        <button class="primary" id="ping">请求 /health</button>
+        <pre id="ping-out">（未请求）</pre>
+      </div>
+
+      <div class="card">
+        <strong>3. 交给宿主打开外部链接</strong>
+        <p class="lead" style="margin: 4px 0 8px">
+          扩展自己 <code>window.open</code> 会被沙箱拦住；正确做法是发一条消息让宿主代开。
+        </p>
+        <button id="open">打开项目主页</button>
+      </div>
+    </main>
+
+    <script>
+      // ── 与宿主的消息协议 ──────────────────────────────────────────────
+      // 通道名与消息类型是**约定**：宿主只认 channel === 'nanowork-extension'，
+      // 其它消息一律丢弃。
+      const CHANNEL = 'nanowork-extension';
+      const hostEl = document.getElementById('host');
+
+      /** 主题：URL 里带了初始值，避免首帧白闪 */
+      const applyTheme = (mode) => {
+        document.documentElement.dataset.theme = mode === 'dark' ? 'dark' : 'light';
+      };
+      applyTheme(new URLSearchParams(location.search).get('theme'));
+
+      window.addEventListener('message', (event) => {
+        const data = event.data;
+        if (!data || data.channel !== CHANNEL) return;
+
+        if (data.type === 'theme' && data.payload) {
+          applyTheme(data.payload.theme);
+          return;
+        }
+        if (data.type === 'ready' && data.payload) {
+          hostEl.textContent = JSON.stringify(
+            {
+              扩展 id: data.payload.extensionId,
+              主题: data.payload.theme,
+              来源: location.origin,
+              能拿到 window.electronAPI: typeof window.electronAPI !== 'undefined',
+            },
+            null,
+            2,
+          );
+          // 告诉宿主"我准备好了"（宿主也可以只看 iframe onload）
+          window.parent.postMessage(
+            { channel: CHANNEL, type: 'status', payload: { text: '已与宿主握手' } },
+            '*',
+          );
+        }
+      });
+
+      // ── 调自己的后台服务 ────────────────────────────────────────────
+      // 注意：扩展服务监听的是**随机端口**，端口号由它自己通过 stdout 打出来，
+      // 宿主把它显示在服务日志里。这里为了演示，请把日志里看到的端口填到下面。
+      const SERVICE_PORT = new URLSearchParams(location.search).get('port') || '17650';
+      const pingOut = document.getElementById('ping-out');
+      document.getElementById('ping').addEventListener('click', async () => {
+        pingOut.textContent = '请求中…';
+        try {
+          const res = await fetch(`http://127.0.0.1:${SERVICE_PORT}/health`);
+          pingOut.textContent = JSON.stringify(await res.json(), null, 2);
+        } catch (err) {
+          pingOut.textContent =
+            `请求失败：${err}\n\n` +
+            '如果服务没启动，先回扩展页点「启动服务」；端口号在服务日志的第一行里。';
+        }
+      });
+
+      // ── 交给宿主开外链 ─────────────────────────────────────────────
+      document.getElementById('open').addEventListener('click', () => {
+        window.parent.postMessage(
+          {
+            channel: CHANNEL,
+            type: 'open-external',
+            payload: { url: 'https://github.com/bwshark/nanowork' },
+          },
+          '*',
+        );
+      });
+    </script>
+  </body>
+</html>

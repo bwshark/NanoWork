@@ -548,6 +548,9 @@ function buildFrontend() {
       '--platform=node',
       '--format=cjs',
       '--external:electron',
+      // node-pty 是原生模块（`.node` + winpty-agent.exe）：打进 bundle 既没法加载，
+      // 也会让 esbuild 在 `.node` 上直接报「没有 loader」。运行时从 node_modules 取。
+      '--external:node-pty',
       `--outfile=${join(REPO_ROOT, 'electron', `${entry}.cjs`)}`,
       '--log-level=warning',
     ]);

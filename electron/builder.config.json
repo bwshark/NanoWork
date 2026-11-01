@@ -27,12 +27,20 @@
     "electron/splashPreload.cjs",
     "electron/splash.html",
     "electron/assets/**/*",
-    "resources/**/*"
+    "resources/**/*",
+    "node_modules/node-pty/**/*"
+  ],
+  "asarUnpack": [
+    "node_modules/node-pty/**/*"
   ],
   "extraResources": [
     {
       "from": "build/rt",
       "to": "rt"
+    },
+    {
+      "from": "examples/extensions",
+      "to": "extensions-samples"
     }
   ],
   "asar": true,

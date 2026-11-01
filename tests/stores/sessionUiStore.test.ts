@@ -82,13 +82,23 @@ describe('sessionUiStore: 产物标签页', () => {
     expect(ui().artifactPanelActiveTabId).toBe('b1');
   });
 
-  it('「查看所有产物」（不带 previewId）回到列表但保留已打开的标签', () => {
+  it('「查看所有变更」开的是变更标签，已打开的产物标签保留', () => {
     const ui = () => useSessionUiStore.getState();
     ui().openArtifactPanel('s1', { previewId: 'a1' });
     ui().openArtifactPanel('s1', { view: 'changes' });
-    expect(ui().artifactPanelActiveTabId).toBeNull();
-    expect(ui().artifactPanelTabs.map((t) => t.id)).toEqual(['a1']);
+    const active = ui().artifactPanelTabs.find((t) => t.id === ui().artifactPanelActiveTabId);
+    expect(active?.kind).toBe('changes');
+    expect(ui().artifactPanelTabs.map((t) => t.kind)).toEqual(['artifact', 'changes']);
     expect(ui().artifactPanelView).toBe('changes');
+  });
+
+  it('「查看所有产物」（不带 previewId）落到新标签页，已打开的标签保留', () => {
+    const ui = () => useSessionUiStore.getState();
+    ui().openArtifactPanel('s1', { previewId: 'a1' });
+    ui().openArtifactPanel('s1');
+    const active = ui().artifactPanelTabs.find((t) => t.id === ui().artifactPanelActiveTabId);
+    expect(active?.kind).toBe('list');
+    expect(ui().artifactPanelTabs.map((t) => t.kind)).toEqual(['artifact', 'list']);
   });
 
   it('activateArtifactTab 只认已打开的标签，不给未打开的凭空造标签', () => {
@@ -115,7 +125,7 @@ describe('sessionUiStore: 产物标签页', () => {
     expect(ui().artifactPanelActiveTabId).toBe('a2');
   });
 
-  it('关闭当前标签 → 激活右邻居；关掉最后一个 → 回到列表视图', () => {
+  it('关闭当前标签 → 激活右邻居；关掉最后一个 → 自动补一个新标签页', () => {
     const ui = () => useSessionUiStore.getState();
     ui().openArtifactPanel('s1', { previewId: 'a1' });
     ui().openArtifactTab('a2');
@@ -132,8 +142,11 @@ describe('sessionUiStore: 产物标签页', () => {
     expect(ui().artifactPanelActiveTabId).toBe('a3');
 
     ui().closeArtifactTab('a3');
-    expect(ui().artifactPanelTabs.map((t) => t.id)).toEqual([]);
-    expect(ui().artifactPanelActiveTabId).toBeNull();
+    // 面板不能留空白：补一个「新标签页」，并激活它
+    const tabs = ui().artifactPanelTabs;
+    expect(tabs).toHaveLength(1);
+    expect(tabs[0].kind).toBe('list');
+    expect(ui().artifactPanelActiveTabId).toBe(tabs[0].id);
   });
 
   it('同一会话收起面板再展开 → 标签仍在（判据是会话，不是面板开关）', () => {
@@ -148,21 +161,42 @@ describe('sessionUiStore: 产物标签页', () => {
     expect(ui().artifactPanelActiveTabId).toBe('a1');
   });
 
-  it('closeAllArtifactTabs 清空标签并回到列表', () => {
+  it('closeAllArtifactTabs 关光后留一个新标签页', () => {
     const ui = () => useSessionUiStore.getState();
     ui().openArtifactPanel('s1', { previewId: 'a1' });
     ui().openArtifactTab('a2');
     ui().closeAllArtifactTabs();
-    expect(ui().artifactPanelTabs.map((t) => t.id)).toEqual([]);
-    expect(ui().artifactPanelActiveTabId).toBeNull();
+    const tabs = ui().artifactPanelTabs;
+    expect(tabs).toHaveLength(1);
+    expect(tabs[0].kind).toBe('list');
+    expect(ui().artifactPanelActiveTabId).toBe(tabs[0].id);
   });
 
-  it('showArtifactList 回列表但不清标签（还能切回去）', () => {
+  it('showArtifactList 回到列表页但不清标签（还能切回去）', () => {
     const ui = () => useSessionUiStore.getState();
     ui().openArtifactPanel('s1', { previewId: 'a1' });
     ui().showArtifactList();
-    expect(ui().artifactPanelActiveTabId).toBeNull();
-    expect(ui().artifactPanelTabs.map((t) => t.id)).toEqual(['a1']);
+    const active = ui().artifactPanelTabs.find((t) => t.id === ui().artifactPanelActiveTabId);
+    expect(active?.kind).toBe('list');
+    // 产物标签还在，切回去就能看
+    expect(ui().artifactPanelTabs.some((t) => t.id === 'a1')).toBe(true);
+  });
+
+  it('快捷入口在「新标签页」上是就地替换，不新开标签（浏览器语义）', () => {
+    const ui = () => useSessionUiStore.getState();
+    ui().openArtifactPanel('s1');
+    const listTabId = ui().artifactPanelActiveTabId;
+
+    ui().openFilesTab();
+    // 标签数不变，id 不变，只是页面变了
+    expect(ui().artifactPanelTabs).toHaveLength(1);
+    expect(ui().artifactPanelActiveTabId).toBe(listTabId);
+    expect(ui().artifactPanelTabs.find((t) => t.id === listTabId)?.kind).toBe('files');
+
+    // 单例：再点一次只激活，不再开第二个
+    ui().openTerminalTab();
+    ui().openFilesTab();
+    expect(ui().artifactPanelTabs.filter((t) => t.kind === 'files')).toHaveLength(1);
   });
 });
 
@@ -289,7 +323,8 @@ describe('sessionUiStore: 新建标签页（网页）与全屏', () => {
     ui().navigateWebTab(webId, 'https://a.com');
 
     ui().openArtifactPanel('s2');
-    expect(ui().artifactPanelTabs).toEqual([]);
+    // 换会话：网页标签整体丢弃，只留一个干净的落地页
+    expect(ui().artifactPanelTabs.map((t) => t.kind)).toEqual(['list']);
   });
 });
 

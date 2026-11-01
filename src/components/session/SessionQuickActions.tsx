@@ -37,12 +37,12 @@ interface SessionQuickActionsProps {
 }
 
 /**
- * 会话的三个快捷入口：对话内搜索 / 历史提问 / 产物面板。
+ * 会话的三个快捷入口：对话内搜索 / 历史提问 / 右侧边栏。
  *
  * 挂在会话标题右侧（任务列表行、频道列表行、聊天头部共用），交互保持一致：
  * - 搜索 → 在标题右侧内联展开搜索条（并切到该会话）
  * - 历史提问 → 就地弹出该会话的全部用户提问，点击滚动定位
- * - 产物 → 右侧展开产物面板（并切到该会话）
+ * - 右侧边栏 → 右侧展开（并切到该会话）
  */
 export function SessionQuickActions({
   sessionId,
@@ -147,13 +147,13 @@ export function SessionQuickActions({
         </IconButton>
       </Tooltip>
 
-      <Tooltip title={panelOpen ? '收起产物面板' : '产物面板'} placement="top">
+      <Tooltip title={panelOpen ? '收起右侧边栏' : '打开右侧边栏'} placement="top">
         <IconButton
           size="small"
           sx={btnSx}
           color={panelOpen ? 'primary' : 'default'}
           onClick={handleArtifacts}
-          aria-label="产物面板"
+          aria-label="右侧边栏"
         >
           {/* 水平镜像：ViewSidebar 默认是「左侧栏」，本面板在右侧 */}
           <ViewSidebarIcon sx={{ ...iconSx, transform: 'scaleX(-1)' }} />

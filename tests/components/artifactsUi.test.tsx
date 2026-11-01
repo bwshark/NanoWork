@@ -130,8 +130,13 @@ describe('消息底部产物卡片区', () => {
         ) ?? null,
       );
     });
-    expect(useSessionUiStore.getState().artifactPanelView).toBe('changes');
-    expect(useSessionUiStore.getState().artifactPanelActiveTabId).toBeNull();
+    const ui = useSessionUiStore.getState();
+    // 「变更」现在是**独立标签**（参考稿把原来的「全部 / 变更」胶囊搬成了页面），
+    // 而不是列表页上的一个筛选口径
+    expect(ui.artifactPanelView).toBe('changes');
+    expect(ui.artifactPanelTabs.find((t) => t.id === ui.artifactPanelActiveTabId)?.kind).toBe(
+      'changes',
+    );
   });
 
   it('「定位到消息」把请求交给会话 UI（消息 id 取自索引）', () => {
@@ -170,7 +175,7 @@ describe('产物面板：列表与预览', () => {
     expect(host.textContent).toContain('收起');
   });
 
-  it('「变更」口径只列被再次编辑过的文件产物（与「查看所有变更」计数同口径）', () => {
+  it('列表页列出全部产物（含富产物），不再有「全部 / 变更」口径胶囊', () => {
     const { refs } = seedFiles('s1', [
       { path: 'D:/aa/once.ts', content: 'one' },
       { path: 'D:/aa/edited.ts', content: 'v1' },
@@ -181,7 +186,7 @@ describe('产物面板：列表与预览', () => {
       content: 'v2',
       change: 'modified',
     });
-    // 富产物即便被改过也不进这一视图（它的版本徽章在「全部」里已标出）
+    // 富产物同样进列表（它与文件产物只差图标，不该被口径藏起来）
     const richArt: Artifact = {
       id: 'rich-1',
       type: 'mermaid',
@@ -204,18 +209,19 @@ describe('产物面板：列表与预览', () => {
     useSessionUiStore.setState({
       artifactPanelOpen: true,
       artifactPanelSessionId: 's1',
+      // 旧数据里可能还留着 changes 口径：列表页不再吃它，口径搬到了「变更」标签
       artifactPanelView: 'changes',
     });
 
     const host = mount(<ArtifactPanel />);
     const rows = host.querySelectorAll('[role="button"][aria-label^="打开产物"]');
-    expect(rows).toHaveLength(1);
+    expect(rows).toHaveLength(3);
+    expect(host.textContent).toContain('once.ts');
     expect(host.textContent).toContain('edited.ts');
-    expect(host.textContent).not.toContain('once.ts');
-    expect(rows[0].getAttribute('aria-label')).toContain('edited.ts');
+    expect(host.textContent).toContain('流程图 1');
   });
 
-  it('正文态：显示标签与产物名，「产物列表」入口回到列表', () => {
+  it('正文态：显示标签与产物名，「+」还能再开一个列表页回来', () => {
     const { refs } = seedFiles('s1', [{ path: 'D:/aa/report.md', content: '# hi' }]);
     useSessionUiStore.setState({
       artifactPanelOpen: true,
@@ -226,23 +232,27 @@ describe('产物面板：列表与预览', () => {
 
     const host = mount(<ArtifactPanel />);
     expect(host.textContent).toContain('report.md');
-    // 标签栏常驻：正文态下「产物列表」入口仍在
-    expect(host.querySelector('[aria-label="产物列表"]')).toBeTruthy();
-    // 列表态才有的「概览」在正文态让位
-    expect(host.textContent).not.toContain('智能体');
+    // 标签栏常驻：正文态下「新建标签页」入口仍在
+    expect(host.querySelector('[aria-label="新建标签页"]')).toBeTruthy();
+    // 列表态才有的内容在正文态让位。
+    // ⚠️ 锚点用「打开浏览器」（列表态的快捷入口）而不是概览里的「智能体」行：
+    // 元信息现在**默认收起**（与参考稿一致），「智能体」在列表态也不出现，
+    // 拿它当锚点会变成"两边都没有"——断言恒真，等于什么都没验证。
+    expect(host.textContent).not.toContain('打开浏览器');
 
     act(() => {
-      click(host.querySelector('[aria-label="产物列表"]'));
+      click(host.querySelector('[aria-label="新建标签页"]'));
     });
-    expect(useSessionUiStore.getState().artifactPanelActiveTabId).toBeNull();
-    // 回列表不清标签，还能切回去
-    expect(useSessionUiStore.getState().artifactPanelTabs.map((t) => t.id)).toEqual([refs[0].id]);
-    expect(host.textContent).toContain('智能体');
+    const ui = useSessionUiStore.getState();
+    expect(ui.artifactPanelTabs.find((t) => t.id === ui.artifactPanelActiveTabId)?.kind).toBe('list');
+    // 新标签页是**追加**的：原来的产物标签还在，靠标签栏能切回去
+    expect(ui.artifactPanelTabs.map((t) => t.kind)).toEqual(['artifact', 'list']);
+    expect(host.textContent).toContain('打开浏览器');
   });
 });
 
 describe('产物面板：多标签', () => {
-  /** 从列表里第 `index` 行打开产物（打开后列表让位，需要先经「产物列表」回来） */
+  /** 从列表里第 `index` 行打开产物（打开后列表标签仍在，靠标签栏切回来） */
   function openRow(host: HTMLDivElement, index: number) {
     const rows = host.querySelectorAll('[role="button"][aria-label^="打开产物"]');
     expect(rows[index]).toBeTruthy();
@@ -251,7 +261,7 @@ describe('产物面板：多标签', () => {
     });
   }
 
-  it('依次打开两个产物 → 标签栏两个标签，可来回切换', () => {
+  it('依次打开两个产物 → 标签栏两个产物标签，可来回切换', () => {
     const { refs } = seedFiles('s1', [
       { path: 'D:/aa/a.ts', content: 'const a = 1;' },
       { path: 'D:/aa/b.ts', content: 'const b = 2;' },
@@ -260,9 +270,9 @@ describe('产物面板：多标签', () => {
 
     const host = mount(<ArtifactPanel />);
     openRow(host, 0);
-    // 打开第一个后列表让位给正文 —— 靠标签栏左侧「产物列表」回到列表再开第二个
+    // 打开第一个后列表标签仍在（点行是追加语义），切回它再开第二个
     act(() => {
-      click(host.querySelector('[aria-label="产物列表"]'));
+      click(host.querySelector('[aria-label="切换到新标签页"]'));
     });
     // 已打开的产物在列表里被标记（aria-current），避免重复点开
     expect(
@@ -270,11 +280,16 @@ describe('产物面板：多标签', () => {
     ).toBe('true');
     openRow(host, 1);
 
-    expect(useSessionUiStore.getState().artifactPanelTabs.map((t) => t.id)).toEqual([refs[0].id, refs[1].id]);
-    expect(useSessionUiStore.getState().artifactPanelActiveTabId).toBe(refs[1].id);
+    expect(
+      useSessionUiStore
+        .getState()
+        .artifactPanelTabs.filter((t) => t.kind === 'artifact')
+        .map((t) => t.id),
+    ).toEqual([refs[0].id, refs[1].id]);
 
     const tabEls = () => Array.from(host.querySelectorAll('[role="tab"]'));
-    expect(tabEls()).toHaveLength(2);
+    // 列表标签 + 两个产物标签
+    expect(tabEls()).toHaveLength(3);
     expect(host.textContent).toContain('b.ts');
 
     // 切回第一个标签 → 激活项与正文都跟着换
@@ -282,10 +297,10 @@ describe('产物面板：多标签', () => {
       click(host.querySelector('[aria-label="切换到产物 a.ts"]'));
     });
     expect(useSessionUiStore.getState().artifactPanelActiveTabId).toBe(refs[0].id);
-    expect(tabEls()[0].getAttribute('aria-selected')).toBe('true');
+    expect(tabEls()[1].getAttribute('aria-selected')).toBe('true');
   });
 
-  it('关闭标签：非当前标签不影响激活项，关掉最后一个回到列表', () => {
+  it('关闭标签：非当前标签不影响激活项，关掉最后一个自动补一个新标签页', () => {
     const { refs } = seedFiles('s1', [
       { path: 'D:/aa/a.ts', content: 'const a = 1;' },
       { path: 'D:/aa/b.ts', content: 'const b = 2;' },
@@ -302,44 +317,37 @@ describe('产物面板：多标签', () => {
 
     const host = mount(<ArtifactPanel />);
     act(() => {
-      click(host.querySelector('[aria-label="关闭标签 a.ts"]'));
+      click(host.querySelector('[aria-label="关闭产物 a.ts"]'));
     });
     expect(useSessionUiStore.getState().artifactPanelTabs.map((t) => t.id)).toEqual([refs[1].id]);
     expect(useSessionUiStore.getState().artifactPanelActiveTabId).toBe(refs[1].id);
-    expect(host.querySelectorAll('[role="tab"]')).toHaveLength(1);
-    // 只剩一个标签时不再提供「关闭全部」——那时它等同于「关闭它」
-    expect(host.querySelector('[aria-label="关闭全部标签"]')).toBeNull();
 
     act(() => {
-      click(host.querySelector('[aria-label="关闭标签 b.ts"]'));
+      click(host.querySelector('[aria-label="关闭产物 b.ts"]'));
     });
-    expect(useSessionUiStore.getState().artifactPanelTabs.map((t) => t.id)).toEqual([]);
-    expect(useSessionUiStore.getState().artifactPanelActiveTabId).toBeNull();
-    // 标签清空后回到列表态
-    expect(host.textContent).toContain('智能体');
+    // 关光之后面板不能留空白：store 会补一个「新标签页」，并激活它
+    const ui = useSessionUiStore.getState();
+    expect(ui.artifactPanelTabs).toHaveLength(1);
+    expect(ui.artifactPanelTabs[0].kind).toBe('list');
+    expect(ui.artifactPanelActiveTabId).toBe(ui.artifactPanelTabs[0].id);
+    // 锚点：列表态专属的快捷入口
+    expect(host.textContent).toContain('打开浏览器');
   });
 
-  it('两个以上标签时提供「关闭全部」', () => {
-    const { refs } = seedFiles('s1', [
-      { path: 'D:/aa/a.ts', content: 'const a = 1;' },
-      { path: 'D:/aa/b.ts', content: 'const b = 2;' },
-    ]);
-    useSessionUiStore.setState({
-      artifactPanelOpen: true,
-      artifactPanelSessionId: 's1',
-      artifactPanelTabs: [
-        { id: refs[0].id, kind: 'artifact' as const },
-        { id: refs[1].id, kind: 'artifact' as const },
-      ],
-      artifactPanelActiveTabId: refs[1].id,
-    });
-
+  it('点「+」是显式新建：即使已经停在新标签页，也会多出一个', () => {
+    useSessionUiStore.setState({ artifactPanelOpen: true, artifactPanelSessionId: 's1' });
     const host = mount(<ArtifactPanel />);
+
     act(() => {
-      click(host.querySelector('[aria-label="关闭全部标签"]'));
+      click(host.querySelector('[aria-label="新建标签页"]'));
     });
-    expect(useSessionUiStore.getState().artifactPanelTabs).toEqual([]);
-    expect(host.querySelectorAll('[role="tab"]')).toHaveLength(0);
+    act(() => {
+      click(host.querySelector('[aria-label="新建标签页"]'));
+    });
+    const tabs = useSessionUiStore.getState().artifactPanelTabs;
+    expect(tabs.every((t) => t.kind === 'list')).toBe(true);
+    // 初始那一个（兜底页被扶正）+ 点两次新建的两个
+    expect(tabs).toHaveLength(3);
   });
 
   it('消息卡片连点两个产物 → 两个标签（点卡片是追加语义，不是顶掉）', () => {
@@ -364,7 +372,7 @@ describe('产物面板：多标签', () => {
 });
 
 describe('产物面板：新建标签页与全屏', () => {
-  it('点「+」新建空白网页标签：标签栏多一格，内容区换成地址栏 + 引导语', () => {
+  it('点「+」新建标签页：标签栏多一格，内容区仍是快捷入口 + 产物列表', () => {
     useSessionUiStore.setState({ artifactPanelOpen: true, artifactPanelSessionId: 's1' });
     const host = mount(<ArtifactPanel />);
 
@@ -373,22 +381,30 @@ describe('产物面板：新建标签页与全屏', () => {
     });
 
     const tabs = useSessionUiStore.getState().artifactPanelTabs;
-    expect(tabs).toHaveLength(1);
-    expect(tabs[0].kind).toBe('web');
-    // 空白标签不显示文字（只有地球图标），与参考稿一致
-    expect(host.querySelector('[aria-label="切换到标签页 新标签页"]')).toBeTruthy();
-    expect(host.querySelector('[aria-label="地址栏"]')).toBeTruthy();
-    expect(host.textContent).toContain('在上方输入网址开始浏览');
-    // 还没地址 → 不渲染 iframe
+    expect(tabs).toHaveLength(2);
+    expect(tabs.every((t) => t.kind === 'list')).toBe(true);
+    expect(host.querySelector('[aria-label="切换到新标签页"]')).toBeTruthy();
+    expect(host.textContent).toContain('打开浏览器');
     expect(host.querySelector('iframe')).toBeNull();
   });
 
-  it('地址栏回车 → 地址进标签（本地地址补 http）并渲染 iframe', () => {
+  it('「打开浏览器」开的是地址栏标签，回车后地址进标签并渲染 iframe', () => {
     useSessionUiStore.setState({ artifactPanelOpen: true, artifactPanelSessionId: 's1' });
     const host = mount(<ArtifactPanel />);
     act(() => {
-      click(host.querySelector('[aria-label="新建标签页"]'));
+      click(
+        Array.from(host.querySelectorAll('[role="button"]')).find(
+          (b) => b.getAttribute('aria-label') === '打开浏览器',
+        ) ?? null,
+      );
     });
+
+    // 当前那个新标签页**就地**变成浏览器标签（浏览器语义，标签数不变）
+    const tabs = useSessionUiStore.getState().artifactPanelTabs;
+    expect(tabs).toHaveLength(1);
+    expect(tabs[0].kind).toBe('web');
+    expect(host.querySelector('[aria-label="地址栏"]')).toBeTruthy();
+    expect(host.textContent).toContain('在上方输入网址开始浏览');
 
     const input = host.querySelector<HTMLInputElement>('[aria-label="地址栏"]');
     act(() => {

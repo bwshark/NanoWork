@@ -87,6 +87,10 @@ const AuditPage = lazyPage(() => import('@/pages/audit/AuditPage'), 'AuditPage')
 const KnowledgePage = lazyPage(() => import('@/pages/knowledge/KnowledgePage'), 'KnowledgePage');
 const ProjectsPage = lazyPage(() => import('@/pages/projects/ProjectsPage'), 'ProjectsPage');
 const AuthPage = lazyPage(() => import('@/pages/auth/AuthPage'), 'AuthPage');
+const ExtensionsPage = lazyPage(
+  () => import('@/pages/extensions/ExtensionsPage'),
+  'ExtensionsPage',
+);
 
 export const router = createBrowserRouter([
   {
@@ -118,6 +122,7 @@ export const router = createBrowserRouter([
           { path: ROUTES.audit, element: <AuditPage /> },
           { path: ROUTES.knowledge, element: <KnowledgePage /> },
           { path: ROUTES.projects, element: <ProjectsPage /> },
+          { path: ROUTES.extensions, element: <ExtensionsPage /> },
           { path: '*', element: <Navigate to={ROUTES.chat} replace /> },
         ],
       },

@@ -46,6 +46,9 @@ const CONTENT_ANCHORS: Record<SettingsSectionId, string> = {
   voice: '语音合成',
   assistant: '配置 IM 频道',
   plugins: '引擎已激活',
+  // 扩展分区在 Web 端只显示"仅桌面端可用"那句说明（没有本地目录可扫）。
+  // 左侧菜单项是「扩展」两个字，不会误命中这句。
+  extensions: '扩展仅在桌面端可用',
   // 「写入策略」是安全分区第一张卡片的标题；左侧菜单项只有「安全」两个字，不会误命中
   security: '凭据目录（始终拒绝访问）',
   data: '数据落点',

@@ -512,6 +512,111 @@ export const platform: PlatformAdapter = {
     }
     return Promise.resolve({ ok: false, error: 'Web 端无法卸载插件包，请使用桌面端' });
   },
+  // —— 扩展（Extension，对齐 WorkBuddy `resources/extensions/`）——
+  /**
+   * 扫描扩展目录。Web 端返回**带原因的失败**而不是空列表：
+   * 空列表会被界面渲染成「你还没装扩展」，而真相是浏览器里根本没有这个能力。
+   */
+  extensionsScan: () => {
+    if (isElectron() && window.electronAPI) {
+      return window.electronAPI.extensionsScan();
+    }
+    return Promise.resolve({
+      extensions: [],
+      skipped: [],
+      extensionsRoot: '',
+      error: '扩展仅在桌面端可用（需要本地目录与 iframe 自定义协议）',
+    });
+  },
+  startExtensionService: (extensionId: string) => {
+    if (isElectron() && window.electronAPI) {
+      return window.electronAPI.extensionServiceStart(extensionId);
+    }
+    return Promise.resolve({ ok: false, error: 'Web 端无法启动扩展后台服务' });
+  },
+  stopExtensionService: (extensionId: string) => {
+    if (isElectron() && window.electronAPI) {
+      return window.electronAPI.extensionServiceStop(extensionId);
+    }
+    return Promise.resolve({ ok: false, error: 'Web 端无法停止扩展后台服务' });
+  },
+  extensionServiceStatuses: () => {
+    if (isElectron() && window.electronAPI) {
+      return window.electronAPI.extensionServiceStatuses();
+    }
+    return Promise.resolve([]);
+  },
+  installSampleExtension: () => {
+    if (isElectron() && window.electronAPI) {
+      return window.electronAPI.installSampleExtension();
+    }
+    return Promise.resolve({ ok: false, error: 'Web 端无法安装扩展（需要本地目录）' });
+  },
+  openTerminalAt: (dir: string) => {
+    if (isElectron() && window.electronAPI) {
+      return window.electronAPI.openTerminalAt(dir);
+    }
+    return Promise.resolve({ ok: false, error: 'Web 端无法打开本地终端' });
+  },
+  // —— 右侧边栏的面板内能力（文件树 / 变更 / 终端）——
+  // Web 端一律**如实失败**：浏览器里既没有可枚举的文件系统，也没有 shell。
+  // 返回「空的成功」会让界面显示「这个目录没有文件」——那是假话，比报错更误导。
+  workspaceListDir: (dir: string) => {
+    if (isElectron() && window.electronAPI) return window.electronAPI.workspaceListDir(dir);
+    return Promise.resolve({ ok: false, entries: [], error: 'Web 端无法读取本地目录' });
+  },
+  workspaceReadText: (path: string) => {
+    if (isElectron() && window.electronAPI) return window.electronAPI.workspaceReadText(path);
+    return Promise.resolve({ ok: false, error: 'Web 端无法读取本地文件' });
+  },
+  gitStatus: (dir: string) => {
+    if (isElectron() && window.electronAPI) return window.electronAPI.gitStatus(dir);
+    return Promise.resolve({
+      ok: false,
+      isRepo: false,
+      files: [],
+      added: 0,
+      removed: 0,
+      error: 'Web 端无法读取 git 状态',
+    });
+  },
+  gitDiff: (dir: string, path: string) => {
+    if (isElectron() && window.electronAPI) return window.electronAPI.gitDiff(dir, path);
+    return Promise.resolve({ ok: false, patch: '', error: 'Web 端无法读取 git diff' });
+  },
+  ptyCreate: (opts) => {
+    if (isElectron() && window.electronAPI) return window.electronAPI.ptyCreate(opts);
+    return Promise.resolve({ ok: false, error: 'Web 端无法打开终端' });
+  },
+  // 这三条是**热路径**（每次按键 / 每次拖宽都会走），签名里没有 Promise：
+  // 排队等一层微任务只会让输入延迟可见地变差
+  ptyWrite: (id: string, data: string) => {
+    if (isElectron() && window.electronAPI) window.electronAPI.ptyWrite(id, data);
+  },
+  ptyResize: (id: string, cols: number, rows: number) => {
+    if (isElectron() && window.electronAPI) window.electronAPI.ptyResize(id, cols, rows);
+  },
+  ptyKill: (id: string) => {
+    if (isElectron() && window.electronAPI) window.electronAPI.ptyKill(id);
+  },
+  onPtyData: (cb) => {
+    if (isElectron() && window.electronAPI) return window.electronAPI.onPtyData(cb);
+    return () => undefined;
+  },
+  onPtyExit: (cb) => {
+    if (isElectron() && window.electronAPI) return window.electronAPI.onPtyExit(cb);
+    return () => undefined;
+  },
+  installExtension: (sourceDir: string, overwrite?: boolean) => {
+    if (isElectron() && window.electronAPI) {
+      return window.electronAPI.extensionInstall(sourceDir, overwrite);
+    }
+    return Promise.resolve({
+      ok: false,
+      error: 'Web 端无法安装扩展，请使用桌面端',
+      errorKind: 'io' as const,
+    });
+  },
   // —— 市场注册表与版本化缓存（FR-3.7 / FR-3.8）——
   // Web 端一律**如实拒绝**而不是返回空结果：市场要读写 `~/.nanowork/plugins`，
   // 浏览器做不到；返回空列表会让界面显示「没有市场」——那是假话。

@@ -41,6 +41,7 @@ import { AgentKnowledgeChip } from "@/components/agents/AgentKnowledgeChip";
 import { ExpertPackageImportDialog } from "@/components/agents/ExpertPackageImportDialog";
 import { useExpertPackageExport } from "@/components/agents/useExpertPackageExport";
 import { CreateExpertDialog } from "@/components/agents/CreateExpertDialog";
+import { ImportableExpertsBar } from "@/components/agents/ImportableExpertsBar";
 import {
   useExpertAutoCreate,
   type AutoCreateKind,
@@ -276,6 +277,9 @@ export function AgentsPage() {
           {tab === "agents" ? "创建专家" : "创建专家团"}
         </Button>
       </Box>
+
+      {/** 插件带来的专家：直接给导入入口，省得用户去插件页翻 */}
+      <ImportableExpertsBar />
 
       {/** 专家 / 专家团 分段切换 */}
       <TabsBlock

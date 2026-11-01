@@ -75,6 +75,14 @@ interface PluginsState {
    */
   refresh: () => Promise<void>;
   /**
+   * 确保扫描跑过一次（幂等、单飞）。
+   *
+   * 与 `extensionsStore.ensureLoaded` 同款：专家页要判断"有没有随包专家可导入"，
+   * 但它不该在应用启动时就拉插件目录（那会在引擎没起时白跑一次 IPC）。
+   * 组件挂载时调一次，并发调用共用一个 promise。
+   */
+  ensureLoaded: () => Promise<void>;
+  /**
    * 启用 / 停用插件。**引擎先行，意图后写**。
    *
    * 顺序不能反：引擎的激活标记才是事实，意图只是「我想」。若先写意图、
@@ -188,6 +196,9 @@ const EMPTY_MARKET_STATE = {
   marketError: null as string | null,
 };
 
+/** 单飞中的扫描 promise（见 `ensureLoaded`）：它是"正在飞的那一次"，不是可观察状态 */
+let pendingPluginScan: Promise<void> | null = null;
+
 export const usePluginsStore = create<PluginsState>((set, get) => ({
   ...EMPTY_MARKET_STATE,
   installed: [],
@@ -233,8 +244,21 @@ export const usePluginsStore = create<PluginsState>((set, get) => ({
     }
   },
 
-  setEnabled: async (name, enabled) => {
-    const failure = await toggleInEngine(name, enabled);
+  /**
+   * 单飞：并发的 `ensureLoaded` 共用一个 promise（同 `extensionsStore`）。
+   */
+  ensureLoaded: async () => {
+    if (get().loaded) return;
+    if (!pendingPluginScan) pendingPluginScan = get().refresh();
+    const shared = pendingPluginScan;
+    try {
+      await shared;
+    } finally {
+      if (pendingPluginScan === shared) pendingPluginScan = null;
+    }
+  },
+
+  setEnabled: async (name, enabled) => {    const failure = await toggleInEngine(name, enabled);
     if (failure !== null) {
       // 引擎拒绝了：**意图一个字都不写**，否则界面会显示一个不成立的「已启用」
       set({ error: failure });

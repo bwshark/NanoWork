@@ -12,6 +12,7 @@ import type {
   ToolsSyncResult,
 } from '../src/platform/types';
 import type { DeepLinkAction } from '../src/types/deepLink';
+import type { PtyDataEvent, PtyExitEvent } from '../src/types/workspace';
 import type { UpdateStatus } from '../src/types/update';
 import type { EngineInstallState } from '../src/types/engine';
 
@@ -158,6 +159,43 @@ const api: ElectronAPI = {
   pluginsInstall: (sourceDir: string, overwrite?: boolean) =>
     ipcRenderer.invoke('plugins:install', sourceDir, overwrite),
   pluginsUninstall: (name: string) => ipcRenderer.invoke('plugins:uninstall', name),
+  // —— 扩展（Extension）：界面 + 后台服务 ——
+  // 界面本身走 `nanowork-ext://` 协议（主进程注册），不经 IPC；
+  // 这里只有"扫描"与"服务开关"两件事需要跨进程。
+  extensionsScan: () => ipcRenderer.invoke('extensions:scan'),
+  extensionServiceStart: (extensionId: string) =>
+    ipcRenderer.invoke('extensions:serviceStart', extensionId),
+  extensionServiceStop: (extensionId: string) =>
+    ipcRenderer.invoke('extensions:serviceStop', extensionId),
+  extensionServiceStatuses: () => ipcRenderer.invoke('extensions:serviceStatuses'),
+  installSampleExtension: () => ipcRenderer.invoke('extensions:installSample'),
+  openTerminalAt: (dir: string) => ipcRenderer.invoke('terminal:openAt', dir),
+  // —— 右侧边栏「面板内」能力：文件树 / 变更 / 终端 ——
+  // 与上面的系统终端并存：同一个入口在不同后端下给不同东西，但**都不骗人**
+  // （Web 端这两组会如实返回失败，见 src/platform/index.ts）。
+  workspaceListDir: (dir: string) => ipcRenderer.invoke('workspace:listDir', dir),
+  workspaceReadText: (filePath: string) => ipcRenderer.invoke('workspace:readText', filePath),
+  gitStatus: (dir: string) => ipcRenderer.invoke('git:status', dir),
+  gitDiff: (dir: string, path: string) => ipcRenderer.invoke('git:diff', dir, path),
+  ptyCreate: (opts) => ipcRenderer.invoke('pty:create', opts),
+  ptyWrite: (id: string, data: string) => ipcRenderer.send('pty:write', id, data),
+  ptyResize: (id: string, cols: number, rows: number) =>
+    ipcRenderer.send('pty:resize', id, cols, rows),
+  ptyKill: (id: string) => ipcRenderer.send('pty:kill', id),
+  onPtyData: (cb) => {
+    // 一条通道承载所有会话的输出，按 `id` 在渲染层分发——每个终端标签各挂一份
+    // 监听器，会话多了也只是各筛各的，不需要一终端一条 IPC 通道
+    const listener = (_e: unknown, payload: PtyDataEvent) => cb(payload);
+    ipcRenderer.on('pty:data', listener);
+    return () => ipcRenderer.removeListener('pty:data', listener);
+  },
+  onPtyExit: (cb) => {
+    const listener = (_e: unknown, payload: PtyExitEvent) => cb(payload);
+    ipcRenderer.on('pty:exit', listener);
+    return () => ipcRenderer.removeListener('pty:exit', listener);
+  },
+  extensionInstall: (sourceDir: string, overwrite?: boolean) =>
+    ipcRenderer.invoke('extensions:install', sourceDir, overwrite),
   // —— 市场注册表与版本化缓存（FR-3.7 / FR-3.8）——
   pluginsMarkets: () => ipcRenderer.invoke('plugins:markets'),
   pluginsMarketsUpsert: (entry: unknown) => ipcRenderer.invoke('plugins:marketsUpsert', entry),

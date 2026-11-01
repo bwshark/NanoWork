@@ -7,6 +7,7 @@ import type { Artifact } from '@/types';
 import { isHtmlArtifact } from '@/lib/artifact/fileArtifact';
 import { MarkdownView } from './MarkdownView';
 import { ARTIFACT_PREVIEW_CSP } from './artifacts/artifactCsp';
+import { ExtensionPreviewAction } from './extensions/ExtensionPreviewAction';
 
 /** 胶囊式小按钮的两种选中态（与产物面板「全部 / 变更」同一套视觉语言） */
 const chipSx = (active: boolean) => ({
@@ -249,8 +250,17 @@ export function ArtifactRenderer({ artifact, header = true }: ArtifactRendererPr
     URL.revokeObjectURL(url);
   };
 
+  /** 扩展预览入口（未命中任何扩展时不渲染任何东西） */
+  const extensionAction = <ExtensionPreviewAction artifact={artifact} />;
+
   // 自带头的关闭态：文件产物在面板里由外层提供标题与操作，这里直接给正文
-  if (!header) return <Box>{body}</Box>;
+  if (!header)
+    return (
+      <Box>
+        {extensionAction}
+        {body}
+      </Box>
+    );
 
   return (
     <Paper variant="outlined" sx={{ p: 1.5, my: 1, bgcolor: 'background.paper' }}>
@@ -271,6 +281,7 @@ export function ArtifactRenderer({ artifact, header = true }: ArtifactRendererPr
           下载
         </Button>
       </Box>
+      <Box>{extensionAction}</Box>
       <Box>{body}</Box>
     </Paper>
   );

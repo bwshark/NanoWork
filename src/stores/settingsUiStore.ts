@@ -21,6 +21,9 @@ export const SETTINGS_SECTION_IDS = [
   'voice',
   'assistant',
   'plugins',
+  // 扩展（对齐 WorkBuddy `resources/extensions/`）：扩展可以把设置项挂到指定分区，
+  // 这里既是"全部扩展设置项"的汇总页，也是 target 匹配不上时的兜底去处。
+  'extensions',
   // 安全（FR-8.4）：引擎侧的写策略与凭据目录边界，夹在「插件」与「数据管理」之间。
   'security',
   'data',

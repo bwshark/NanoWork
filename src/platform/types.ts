@@ -27,6 +27,50 @@ import type { SessionLatencySample } from '@/lib/core/sseLatency';
 import type { EngineInstallState, EngineSelfCheckReport } from '@/types/engine';
 import type { DeepLinkAction } from '@/types/deepLink';
 import type { UpdateStatus } from '@/types/update';
+import type {
+  ExtensionActionResult,
+  ExtensionInstallResult,
+  ExtensionScanResult,
+  ExtensionServiceStatus,
+} from '@/types/extension';
+import type {
+  GitDiffResult,
+  GitStatusResult,
+  PtyCreateResult,
+  PtyDataEvent,
+  PtyExitEvent,
+  WorkspaceListResult,
+  WorkspaceReadResult,
+} from '@/types/workspace';
+
+/**
+ * 右侧边栏面板内能力的类型声明在 `@/types/workspace.ts`（**唯一声明处**，
+ * 主进程的 `electron/workspaceRoutes.ts` 也引它——跨进程是同一个事实，
+ * 两边各写一份必然漂移）。这里转出，让 platform 消费方只 import 一处。
+ */
+export type {
+  GitDiffResult,
+  GitFileChange,
+  GitFileStatus,
+  GitStatusResult,
+  PtyCreateResult,
+  PtyDataEvent,
+  PtyExitEvent,
+  WorkspaceEntry,
+  WorkspaceListResult,
+  WorkspaceReadResult,
+} from '@/types/workspace';
+
+// 扩展领域类型声明在 `@/types/extension.ts`（唯一声明处，主进程也引它）。
+export type {
+  ExtensionActionResult,
+  ExtensionInstallResult,
+  ExtensionManifest,
+  ExtensionScanResult,
+  ExtensionServiceStatus,
+  ExtensionUiEntry,
+  InstalledExtension,
+} from '@/types/extension';
 
 // 插件领域类型声明在 `@/types/plugin.ts`（**唯一声明处**，主进程也引它）。
 // 这里只做转出，让 platform 消费方「只 import 一处」即可拿到完整契约面。
@@ -1303,6 +1347,63 @@ export interface PlatformAdapter {
    * - web：返回 `ok=false`。
    */
   uninstallPlugin(name: string): Promise<PluginActionResult>;
+  // —— 扩展（Extension，对齐 WorkBuddy `resources/extensions/`）——
+  /**
+   * 扫描 `~/.nanowork/extensions` 下的扩展。
+   *
+   * 与插件扫描的关键差别：扩展**不经过引擎**，是纯客户端能力（一块界面 +
+   * 可选的后台服务）。所以这里没有任何"激活状态"要跟引擎对账——装了什么就是什么。
+   *
+   * - electron：读 `~/.nanowork/extensions` 并解析每个 `extension.json`；
+   * - web：返回带 `error` 的空结果（浏览器里没有这个目录，也不该假装有）。
+   */
+  extensionsScan(): Promise<ExtensionScanResult>;
+  /**
+   * 安装扩展：把用户选中的目录整体复制成 `extensions/<清单 id>`。
+   *
+   * - electron：主进程 `fs.cp` 递归复制，**先校验清单再落盘**；
+   * - web：返回 `ok=false`（浏览器没有本地目录可复制）。
+   */
+  installExtension(sourceDir: string, overwrite?: boolean): Promise<ExtensionInstallResult>;
+  /** 启动扩展声明的后台服务（`service.process === 'fork'`）；Web 端返回 `ok=false` */
+  startExtensionService(extensionId: string): Promise<ExtensionActionResult>;
+  /** 停止扩展的后台服务 */
+  stopExtensionService(extensionId: string): Promise<ExtensionActionResult>;
+  /** 全部扩展服务的状态（页面轮询用；未启动过的给 stopped 快照） */
+  extensionServiceStatuses(): Promise<ExtensionServiceStatus[]>;
+  /**
+   * 安装随应用分发的示例扩展（一键就有东西可试）。
+   *
+   * Web 端返回 `ok=false`：没有本地目录可写。
+   */
+  installSampleExtension(): Promise<{ ok: boolean; error?: string; path?: string }>;
+  /**
+   * 在指定目录打开**系统终端**。
+   *
+   * - electron：主进程校验目录存在后拉起 `cmd.exe` / Terminal / x-terminal-emulator；
+   * - web：返回 `ok=false`（浏览器开不了本地终端）。
+   */
+  openTerminalAt(dir: string): Promise<{ ok: boolean; error?: string }>;
+  // —— 右侧边栏的面板内能力（文件树 / 变更 / 终端）——
+  // 与上面的系统终端**并存**：系统终端零依赖但要离开窗口，面板内终端能在同一块
+  // 界面里原地敲命令。Web 端这几项一律如实降级（没有文件系统、没有子进程）。
+  /** 列出一个目录的直接子项（文件树按层懒加载，不递归） */
+  workspaceListDir(dir: string): Promise<WorkspaceListResult>;
+  /** 只读读取文本文件（超限截断、二进制识别；不用于二进制预览） */
+  workspaceReadText(path: string): Promise<WorkspaceReadResult>;
+  /** 工作区改动列表（git status + 行数统计）；非 git 仓库返回 `isRepo:false` 而不是失败 */
+  gitStatus(dir: string): Promise<GitStatusResult>;
+  /** 单个文件相对 HEAD 的 unified diff（未跟踪文件按「全新增」合成） */
+  gitDiff(dir: string, path: string): Promise<GitDiffResult>;
+  /** 创建面板内终端会话；Web 端返回 `ok=false`（浏览器里没有 shell） */
+  ptyCreate(opts: { cwd?: string; cols?: number; rows?: number }): Promise<PtyCreateResult>;
+  ptyWrite(id: string, data: string): void;
+  ptyResize(id: string, cols: number, rows: number): void;
+  ptyKill(id: string): void;
+  /** 订阅终端输出；返回取消订阅函数（Web 端空实现） */
+  onPtyData(cb: (event: PtyDataEvent) => void): () => void;
+  /** 订阅终端退出；返回取消订阅函数（Web 端空实现） */
+  onPtyExit(cb: (event: PtyExitEvent) => void): () => void;
   // —— 桌面端集成（窗口控制 / 托盘配置 / 主进程指令）——
   // 这一组在 Web 端一律降级为 no-op / null / 空取消函数，**渲染层据此分支而不是
   // 自己判断 preload 桥在不在**。原先 `TitleBar` / `useDesktopConfig` /
@@ -1899,6 +2000,33 @@ export interface ElectronAPI {
   pluginsInstall(sourceDir: string, overwrite?: boolean): Promise<PluginInstallResult>;
   /** 卸载插件（删除包目录，不可撤销） */
   pluginsUninstall(name: string): Promise<PluginActionResult>;
+  // —— 扩展（Extension）：界面 + 后台服务 ——
+  // 与插件不同，扩展**完全不走引擎**：没有激活标记要对账，装了什么就是什么。
+  /** 扫描 `~/.nanowork/extensions` 下的扩展 */
+  extensionsScan(): Promise<ExtensionScanResult>;
+  /** 启动扩展声明的后台服务 */
+  extensionServiceStart(extensionId: string): Promise<ExtensionActionResult>;
+  /** 停止扩展的后台服务 */
+  extensionServiceStop(extensionId: string): Promise<ExtensionActionResult>;
+  /** 全部扩展服务状态 */
+  extensionServiceStatuses(): Promise<ExtensionServiceStatus[]>;
+  /** 安装随应用分发的示例扩展 */
+  installSampleExtension(): Promise<{ ok: boolean; error?: string; path?: string }>;
+  /** 在指定目录打开系统终端 */
+  openTerminalAt(dir: string): Promise<{ ok: boolean; error?: string }>;
+  // —— 右侧边栏的面板内能力（文件树 / 变更 / 终端）——
+  workspaceListDir(dir: string): Promise<WorkspaceListResult>;
+  workspaceReadText(path: string): Promise<WorkspaceReadResult>;
+  gitStatus(dir: string): Promise<GitStatusResult>;
+  gitDiff(dir: string, path: string): Promise<GitDiffResult>;
+  ptyCreate(opts: { cwd?: string; cols?: number; rows?: number }): Promise<PtyCreateResult>;
+  ptyWrite(id: string, data: string): void;
+  ptyResize(id: string, cols: number, rows: number): void;
+  ptyKill(id: string): void;
+  onPtyData(cb: (event: PtyDataEvent) => void): () => void;
+  onPtyExit(cb: (event: PtyExitEvent) => void): () => void;
+  /** 安装扩展：把来源目录复制成 `extensions/<清单 id>` */
+  extensionInstall(sourceDir: string, overwrite?: boolean): Promise<ExtensionInstallResult>;
   // —— 市场注册表与版本化缓存（FR-3.7 / FR-3.8）——
   // 同样是「文件系统那一半」：注册表读写、目录型市场同步、materialize 副本并拨指针。
   /** 读市场注册表（含 `type` / `isBuiltIn` / `autoUpdate` / `lastSyncAt`） */

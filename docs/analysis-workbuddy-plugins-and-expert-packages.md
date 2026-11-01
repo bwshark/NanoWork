@@ -3,6 +3,8 @@
 > 调查对象：`D:\Program Files\WorkBuddy\resources\app.asar.unpacked\resources`
 > 调查时间：2026-11-01
 > 关联文档：`docs/analysis-workbuddy-builtin-plugins.md`（2026-10-15，只覆盖 `plugins/workbuddy-builtin`）
+> 关联文档：`docs/analysis-workbuddy-host-assets.md`（同一 `resources/` 目录下的**其余**资产全量对照：
+> prompt 模板、extension 扩展体系、DevTools 面板、preload 桥、原生 SDK）
 
 ---
 

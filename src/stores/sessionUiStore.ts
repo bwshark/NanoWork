@@ -25,13 +25,33 @@ export interface ArtifactPanelOpenOptions {
 /**
  * 面板里的一个**标签页**。
  *
- * 标签栏是异构的：产物预览（`artifact`）与「+ 新建标签页」开出来的网页（`web`）混排。
- * 因此标签不能再用裸 id 表达 —— 渲染时得知道该画产物正文还是地址栏。
+ * 标签栏是异构的：产物预览、网页、工作空间文件树、变更、终端、以及「新标签页」
+ * （会话概况 + 快捷入口 + 产物列表）混排。因此标签不能再用裸 id 表达 ——
+ * 渲染时得知道该画哪一种页面。
+ *
+ * ## 为什么「新标签页」也是一个标签，而不是 `activeTabId === null`
+ *
+ * 参考稿（WorkBuddy 右栏）是浏览器模型：快捷入口点下去，**当前那个新标签页本身**
+ * 变成「文件 / 变更 / 终端」——标题和图标就地切换，标签数不变。要做到这一点，
+ * 「新标签页」必须是标签数组里的一员（可以被就地替换），而不是一个平行状态。
+ *
+ * `activeTabId === null` 因此只剩一个含义：**拉起的旧状态 / 会话刚切换**，
+ * 渲染层遇到它一律当作「显示新标签页」处理（见 `ArtifactPanel` 的兜底）。
  *
  * 网页标签自带**历史栈**：iframe 的内容窗口跨域，`contentWindow.history` 碰不得，
  * 后退 / 前进只能自己记（地址栏是唯一的导航入口）。
  */
 export type ArtifactPanelTab =
+  /** 新标签页：会话概况 + 四个快捷入口 + 产物列表 */
+  | { id: string; kind: 'list' }
+  /** 工作空间文件树（会话级单例：再点一次只是激活，不再开第二个） */
+  | { id: string; kind: 'files' }
+  /** 工作区变更（git status + diff，会话级单例） */
+  | { id: string; kind: 'changes' }
+  /** 面板内终端（每次点「打开终端」都是新会话，故不做单例） */
+  | { id: string; kind: 'terminal'; title: string }
+  /** 从文件树点开的单个文件（只读预览；同路径复用同一标签） */
+  | { id: string; kind: 'file'; path: string; name: string }
   | { id: string; kind: 'artifact' }
   | {
       id: string;
@@ -51,6 +71,44 @@ export type ArtifactPanelTab =
       label?: string;
     };
 
+/**
+ * 「打开一个页面」的统一规则（快捷入口 / 文件预览共用）。
+ *
+ * 三条约束按顺序生效：
+ * 1. 单例页面（文件树 / 变更）已存在 → 只激活，不重复开；
+ * 2. 当前标签是**新标签页** → 就地替换它（浏览器语义，也是参考稿的行为）；
+ * 3. 其余情况 → 追加到末尾并激活。
+ *
+ * `make` 每次返回**全新 id**：就地替换要保留原 id（标签身份不变），但新建的页面
+ * 不能复用旧 id，否则「关掉再开」会得到两个同 id 的标签，激活项指向谁就说不清了。
+ */
+function openPage(
+  tabs: ArtifactPanelTab[],
+  activeId: string | null,
+  make: () => ArtifactPanelTab,
+  singleton?: ArtifactPanelTab['kind'],
+): { tabs: ArtifactPanelTab[]; activeId: string } {
+  if (singleton !== undefined) {
+    const existing = tabs.find((t) => t.kind === singleton);
+    if (existing) return { tabs, activeId: existing.id };
+  }
+  const active = activeId === null ? undefined : tabs.find((t) => t.id === activeId);
+  if (active && active.kind === 'list') {
+    const page = make();
+    return {
+      tabs: tabs.map((t) => (t.id === active.id ? ({ ...page, id: active.id } as ArtifactPanelTab) : t)),
+      activeId: active.id,
+    };
+  }
+  const page = make();
+  return { tabs: [...tabs, page], activeId: page.id };
+}
+
+/** 新建一个「新标签页」标签（关光所有标签时也要留一个，否则面板会变成空白页） */
+function makeListTab(): ArtifactPanelTab {
+  return { id: `list-${genId()}`, kind: 'list' };
+}
+
 interface SessionUiState {
   /** 右侧产物面板是否展开 */
   artifactPanelOpen: boolean;
@@ -66,10 +124,8 @@ interface SessionUiState {
    */
   artifactPanelTabs: ArtifactPanelTab[];
   /**
-   * 当前激活的标签页 id；`null` = 列表视图（概览 + 产物列表）。
-   *
-   * 由消息流里的产物卡片点击写入——「点卡片 → 右侧看内容」是产品要求的主路径，
-   * 因此它属于跨组件的 UI 态（与面板开关同源），而不是某个组件内部的 state。
+   * 当前激活的标签页 id；`null` 只出现在「面板刚被拉起 / 会话已切换」这类
+   * 还没建标签的时刻，渲染层一律把它当「新标签页」处理。
    */
   artifactPanelActiveTabId: string | null;
   /** 面板列表口径（产物 / 变更） */
@@ -94,6 +150,26 @@ interface SessionUiState {
    * 传 `doc` = 用源码快照渲染（html 产物没有磁盘文件时的「在网页标签打开」）。
    */
   openWebTab: (opts?: { url?: string; doc?: string; label?: string }) => string;
+  /**
+   * 打开「工作空间」文件树标签（会话级单例）。
+   *
+   * 当前标签是「新标签页」时就地替换——这正是参考稿里点「查看工作空间」后
+   * 标签标题变成「文件」的行为；否则追加或激活已有那个。
+   */
+  openFilesTab: () => void;
+  /** 打开「变更」标签（同上，单例 + 就地替换） */
+  openChangesTab: () => void;
+  /** 打开一个面板内终端标签（每次都是新会话，返回新标签 id） */
+  openTerminalTab: () => string;
+  /**
+   * 「+ 新建标签页」：**总是**追加一个空白新标签页并激活。
+   *
+   * 与 `showArtifactList` 的区别是「复用还是新建」：后者是「回到列表」，
+   * 已经有列表标签时只激活它；这里点的是一次明确的「再开一个」。
+   */
+  openNewTab: () => void;
+  /** 从文件树点开一个文件：同路径复用同一标签（反复点同一个文件不该堆一串标签） */
+  openFileTab: (path: string, name?: string) => void;
   /** 提交网页标签的地址（写进历史栈；空串 / 与当前相同则忽略） */
   navigateWebTab: (tabId: string, url: string) => void;
   /** 网页标签后退 / 前进（delta = -1 / +1；越界不动） */
@@ -193,24 +269,37 @@ export const useSessionUiStore = create<SessionUiState>()((set, get) => ({
   openArtifactPanel: (sessionId, opts) => {
     const { artifactPanelSessionId, artifactPanelTabs } = get();
     // 判据是**会话**而不是「面板是否开着」：同一会话收起面板再打开，标签应当还在
-    // （否则「点 ☰ 看列表 → 收起 → 再打开」会丢掉刚开的一堆产物）；
+    // （否则「看列表 → 收起 → 再打开」会丢掉刚开的一堆产物）；
     // 换了会话才重置——上一会话的产物 id 在新会话里指不到任何东西
     const sameSession = artifactPanelSessionId === sessionId;
     const kept = sameSession ? artifactPanelTabs : [];
     const id = opts?.previewId;
-    // 点卡片（带 previewId）是**追加**语义：连点两张卡片应该得到两个标签，
-    // 而不是把上一个顶掉——这正是「同时预览多个产物」的入口
-    const tabs: ArtifactPanelTab[] =
-      id !== undefined && !kept.some((t) => t.id === id)
-        ? [...kept, { id, kind: 'artifact' }]
-        : kept;
+    const view = opts?.view ?? 'all';
+
+    let tabs: ArtifactPanelTab[] = kept;
+    let activeId: string | null;
+    if (id !== undefined) {
+      // 点卡片（带 previewId）是**追加**语义：连点两张卡片应该得到两个标签，
+      // 而不是把上一个顶掉——这正是「同时预览多个产物」的入口
+      tabs = kept.some((t) => t.id === id) ? kept : [...kept, { id, kind: 'artifact' }];
+      activeId = id;
+    } else if (view === 'changes') {
+      // 消息底部「查看所有变更」：落到变更标签，而不是列表页上的一个筛选口径
+      const opened = openPage(tabs, null, () => ({ id: `changes-${genId()}`, kind: 'changes' }), 'changes');
+      tabs = opened.tabs;
+      activeId = opened.activeId;
+    } else {
+      const opened = openPage(tabs, null, makeListTab, 'list');
+      tabs = opened.tabs;
+      activeId = opened.activeId;
+    }
+
     set({
       artifactPanelOpen: true,
       artifactPanelSessionId: sessionId,
       artifactPanelTabs: tabs,
-      // 无 previewId（「查看所有产物 / 变更」）→ 回列表，但保留已打开的标签
-      artifactPanelActiveTabId: id ?? null,
-      artifactPanelView: opts?.view ?? 'all',
+      artifactPanelActiveTabId: activeId,
+      artifactPanelView: view,
     });
   },
 
@@ -224,16 +313,19 @@ export const useSessionUiStore = create<SessionUiState>()((set, get) => ({
     }
     // 展开（或切到另一个会话）：同会话续用标签，换会话整体重置
     const sameSession = artifactPanelSessionId === sessionId;
+    if (sameSession) {
+      set({ artifactPanelOpen: true, artifactPanelSessionId: sessionId });
+      return;
+    }
+    // 换会话时给一个「新标签页」当落地页：空标签数组会让面板内容区一片空白，
+    // 用户第一眼看到的是「坏了」而不是「可以点这里」
+    const tab = makeListTab();
     set({
       artifactPanelOpen: true,
       artifactPanelSessionId: sessionId,
-      ...(sameSession
-        ? {}
-        : {
-            artifactPanelTabs: [],
-            artifactPanelActiveTabId: null,
-            artifactPanelView: 'all' as ArtifactPanelView,
-          }),
+      artifactPanelTabs: [tab],
+      artifactPanelActiveTabId: tab.id,
+      artifactPanelView: 'all' as ArtifactPanelView,
     });
   },
 
@@ -251,25 +343,78 @@ export const useSessionUiStore = create<SessionUiState>()((set, get) => ({
   },
 
   openWebTab: (opts) => {
-    const id = `web-${genId()}`;
     const url = opts?.url?.trim() ?? '';
     const doc = opts?.doc ?? '';
-    set((s) => ({
-      artifactPanelTabs: [
-        ...s.artifactPanelTabs,
-        {
-          id,
-          kind: 'web',
-          url,
-          history: url === '' ? [] : [url],
-          cursor: url === '' ? -1 : 0,
-          ...(doc !== '' ? { doc } : {}),
-          ...(opts?.label ? { label: opts.label } : {}),
-        },
-      ],
-      artifactPanelActiveTabId: id,
-    }));
-    return id;
+    // 与「查看工作空间」同一条规则：当前是新标签页就地替换（浏览器语义）。
+    // 「+」按钮追加新标签走的是 `ArtifactPanel` 里的 `openBlankTab`。
+    const opened = openPage(
+      get().artifactPanelTabs,
+      get().artifactPanelActiveTabId,
+      () => ({
+        id: `web-${genId()}`,
+        kind: 'web',
+        url,
+        history: url === '' ? [] : [url],
+        cursor: url === '' ? -1 : 0,
+        ...(doc !== '' ? { doc } : {}),
+        ...(opts?.label ? { label: opts.label } : {}),
+      }),
+    );
+    set({ artifactPanelTabs: opened.tabs, artifactPanelActiveTabId: opened.activeId });
+    // 就地替换时真实 id 是原来的那个标签：返回它，调用方拿到的才是**可用**的 id
+    return opened.activeId;
+  },
+
+  openFilesTab: () =>
+    set((s) => {
+      const opened = openPage(
+        s.artifactPanelTabs,
+        s.artifactPanelActiveTabId,
+        () => ({ id: `files-${genId()}`, kind: 'files' }),
+        'files',
+      );
+      return { artifactPanelTabs: opened.tabs, artifactPanelActiveTabId: opened.activeId };
+    }),
+
+  openChangesTab: () =>
+    set((s) => {
+      const opened = openPage(
+        s.artifactPanelTabs,
+        s.artifactPanelActiveTabId,
+        () => ({ id: `changes-${genId()}`, kind: 'changes' }),
+        'changes',
+      );
+      return { artifactPanelTabs: opened.tabs, artifactPanelActiveTabId: opened.activeId };
+    }),
+
+  openTerminalTab: () => {
+    const tab: ArtifactPanelTab = {
+      // 标签标题取 PTY 的 TERM 名（与参考稿一致，也是「这里是个真终端」最直接的说明）
+      id: `term-${genId()}`,
+      kind: 'terminal',
+      title: 'xterm-256color',
+    };
+    set((s) => ({ artifactPanelTabs: [...s.artifactPanelTabs, tab], artifactPanelActiveTabId: tab.id }));
+    return tab.id;
+  },
+
+  openFileTab: (path, name) =>
+    set((s) => {
+      const existing = s.artifactPanelTabs.find((t) => t.kind === 'file' && t.path === path);
+      if (existing) return { artifactPanelActiveTabId: existing.id };
+      const opened = openPage(s.artifactPanelTabs, s.artifactPanelActiveTabId, () => ({
+        id: `file-${genId()}`,
+        kind: 'file',
+        path,
+        // 展示名取路径最后一段：文件树里点的就是它，标签上再写全路径只会被截断
+        name: name ?? path.split(/[\\/]/).pop() ?? path,
+      }));
+      return { artifactPanelTabs: opened.tabs, artifactPanelActiveTabId: opened.activeId };
+    }),
+
+  openNewTab: () => {
+    const tab = makeListTab();
+    set((s) => ({ artifactPanelTabs: [...s.artifactPanelTabs, tab], artifactPanelActiveTabId: tab.id }));
   },
 
   navigateWebTab: (tabId, url) =>
@@ -306,17 +451,31 @@ export const useSessionUiStore = create<SessionUiState>()((set, get) => ({
     const index = artifactPanelTabs.findIndex((t) => t.id === artifactId);
     if (index < 0) return;
     const tabs = artifactPanelTabs.filter((t) => t.id !== artifactId);
+    // 关光了 → 补一个新的「新标签页」：面板不能没有页面（浏览器关掉最后一个标签
+    // 是关窗，我们这里只有这一块界面，留空白等于把用户扔在一片黑里）
+    if (tabs.length === 0) {
+      const tab = makeListTab();
+      set({ artifactPanelTabs: [tab], artifactPanelActiveTabId: tab.id });
+      return;
+    }
     // 关的不是当前标签 → 当前标签不受影响；关的是当前标签 → 让位给右邻居（按下标对齐
-    // 过滤后的数组），没有右邻居就取左邻居，一个不剩则回到列表
+    // 过滤后的数组），没有右邻居就取左邻居
     const neighbor = tabs[index] ?? tabs[index - 1] ?? null;
     const nextActive =
       artifactPanelActiveTabId === artifactId ? (neighbor?.id ?? null) : artifactPanelActiveTabId;
     set({ artifactPanelTabs: tabs, artifactPanelActiveTabId: nextActive });
   },
 
-  closeAllArtifactTabs: () => set({ artifactPanelTabs: [], artifactPanelActiveTabId: null }),
+  closeAllArtifactTabs: () => {
+    const tab = makeListTab();
+    set({ artifactPanelTabs: [tab], artifactPanelActiveTabId: tab.id });
+  },
 
-  showArtifactList: () => set({ artifactPanelActiveTabId: null }),
+  showArtifactList: () =>
+    set((s) => {
+      const opened = openPage(s.artifactPanelTabs, s.artifactPanelActiveTabId, makeListTab, 'list');
+      return { artifactPanelTabs: opened.tabs, artifactPanelActiveTabId: opened.activeId };
+    }),
 
   toggleArtifactPanelFullscreen: () =>
     set((s) => ({ artifactPanelFullscreen: !s.artifactPanelFullscreen })),

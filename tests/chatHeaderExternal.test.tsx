@@ -99,7 +99,8 @@ describe('IM 频道会话的头部', () => {
     const host = renderHeader(session('nb:weixin:wxid_a', 'weixin'));
     expect(byAria('对话内搜索', host)).toBeTruthy();
     expect(byAria('历史提问', host)).toBeTruthy();
-    expect(byAria('产物面板', host)).toBeTruthy();
+    // 术语统一为「右侧边栏」（入口处的 aria-label）
+    expect(byAria('右侧边栏', host)).toBeTruthy();
   });
 });
 

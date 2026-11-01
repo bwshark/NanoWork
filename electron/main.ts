@@ -194,6 +194,23 @@ import {
   readInstalledPlugins,
   uninstallPluginPackage,
 } from './pluginPackage';
+import { readExtension, scanExtensions, installExtensionPackage } from './extensionPackage';
+import {
+  installExtensionProtocol,
+  registerExtensionScheme,
+  setExtensionRoots,
+} from './extensionProtocol';
+import {
+  allExtensionServiceStatus,
+  startExtensionService,
+  stopAllExtensionServices,
+  stopExtensionService,
+} from './extensionService';
+import { installSampleExtension } from './extensionSample';
+import { openTerminalAt } from './openTerminal';
+import { registerPtyRoutes } from './ptyRoutes';
+import { registerWorkspaceRoutes } from './workspaceRoutes';
+import { EXTENSION_ID_RE } from '../src/types/extension';
 import {
   collectMarketCache,
   installFromMarket,
@@ -443,6 +460,26 @@ const USER_PLUGINS_DIR = join(
   process.env.NANOWORK_HOME || process.env.CODEBUDDY_HOME || productDir(STORAGE_ROOTS),
   'plugins',
 );
+
+/**
+ * 扩展目录：`~/.nanowork/extensions`。
+ *
+ * 与插件目录**分开**而不是塞在 `plugins/` 下：两者的清单格式、加载方式、信任模型
+ * 都不一样（插件改提示词，扩展跑代码）。放一个目录里迟早有人把 `extension.json`
+ * 当插件清单读，得到一个"能装上但什么都不生效"的包。
+ */
+const USER_EXTENSIONS_DIR = join(
+  process.env.NANOWORK_HOME || process.env.CODEBUDDY_HOME || productDir(STORAGE_ROOTS),
+  'extensions',
+);
+
+/**
+ * 扩展 UI 的 `nanowork-ext://` 协议注册。
+ *
+ * ⚠️ 必须在本模块加载时（也就是 `app.whenReady()` **之前**）调用，Electron 只认
+ * 这一时机；放到 ready 里会静默无效，症状是"扩展页永远白屏 + 控制台 404"。
+ */
+registerExtensionScheme();
 
 /**
  * 连接器凭据保险库：`~/.nanowork/connectors/.credentials.v3.json`。
@@ -5684,6 +5721,102 @@ ipcMain.handle('plugins:uninstall', async (_e, name: unknown) => {
   return removed ? { ok: true } : { ok: false, error: `插件「${name}」不存在或名字不合法` };
 });
 
+/**
+ * 在指定目录打开系统终端（右侧边栏的「打开终端」入口）。
+ *
+ * 目录由主进程校验（必须存在且是目录）——渲染层只能提出请求，不能决定开在哪。
+ */
+ipcMain.handle('terminal:openAt', async (_e, dir: unknown) => {
+  if (typeof dir !== 'string' || !dir.trim()) {
+    return { ok: false, error: '未指定目录' };
+  }
+  return openTerminalAt(dir);
+});
+
+// —— 右侧边栏的「面板内」能力：终端 / 文件树 / 变更 ——
+// 与上面那条系统终端并行保留：系统终端零维护但要离开窗口，面板内终端要装 PTY
+// 但能在同一块界面里顺手敲命令。两条路服务的是两种使用节奏。
+registerPtyRoutes();
+registerWorkspaceRoutes();
+
+// —— 扩展（Extension）：界面 + 后台服务（对齐 WorkBuddy `resources/extensions/`）——
+/**
+ * 扫描**顺手刷新协议映射表**。
+ *
+ * 两件事必须成对：不刷新的话，新装的扩展在界面上出现了、iframe 却 404；
+ * 删掉的扩展则仍然能被旧 URL 访问（协议 handler 只认映射表，不认目录）。
+ */
+ipcMain.handle('extensions:scan', async () => {
+  const result = await scanExtensions(USER_EXTENSIONS_DIR);
+  setExtensionRoots(
+    result.extensions.map((ext) => ({ id: ext.manifest.id, root: ext.root })),
+  );
+  return result;
+});
+
+/**
+ * 启动扩展的后台服务。
+ *
+ * ⚠️ **不信任渲染层传进来的任何路径**：只收 id，root 与 spec 都从磁盘重新读。
+ * 渲染层若能指定 entry，等于把「任意 node 脚本执行」做成了一条 IPC。
+ */
+ipcMain.handle('extensions:serviceStart', async (_e, extensionId: unknown) => {
+  if (typeof extensionId !== 'string' || !EXTENSION_ID_RE.test(extensionId)) {
+    return { ok: false, error: '扩展 id 不合法' };
+  }
+  const { extension, issues } = await readExtension(USER_EXTENSIONS_DIR, extensionId, 'user');
+  if (!extension) {
+    return { ok: false, error: issues[0] ?? `扩展「${extensionId}」不存在` };
+  }
+  const spec = extension.manifest.service;
+  if (!spec) return { ok: false, error: '该扩展没有声明后台服务' };
+  return startExtensionService(extensionId, extension.root, spec);
+});
+
+ipcMain.handle('extensions:serviceStop', async (_e, extensionId: unknown) => {
+  if (typeof extensionId !== 'string' || !EXTENSION_ID_RE.test(extensionId)) {
+    return { ok: false, error: '扩展 id 不合法' };
+  }
+  return stopExtensionService(extensionId);
+});
+
+ipcMain.handle('extensions:serviceStatuses', async () => allExtensionServiceStatus());
+
+/**
+ * 安装示例扩展（一键把仓库里的 hello-world 装进扩展目录）。
+ *
+ * 存在的理由：扩展能力的第一道门槛是"得先有一个扩展"。让用户自己找目录、
+ * 复制、改路径、再回来点重新扫描——任何一步没做对，界面就表现为"功能好像没生效"。
+ */
+ipcMain.handle('extensions:installSample', async () => {
+  const result = await installSampleExtension(USER_EXTENSIONS_DIR);
+  if (!result.ok) return { ok: false, error: result.error };
+  // 装完立刻刷新协议映射表：否则新装的扩展在界面上出现了、iframe 却 404
+  const scan = await scanExtensions(USER_EXTENSIONS_DIR);
+  setExtensionRoots(scan.extensions.map((ext) => ({ id: ext.manifest.id, root: ext.root })));
+  return { ok: true, path: result.path };
+});
+
+/**
+ * 安装扩展：把用户选中的目录整体复制成 `extensions/<id>`。
+ *
+ * 与插件安装同款"先校验、再落盘"。`id` 由主进程从清单里读，**不接受渲染层传入**
+ * ——否则那条 IPC 就成了"任意目录改名进扩展目录"的通道。
+ */
+ipcMain.handle(
+  'extensions:install',
+  async (_e, sourceDir: unknown, overwrite?: unknown) => {
+    if (typeof sourceDir !== 'string' || sourceDir.trim() === '') {
+      return { ok: false, error: '未指定扩展来源目录', errorKind: 'source-missing' as const };
+    }
+    return installExtensionPackage({
+      sourceDir,
+      extensionsRoot: USER_EXTENSIONS_DIR,
+      overwrite: overwrite === true,
+    });
+  },
+);
+
 // —— 市场注册表与版本化缓存（FR-3.7 / FR-3.8）——
 /**
  * 这一组 IPC 只做**文件系统那一半**：注册表读写、目录型市场同步、
@@ -5823,6 +5956,12 @@ app.whenReady().then(async () => {
 
   // 隐藏系统级原生菜单（自绘菜单栏接管）
   Menu.setApplicationMenu(null);
+
+  // 扩展 UI 协议（`nanowork-ext://`）：scheme 的特权已在模块加载时注册，
+  // handler 必须等到 ready 之后才能装。映射表由 `extensions:scan` 填充——
+  // 也就是说**用户没打开扩展页之前，这些 URL 一律 404**，这是有意的：
+  // 映射表只反映"扫描过的扩展"，不给未扫描的目录留后门。
+  installExtensionProtocol();
 
   // ——— 麦克风权限（语音输入） ———
   //
@@ -6115,6 +6254,10 @@ app.on('before-quit', () => {
 app.on('will-quit', (event) => {
   event.preventDefault();
   void (async () => {
+    // 扩展后台服务先收：它们是随用户点「启动」拉起来的 node 子进程，
+    // 不清理会像引擎一样变孤儿（端口被占，下次启动报"服务起不来"）。
+    // 同步 kill、不等优雅退出——退出流程不能被第三方代码拖住。
+    stopAllExtensionServices();
     try {
       const reaped = await stopNanobotAndWait(CHILD_PROCESS_EXIT_TIMEOUT_MS);
       if (reaped < 2) {
