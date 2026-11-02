@@ -1,5 +1,12 @@
 import type { ReactNode } from "react";
-import { cloneElement, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Fragment,
+  cloneElement,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import {
   Box,
@@ -12,6 +19,8 @@ import {
   DialogContent,
   DialogContentText,
   DialogTitle,
+  Divider,
+  Fade,
   IconButton,
   List,
   ListItemButton,
@@ -19,6 +28,8 @@ import {
   ListItemText,
   Menu,
   MenuItem,
+  Paper,
+  Popper,
   Tab,
   Tabs,
   TextField,
@@ -27,6 +38,7 @@ import {
 } from "@mui/material";
 import AddCommentIcon from "@mui/icons-material/AddComment";
 import AccessAlarmIcon from "@mui/icons-material/AccessAlarm";
+import AppsIcon from "@mui/icons-material/Apps";
 import PsychologyIcon from "@mui/icons-material/Psychology";
 import GridViewIcon from "@mui/icons-material/GridView";
 import AutoFixHighIcon from "@mui/icons-material/AutoFixHigh";
@@ -40,6 +52,7 @@ import FolderIcon from "@mui/icons-material/Folder";
 import ExpandLessIcon from "@mui/icons-material/ExpandLess";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import ChevronRightIcon from "@mui/icons-material/ChevronRight";
+import TuneIcon from "@mui/icons-material/Tune";
 import MoreVertIcon from "@mui/icons-material/MoreVert";
 import PushPinOutlinedIcon from "@mui/icons-material/PushPinOutlined";
 import FolderOpenIcon from "@mui/icons-material/FolderOpen";
@@ -75,12 +88,19 @@ import { useDefaultWorkspacePath } from "@/stores/storageInfoStore";
 import { useTaskQueryStore } from "@/stores/taskQueryStore";
 import { useTasksStore } from "@/stores/tasksStore";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { CustomMenuPanel } from "@/components/sidebar/CustomMenuPanel";
 import { LogoIcon } from "@/components/LogoIcon";
 import { AccountEntry } from "@/components/AccountEntry";
 import { ChannelIcon } from "@/components/im/ChannelIcon";
 import { SessionQuickActions } from "@/components/session/SessionQuickActions";
 import { platform } from "@/platform";
 import { toast } from "@/components/Toast";
+import {
+  MORE_MENU_IDS,
+  PRIMARY_MENU_IDS,
+  normalizeMenuOrder,
+} from "@/lib/ui/sidebarMenu";
+import type { MoreMenuId, PrimaryMenuId } from "@/lib/ui/sidebarMenu";
 import type { NanobotChannelSessionSummary } from "@/platform/types";
 import type { Session, TaskConfig } from "@/types";
 
@@ -101,23 +121,50 @@ interface NavRouteItem extends NavLinkItem {
   to: string;
 }
 
-const TOP_ACTION_ITEMS: NavRouteItem[] = [
-  { label: "定时任务", icon: <AccessAlarmIcon />, to: ROUTES.tasks },
-  { label: "审计", icon: <HistoryIcon />, to: ROUTES.audit },
-];
+/**
+ * 一级菜单里**可拖拽排序**的四行，按 id 索引。
+ *
+ * 为什么从「一个按顺序排列的数组」改成「id → 行」的映射：顺序现在是**用户偏好**
+ * （`settings.primaryMenuOrder`，见「自定义菜单栏」），渲染时要按用户顺序取行。
+ * 数组只能表达一种顺序，映射 + 顺序表才能既保留「有哪些行」这个事实、
+ * 又让顺序可被用户改写。默认顺序在 `lib/ui/sidebarMenu` 的 `PRIMARY_MENU_IDS`。
+ */
+const PRIMARY_MENU_ROWS: Record<PrimaryMenuId, NavRouteItem> = {
+  tasks: { label: "定时任务", icon: <AccessAlarmIcon />, to: ROUTES.tasks },
+  /**
+   * 知识库原先藏在「能力扩展」分组里，和专家 / 技能 / 连接器混在一起。
+   *
+   * 它不是「能力」，是**内容载体**（文档库）——和「定时任务」一样是日常直接进出的
+   * 地方，多一次「先展开分组」的点击纯属浪费。所以提到顶层。
+   */
+  knowledge: { label: "知识库", icon: <MenuBookIcon />, to: ROUTES.knowledge },
+  capabilities: { label: "能力扩展", icon: <GridViewIcon />, to: "" },
+  more: { label: "更多", icon: <AppsIcon />, to: "" },
+};
 
 /**
- * 扩展分组：装的是**能力**（专家 / 技能 / 连接器）。
+ * 「更多」二级菜单里的行（悬停「更多」时弹出）。
+ *
+ * 为什么「项目」「审计」要收进这里而不是留在顶层：它们是**低频但需要常在**的入口
+ * ——每天用会嫌顶层太挤，收进设置又太深。「二级菜单」正好是这两者的中间档。
+ * 默认顺序（项目在前、审计在后）见 `lib/ui/sidebarMenu` 的 `MORE_MENU_IDS`。
+ */
+const MORE_MENU_ROWS: Record<MoreMenuId, NavRouteItem> = {
+  projects: { label: "项目", icon: <WorkOutlineIcon />, to: ROUTES.projects },
+  audit: { label: "审计", icon: <HistoryIcon />, to: ROUTES.audit },
+};
+
+/**
+ * 扩展分组：装的是**能力**（专家 / 技能 / 连接器 / 扩展）。
  *
  * 「插件」已从这里移出到设置弹窗——插件是「把能力打包分发」的单位，装完基本不再动，
  * 留在日常操作区会让人以为它和技能 / 连接器是同一使用频率的东西。
+ * 「知识库 / 项目」也已提到顶层 / 二级菜单：它们是内容载体，不是能力。
  */
 const LIBRARY_ITEMS: NavRouteItem[] = [
   { label: "专家", icon: <PsychologyIcon />, to: ROUTES.agents },
   { label: "技能", icon: <AutoFixHighIcon />, to: ROUTES.skills },
   { label: "连接器", icon: <HubIcon />, to: ROUTES.mcp },
-  { label: "知识库", icon: <MenuBookIcon />, to: ROUTES.knowledge },
-  { label: "项目", icon: <WorkOutlineIcon />, to: ROUTES.projects },
   { label: "扩展", icon: <WidgetsOutlinedIcon />, to: ROUTES.extensions },
 ];
 
@@ -137,6 +184,65 @@ export function SidebarNav() {
   /** 扩展分组折叠状态（默认收起） */
   const [expandOpen, setExpandOpen] = useState(false);
   const [expandHover, setExpandHover] = useState(false);
+
+  /**
+   * 一级菜单顺序（用户自定义）+ 「更多」二级菜单顺序。
+   *
+   * 两处都过 `normalizeMenuOrder`：持久化里可能是 `[]`（没改过）、可能缺项
+   * （老用户表里没有本次新增的行）、也可能残留非法 id。归一化在这里做而不是
+   * 只信任 store，是因为渲染侧会直接 `map` 这份表 —— 缺项就是「入口消失」，
+   * 非法项就是 `PRIMARY_MENU_ROWS[id]` 取到 undefined 后崩溃。
+   */
+  const primaryMenuOrder = useSettingsStore((s) => s.settings.primaryMenuOrder);
+  const moreMenuOrder = useSettingsStore((s) => s.settings.moreMenuOrder);
+  const primaryOrder = useMemo(
+    () => normalizeMenuOrder(primaryMenuOrder, PRIMARY_MENU_IDS),
+    [primaryMenuOrder],
+  );
+  const moreOrder = useMemo(
+    () => normalizeMenuOrder(moreMenuOrder, MORE_MENU_IDS),
+    [moreMenuOrder],
+  );
+
+  /**
+   * 「更多」浮层的锚点元素（侧边栏那一行）。
+   *
+   * 用锚点 + Popper 而不是把浮层绝对定位在行内：行在一个 `overflow: hidden` 的
+   * 容器里（侧边栏自己），绝对定位的浮层会被裁掉一半。Popper 挂 Portal 到 body，
+   * 天然不受祖先裁剪影响。
+   */
+  const [moreAnchor, setMoreAnchor] = useState<HTMLElement | null>(null);
+  /** 「自定义菜单栏」面板是否打开 */
+  const [panelOpen, setPanelOpen] = useState(false);
+
+  /**
+   * 关闭浮层的延迟计时器。
+   *
+   * 为什么需要它：指针从「更多」那一行移到右侧浮层，中间必然经过一段**不属于
+   * 任何一方**的缝隙（浮层与侧边栏有 8px 间距）。立刻关闭的话，这段移动会触发
+   * 一次关闭，浮层在指针到达前就没了 —— 用户看到的是「浮层一闪就消失，根本点不到」。
+   */
+  const moreCloseTimer = useRef<number | null>(null);
+  const cancelMoreClose = () => {
+    if (moreCloseTimer.current !== null) {
+      window.clearTimeout(moreCloseTimer.current);
+      moreCloseTimer.current = null;
+    }
+  };
+  const scheduleMoreClose = () => {
+    cancelMoreClose();
+    moreCloseTimer.current = window.setTimeout(() => {
+      moreCloseTimer.current = null;
+      setMoreAnchor(null);
+    }, 180);
+  };
+  const openMore = (anchor: HTMLElement) => {
+    cancelMoreClose();
+    setMoreAnchor(anchor);
+  };
+  // 卸载时清掉挂起的计时器：否则组件卸载后仍会有一次 setState（React 会警告，
+  // 且窗口切走 / 侧边栏收起时这条路径确实会走到）
+  useEffect(() => cancelMoreClose, []);
 
   /**
    * 新建任务：工作空间一律**回到「默认工作空间」**（不继承当前任务的 workdir）；
@@ -236,7 +342,7 @@ export function SidebarNav() {
         </Box>
       </Box>
 
-      {/* 一级导航：新建任务 + 定时任务 + 扩展 */}
+      {/* 一级导航：新建任务（固定第一行）+ 可自定义顺序的四行 */}
       <List dense disablePadding sx={{ px: 1, pb: 1 }}>
         <ListItemButton
           onClick={handleNewSession}
@@ -261,60 +367,114 @@ export function SidebarNav() {
             }}
           />
         </ListItemButton>
-        {TOP_ACTION_ITEMS.map((item) => (
-          <NavRow
-            key={item.label}
-            item={item}
-            active={currentPath === item.to}
-            onClick={() => navigate(item.to)}
-          />
-        ))}
-        <ListItemButton
-          onClick={() => setExpandOpen((v) => !v)}
-          onMouseEnter={() => setExpandHover(true)}
-          onMouseLeave={() => setExpandHover(false)}
-          sx={{
-            borderRadius: 2,
-            mb: 0.25,
-            py: 0.75,
-            "&:hover": { bgcolor: "action.hover" },
-          }}
-        >
-          <ListItemIcon
-            sx={{ minWidth: 30, color: "text.secondary", fontSize: 18 }}
-          >
-            {expandHover ? (
-              expandOpen ? (
-                <ExpandMoreIcon fontSize="inherit" />
-              ) : (
-                <ChevronRightIcon fontSize="inherit" />
-              )
-            ) : (
-              <GridViewIcon fontSize="inherit" />
-            )}
-          </ListItemIcon>
-          <ListItemText
-            primary="能力扩展"
-            primaryTypographyProps={{
-              fontSize: 12.5,
-              fontWeight: 500,
-              color: "text.secondary",
-            }}
-          />
-        </ListItemButton>
-        <Collapse in={expandOpen} timeout="auto" unmountOnExit>
-          {/* 子项整体右移一点，形成层级缩进 */}
-          <List dense disablePadding sx={{ pl: 2 }}>
-            {LIBRARY_ITEMS.map((item) => (
-              <NavRow
-                key={item.label}
-                item={item}
-                active={currentPath === item.to}
-                onClick={() => navigate(item.to)}
-              />
-            ))}
-          </List>
-        </Collapse>
+        {primaryOrder.map((id) => {
+          // 「能力扩展」是折叠组：它的子项必须紧跟在自己这一行之后，
+          // 所以整组（行 + Collapse）作为一个 fragment 随顺序一起搬动
+          if (id === "capabilities") {
+            return (
+              <Fragment key={id}>
+                <ListItemButton
+                  onClick={() => setExpandOpen((v) => !v)}
+                  onMouseEnter={() => setExpandHover(true)}
+                  onMouseLeave={() => setExpandHover(false)}
+                  sx={{
+                    borderRadius: 2,
+                    mb: 0.25,
+                    py: 0.75,
+                    "&:hover": { bgcolor: "action.hover" },
+                  }}
+                >
+                  <ListItemIcon
+                    sx={{ minWidth: 30, color: "text.secondary", fontSize: 18 }}
+                  >
+                    {expandHover ? (
+                      expandOpen ? (
+                        <ExpandMoreIcon fontSize="inherit" />
+                      ) : (
+                        <ChevronRightIcon fontSize="inherit" />
+                      )
+                    ) : (
+                      <GridViewIcon fontSize="inherit" />
+                    )}
+                  </ListItemIcon>
+                  <ListItemText
+                    primary="能力扩展"
+                    primaryTypographyProps={{
+                      fontSize: 12.5,
+                      fontWeight: 500,
+                      color: "text.secondary",
+                    }}
+                  />
+                </ListItemButton>
+                <Collapse in={expandOpen} timeout="auto" unmountOnExit>
+                  {/* 子项整体右移一点，形成层级缩进 */}
+                  <List dense disablePadding sx={{ pl: 2 }}>
+                    {LIBRARY_ITEMS.map((item) => (
+                      <NavRow
+                        key={item.label}
+                        item={item}
+                        active={currentPath === item.to}
+                        onClick={() => navigate(item.to)}
+                      />
+                    ))}
+                  </List>
+                </Collapse>
+              </Fragment>
+            );
+          }
+
+          // 「更多」：悬停弹出二级菜单（项目 / 审计 / 自定义菜单栏）
+          if (id === "more") {
+            const moreActive = moreOrder.some(
+              (mid) => MORE_MENU_ROWS[mid].to === currentPath,
+            );
+            return (
+              <ListItemButton
+                key={id}
+                selected={moreActive}
+                // 悬浮即开：`onMouseEnter` 走计时器取消，避免「从行挪到浮层」这段
+                // 空隙里浮层先关再开（那会闪一下）
+                onMouseEnter={(e) => openMore(e.currentTarget)}
+                onMouseLeave={scheduleMoreClose}
+                // 点击 = 打开（幂等），不是 toggle：悬停已经会打开它，
+                // 若这里做成 toggle，「悬停后顺手点一下」会把浮层关掉，
+                // 看起来像「点了反而没了」。这个入口是给键盘 / 触屏用户的
+                // ——他们 hover 不出来，需要一个显式的「打开」动作。
+                onClick={(e) => openMore(e.currentTarget)}
+                sx={{
+                  borderRadius: 2,
+                  mb: 0.25,
+                  py: 0.75,
+                  "&:hover": { bgcolor: "action.hover" },
+                }}
+              >
+                <ListItemIcon
+                  sx={{ minWidth: 30, color: "text.secondary", fontSize: 18 }}
+                >
+                  <AppsIcon fontSize="inherit" />
+                </ListItemIcon>
+                <ListItemText
+                  primary="更多"
+                  primaryTypographyProps={{
+                    fontSize: 12.5,
+                    fontWeight: 500,
+                    color: "text.secondary",
+                  }}
+                />
+              </ListItemButton>
+            );
+          }
+
+          const item = PRIMARY_MENU_ROWS[id];
+          return (
+            <NavRow
+              key={id}
+              item={item}
+              active={currentPath === item.to}
+              onClick={() => navigate(item.to)}
+            />
+          );
+        })}
       </List>
 
       {/* 任务 / 频道 切换列表 */}
@@ -339,6 +499,108 @@ export function SidebarNav() {
       >
         <AccountEntry />
       </Box>
+
+      {/* 「更多」二级菜单：悬停「更多」弹出，指针移出即收起（带 180ms 缓冲） */}
+      <Popper
+        open={!!moreAnchor}
+        anchorEl={moreAnchor}
+        placement="right-start"
+        // 与侧边栏之间留 8px：贴着会盖住行本身的 hover 底色，看起来像「行变宽了」
+        modifiers={[{ name: "offset", options: { offset: [8, 0] } }]}
+        sx={{ zIndex: (theme) => theme.zIndex.modal }}
+      >
+        {({ TransitionProps }) => (
+          /*
+           * ⚠️ `in` 必须**显式**给。
+           *
+           * MUI 的 `Popper` 根本不往回调里传 `TransitionProps`（它只有 `open` /
+           * `anchorEl` 等），所以 `{...TransitionProps}` 展开的是一个 undefined。
+           * 而 `Fade` 的 `in` 默认是 `false` —— 于是浮层**渲染了却永远不可见**：
+           * `opacity: 0` + `visibility: hidden`。
+           *
+           * 这个坑格外隐蔽：DOM 里节点齐全、文案能查到、`getBoundingClientRect`
+           * 也是正常尺寸，只有真去看像素才看得出「它根本没画出来」。
+           * （jsdom 不跑 CSS transition，所以组件测试也抓不到——见测试里那条
+           * 「浮层必须真的可见」的断言，它是为此补的。）
+           *
+           * `Popper` 在 `open=false` 时整棵不渲染，所以这里恒为 `true` 即可；
+           * 入场淡入由 `appear` 承担，出场不需要动画（指针移开就该立刻消失）。
+           */
+          <Fade {...TransitionProps} in appear timeout={120}>
+            <Paper
+              // 指针进出浮层都要取消 / 重排关闭计时器：从行挪进来时取消（否则
+              // 走到一半浮层就没了），挪出去时重排（否则浮层会一直挂着）
+              onMouseEnter={cancelMoreClose}
+              onMouseLeave={scheduleMoreClose}
+              elevation={8}
+              sx={{
+                minWidth: 190,
+                py: 0.75,
+                px: 0.75,
+                borderRadius: 2,
+                border: "1px solid",
+                borderColor: "divider",
+                bgcolor: "background.paper",
+              }}
+            >
+              {moreOrder.map((id) => {
+                const item = MORE_MENU_ROWS[id];
+                const active = currentPath === item.to;
+                return (
+                  <ListItemButton
+                    key={id}
+                    selected={active}
+                    onClick={() => {
+                      setMoreAnchor(null);
+                      navigate(item.to);
+                    }}
+                    sx={{ borderRadius: 1.5, py: 0.6, mb: 0.25 }}
+                  >
+                    <ListItemIcon
+                      sx={{ minWidth: 30, color: "text.secondary", fontSize: 18 }}
+                    >
+                      {cloneElement(item.icon as React.ReactElement, {
+                        fontSize: "inherit",
+                      })}
+                    </ListItemIcon>
+                    <ListItemText
+                      primary={item.label}
+                      primaryTypographyProps={{ fontSize: 13, fontWeight: 500 }}
+                    />
+                  </ListItemButton>
+                );
+              })}
+              <Divider sx={{ my: 0.75 }} />
+              {/* 底部固定那一项：打开自定义面板。它不是「菜单项」，是**入口**，
+                  所以放在分隔线下方——否则它会看起来和上面两项同类 */}
+              <ListItemButton
+                onClick={() => {
+                  setMoreAnchor(null);
+                  setPanelOpen(true);
+                }}
+                sx={{ borderRadius: 1.5, py: 0.6 }}
+              >
+                <ListItemIcon
+                  sx={{ minWidth: 30, color: "text.secondary", fontSize: 18 }}
+                >
+                  <TuneIcon fontSize="inherit" />
+                </ListItemIcon>
+                <ListItemText
+                  primary="自定义菜单栏"
+                  primaryTypographyProps={{ fontSize: 13, fontWeight: 500 }}
+                />
+              </ListItemButton>
+            </Paper>
+          </Fade>
+        )}
+      </Popper>
+
+      <CustomMenuPanel
+        open={panelOpen}
+        onClose={() => setPanelOpen(false)}
+        primary={PRIMARY_MENU_ROWS}
+        more={MORE_MENU_ROWS}
+      />
     </Box>
   );
 }

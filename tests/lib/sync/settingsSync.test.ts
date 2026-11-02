@@ -58,6 +58,8 @@ function fullSettings(overrides: Partial<Settings> = {}): Settings {
     knownWorkspaces: ['D:\\dev'],
     sidebarCollapsed: true,
     hiddenSessions: ['s-1', 's-2'],
+    primaryMenuOrder: ['tasks', 'knowledge', 'capabilities', 'more'],
+    moreMenuOrder: ['projects', 'audit'],
     shortcuts: {},
     enabledPlugins: ['foo@bar'],
     defaultWorkspacePath: 'C:\\Users\\tester\\NanoWork',
@@ -168,6 +170,26 @@ describe('toSyncPayload：偏好要真的跟过来', () => {
 
     // 防回归：将来有人误把 processDetail 加进 SETTINGS_SYNC_OMIT_KEYS 时这条会红
     expect(payload).toHaveProperty('processDetail', 'full');
+  });
+
+  it('侧边栏菜单顺序随偏好上行（是用户排列，不是本机环境）', () => {
+    const payload = toSyncPayload(
+      fullSettings({
+        primaryMenuOrder: ['more', 'tasks', 'knowledge', 'capabilities'],
+        moreMenuOrder: ['audit', 'projects'],
+      }),
+    );
+
+    // 「我把菜单调成了这样」是跨设备成立的偏好：换台机器应该长得一样。
+    // 它不能被误当成「本机环境」——与 hiddenSessions 的区别在于，
+    // 那张表描述的是「本机上有哪些会话」，而这张表只是排列。
+    expect(payload).toHaveProperty('primaryMenuOrder', [
+      'more',
+      'tasks',
+      'knowledge',
+      'capabilities',
+    ]);
+    expect(payload).toHaveProperty('moreMenuOrder', ['audit', 'projects']);
   });
 
   it('排除表逐条核对：表里列了的，负载里一个都不能有', () => {

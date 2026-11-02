@@ -217,6 +217,21 @@ export interface Settings {
    * 兜底默认 `[]`，老用户迁移见 settingsStore 的 v8 迁移函数。
    */
   hiddenSessions?: string[];
+  // —— 侧边栏菜单自定义顺序 ——
+  /**
+   * 一级菜单的显示顺序（「自定义菜单栏」拖拽结果）。
+   *
+   * 存**菜单 id**（见 `lib/ui/sidebarMenu` 的 `PrimaryMenuId`）而不是下标或文案：
+   * 下标会在增删菜单项时整体错位，文案会在改文案时全部失效，两者都不报错，
+   * 只表现为「顺序莫名其妙变了」。
+   *
+   * 语义是「用户偏好的排列」，因此它**可同步**（跨设备一致），与本机环境字段不同。
+   * 兜底默认 `[]` = 用代码里的默认顺序；读取侧一律过 `normalizeMenuOrder` 补齐，
+   * 老用户迁移见 settingsStore 的 v16。
+   */
+  primaryMenuOrder?: string[];
+  /** 「更多」二级菜单的显示顺序，口径与 `primaryMenuOrder` 完全一致 */
+  moreMenuOrder?: string[];
   // —— 快捷键（设置弹窗「快捷键」分区）——
   /**
    * 用户改键覆盖表：`ShortcutId → 键位串`（格式见 `lib/editor/shortcuts` 的文件头注释）。

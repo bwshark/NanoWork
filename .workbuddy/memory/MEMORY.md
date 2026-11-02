@@ -32,6 +32,16 @@ FR 权威：`docs/nanowork-prd-design-v2.md` 第 3 章；逐日细节 `YYYY-MM-D
 - ⛔ Agent 新字段改三处：`types/agent.ts` + `agentsStore.buildAgent` + `mergeAgents`。
 - vitest 全量必带 `--maxWorkers=3 --silent`（不加会刷 13 万行 act 告警 → `ERR_IPC_CHANNEL_CLOSED`、拿不到汇总行）；`EPERM node-brokered-fs-shim` 重跑即绿。
 - `npm run build` 偶发 vite panic → 单跑 `npx vite build` 重定向日志更稳。
+- ⛔ MUI `Popper` **不传** `TransitionProps` → `<Fade {...TransitionProps}>` 的 `in` 恒 false，
+  浮层渲染了却 `opacity:0`+`visibility:hidden`（DOM/尺寸/文案全正常，只看像素才发现）。
+  必须显式 `in appear`。jsdom 不跑 CSS transition，只能断言内联 style 没有隐藏态。
+- 侧边栏菜单顺序存 **id** 不存下标/文案；归一化必须补缺失项（否则新增入口静默消失）；
+  存储侧 `normalizeStoredMenuOrder` 空表保持空表，渲染侧才补成完整顺序。
+- ⛔ 拖拽落库只提交被拖那一段（两段都传会把没动过的那段从「默认」变成「已调过」）。
+  几何判据用「列表顶 + 槽位 × **行距**」的 `pointerdown` 快照（用行高会逐行累积偏差）；
+  会话放 `ref` 不放 state（`pointermove` 每帧读，setState 异步会重复算位移）。
+- jsdom 无布局（`getBoundingClientRect()` 恒 0）→ 测拖拽必须伪造矩形；`setPointerCapture` 是
+  `undefined` → 用 `?.()`。浮层与触发器之间的缝隙要延时关闭（180ms），否则「一闪就没」。
 
 ## 语音输入（STT）
 - ⛔ 引擎 `serve` **没有** `/audio/transcriptions`（STT 只在 channel + gateway WS 事件里）→ 客户端必须**直连服务商**。

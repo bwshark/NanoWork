@@ -13,6 +13,13 @@ import {
   TRANSCRIPTION_PROVIDER_NAMES,
 } from '@/lib/voice/providers';
 import { metaForEdit } from '@/lib/sync/syncStamp';
+import {
+  MORE_MENU_IDS,
+  PRIMARY_MENU_IDS,
+  normalizeMenuOrder,
+  normalizeStoredMenuOrder,
+} from '@/lib/ui/sidebarMenu';
+import type { MoreMenuId, PrimaryMenuId } from '@/lib/ui/sidebarMenu';
 import type {
   ConnectionStatus,
   DesktopConfig,
@@ -89,6 +96,18 @@ interface SettingsState {
   setShortcut: (id: ShortcutId, binding: string | null) => void;
   /** 全部快捷键恢复默认（清空覆盖表） */
   resetShortcuts: () => void;
+  /**
+   * 保存侧边栏菜单顺序（「自定义菜单栏」拖拽提交时调用）。
+   *
+   * 存**归一化后**的完整顺序而不是用户传进来的原样：调用方传半截表（比如只改
+   * 「更多」组）时，若原样落盘，另一组就会因为「缺失项」被补到末尾 —— 用户没动
+   * 的那一组顺序会自己变。归一化在写入侧做，读侧就不必依赖「表一定完整」这个
+   * 只有这里能保证的前提。
+   */
+  setMenuOrder: (patch: {
+    primary?: readonly PrimaryMenuId[];
+    more?: readonly MoreMenuId[];
+  }) => void;
 }
 
 /**
@@ -170,6 +189,10 @@ const DEFAULT_SETTINGS: Settings = {
   knownWorkspaces: [],
   sidebarCollapsed: false,
   hiddenSessions: [],
+  // 空表 = 用 `lib/ui/sidebarMenu` 里的默认顺序。**刻意不预填默认值全集**：
+  // 那样日后调整默认顺序（比如新增一项）会被这张表挡住，老用户永远收不到。
+  primaryMenuOrder: [],
+  moreMenuOrder: [],
   // 空表 = 全部使用默认键位。刻意不写「默认值全集」：那样任何一次默认键位调整
   // 都会被这张表挡住，老用户永远收不到新的默认值。
   shortcuts: {},
@@ -270,17 +293,30 @@ export const useSettingsStore = create<SettingsState>()(
       resetShortcuts: () =>
         // 清空快捷键表是改动**可同步字段**（对端应收到「恢复默认」）→ bump
         set((s) => ({ settings: { ...s.settings, shortcuts: {} }, syncMeta: metaForEdit(s.syncMeta) })),
+      setMenuOrder: ({ primary, more }) =>
+        // 菜单顺序是**用户偏好**（跨设备成立）→ bump 同步元数据，与 shortcuts 同口径
+        set((s) => ({
+          settings: {
+            ...s.settings,
+            ...(primary
+              ? { primaryMenuOrder: normalizeMenuOrder(primary, PRIMARY_MENU_IDS) }
+              : {}),
+            ...(more ? { moreMenuOrder: normalizeMenuOrder(more, MORE_MENU_IDS) } : {}),
+          },
+          syncMeta: metaForEdit(s.syncMeta),
+        })),
     }),
     {
       name: STORAGE_KEYS.settings,
       storage: zustandStorage,
       // v14：记忆 v2 策略（蒸馏门槛 / 归档阈值 / 注入预算）
       // v15：转录配置新增 `provider`（原来只有 endpoint，直连服务商后必须知道是谁）。
+      // v16：侧边栏菜单自定义顺序（`primaryMenuOrder` / `moreMenuOrder`）。
       // 老用户的持久化里没有这个字段 → 浅合并已补 `groq`，但这里再归一化一次：
       // 手工写入的未知 provider 会让 `findTranscriptionProvider` 落到 custom 分支，
       // 而 custom 的 apiBase 为空 → 请求 URL 拼成 `/audio/transcriptions`（无 host），
       // 表现为 fetch 直接抛 TypeError。提前收敛到合法值比事后排查便宜得多。
-      version: 15,
+      version: 16,
       migrate: (persistedState) => {
         const state = persistedState as Partial<SettingsState> | undefined;
         if (state?.settings?.gatewayEndpoint?.includes(':8765')) {
@@ -360,6 +396,22 @@ export const useSettingsStore = create<SettingsState>()(
           // ——`undefined` 会算成 NaN，门槛**静默失效**（不报错、不告警，只是「怎么都不晋升」）。
           // 归一化同时管住区间：持久化文件可能被手工改成 `"30"` 或 `-1`。
           state.settings.memoryPolicy = normalizeMemoryPolicy(state.settings.memoryPolicy);
+          // v16：侧边栏菜单顺序。老用户没有这两个字段 → 空表即「用默认顺序」，
+          // 但**仍显式归一化成数组**：读侧会对它做 `map` / `includes`，
+          // 残留 null 或字符串会在那里抛错（与 v7 / v8 的 `sidebarCollapsed` /
+          // `hiddenSessions` 同一类问题，只是这次坏在拖拽面板里）。
+          //
+          // ⚠️ 空表**必须保持空表**，不能写成默认顺序全集：写成全集等于替用户
+          // 「调过了」，日后调整默认顺序老用户就永远收不到——正是 `shortcuts`
+          // 那条注释里说过的同一个坑。非空表才需要归一化（补缺项 / 丢非法 id）。
+          state.settings.primaryMenuOrder = normalizeStoredMenuOrder(
+            state.settings.primaryMenuOrder,
+            PRIMARY_MENU_IDS,
+          );
+          state.settings.moreMenuOrder = normalizeStoredMenuOrder(
+            state.settings.moreMenuOrder,
+            MORE_MENU_IDS,
+          );
         }
         if (state) {
           // v12：同步元数据兄弟切片。老用户没有它 → 补默认值（`rev = 0` = 从未改过）。

@@ -175,8 +175,74 @@ describe('settingsStore 迁移 v12 → v13：processDetail 补齐', () => {
   });
 });
 
-describe('settingsStore 迁移健壮性', () => {
-  it('非法 theme 兜底为 dark', async () => {
+describe('settingsStore 迁移 v15 → v16：侧边栏菜单顺序', () => {
+  it('v15 数据没有菜单顺序字段：迁移后是空表（= 用默认顺序，而不是替用户「调过」）', async () => {
+    await rehydrateLegacy(
+      { settings: { gatewayEndpoint: DEFAULT_GATEWAY, theme: 'dark' }, status: 'offline' },
+      15,
+    );
+    const s = useSettingsStore.getState().settings;
+
+    // ⚠️ 判据是**空表**而不是默认顺序全集：写成全集等于替用户「已经调过」，
+    // 日后调整默认顺序老用户就永远收不到（与 `shortcuts` 同一条纪律）。
+    expect(s.primaryMenuOrder).toEqual([]);
+    expect(s.moreMenuOrder).toEqual([]);
+  });
+
+  it('v15 数据里残留 null：归一化成数组，不会让渲染侧崩溃', async () => {
+    await rehydrateLegacy(
+      {
+        settings: {
+          gatewayEndpoint: DEFAULT_GATEWAY,
+          primaryMenuOrder: null,
+          moreMenuOrder: null,
+        },
+        status: 'offline',
+      },
+      15,
+    );
+    const s = useSettingsStore.getState().settings;
+    expect(Array.isArray(s.primaryMenuOrder)).toBe(true);
+    expect(Array.isArray(s.moreMenuOrder)).toBe(true);
+  });
+
+  it('已存过的顺序原样保留，不被默认值覆盖', async () => {
+    await rehydrateLegacy(
+      {
+        settings: {
+          gatewayEndpoint: DEFAULT_GATEWAY,
+          primaryMenuOrder: ['more', 'tasks', 'knowledge', 'capabilities'],
+          moreMenuOrder: ['audit', 'projects'],
+        },
+        status: 'offline',
+      },
+      15,
+    );
+    const s = useSettingsStore.getState().settings;
+    expect(s.primaryMenuOrder).toEqual(['more', 'tasks', 'knowledge', 'capabilities']);
+    expect(s.moreMenuOrder).toEqual(['audit', 'projects']);
+  });
+
+  it('表里含非法 id：迁移时丢掉，不留到渲染侧去踩 undefined', async () => {
+    await rehydrateLegacy(
+      {
+        settings: {
+          gatewayEndpoint: DEFAULT_GATEWAY,
+          primaryMenuOrder: ['ghost', 'tasks'],
+          moreMenuOrder: ['nope'],
+        },
+        status: 'offline',
+      },
+      15,
+    );
+    const s = useSettingsStore.getState().settings;
+    // 非法项丢掉、缺失项补齐 —— 补齐很关键：不补的话那一项入口就永远消失
+    expect(s.primaryMenuOrder).toEqual(['tasks', 'knowledge', 'capabilities', 'more']);
+    expect(s.moreMenuOrder).toEqual(['projects', 'audit']);
+  });
+});
+
+describe('settingsStore 迁移健壮性', () => {  it('非法 theme 兜底为 dark', async () => {
     await rehydrateLegacy(
       { settings: { gatewayEndpoint: DEFAULT_GATEWAY, theme: 'neon' }, status: 'offline' },
       3,
