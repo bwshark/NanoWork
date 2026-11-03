@@ -181,6 +181,7 @@ def verify_file(client: Client, kb_id: str, org_id: str, path: Path) -> bool:
 REQUIRED_ROUTE_PREFIXES = (
     "/api/orgs/{org_id}/projects",
     "/api/projects/{project_id}",
+    "/api/orgs/{org_id}/assets",
     "/api/models/builtin",
 )
 

@@ -45,6 +45,7 @@ import AutoFixHighIcon from "@mui/icons-material/AutoFixHigh";
 import HubIcon from "@mui/icons-material/Hub";
 import MenuBookIcon from "@mui/icons-material/MenuBook";
 import WorkOutlineIcon from "@mui/icons-material/WorkOutline";
+import Inventory2OutlinedIcon from "@mui/icons-material/Inventory2Outlined";
 import WidgetsOutlinedIcon from "@mui/icons-material/WidgetsOutlined";
 import HistoryIcon from "@mui/icons-material/History";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
@@ -151,6 +152,7 @@ const PRIMARY_MENU_ROWS: Record<PrimaryMenuId, NavRouteItem> = {
  */
 const MORE_MENU_ROWS: Record<MoreMenuId, NavRouteItem> = {
   projects: { label: "项目", icon: <WorkOutlineIcon />, to: ROUTES.projects },
+  orgAssets: { label: "组织资产", icon: <Inventory2OutlinedIcon />, to: ROUTES.orgAssets },
   audit: { label: "审计", icon: <HistoryIcon />, to: ROUTES.audit },
 };
 

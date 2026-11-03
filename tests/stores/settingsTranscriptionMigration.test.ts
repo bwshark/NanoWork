@@ -220,7 +220,8 @@ describe('settingsStore 迁移 v15 → v16：侧边栏菜单顺序', () => {
     );
     const s = useSettingsStore.getState().settings;
     expect(s.primaryMenuOrder).toEqual(['more', 'tasks', 'knowledge', 'capabilities']);
-    expect(s.moreMenuOrder).toEqual(['audit', 'projects']);
+    // 新增的 orgAssets 由归一化补在末尾：老用户表里没有它，但不能因此消失
+    expect(s.moreMenuOrder).toEqual(['audit', 'projects', 'orgAssets']);
   });
 
   it('表里含非法 id：迁移时丢掉，不留到渲染侧去踩 undefined', async () => {
@@ -238,7 +239,7 @@ describe('settingsStore 迁移 v15 → v16：侧边栏菜单顺序', () => {
     const s = useSettingsStore.getState().settings;
     // 非法项丢掉、缺失项补齐 —— 补齐很关键：不补的话那一项入口就永远消失
     expect(s.primaryMenuOrder).toEqual(['tasks', 'knowledge', 'capabilities', 'more']);
-    expect(s.moreMenuOrder).toEqual(['projects', 'audit']);
+    expect(s.moreMenuOrder).toEqual(['projects', 'orgAssets', 'audit']);
   });
 });
 

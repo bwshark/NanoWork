@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
 import {
   Box,
   Button,
+  CircularProgress,
   Collapse,
   Dialog,
   Divider,
@@ -18,7 +19,20 @@ import FolderOpenIcon from '@mui/icons-material/FolderOpen';
 import RestoreIcon from '@mui/icons-material/Restore';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import OpenInBrowserIcon from '@mui/icons-material/OpenInBrowser';
+import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh';
 import { ArtifactRenderer } from '@/components/ArtifactRenderer';
+
+/**
+ * FR-7.5 圈选改写编辑器走 `lazy()`。
+ *
+ * 本面板在 `AppLayout` 的**静态**依赖链上，而改写编辑器会带上 MUI TextField 与
+ * 改写服务（内含 `connectionManager`）。静态挂上去等于为「用户万一点那颗按钮」
+ * 抬高首屏——与 `ExtensionPreviewAction` 同一条纪律（本项目有 1.5 MB 首屏预算门禁）。
+ * 按钮本身很轻（一个布尔 state），编辑器点开才下载。
+ */
+const SelectionRewriteEditor = lazy(() =>
+  import('./SelectionRewriteEditor').then((m) => ({ default: m.SelectionRewriteEditor })),
+);
 import { ArtifactPreviewBody } from './ArtifactPreviewBody';
 import { WebFrame, WebUrlBar, toFileUrl } from './WebTabView';
 import type { WebTab } from './WebTabView';
@@ -129,6 +143,14 @@ export function ArtifactPanel() {
   const [versionOpen, setVersionOpen] = useState(false);
   const [compare, setCompare] = useState<{ bHash: string; bLabel: string } | null>(null);
   const [versionHash, setVersionHash] = useState<string | null>(null);
+
+  /**
+   * FR-7.5 圈选改写：进入编辑态。
+   *
+   * 放在面板层而不是预览组件里：改写成功后要让**面板**刷新正文（正文来自索引
+   * `contentHash` + `bodies`），预览组件自己拿不到那个新 hash。
+   */
+  const [rewriteOpen, setRewriteOpen] = useState(false);
 
   /**
    * 网页标签的刷新计数：地址没变，只能靠换 `key` 让 iframe 重新加载。
@@ -271,6 +293,9 @@ export function ArtifactPanel() {
     setVersionHash(null);
     setCompare(null);
     setVersionOpen(false);
+    // 改写编辑区是**产物私有**的（正文与选区都绑在当前产物上），换标签必须退出，
+    // 否则用户会在下一个产物的面板里看到上一个文件的正文
+    setRewriteOpen(false);
   }, [activeTabId]);
 
   /** 把某版本的 `contentHash` 还原成可渲染的 `Artifact`（正文从内容池回填） */
@@ -477,6 +502,24 @@ export function ArtifactPanel() {
                     <ContentCopyIcon sx={{ fontSize: 15 }} />
                   </IconButton>
                 </Tooltip>
+                {/*
+                  FR-7.5 圈选改写：只在「当前版本」下给入口。
+                  预览历史版本时正文是只读回放，改写落库会写回当前版，用户会以为
+                  自己改的是那一版历史 —— 语义对不上，所以先要求返回当前版本。
+                */}
+                {!versionHash && (
+                  <Tooltip title={rewriteOpen ? '退出改写' : '圈选改写'} placement="bottom">
+                    <IconButton
+                      size="small"
+                      aria-label={rewriteOpen ? '退出改写' : '圈选改写'}
+                      sx={{ p: 0.4 }}
+                      color={rewriteOpen ? 'primary' : 'default'}
+                      onClick={() => setRewriteOpen((v) => !v)}
+                    >
+                      <AutoFixHighIcon sx={{ fontSize: 15 }} />
+                    </IconButton>
+                  </Tooltip>
+                )}
               </>
             ) : null}
           </Box>
@@ -539,7 +582,31 @@ export function ArtifactPanel() {
                 )}
               </Box>
               <Box sx={{ px: 1.25, py: 1 }}>
-                {previewResolved && <ArtifactPreviewBody artifact={previewResolved} />}
+                {rewriteOpen && previewResolved ? (
+                  <Suspense
+                    fallback={
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, color: 'text.secondary', py: 2 }}>
+                        <CircularProgress size={12} sx={{ color: 'text.secondary' }} />
+                        <Typography sx={{ fontSize: 12.5 }}>加载改写面板…</Typography>
+                      </Box>
+                    }
+                  >
+                    <SelectionRewriteEditor
+                      artifact={previewResolved}
+                      onApplied={() => {
+                        // 改写成功后正文来自索引的新 `contentHash`，回填由 `previewResolved`
+                        // 的 useMemo 自动完成；这里只需退出编辑态并展开版本历史，
+                        // 让用户立刻看到「多了一版」
+                        setRewriteOpen(false);
+                        setVersionHash(null);
+                        setVersionOpen(true);
+                      }}
+                      onClose={() => setRewriteOpen(false)}
+                    />
+                  </Suspense>
+                ) : (
+                  previewResolved && <ArtifactPreviewBody artifact={previewResolved} />
+                )}
               </Box>
 
               {/* 版本历史（FR-7.4）：列表 + 预览 / 对比 / 回退 */}

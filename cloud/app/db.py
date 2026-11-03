@@ -53,6 +53,7 @@ def create_db_and_tables() -> None:
     from app.kb import models as _kb_models  # noqa: F401
     from app.migrations import ensure_columns
     from app.orgs import models as _org_models  # noqa: F401
+    from app.orgassets import models as _org_asset_models  # noqa: F401
     from app.sync import models as _sync_models  # noqa: F401
 
     SQLModel.metadata.create_all(engine)

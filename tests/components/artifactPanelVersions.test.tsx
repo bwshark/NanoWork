@@ -12,13 +12,14 @@
  * 的规则一旦坏掉，这组测试照样绿。
  */
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react';
 import { click, mount, unmount } from '../helpers/reactMount';
 import { ArtifactPanel } from '@/components/artifacts/ArtifactPanel';
 import { useArtifactsStore } from '@/stores/artifactsStore';
 import { useSessionUiStore } from '@/stores/sessionUiStore';
 import { fileArtifactId } from '@/lib/artifact/fileArtifact';
+import { platform } from '@/platform';
 
 const SESSION = 's1';
 const PATH = 'D:/aa/report.md';
@@ -206,5 +207,34 @@ describe('产物面板：回退到历史版本', () => {
     // 被回退掉的那一版正文必须仍可读到（否则「历史不丢」是空话）
     const v2 = after.versions?.find((v) => v.version === 2);
     expect(useArtifactsStore.getState().bodies[v2?.contentHash ?? '']).toBe('第二版正文');
+  });
+
+  /**
+   * FR-8.9 接线：回退必须留痕。
+   *
+   * 为什么单独立一条：版本号是**向前**涨的（回退 = 新开一版），所以事后翻版本历史
+   * 只会看到「又有了一版」，完全看不出「有人把正文换回了旧版」——而这恰恰是最该
+   * 追查的一类动作。审计是唯一能回答它的地方，漏接则整件事静默消失。
+   */
+  it('回退会写一条 artifact.rollback 审计（版本历史本身说不出「有人回到旧版」）', () => {
+    const append = vi.spyOn(platform, 'auditAppendApp').mockResolvedValue({ ok: true });
+    const id = record('旧正文');
+    record('新正文', 'modified');
+    openPanel(id);
+
+    const host = mount(<ArtifactPanel />);
+    expandVersions(host);
+    act(() => {
+      click(iconBtn(host, '回退到此版本')[0]);
+    });
+
+    const lines = append.mock.calls.flatMap((call) => call[0]);
+    const rollback = lines
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .find((row) => row.action === 'artifact.rollback');
+    expect(rollback, '回退没有写审计').toBeTruthy();
+    expect(rollback?.targetId).toBe(id);
+    // 只留哈希前 8 位：全文哈希对读日志的人没有信息量，前 8 位足够对上版本条目
+    expect(String((rollback?.detail as Record<string, unknown>)?.version)).toHaveLength(8);
   });
 });

@@ -140,6 +140,13 @@ export const ROUTES = {
   /** 项目空间（FR-12.7）：成员 + 共享知识库的协作容器 */
   projects: '/projects',
   /**
+   * 组织资产（FR-2.6）：管理员把个人专家 / 技能 / 提示词模板发布成全组织可见。
+   *
+   * 与「项目」并列在低频但需要常在的档位（侧栏「更多」二级菜单）：日常不天天进，
+   * 但每次新人入职都要用一次。
+   */
+  orgAssets: '/org-assets',
+  /**
    * 能力扩展（Extension）：对齐 WorkBuddy `resources/extensions/` 的宿主资产。
    *
    * 与插件（`~/.nanowork/plugins`）分开：插件改 AI 的技能与工具面（文本资产），

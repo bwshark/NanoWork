@@ -86,4 +86,29 @@ describe('应用操作档的两个来源', () => {
     expect(text).toContain('新建专家');
     expect(text).not.toContain('采纳 Dream 合并');
   });
+
+  it('网关写的「外发消息」也出现在表里，且渲染成中文而不是裸 id', async () => {
+    // 主进程会把 serve 与 gateway 两份拼成一段 content 交上来；
+    // 这里直接模拟合并后的结果，钉住「动作 -> 标签」这条路真的通到界面。
+    vi.mocked(platform.auditReadAppEngine).mockResolvedValue({
+      path: 'C:/data/audit/app-operations.ndjson',
+      exists: true,
+      content: [
+        ENGINE_APP_LOG,
+        '{"ts":"2026-10-23T04:00:00.000+00:00","action":"message.send","outcome":"ok","actor":"engine","targetLabel":"oc_v3_abc123","detail":{"channel":"feishu.feishu","chars":42}}',
+      ].join('\n'),
+    });
+    const host = mount(<AuditPage />);
+    await flush();
+
+    await click(buttonByText(host, '应用操作')!);
+    await flush();
+
+    const text = host.textContent ?? '';
+    expect(text).toContain('外发消息');
+    // 会话标识要露出来：这条账回答的是「发给了哪条 IM 线程」
+    expect(text).toContain('oc_v3_abc123');
+    // 裸 id 说明标签表漏了这条 —— 界面会退化成让人猜 action 拼写
+    expect(text).not.toContain('message.send');
+  });
 });

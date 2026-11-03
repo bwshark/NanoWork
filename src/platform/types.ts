@@ -1584,11 +1584,15 @@ export interface PlatformAdapter {
   /** 读取应用操作审计日志（形状与 `auditRead()` 一致，便于同一套解析与展示）。 */
   auditReadApp(): Promise<AuditLogReadResult>;
   /**
-   * 读取**引擎侧**应用操作审计（`<data_dir>/audit/app-operations.ndjson`）。
+   * 读取**引擎侧**应用操作审计。
    *
-   * 与本机那份是两个文件、同一套行格式：本机记「人点的按钮」，引擎记「引擎真的做了什么」
-   * （Dream 采纳、配置热加载、任务库重载）。合并展示时用 `origin` 区分，不合并文件——
-   * 两个进程各写各的，混写在同一个文件里迟早写花。
+   * 与本机那份同一套行格式、不同落点：本机记「人点的按钮」，引擎记「引擎真的做了什么」
+   * （Dream 采纳、配置热加载、任务库重载、经网关把消息发到 IM）。合并展示时用 `origin`
+   * 区分，不合并文件——多个进程各写各的，混写在同一个文件里迟早写花。
+   *
+   * ⚠️ 引擎侧是**两份**：`serve` 与 `gateway` 是两个并行进程，各写
+   * `app-operations.ndjson` / `app-operations.gateway.ndjson`。主进程读回时拼成一段
+   * NDJSON 再交上来（`content` 已是合并结果），所以这层看到的仍是一条时间轴。
    */
   auditReadAppEngine(): Promise<AuditLogReadResult>;
 }

@@ -217,7 +217,7 @@ describe('「自定义菜单栏」面板', () => {
       '能力扩展',
       '更多',
     ]);
-    expect(sectionLabels('more')).toEqual(['项目', '审计']);
+    expect(sectionLabels('more')).toEqual(['项目', '组织资产', '审计']);
   });
 
   it('面板行序跟着 store 走（自定义顺序会被真正渲染出来）', async () => {
@@ -228,6 +228,19 @@ describe('「自定义菜单栏」面板', () => {
     await openPanel(host);
 
     expect(sectionLabels('primary')).toEqual(['更多', '能力扩展', '定时任务', '知识库']);
+  });
+
+  it('⛔ 老用户的顺序表里没有新入口时，面板也要把它补出来', async () => {
+    // 真事故：`moreMenuOrder` 是上次保存时的快照，不含后来新增的行。面板曾直接拿
+    // 它当工作副本 → 新入口只在侧边栏浮层里出现、在面板里排不到（看起来像「这一行
+    // 不支持排序」）。判据是「面板里必须能看见它」，不是「顺序对不对」。
+    useSettingsStore.setState((s) => ({
+      settings: { ...s.settings, moreMenuOrder: ['audit', 'projects'] },
+    }));
+    const host = renderSidebar();
+    await openPanel(host);
+
+    expect(sectionLabels('more')).toEqual(['审计', '项目', '组织资产']);
   });
 
   it('「恢复默认」把两段顺序都清回默认', async () => {
@@ -241,7 +254,7 @@ describe('「自定义菜单栏」面板', () => {
     const host = renderSidebar();
     await openPanel(host);
     expect(sectionLabels('primary')).toEqual(['更多', '定时任务', '知识库', '能力扩展']);
-    expect(sectionLabels('more')).toEqual(['审计', '项目']);
+    expect(sectionLabels('more')).toEqual(['审计', '项目', '组织资产']);
 
     click(
       Array.from(dialogRoot().querySelectorAll('button')).find(
@@ -252,7 +265,7 @@ describe('「自定义菜单栏」面板', () => {
 
     // 面板当场更新
     expect(sectionLabels('primary')).toEqual(['定时任务', '知识库', '能力扩展', '更多']);
-    expect(sectionLabels('more')).toEqual(['项目', '审计']);
+    expect(sectionLabels('more')).toEqual(['项目', '组织资产', '审计']);
     // store 也真的写了（不是只改了本地副本）
     const s = useSettingsStore.getState().settings;
     expect(s.primaryMenuOrder).toEqual([...PRIMARY_MENU_IDS]);
@@ -349,15 +362,16 @@ describe('拖拽排序（端到端）', () => {
     await openPanel(host);
     stubLayout('more');
 
-    expect(sectionLabels('more')).toEqual(['项目', '审计']);
-    // 只有两行，把第 0 行拖到第 1 行
+    expect(sectionLabels('more')).toEqual(['项目', '组织资产', '审计']);
+    // 把第 0 行（项目）拖到第 1 位：后两行保持相对顺序
     dragTo(handleAt('more', 0), LIST_TOP + (ROW_HEIGHT + ROW_GAP) + 20);
     await settle(30);
 
-    expect(sectionLabels('more')).toEqual(['审计', '项目']);
+    expect(sectionLabels('more')).toEqual(['组织资产', '项目', '审计']);
     expect(useSettingsStore.getState().settings.moreMenuOrder).toEqual([
-      'audit',
+      'orgAssets',
       'projects',
+      'audit',
     ]);
     // 一级菜单不该被连带改动
     expect(useSettingsStore.getState().settings.primaryMenuOrder).toEqual([]);

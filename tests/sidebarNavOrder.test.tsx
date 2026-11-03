@@ -179,7 +179,7 @@ describe('「更多」二级菜单', () => {
     const rows = Array.from(pop.querySelectorAll('.MuiListItemButton-root')).map(
       (n) => (n.textContent ?? '').trim(),
     );
-    expect(rows).toEqual(['项目', '审计', '自定义菜单栏']);
+    expect(rows).toEqual(['项目', '组织资产', '审计', '自定义菜单栏']);
     expect(pop.querySelector('.MuiDivider-root'), '缺少分隔线').toBeTruthy();
   });
 

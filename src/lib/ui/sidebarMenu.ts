@@ -24,7 +24,7 @@
 export type PrimaryMenuId = 'tasks' | 'knowledge' | 'capabilities' | 'more';
 
 /** 「更多」浮层里的行 */
-export type MoreMenuId = 'projects' | 'audit';
+export type MoreMenuId = 'projects' | 'orgAssets' | 'audit';
 
 /** 一级菜单默认顺序（也是「补齐缺失项」的基准顺序） */
 export const PRIMARY_MENU_IDS: readonly PrimaryMenuId[] = [
@@ -35,7 +35,7 @@ export const PRIMARY_MENU_IDS: readonly PrimaryMenuId[] = [
 ];
 
 /** 「更多」浮层默认顺序 */
-export const MORE_MENU_IDS: readonly MoreMenuId[] = ['projects', 'audit'];
+export const MORE_MENU_IDS: readonly MoreMenuId[] = ['projects', 'orgAssets', 'audit'];
 
 /**
  * 把持久化里的顺序表收敛成「合法且完整」的顺序。

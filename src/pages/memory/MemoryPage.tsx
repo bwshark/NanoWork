@@ -34,6 +34,7 @@ import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { platform } from '@/platform';
 import { toast } from '@/components/Toast';
 import { fileKeyOf, getBackupContent } from '@/lib/artifact/fileBackup';
+import { recordAppAudit } from '@/lib/audit/appAudit';
 import { useFileBackupStore, type BackupEntry } from '@/stores/fileBackupStore';
 import type { MemoryScope, MemoryScopeSummary } from '@/types';
 
@@ -260,6 +261,14 @@ export function MemoryPage({
         if (content === null) throw new Error('该版本备份已丢失');
         if (scope === 'user') await MemoryService.save(content, 'user');
         else await MemoryService.writeFile(undefined, file, content);
+        // FR-8.9：回滚**覆盖了磁盘上的长期记忆**，而记忆会影响之后每一个回合。
+        // 这份文件被改过这件事，事后必须查得到是谁、回到哪一版（哈希前 8 位足够对上备份条目）。
+        recordAppAudit({
+          action: 'memory.rollback',
+          targetId: scope === 'user' ? 'user-memory' : file,
+          targetLabel: scope === 'user' ? '用户级长期记忆' : file,
+          detail: { version: entry.hash.slice(0, 8) },
+        });
       },
       '已回滚到所选版本',
       '回滚失败',

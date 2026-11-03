@@ -20,3 +20,4 @@ export * from './channel';
 export * from './plugin';
 export * from './sync';
 export * from './usage';
+export * from './orgAsset';

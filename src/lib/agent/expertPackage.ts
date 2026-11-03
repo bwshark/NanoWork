@@ -287,7 +287,10 @@ function normalizeName(name: string): string {
 }
 
 /** 重名时依次尝试「（导入）」「（导入 2）」……上限之后退回带时间戳的名字。 */
-function uniqueExpertName(base: string, taken: Set<string>): { name: string; renamed: boolean } {
+function uniqueExpertName(
+  base: string,
+  taken: Set<string>,
+): { name: string; renamed: boolean } {
   if (!taken.has(normalizeName(base))) return { name: base, renamed: false };
   const withTag = `${base}（导入）`;
   if (!taken.has(normalizeName(withTag))) return { name: withTag, renamed: true };
@@ -296,6 +299,22 @@ function uniqueExpertName(base: string, taken: Set<string>): { name: string; ren
     if (!taken.has(normalizeName(candidate))) return { name: candidate, renamed: true };
   }
   return { name: `${base}（导入 ${Date.now()}）`, renamed: true };
+}
+
+/**
+ * 对外入口：给「本机已有专家名」，返回一个不撞名的名字。
+ *
+ * 导出而不是只在本模块用：组织资产导入（FR-2.6）是**另一条入口**（云端快照，不是
+ * 专家包），但「导入进来的专家重名怎么办」必须只有一个答案 —— 两份实现迟早分叉成
+ * 「从包导入叫（导入 2）、从组织资产导入直接撞名」。
+ */
+export function dedupeExpertName(
+  base: string,
+  existingNames: Iterable<string>,
+): { name: string; renamed: boolean } {
+  const taken = new Set<string>();
+  for (const name of existingNames) taken.add(normalizeName(name));
+  return uniqueExpertName(base, taken);
 }
 
 /**
@@ -312,9 +331,7 @@ export function planExpertImport(
   pkg: ExpertPackage,
   ctx: ExpertImportContext,
 ): ExpertImportPlan {
-  const taken = new Set<string>();
-  for (const name of ctx.existingNames) taken.add(normalizeName(name));
-  const { name, renamed } = uniqueExpertName(pkg.agent.name, taken);
+  const { name, renamed } = dedupeExpertName(pkg.agent.name, ctx.existingNames);
 
   const localSkills = new Set(ctx.skillIds);
   const boundSkillIds: string[] = [];

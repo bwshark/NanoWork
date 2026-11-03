@@ -64,13 +64,25 @@ export type AppAuditAction =
   | 'task.delete'
   | 'task.toggle'
   | 'session.delete'
+  | 'artifact.rewrite'
+  // 「把文件换回旧版」：版本号是向前涨的，事后看历史只看到「又生成了一版」，
+  // 看不出「有人回到了旧版」——所以回退必须单独留痕。
+  | 'artifact.rollback'
+  | 'memory.rollback'
+  | 'orgAsset.publish'
+  | 'orgAsset.update'
+  | 'orgAsset.withdraw'
+  | 'orgAsset.import'
   | 'security.deny_write'
   | 'security.path_rules'
   // —— 引擎侧（actor=engine，由 nanobot 自己写）——
   | 'dream.accept'
   | 'dream.reject'
   | 'config.reload'
-  | 'cron.reload';
+  | 'cron.reload'
+  // 网关进程写的：内容被**送出本机**（`POST /v1/send` 把写好的文本投给 IM 渠道）。
+  // 它不过工具网关，所以工具那档留痕里一行都不会有——单独一条动作 id 才查得到。
+  | 'message.send';
 
 /** 动作的中文标签（界面与 CSV 用；缺一条就渲染成裸 id，等于让人猜）。 */
 export const APP_AUDIT_ACTION_LABELS: Record<AppAuditAction, string> = {
@@ -100,6 +112,14 @@ export const APP_AUDIT_ACTION_LABELS: Record<AppAuditAction, string> = {
   'task.delete': '删除定时任务',
   'task.toggle': '启停定时任务',
   'session.delete': '删除会话',
+  'artifact.rewrite': '圈选改写产物',
+  'artifact.rollback': '回退产物版本',
+  'memory.rollback': '回滚长期记忆',
+  'orgAsset.publish': '发布组织资产',
+  // 改名称/说明：与「发布」分开记，否则审计里看不出是新增了一条还是改了一条
+  'orgAsset.update': '修改组织资产信息',
+  'orgAsset.withdraw': '撤回组织资产',
+  'orgAsset.import': '导入组织资产',
   'security.deny_write': '切换默认拒绝写入',
   'security.path_rules': '修改路径权限规则',
   // 引擎侧动作：id 与 `nanobot/security/audit.py` 里 `record_app_operation(action=…)`
@@ -108,9 +128,10 @@ export const APP_AUDIT_ACTION_LABELS: Record<AppAuditAction, string> = {
   'dream.reject': '丢弃 Dream 合并',
   'config.reload': '热加载引擎配置',
   'cron.reload': '重载定时任务库',
+  'message.send': '外发消息',
 };
 
-/** 动作分组（界面按域分组筛选，避免一个 28 项的下拉）。 */
+/** 动作分组（界面按域分组筛选；动作已有 40+，平铺成一个下拉等于让人用滚轮找）。 */
 export const APP_AUDIT_ACTION_GROUPS: Record<string, AppAuditAction[]> = {
   '专家': ['agent.create', 'agent.import', 'agent.update', 'agent.delete', 'agent.toggle'],
   '扩展': [
@@ -132,8 +153,26 @@ export const APP_AUDIT_ACTION_GROUPS: Record<string, AppAuditAction[]> = {
     'channel.delete',
     'channel.enable',
     'channel.disable',
+    // 「外发」放到渠道这组：它回答的是「这台机器往外送过什么」，
+    // 排查时人也是从「哪个渠道」开始找的。
+    'message.send',
   ],
-  '自动化与数据': ['task.create', 'task.update', 'task.delete', 'task.toggle', 'session.delete'],
+  '自动化与数据': [
+    'task.create',
+    'task.update',
+    'task.delete',
+    'task.toggle',
+    'session.delete',
+    'artifact.rewrite',
+    'artifact.rollback',
+    'memory.rollback',
+  ],
+  '组织资产': [
+    'orgAsset.publish',
+    'orgAsset.update',
+    'orgAsset.withdraw',
+    'orgAsset.import',
+  ],
   '安全': ['security.deny_write', 'security.path_rules'],
   '引擎侧': ['dream.accept', 'dream.reject', 'config.reload', 'cron.reload'],
 };

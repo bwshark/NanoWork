@@ -27,6 +27,7 @@ from app.db import create_db_and_tables, engine
 from app.kb import routes as kb_routes
 from app.orgs import department_routes
 from app.orgs import routes as org_routes
+from app.orgassets import routes as org_asset_routes
 from app.projects import routes as project_routes
 from app.sync import routes as sync_routes
 
@@ -76,6 +77,7 @@ app.include_router(org_routes.router)
 app.include_router(department_routes.router)
 app.include_router(kb_routes.router)
 app.include_router(project_routes.router)
+app.include_router(org_asset_routes.router)
 app.include_router(account_routes.router)
 
 

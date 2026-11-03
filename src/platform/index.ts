@@ -765,7 +765,10 @@ export const platform: PlatformAdapter = {
     if (isElectron() && window.electronAPI) return window.electronAPI.auditReadApp();
     return Promise.resolve({ path: '', exists: false, content: '' });
   },
-  /** 引擎侧应用操作审计：与本机那份同一套行格式、不同落点，界面靠 origin 区分 */
+  /**
+   * 引擎侧应用操作审计：与本机那份同一套行格式、不同落点，界面靠 origin 区分。
+   * 引擎侧是两份（serve / gateway），主进程已合并成一段 NDJSON 再交上来。
+   */
   auditReadAppEngine: (): Promise<AuditLogReadResult> => {
     if (isElectron() && window.electronAPI) return window.electronAPI.auditReadAppEngine();
     return Promise.resolve({ path: '', exists: false, content: '' });

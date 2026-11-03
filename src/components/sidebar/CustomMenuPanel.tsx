@@ -35,7 +35,13 @@ import { Box, Button, Dialog, IconButton, Typography } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
 import DragIndicatorIcon from '@mui/icons-material/DragIndicator';
 import { useSettingsStore } from '@/stores/settingsStore';
-import { MORE_MENU_IDS, PRIMARY_MENU_IDS, dropInsertIndex, moveMenuItem } from '@/lib/ui/sidebarMenu';
+import {
+  MORE_MENU_IDS,
+  PRIMARY_MENU_IDS,
+  dropInsertIndex,
+  moveMenuItem,
+  normalizeMenuOrder,
+} from '@/lib/ui/sidebarMenu';
 import type { MoreMenuId, PrimaryMenuId } from '@/lib/ui/sidebarMenu';
 
 /** 面板里一行菜单的展示信息（文案 + 图标由调用方给，本组件不关心业务含义） */
@@ -250,14 +256,15 @@ export function CustomMenuPanel({ open, onClose, primary, more }: CustomMenuPane
 
   // 打开时把 store 里的顺序读进工作副本：面板是「每次打开重新开始编辑」的语义，
   // 关掉不保存就等于放弃这次修改（参考视频里也没有「保存」按钮）
+  //
+  // ⚠️ 必须过 `normalizeMenuOrder`，不能直接拿 store 里那串。老用户的 `moreMenuOrder`
+  // 是上次保存时的菜单快照，**不含后来新增的行** —— 直接当工作副本用，新入口就只能在
+  // 侧边栏浮层里看到、在面板里排不到（看起来像「这一行不支持排序」）。
+  // 归一化顺带处理空表（未调过）与非法 id，与渲染侧用的是同一个函数。
   useEffect(() => {
     if (!open) return;
-    setDraftPrimary(
-      (primaryMenuOrder?.length ? primaryMenuOrder : PRIMARY_MENU_IDS) as PrimaryMenuId[],
-    );
-    setDraftMore(
-      (moreMenuOrder?.length ? moreMenuOrder : MORE_MENU_IDS) as MoreMenuId[],
-    );
+    setDraftPrimary(normalizeMenuOrder(primaryMenuOrder, PRIMARY_MENU_IDS));
+    setDraftMore(normalizeMenuOrder(moreMenuOrder, MORE_MENU_IDS));
   }, [open, primaryMenuOrder, moreMenuOrder]);
 
   const [drag, setDrag] = useState<DragSession | null>(null);

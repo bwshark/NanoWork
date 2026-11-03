@@ -41,6 +41,10 @@ import { createEngineInstaller } from './engineInstall';
 import type { EngineSelfCheckReport } from '../src/types/engine';
 import { normalizeEngineChannelAllowFrom } from './channelAllowFrom';
 import {
+  mergeEngineAppAuditContent,
+  resolveEngineAppAuditTargets,
+} from './engineAppAuditLog';
+import {
   GATEWAY_HEALTH_HOST,
   GATEWAY_HEALTH_PORT,
   buildChannelApprovalResolveRequest,
@@ -3925,29 +3929,55 @@ const APP_AUDIT_MAX_LINE = 4000;
 const APP_AUDIT_MAX_BATCH = 50;
 
 /**
- * 引擎侧应用操作审计的落点：与工具审计**同目录**、换文件名。
+ * 引擎侧应用操作审计的落点：与工具审计**同目录**，且有**两份**。
  *
  * 不放进 `<userData>/audit/`（那是渲染层那份）：引擎按自己的 data_dir 写，
  * 主进程只负责读——让引擎往 userData 写等于把「引擎不认识 userData」这条边界抹掉。
- * `NANOBOT_APP_AUDIT_LOG` 与引擎侧同名，客户端或用户在启动引擎时若重定向过，
- * 这里读同一处；否则按工具审计的目录推断。
+ *
+ * 为什么是两份：`serve`（/v1 API）与 `gateway`（IM 渠道长连接）是**两个并行进程**
+ * （见本文件启动编排里的 `Promise.all`），两边都可能有「非工具类动作」要记。
+ * 让它们往同一个文件 append，正确性就押在「单次 write 小于 PIPE_BUF 时 O_APPEND
+ * 原子」这条平台细节上——行被内核切开就是两行都坏，而解析层对坏行只能整行丢弃，
+ * 等于悄悄丢证据。因此网关写 `app-operations.gateway.ndjson`，这里读回来拼成一段。
+ *
+ * 两个 env 与引擎侧同名；**显式空串即关闭那一份**（与 `nanobot/security/audit.py`
+ * 同一约定）。此前这里把空串当成「没设」继续按默认路径找，结果是「已经关掉了，
+ * 界面却还在展示关闭前的旧账」。
  */
-async function resolveEngineAppAuditLogPath(): Promise<string> {
-  const envOverride = process.env.NANOBOT_APP_AUDIT_LOG;
-  if (envOverride && envOverride.trim()) {
-    return join(envOverride.trim());
-  }
-  return join(dirname(await resolveAuditLogPath()), 'app-operations.ndjson');
+async function resolveEngineAppAuditLogPaths(): Promise<string[]> {
+  const dir = dirname(await resolveAuditLogPath());
+  return resolveEngineAppAuditTargets(
+    {
+      app: process.env.NANOBOT_APP_AUDIT_LOG,
+      gateway: process.env.NANOBOT_GATEWAY_AUDIT_LOG,
+    },
+    dir,
+  );
 }
 
 ipcMain.handle('audit:read-app-engine', async () => {
-  const target = await resolveEngineAppAuditLogPath();
-  try {
-    const data = await fs.readFile(target, 'utf-8');
-    return { path: target, exists: true, content: data };
-  } catch {
-    return { path: target, exists: false, content: '' };
+  const targets = await resolveEngineAppAuditLogPaths();
+  if (targets.length === 0) {
+    // 两份都被显式关闭：回空而不是回「路径不存在」，免得界面提示去一个
+    // 永远不会出现的文件里找。
+    return { path: '', exists: false, content: '' };
   }
+  const chunks: string[] = [];
+  for (const target of targets) {
+    try {
+      chunks.push(await fs.readFile(target, 'utf-8'));
+    } catch {
+      // 单份缺失照常继续：全新安装时网关那份还不存在，不该因此丢掉 serve 那份。
+    }
+  }
+  const merged = mergeEngineAppAuditContent(chunks);
+  return {
+    // 只报第一份（serve 那份）：内容是把两份拼起来的，任何单一文件都不是完整答案，
+    // 所以 `path` 的用途仅是「在文件管理器中打开这个目录」，不需要把清单也传上去。
+    path: targets[0],
+    exists: merged.exists,
+    content: merged.content,
+  };
 });
 
 ipcMain.handle('audit:read-app', async () => {

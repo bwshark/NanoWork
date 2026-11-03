@@ -4,6 +4,7 @@ import { platform, zustandStorage } from '@/platform';
 import { STORAGE_KEYS } from '@/lib/core/constants';
 import { artifactContentHash, buildIndexEntry } from '@/lib/artifact/artifactIndex';
 import { isFileArtifact } from '@/lib/artifact/fileArtifact';
+import { recordAppAudit } from '@/lib/audit/appAudit';
 import type { Artifact, ArtifactIndexEntry, ArtifactVersionMeta, SyncTombstones } from '@/types';
 
 interface ArtifactsState {
@@ -244,6 +245,15 @@ export const useArtifactsStore = create<ArtifactsState>()(
           title: title ?? existing.title,
           content,
           createdAt: new Date().toISOString(),
+        });
+        // FR-8.9：回退把正文换成了旧版本，而版本号是**向前**涨的——事后看历史只会
+        // 看到「又生成了一版」，看不出「有人回到了旧版」。这条账专门回答后者。
+        // 只记目标哈希（前 8 位）：全文哈希对读日志的人没有信息量，但足够对上版本条目。
+        recordAppAudit({
+          action: 'artifact.rollback',
+          targetId: artifactId,
+          targetLabel: existing.title,
+          detail: { version: targetHash.slice(0, 8) },
         });
       },
 
