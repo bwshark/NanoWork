@@ -1,6 +1,6 @@
 # nanowork · 智能办公助手
 
-基于 [HKUDS nanobot](https://github.com/HKUDS/nanobot) 引擎、**对标 WorkBuddy** 的跨端智能体（Agent）客户端。同一套 React 渲染层既能在浏览器运行，也能被 Electron 加载为桌面应用；始终直连真实 nanobot 网关进行端到端对话，连接状态实时探测（connected / offline）。
+基于 [HKUDS nanobot](https://github.com/HKUDS/nanobot) 引擎、跨端智能体（Agent）客户端。同一套 React 渲染层既能在浏览器运行，也能被 Electron 加载为桌面应用；始终直连真实 nanobot 网关进行端到端对话，连接状态实时探测（connected / offline）。
 
 > 引擎契约：nanobot 暴露 OpenAI 兼容的 `/v1/chat/completions` SSE 接口（`delta.content` 文本流 + 标准 `tool_calls` 增量 + 富产物）。
 
