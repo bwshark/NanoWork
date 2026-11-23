@@ -17,6 +17,7 @@ import { useTasksStore } from '@/stores/tasksStore';
 import type {
   ProjectDetail,
   ProjectGateway,
+  ProjectMemory,
   ProjectSummary,
 } from '@/lib/project/projectClient';
 import { PROJECT_LOGIN_REQUIRED } from '@/lib/project/projectClient';
@@ -112,9 +113,23 @@ function detailOf(p: ProjectSummary, over: Partial<ProjectDetail> = {}): Project
 }
 
 function fakeProjectGateway(
-  options: { list?: ProjectSummary[]; detail?: ProjectDetail } = {},
+  options: {
+    list?: ProjectSummary[];
+    detail?: ProjectDetail;
+    /** 共享记忆（FR-12.7 ③）；缺省是「项目还没写过」 */
+    memory?: Partial<ProjectMemory>;
+  } = {},
 ): { gateway: ProjectGateway; listCalls: { orgId: string; includeArchived: boolean }[] } {
   const listCalls: { orgId: string; includeArchived: boolean }[] = [];
+  const memoryOf = (): ProjectMemory => ({
+    text: '',
+    rev: 0,
+    updatedAt: '',
+    updatedBy: '',
+    canEdit: true,
+    maxChars: 20000,
+    ...options.memory,
+  });
   const gateway: ProjectGateway = {
     listProjects: async (orgId, input) => {
       listCalls.push({ orgId, includeArchived: input?.includeArchived === true });
@@ -134,6 +149,11 @@ function fakeProjectGateway(
     removeMember: async () => ({ ok: true, data: undefined }),
     addKb: async () => ({ ok: true, data: { id: 'k1', name: '库', documentCount: 0 } }),
     removeKb: async () => ({ ok: true, data: undefined }),
+    getMemory: async () => ({ ok: true, data: memoryOf() }),
+    putMemory: async (_projectId, input) => ({
+      ok: true,
+      data: { ...memoryOf(), text: input.text, rev: input.rev + 1 },
+    }),
   };
   return { gateway, listCalls };
 }
@@ -460,6 +480,71 @@ describe('项目空间页', () => {
 
     const moved = useTasksStore.getState().tasks.find((t) => t.id === 't-free');
     expect(moved?.projectId).toBe('p1');
+    unmount();
+  });
+});
+
+describe('项目空间页 · 共享记忆（FR-12.7 ③）', () => {
+  /**
+   * 三条口径：空白要有话、正文按原文展示、编辑入口只认服务端的 `canEdit`。
+   *
+   * 「只认 canEdit」这条是本组的重点：前端自己算「我是不是 lead」就是第二套权限规则，
+   * 服务端一改必漏（项目页其余入口已经踩过同一条纪律）。
+   */
+  const openProject = async (gateway: ProjectGateway) => {
+    render(gateway, fakeKbGateway());
+    await waitForSettled(() => (document.body.textContent ?? '').includes('登月计划'));
+    click(listItemByText('登月计划'));
+    await waitForSettled(() => (document.body.textContent ?? '').includes('成员（2）'));
+  };
+
+  it('项目还没写共享记忆时给一句人话，而不是一块空白', async () => {
+    const p = project();
+    const { gateway } = fakeProjectGateway({ list: [p], detail: detailOf(p) });
+    await openProject(gateway);
+
+    const text = document.body.textContent ?? '';
+    expect(text).toContain('共享记忆');
+    // 空白区会被读成「加载失败」，所以必须有一句话说明这是「还没写」
+    expect(text).toContain('还没写共享记忆');
+    unmount();
+  });
+
+  it('有正文时按原文展示，并摆出「谁什么时候改的」', async () => {
+    const p = project();
+    const { gateway } = fakeProjectGateway({
+      list: [p],
+      detail: detailOf(p),
+      memory: {
+        text: '本项目一律用 pnpm。',
+        rev: 2,
+        updatedAt: '2026-11-17T10:00:00Z',
+        updatedBy: 'boss@corp.example',
+        canEdit: true,
+      },
+    });
+    await openProject(gateway);
+    // 记忆是**另一次请求**（详情先到、记忆后到），所以等到正文自己出现再断言
+    await waitForSettled(() => (document.body.textContent ?? '').includes('pnpm'));
+
+    const text = document.body.textContent ?? '';
+    expect(text).toContain('本项目一律用 pnpm。');
+    expect(text).toContain('boss@corp.example');
+    unmount();
+  });
+
+  it('canEdit=false 时不给「编辑」入口（成员只读，且不自己算权限）', async () => {
+    const p = project({ myRole: '', canManage: false });
+    const { gateway } = fakeProjectGateway({
+      list: [p],
+      detail: detailOf(p),
+      memory: { text: '只读正文', canEdit: false },
+    });
+    await openProject(gateway);
+    await waitForSettled(() => (document.body.textContent ?? '').includes('只读正文'));
+
+    // 正文读得到（读权限不收窄到项目成员），但没有写入口
+    expect(buttonByText(document, '编辑')).toBeNull();
     unmount();
   });
 });

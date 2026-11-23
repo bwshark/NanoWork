@@ -102,6 +102,28 @@ class ProjectDetailView(BaseModel):
     kbs: list[ProjectKbView]
 
 
+#: 共享记忆正文上限。与知识库文档的「超限报错而不是截断」同一条纪律：
+#: 截断是**静默丢内容**，用户看见的是「保存成功」，下次打开发现少了一段。
+PROJECT_MEMORY_MAX_CHARS = 20000
+
+
+class ProjectMemoryView(BaseModel):
+    text: str
+    rev: int
+    updatedAt: str
+    #: 最后写入者的邮箱（解析不出来时回空串，不拿 id 冒充）
+    updatedBy: str
+    #: 我能不能改。**由服务端算好**，前端不要重算「我是不是 lead」——那是第二套规则
+    canEdit: bool
+    maxChars: int
+
+
+class UpdateProjectMemoryRequest(BaseModel):
+    text: str = Field(default="")
+    #: 我读到的版本号。与服务端不一致即 409（乐观锁），不静默覆盖
+    rev: int = Field(ge=0)
+
+
 def _project_or_404(session: Session, project_id: str, user: User) -> tuple[Project, OrgMember]:
     """取项目 + 调用者的组织成员记录。
 
@@ -239,6 +261,73 @@ def create_project(
     return _view(
         project, member_count=1, kb_count=0, my_role=PROJECT_ROLE_LEAD, org_role=member.role
     )
+
+
+def _memory_view(session: Session, project: Project, user: User, org_role: str) -> ProjectMemoryView:
+    writer = session.get(User, project.memory_updated_by) if project.memory_updated_by else None
+    return ProjectMemoryView(
+        text=project.memory_doc,
+        rev=project.memory_rev,
+        updatedAt=project.memory_updated_at,
+        updatedBy=writer.email if writer is not None else "",
+        canEdit=_can_manage(_project_role(session, project.id, user.id), org_role),
+        maxChars=PROJECT_MEMORY_MAX_CHARS,
+    )
+
+
+@router.get("/api/projects/{project_id}/memory", response_model=ProjectMemoryView)
+def get_project_memory(
+    project_id: str,
+    user: User = Depends(current_user),
+    session: Session = Depends(get_session),
+) -> ProjectMemoryView:
+    """读项目共享记忆（项目所在组织的成员都可读）。
+
+    读权限**不再收窄到项目成员**：组织成员本来就能看到项目列表与详情，把记忆藏起来
+    只会让人以为「这项目没有记忆」，而它其实在别处被注入了提示词。
+    """
+    project, member = _project_or_404(session, project_id, user)
+    return _memory_view(session, project, user, member.role)
+
+
+@router.put("/api/projects/{project_id}/memory", response_model=ProjectMemoryView)
+def update_project_memory(
+    project_id: str,
+    payload: UpdateProjectMemoryRequest,
+    user: User = Depends(current_user),
+    session: Session = Depends(get_session),
+) -> ProjectMemoryView:
+    """写项目共享记忆（项目 `lead` 或组织 `admin`/`owner`，与改名同一条权限线）。
+
+    ## 为什么带 `rev` 做乐观锁，而不是「最后写的赢」
+
+    共享记忆是**多写者**场景，且每个人补的都是不同事实。LWW 在这里的表现是
+    「B 保存后 A 补的两段凭空消失」——没有报错、没有痕迹，只有某天发现内容少了。
+    409 把选择权交回写入方：重新拉一遍、看清别人改了什么、再合并。
+    """
+    project, member = _project_or_404(session, project_id, user)
+    _require_manage(session, project, user)
+
+    if len(payload.text) > PROJECT_MEMORY_MAX_CHARS:
+        # 400 而不是静默截断：见 PROJECT_MEMORY_MAX_CHARS 的注释
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"共享记忆不能超过 {PROJECT_MEMORY_MAX_CHARS} 字符",
+        )
+    if payload.rev != project.memory_rev:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="共享记忆已被他人修改，请刷新后重新编辑",
+        )
+
+    project.memory_doc = payload.text
+    project.memory_rev += 1
+    project.memory_updated_at = iso_z(utc_now())
+    project.memory_updated_by = user.id
+    session.add(project)
+    session.commit()
+    session.refresh(project)
+    return _memory_view(session, project, user, member.role)
 
 
 @router.get("/api/projects/{project_id}", response_model=ProjectDetailView)

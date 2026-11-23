@@ -6,6 +6,8 @@
  * 2. **已登录** → 头像 + **掩码**账号名（侧栏是常驻可见区域，不铺明文）；
  * 3. 点账号名弹出菜单：**设置 / 意见反馈 / 退出登录**（设置从侧栏独立一行挪进来了）；
  * 4. 菜单项真的接线：「设置」开设置弹窗、「意见反馈」开反馈页、退出登录断开并回到未登录态。
+ * 5. **过期态**（换票被服务端拒绝）自己一套说法：入口写「登录已过期」，菜单首项「重新登录」，
+ *    最后一项改叫「清除本机登录信息」——**不能**再出现「退出登录」，那与「已过期」互相打脸。
  *
  * 还钉住一条容易做错、错了也不报错的**时序**：同步运行时是**启动后异步**出现的
  * （App 启动块要等设备号与会话列表），而本组件在首屏就挂载了。若只在渲染期读一次单例，
@@ -25,9 +27,10 @@ const syncMocks = vi.hoisted(() => {
 
   /** 账户态：登录 / 登出的唯一广播源（与真实 `syncAccount` 的订阅语义一致） */
   const accountListeners = new Set<() => void>();
-  const box: { session: Session | null; runtime: unknown } = {
+  const box: { session: Session | null; runtime: unknown; expired: boolean } = {
     session: null,
     runtime: null,
+    expired: false,
   };
   const emitAccount = (): void => {
     for (const listener of Array.from(accountListeners)) listener();
@@ -37,13 +40,17 @@ const syncMocks = vi.hoisted(() => {
     getSession: () => box.session,
     isAuthenticated: () => box.session !== null,
     getAccessToken: () => box.session?.access ?? null,
+    /** 换票被服务端拒绝的标记（真实实现见 `syncAccount.refreshOnce`） */
+    isSessionExpired: () => box.expired,
     load: async () => undefined,
     setSession: async (next: Session) => {
       box.session = next;
+      box.expired = false;
       emitAccount();
     },
     clearSession: async () => {
       box.session = null;
+      box.expired = false;
       emitAccount();
     },
     refresh: async () => false,
@@ -55,6 +62,7 @@ const syncMocks = vi.hoisted(() => {
     },
     logout: async () => {
       box.session = null;
+      box.expired = false;
       emitAccount();
     },
     deleteAccount: async () => undefined,
@@ -161,6 +169,7 @@ async function openMenu(host: HTMLElement): Promise<void> {
 beforeEach(() => {
   unmount();
   syncMocks.box.session = null;
+  syncMocks.box.expired = false;
   syncMocks.box.runtime = syncMocks.runtime;
   syncMocks.accountListeners.clear();
   syncMocks.runtimeListeners.clear();
@@ -263,5 +272,77 @@ describe('AccountEntry', () => {
 
     expect(byAria('账户菜单', host), '单例出现后没有重读会话').toBeTruthy();
     expect(host.textContent).toContain('li****@nanowork.dev');
+  });
+
+  /*
+   * 过期态：换票被服务端拒绝，本地会话还在、云端已经不能用。
+   *
+   * 这一态存在的全部理由就是「不许自相矛盾」：知识库 / 项目页的横幅写着
+   * 「登录状态已过期」，侧栏就不能还端着一个正常的账号菜单。
+   */
+  it('凭据被拒：侧栏改说「登录已过期」，且仍看得出是哪个账号', () => {
+    syncMocks.box.session = SESSION;
+    syncMocks.box.expired = true;
+    const host = renderEntry();
+
+    expect(byAria('登录已过期', host), '过期态没有独立入口').toBeTruthy();
+    expect(byAria('账户菜单', host), '过期后仍显示成正常已登录').toBeNull();
+    expect(host.textContent).toContain('li****@nanowork.dev');
+    // 依然掩码：过期不等于可以铺明文
+    expect(host.textContent).not.toContain(SESSION.email);
+  });
+
+  it('过期态菜单首项是「重新登录」，点了进登录页且不先登出', async () => {
+    syncMocks.box.session = SESSION;
+    syncMocks.box.expired = true;
+    const host = renderEntry();
+
+    click(byAria('登录已过期', host));
+    await flush();
+    expect(menuItem('重新登录')).toBeTruthy();
+    // 设置照旧可用：过期时更不该把人关在门外
+    expect(menuItem('设置')).toBeTruthy();
+
+    click(menuItem('重新登录'));
+    await flush();
+
+    expect(host.textContent, '点了重新登录却没进登录页').toContain('AUTH_SCREEN');
+    expect(syncMocks.box.session, '跳登录页前把本地会话清了（用户得重新回忆账号）').not.toBeNull();
+  });
+
+  /*
+   * 「重新登录」与「退出登录」并排出现是**自相矛盾**（用户看到「登录已过期」那一行，
+   * 马上就会问「都过期了还退什么」）。过期后没有会话可退，这个动作实际只清本机残留，
+   * 于是它在过期态必须改叫「清除本机登录信息」。
+   */
+  it('过期态不再出现「退出登录」，同一动作用「清除本机登录信息」', async () => {
+    syncMocks.box.session = SESSION;
+    syncMocks.box.expired = true;
+    const host = renderEntry();
+    click(byAria('登录已过期', host));
+    await flush();
+
+    const hasItem = (text: string): boolean =>
+      Array.from(document.querySelectorAll('[role="menuitem"]')).some((n) =>
+        (n.textContent ?? '').includes(text),
+      );
+
+    expect(hasItem('退出登录'), '过期态仍写着「退出登录」（与「登录已过期」矛盾）').toBe(false);
+    expect(hasItem('清除本机登录信息'), '过期态没有清除本机登录信息的入口').toBe(true);
+  });
+
+  it('凭据恢复（换票成功）后侧栏回到正常账户入口', async () => {
+    syncMocks.box.session = SESSION;
+    syncMocks.box.expired = true;
+    const host = renderEntry();
+    expect(byAria('登录已过期', host)).toBeTruthy();
+
+    await act(async () => {
+      syncMocks.box.expired = false;
+      for (const cb of Array.from(syncMocks.accountListeners)) cb();
+    });
+
+    expect(byAria('账户菜单', host), '恢复后仍停在过期态').toBeTruthy();
+    expect(byAria('登录已过期', host)).toBeNull();
   });
 });

@@ -36,7 +36,9 @@ import { useSkillsStore } from '@/stores/skillsStore';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { APP_AUDIT_LOCAL_ACTOR, setAppAuditActorProvider } from '@/lib/audit/appAudit';
 import { setKnowledgeSearchProvider } from '@/lib/agent/agentKnowledgeTurn';
+import { setProjectMemoryProvider } from '@/lib/agent/projectMemoryTurn';
 import { createKbGateway } from '@/lib/kb/kbClient';
+import { createProjectGateway } from '@/lib/project/projectClient';
 import { resolveSyncBaseUrl } from './baseUrl';
 import { useSessionsStore } from '@/stores/sessionsStore';
 import { useArtifactsStore } from '@/stores/artifactsStore';
@@ -219,6 +221,32 @@ export function createSyncRuntime(opts: SyncRuntimeOptions = {}): SyncRuntime {
     });
   });
 
+  /*
+   * 把「项目共享记忆」注入会话链路（FR-12.7 ③）。
+   *
+   * 与知识库同一个手法、同一套理由（只有本模块同时知道云端地址与实时 token；
+   * 反向 import 会成环）。差别只有一条：共享记忆**每轮都可能被别人改过**，
+   * 所以这里也不缓存 —— 每次调用都真的打一次 `GET /api/projects/{id}/memory`。
+   *
+   * 未登录回 401（而不是拿空 token 请求）：云端会把匿名请求判成 401，而那与
+   * 「项目没写记忆」在界面上长得一样，排查时极易误判。
+   */
+  setProjectMemoryProvider(async ({ projectId }) => {
+    const token = account.getAccessToken();
+    if (!token) {
+      return { ok: false, status: 401, message: '未登录账户', unauthorized: true };
+    }
+    const gateway = createProjectGateway({
+      baseUrl: (opts.baseUrl ?? resolveSyncBaseUrl()).replace(/\/+$/, ''),
+      token,
+      // 实时取票 + 401 换票重放一次（access token 30 分钟过期，预取发生在轮次之间）
+      getToken: () => account.getAccessToken(),
+      refreshToken: () => account.refresh(),
+      fetchImpl: opts.fetchImpl,
+    });
+    return gateway.getMemory(projectId);
+  });
+
   return {
     account,
     client,
@@ -239,6 +267,7 @@ export function createSyncRuntime(opts: SyncRuntimeOptions = {}): SyncRuntime {
       setAppAuditActorProvider(null);
       // 知识库检索同理：留着 provider 会让下一个用例用上一个 runtime 的 token 去请求
       setKnowledgeSearchProvider(null);
+      setProjectMemoryProvider(null);
       unsubAccount();
       for (const unsubscribe of unsubscribers) unsubscribe();
       engine.stop();

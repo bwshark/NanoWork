@@ -62,6 +62,7 @@ import { availablePresetIds, resolveTurnModel } from '@/lib/agent/agentBinding';
 import { buildExpertGroupRequest } from '@/lib/agent/expertGroupRequest';
 import { knowledgeQueryFrom, normalizeKnowledgeBinding } from '@/lib/agent/agentKnowledge';
 import { resolveKnowledgeSection } from '@/lib/agent/agentKnowledgeTurn';
+import { resolveProjectMemorySection } from '@/lib/agent/projectMemoryTurn';
 import { useAgentsStore } from './agentsStore';
 import { useArtifactsStore } from './artifactsStore';
 import { useExpertGroupsStore } from './expertGroupsStore';
@@ -932,10 +933,18 @@ async function streamAssistantReply(
   const knowledgeBinding = normalizeKnowledgeBinding(
     agents.find((a) => a.id === session.agentId)?.knowledge,
   );
-  const knowledge = await resolveKnowledgeSection({
-    binding: knowledgeBinding,
-    query: knowledgeQueryFrom(session.messages),
-  });
+  // 0.2 与 0.3 并发：两个都是「可选云端能力」，串行会让每轮多付一趟往返，
+  // 而它们的超时预算各自独立（谁慢谁先降级，不互相拖累）。
+  const [knowledge, projectMemory] = await Promise.all([
+    resolveKnowledgeSection({
+      binding: knowledgeBinding,
+      query: knowledgeQueryFrom(session.messages),
+    }),
+    // 项目共享记忆（FR-12.7 ③）：会话挂在某项目上时，把该项目的团队约定注入本轮。
+    // 与知识库同一套 fail-soft 口径（永不抛 / 有超时 / 未登录跳过）。
+    // 不传 projectName：会话上只有 projectId，为了一句展示文案每轮多打一次详情接口不划算。
+    resolveProjectMemorySection({ projectId: session.projectId }),
+  ]);
 
   // 1) 构造 history：system 段（统一经装配器）+ 历史消息
   //
@@ -1005,6 +1014,7 @@ async function streamAssistantReply(
     userInstructions: settings.userCustomPrompt,
     memory: memoryBlock,
     memoryWrite,
+    projectMemory: projectMemory.section,
     knowledge: knowledge.section,
     skills: skills.map((sk) => sk.prompt),
     localTime: localTimeNote,

@@ -57,6 +57,7 @@ function authAccount(): SyncAccount {
     isAuthenticated: () => true,
     getAccessToken: () => 'tok',
     getSession: () => null,
+    isSessionExpired: () => false,
     load: async () => undefined,
     setSession: async () => undefined,
     clearSession: async () => undefined,
@@ -285,6 +286,7 @@ function switchableAccount(initialUserId: string): {
       userId !== null
         ? { userId, email: `${userId}@example.com`, access: 'tok', refresh: 'r' }
         : null,
+    isSessionExpired: () => false,
     load: async () => undefined,
     setSession: async () => undefined,
     clearSession: async () => undefined,

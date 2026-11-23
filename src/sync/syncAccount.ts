@@ -59,7 +59,19 @@ export interface SyncAccount {
    * 服务端失败时**抛错且不清本地会话**（否则会出现「云端还在、本机以为删了」的最坏状态）。
    */
   deleteAccount(): Promise<void>;
-  /** 订阅会话变更（登录 / 登出 / 轮换）；返回取消订阅函数 */
+  /**
+   * 凭据是否已被服务端**明确拒绝**（换票 401 / 403）。
+   *
+   * 与 `isAuthenticated()` 是**两个维度**：会话仍在本机（邮箱、两张票都还在，本地数据也
+   * 没动），但这张 refresh 已经过期 / 被吊销 / 被判重放，云端任何请求都会 401。UI 必须
+   * 把侧边栏与页面说成同一句话——否则就是用户看到的那幕：侧边栏显示着登录邮箱，页面
+   * 横幅却写着「登录状态已过期」。
+   *
+   * 只由 `refresh()` 收到**服务端拒绝**时置真；网络错误 / 5xx 不算（那时票可能还有效，
+   * 说「过期」是撒谎）。登录、换票成功、登出都会复位。
+   */
+  isSessionExpired(): boolean;
+  /** 订阅会话变更（登录 / 登出 / 轮换 / 凭据被拒）；返回取消订阅函数 */
   subscribe(cb: (session: AccountSession | null) => void): () => void;
 }
 
@@ -159,14 +171,28 @@ function createSyncAccount(
   const fetchImpl = opts.fetchImpl ?? fetch;
 
   let session: AccountSession | null = null;
+  /**
+   * 「凭据被拒」标记。**只活在内存里、不落盘**：它描述的是「上一次换票的结果」，
+   * 重启后凭空恢复成「已过期」是没根据的——重启后第一次请求自然会重新验证。
+   */
+  let expired = false;
   const listeners = new Set<(session: AccountSession | null) => void>();
 
   const emit = (): void => {
     for (const listener of Array.from(listeners)) listener(session);
   };
 
+  /** 只在不变化时静默：过期 / 恢复都要广播出去，否则侧边栏停在旧状态 */
+  const setExpired = (next: boolean): void => {
+    if (expired === next) return;
+    expired = next;
+    emit();
+  };
+
   const apply = async (next: AccountSession | null): Promise<void> => {
     session = next;
+    // 拿到新会话（登录 / 注册 / 换票成功）或清会话（登出）：上一次的「拒绝」结论作废
+    expired = false;
     if (next) {
       await persistence.write(next);
     } else {
@@ -222,9 +248,20 @@ function createSyncAccount(
       // 轮换成功：用新对覆盖，但**不清会话**（userId / email 不变）
       await apply(toSession(pair));
       return true;
-    } catch {
-      // 轮换失败（401 / 网络）：**不清会话**——UI 据此提示「重新登录」，
-      // 而不是把用户踢回未登录、丢掉本地状态
+    } catch (err) {
+      /*
+       * 轮换失败：**不清会话**——UI 据此提示「重新登录」，而不是把用户踢回未登录、
+       * 丢掉本地状态（用例钉住了这一条）。
+       *
+       * 但「失败」有两种，必须分开：
+       * - **服务端明确拒绝**（401 / 403：过期 / 已吊销 / 判为重放）→ 这张票彻底没用了，
+       *   记为「登录已过期」并广播，侧边栏与页面才能说同一句话；
+       * - **网络错误 / 5xx**（`post` 抛出非 `SyncAuthError`，或 502 之类）→ 票可能仍然
+       *   有效，只是这一次没换上。此时说「你的登录已过期」是撒谎，用户会白去重登一次。
+       */
+      if (err instanceof SyncAuthError && (err.status === 401 || err.status === 403)) {
+        setExpired(true);
+      }
       return false;
     }
   };
@@ -253,6 +290,7 @@ function createSyncAccount(
     getAccessToken: () =>
       session !== null && session.access.trim() !== '' ? session.access : null,
     getSession: () => (session ? { ...session } : null),
+    isSessionExpired: () => expired,
 
     async load(): Promise<void> {
       session = await persistence.read();

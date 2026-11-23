@@ -53,6 +53,14 @@ ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     # 2026-10-30 个人知识库：组织种类（team / personal）。
     # 默认 'team' = 老行都是真实团队。反过来（默认 personal）会让历史团队从团队列表里消失。
     ("organizations", "kind", "TEXT NOT NULL DEFAULT 'team'"),
+    # 2026-11-17 项目共享记忆（FR-12.7 ③）。
+    # 空串 = 本项目从未写过共享记忆（与「写过但清空了」是两句话，界面文案不同）。
+    ("projects", "memory_doc", "TEXT NOT NULL DEFAULT ''"),
+    # 乐观锁版本。默认 0 = 老项目都是「还没人写过」，第一次保存从 0 → 1。
+    ("projects", "memory_rev", "INTEGER NOT NULL DEFAULT 0"),
+    # ISO 字符串，空串 = 从未写过。
+    ("projects", "memory_updated_at", "TEXT NOT NULL DEFAULT ''"),
+    ("projects", "memory_updated_by", "TEXT NOT NULL DEFAULT ''"),
 )
 
 #: (索引名, 表名, 列清单)。`CREATE INDEX IF NOT EXISTS` 在 SQLite 与 PostgreSQL

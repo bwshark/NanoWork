@@ -51,6 +51,7 @@ function authAccount(authed: boolean): SyncAccount {
     isAuthenticated: () => authed,
     getAccessToken: () => (authed ? 'tok' : null),
     getSession: () => null,
+    isSessionExpired: () => false,
     load: async () => undefined,
     setSession: async () => undefined,
     clearSession: async () => undefined,

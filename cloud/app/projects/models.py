@@ -54,6 +54,19 @@ class Project(SQLModel, table=True):
     #: 任务与产物的归属还在，恢复后应当原样回来。
     archived_at: str = Field(default="", index=True)
 
+    #: 项目共享记忆（FR-12.7 ③），Markdown 正文。
+    #:
+    #: **存储只有这一份**：客户端不复制、不进 `syncRegistry`。本地再存一份就是两份
+    #: 可能不一致的真相，而共享记忆的全部价值恰恰是「所有人看到的是同一份」。
+    memory_doc: str = Field(default="")
+    #: 乐观锁版本号。共享记忆是**多写者**场景，静默让后写覆盖先写等于「有人补的
+    #: 事实凭空消失」且没有任何报错 —— 所以并发保存必须 409，让写入方自己决定。
+    memory_rev: int = Field(default=0)
+    #: ISO 字符串，空串 = 从未写过（与 `archived_at` 同口径，避开 NULL 与 "" 两种判断）
+    memory_updated_at: str = Field(default="")
+    #: 最后写入者。存 user id 而不是邮箱：邮箱可变，id 是稳定键（展示时再解析）。
+    memory_updated_by: str = Field(default="")
+
 
 class ProjectMember(SQLModel, table=True):
     """(project_id, user_id) 复合主键：一人在一个项目里只有一条成员记录。"""

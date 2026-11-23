@@ -29,6 +29,7 @@ import LibraryAddOutlinedIcon from "@mui/icons-material/LibraryAddOutlined";
 import PlaylistAddIcon from "@mui/icons-material/PlaylistAdd";
 import UnarchiveOutlinedIcon from "@mui/icons-material/UnarchiveOutlined";
 import { toast } from "@/components/Toast";
+import { recordAppAudit } from "@/lib/audit/appAudit";
 import { TaskFormDialog } from "@/components/tasks/TaskFormDialog";
 import { useAgentsStore } from "@/stores/agentsStore";
 import { ROUTES } from "@/lib/core/constants";
@@ -48,9 +49,16 @@ import {
   PROJECT_SESSION_EXPIRED,
   type ProjectDetail,
   type ProjectGateway,
+  type ProjectMemory,
   type ProjectSummary,
 } from "@/lib/project/projectClient";
+import {
+  formatProjectMemoryUpdated,
+  normalizeProjectMemoryText,
+  validateProjectMemoryText,
+} from "@/lib/project/projectMemory";
 import { createRuntimeKbGateway } from "@/sync/kbGateway";
+import { useAuthIssue } from "@/sync/useAuthIssue";
 import { createRuntimeProjectGateway } from "@/sync/projectGateway";
 import { useSyncRuntime } from "@/sync/useSyncRuntime";
 
@@ -95,6 +103,15 @@ export function ProjectsPage({
     setSessionExpired(false);
   }, [client]);
 
+  /*
+   * 与侧边栏共用同一份登录态结论（`account` 记着换票是否被服务端拒绝）：
+   * 否则会出现「侧边栏显示登录邮箱、本页说登录已过期」——同一时刻的两句反话。
+   */
+  const authIssue = useAuthIssue({
+    gatewayReady: client !== null,
+    rejected: sessionExpired,
+  });
+
   const [orgs, setOrgs] = useState<KbOrg[]>([]);
   const [activeOrgId, setActiveOrgId] = useState("");
   const [orgsError, setOrgsError] = useState("");
@@ -130,6 +147,21 @@ export function ProjectsPage({
    */
   const [moveSessionOpen, setMoveSessionOpen] = useState(false);
   const [moveTaskOpen, setMoveTaskOpen] = useState(false);
+
+  /**
+   * 项目共享记忆（FR-12.7 ③）。
+   *
+   * `memory` 里带着 `rev` —— 保存时原样带回，服务端据此判断「我读到的还是不是最新」。
+   * 刻意**不**把正文也塞进 `detail`：它有自己的加载态与失败态（项目详情能打开、
+   * 记忆接口超时是完全可能的），混在一起会让「详情正常但记忆空白」看起来像
+   * 「这个项目没记忆」。
+   */
+  const [memory, setMemory] = useState<ProjectMemory | null>(null);
+  const [memoryLoading, setMemoryLoading] = useState(false);
+  const [memoryOpen, setMemoryOpen] = useState(false);
+  const [memoryDraft, setMemoryDraft] = useState("");
+  const [memoryError, setMemoryError] = useState("");
+  const [memorySaving, setMemorySaving] = useState(false);
 
   const activeOrg = orgs.find((o) => o.id === activeOrgId);
   /** 组织角色只用来决定「删除项目」这一个入口的可见性（服务端只给 admin/owner） */
@@ -232,6 +264,27 @@ export function ProjectsPage({
     [client],
   );
 
+  /**
+   * 读共享记忆。失败**不**写进 `detailError`（那会让整个详情看起来坏了）：
+   * 记忆是附加信息，它读不到时页面其余部分照常可用。
+   */
+  const loadMemory = useCallback(
+    async (projectId: string) => {
+      if (!client || !projectId) return;
+      setMemoryLoading(true);
+      const result = await client.getMemory(projectId);
+      setMemoryLoading(false);
+      if (!result.ok) {
+        if (result.unauthorized) setSessionExpired(true);
+        // 读不到就明确置空：留着上一个项目的记忆比空着更糟（会张冠李戴）
+        setMemory(null);
+        return;
+      }
+      setMemory(result.data);
+    },
+    [client],
+  );
+
   useEffect(() => {
     void loadOrgs();
   }, [loadOrgs]);
@@ -242,14 +295,74 @@ export function ProjectsPage({
 
   useEffect(() => {
     setDetail(null);
+    setMemory(null);
     setDeleteArmed(false);
-    if (activeId) void loadDetail(activeId);
-  }, [activeId, loadDetail]);
+    if (activeId) {
+      void loadDetail(activeId);
+      void loadMemory(activeId);
+    }
+  }, [activeId, loadDetail, loadMemory]);
 
   const refreshAll = async () => {
     if (!activeOrgId) return;
     await loadProjects(activeOrgId);
     if (activeId) await loadDetail(activeId);
+  };
+
+  /** 打开编辑：草稿从**当前已加载的正文**开始（不重新拉一次，避免把别人的改动静默吞进草稿） */
+  const openMemoryEditor = () => {
+    setMemoryDraft(memory?.text ?? "");
+    setMemoryError("");
+    setMemoryOpen(true);
+  };
+
+  const saveMemory = async () => {
+    if (!client || !activeId || !memory) return;
+    // 归一在保存前做（CRLF → LF、去 BOM）：只做无损变换，不动缩进（见 projectMemory.ts）
+    const text = normalizeProjectMemoryText(memoryDraft);
+    const check = validateProjectMemoryText(text, memory.maxChars);
+    if (!check.ok) {
+      setMemoryError(check.message);
+      return;
+    }
+    setMemorySaving(true);
+    setMemoryError("");
+    const result = await client.putMemory(activeId, { text, rev: memory.rev });
+    setMemorySaving(false);
+
+    if (!result.ok) {
+      if (result.status === 409) {
+        /*
+         * 别人先改了。**不自动重试**：自动重试就是把对方的改动静默覆盖掉，
+         * 而共享记忆是多写者场景，静默覆盖正是它最容易丢内容的方式。
+         * 做法是重新拉一版（`rev` 与正文预览都更新），草稿保留不丢，
+         * 让写的人自己看一眼再决定要不要覆盖。
+         */
+        await loadMemory(activeId);
+        setMemoryError(
+          "别人刚改过这份共享记忆：已重新加载最新版本，你的草稿仍然保留。请先对比一下再决定是否保存。",
+        );
+        return;
+      }
+      if (result.unauthorized) {
+        setSessionExpired(true);
+        return;
+      }
+      setMemoryError(result.message);
+      return;
+    }
+
+    setMemory(result.data);
+    setMemoryOpen(false);
+    recordAppAudit({
+      action: "project.memory.update",
+      targetId: activeId,
+      targetLabel: detail?.project.name ?? activeId,
+      // 记**字数与版本号**而不是正文：共享记忆会随每轮对话进入提示词，
+      // 但审计是「谁改了什么」，不是内容仓库
+      detail: { rev: result.data.rev, chars: result.data.text.length },
+    });
+    toast.success("共享记忆已保存");
   };
 
   const createProject = async () => {
@@ -458,7 +571,7 @@ export function ProjectsPage({
     [allTasks],
   );
 
-  if (client === null) {
+  if (client === null || authIssue === "anonymous") {
     return (
       <Box sx={{ p: 3 }}>
         <Alert
@@ -563,8 +676,21 @@ export function ProjectsPage({
             {KB_OFFLINE_HINT}
           </Alert>
         )}
-        {sessionExpired && (
-          <Alert severity="warning" sx={{ m: 1 }}>
+        {authIssue === "expired" && (
+          <Alert
+            severity="warning"
+            sx={{ m: 1 }}
+            action={
+              <Button
+                size="small"
+                color="inherit"
+                onClick={() => navigate(ROUTES.auth)}
+                sx={{ textTransform: "none", whiteSpace: "nowrap" }}
+              >
+                重新登录
+              </Button>
+            }
+          >
             {PROJECT_SESSION_EXPIRED}
           </Alert>
         )}
@@ -707,6 +833,54 @@ export function ProjectsPage({
             </Box>
 
             <Box>
+              <Stack direction="row" spacing={1} sx={{ alignItems: "center", mb: 0.5 }}>
+                <Typography variant="subtitle2" sx={{ fontWeight: 500 }}>
+                  共享记忆
+                </Typography>
+                <Typography variant="caption" sx={{ color: "text.secondary" }}>
+                  {formatProjectMemoryUpdated(memory?.updatedAt ?? "", memory?.updatedBy ?? "")}
+                </Typography>
+                <Box sx={{ flex: 1 }} />
+                {memory?.canEdit && (
+                  <Button size="small" onClick={openMemoryEditor}>
+                    编辑
+                  </Button>
+                )}
+              </Stack>
+              <Typography
+                variant="caption"
+                sx={{ color: "text.secondary", display: "block", mb: 1 }}
+              >
+                团队成员共享，每轮对话都会作为背景注入；只有项目负责人和组织管理员能改。
+              </Typography>
+              {memoryLoading ? (
+                <CircularProgress size={16} />
+              ) : memory && memory.text.trim() !== "" ? (
+                <Paper
+                  variant="outlined"
+                  sx={{
+                    p: 1.5,
+                    maxHeight: 220,
+                    overflowY: "auto",
+                    // 正文是 Markdown 原文，等宽 + 保留换行比渲染成富文本更诚实：
+                    // 这里要回答的是「里面到底写了什么」，不是「看起来漂亮吗」
+                    whiteSpace: "pre-wrap",
+                    fontFamily: "monospace",
+                    fontSize: 12.5,
+                  }}
+                >
+                  {memory.text}
+                </Paper>
+              ) : (
+                <Typography variant="body2" sx={{ color: "text.secondary" }}>
+                  {memory?.canEdit
+                    ? "这个项目还没写共享记忆。写下团队共用的背景与约定，成员每轮对话都会看到。"
+                    : "这个项目还没写共享记忆"}
+                </Typography>
+              )}
+            </Box>
+
+            <Box>
               <Typography variant="subtitle2" sx={{ fontWeight: 500, mb: 1 }}>
                 任务（{projectTasks.length}）
               </Typography>
@@ -839,6 +1013,68 @@ export function ProjectsPage({
           <Button onClick={() => setCreateOpen(false)}>取消</Button>
           <Button variant="contained" disabled={busy || !newName.trim()} onClick={() => void createProject()}>
             创建
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={memoryOpen}
+        onClose={() => setMemoryOpen(false)}
+        fullWidth
+        maxWidth="md"
+      >
+        <DialogTitle>编辑共享记忆</DialogTitle>
+        <DialogContent>
+          <Stack spacing={1.5} sx={{ mt: 1 }}>
+            <Typography variant="caption" sx={{ color: "text.secondary" }}>
+              这段内容所有项目成员都能看到，并从下一轮对话起作为背景注入。写背景与约定，
+              不要写密钥或一次性信息。
+            </Typography>
+            <TextField
+              value={memoryDraft}
+              onChange={(e) => setMemoryDraft(e.target.value)}
+              multiline
+              minRows={12}
+              maxRows={24}
+              fullWidth
+              placeholder="例如：\n- 本项目前端一律用 pnpm，不要用 npm。\n- 接口约定见 docs/api.md，改动要先同步。"
+              // 用 inputProps 而不是 label：多行框的 label 会浮在边框上，
+              // 而这里已经有一行说明文字，再来一个浮动标签是重复信息
+              inputProps={{ "aria-label": "共享记忆正文" }}
+              sx={{ "& textarea": { fontFamily: "monospace", fontSize: 13 } }}
+            />
+            <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
+              <Typography
+                variant="caption"
+                sx={{
+                  color:
+                    memory && memoryDraft.length > memory.maxChars
+                      ? "error.main"
+                      : "text.secondary",
+                }}
+              >
+                {memoryDraft.length} / {memory?.maxChars ?? 0} 字符
+              </Typography>
+              <Box sx={{ flex: 1 }} />
+              <Typography variant="caption" sx={{ color: "text.secondary" }}>
+                {formatProjectMemoryUpdated(memory?.updatedAt ?? "", memory?.updatedBy ?? "")}
+              </Typography>
+            </Stack>
+            {memoryError && <Alert severity="warning">{memoryError}</Alert>}
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setMemoryOpen(false)}>取消</Button>
+          <Button
+            variant="contained"
+            disabled={
+              memorySaving ||
+              !memory ||
+              (memory ? !validateProjectMemoryText(memoryDraft, memory.maxChars).ok : true)
+            }
+            onClick={() => void saveMemory()}
+          >
+            {memorySaving ? "保存中…" : "保存"}
           </Button>
         </DialogActions>
       </Dialog>

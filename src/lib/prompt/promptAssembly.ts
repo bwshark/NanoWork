@@ -31,9 +31,10 @@ import type { AssembledSection } from '@/types';
  * 7  user-instructions    <user_custom_instructions>
  * 8  memory               长期记忆块
  * 9  memory-write         记忆写入协议（Agent 主动记一条的写法）
- * 10 knowledge           知识库检索结果（本轮组织资料）
- * 11 skills               本会话挂载的技能正文
- * 12 local-time           本地时间（相对时间换算基准）
+ * 10 project-memory       项目共享记忆（会话属某项目时才有）
+ * 11 knowledge            知识库检索结果（本轮组织资料）
+ * 12 skills               本会话挂载的技能正文
+ * 13 local-time           本地时间（相对时间换算基准）
  * ```
  *
  * 三条排序理由，都不是随手排的：
@@ -115,6 +116,12 @@ export interface AssemblePromptInput {
    * 那会让模型以为检索过了、确实没有，该追问时也追问。
    */
   knowledge?: string;
+  /**
+   * 项目共享记忆段（已含 `<project_memory>` 标签，见 `lib/project/projectMemory.ts`）。
+   *
+   * 空串 = 会话不属任何项目，或那个项目还没写共享记忆 —— 同样整段跳过。
+   */
+  projectMemory?: string;
   /** 本会话挂载的技能正文（已按挂载顺序排好） */
   skills?: string[];
   /** 本地时间提示正文 */
@@ -189,6 +196,11 @@ export function assemblePromptSections(input: AssemblePromptInput): AssembledSec
   // 写入协议紧贴记忆块之后：模型刚「读完」已有记忆，紧接着就看到「怎么写新的」。
   // 放在 skills 之前是因为它属于身份/上下文层，而技能是操作层。
   push('memory-write', input.memoryWrite ?? '');
+  // 项目共享记忆紧随记忆之后、知识库之前：它和个人记忆同属「已知事实」层
+  // （个人记忆跟人走、共享记忆跟项目走），而知识库是本轮检索出来的外部资料。
+  // 刻意**不**插在 `memory` 与 `memory-write` 之间 —— 那会打断「读完记忆紧接着
+  // 读写入协议」这个相邻关系（见上面那条注释）。
+  push('project-memory', input.projectMemory ?? '');
   // 知识库命中在技能之前：先摆出「这一轮可用的事实」，再摆「这一轮的方法」（见文件头）
   push('knowledge', input.knowledge ?? '');
   for (const skill of input.skills ?? []) push('skills', skill);

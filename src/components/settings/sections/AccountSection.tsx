@@ -87,18 +87,27 @@ export function AccountSection() {
   const [session, setSession] = useState<AccountSession | null>(
     () => runtime?.account.getSession() ?? null,
   );
+  /**
+   * 凭据是否已被服务端拒绝。**单独进 state**：订阅回调里若拿到同一个 session 引用，
+   * React 会 bail out，「过期 → 恢复」那一跳就不会重绘（侧栏 `AccountEntry` 同理）。
+   */
+  const [expired, setExpired] = useState<boolean>(
+    () => runtime?.account.isSessionExpired?.() ?? false,
+  );
   const [deviceId, setDeviceId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   /** 二次确认对话框（删账户） */
   const [confirmOpen, setConfirmOpen] = useState(false);
 
-  // 账户变更（登录 / 登出 / 轮换）驱动本分区重渲染
+  // 账户变更（登录 / 登出 / 轮换 / 换票被拒）驱动本分区重渲染
   useEffect(() => {
     if (!runtime) return;
-    setSession(runtime.account.getSession());
-    return runtime.account.subscribe(() => {
+    const read = (): void => {
       setSession(runtime.account.getSession());
-    });
+      setExpired(runtime.account.isSessionExpired?.() ?? false);
+    };
+    read();
+    return runtime.account.subscribe(read);
   }, [runtime]);
 
   // 设备 ID：Web 端 `platform.appInfo()` 恒为 null → 优雅降级为「仅桌面端可见」
@@ -129,7 +138,8 @@ export function AccountSection() {
     try {
       // 只调 logout：engine.stop() + resetSyncStatus() 由 account.subscribe 触发。
       await runtime.account.logout();
-      toast.success('已退出登录');
+      // 过期态说「退出登录」是假话（本来就没有可用会话），跟着改说法
+      toast.success(expired ? '已清除本机登录信息' : '已退出登录');
     } finally {
       setBusy(false);
     }
@@ -322,9 +332,33 @@ export function AccountSection() {
               }
             />
             <SettingsRow label="同步状态" control={<SyncStatusIndicator state={status} />} />
+            {/* 过期时把「要做什么」摆在登出上面：否则这一页看起来一切正常，只有别的页在报错 */}
+            {expired && (
+              <SettingsRow
+                label="登录状态"
+                hint="换票被服务端拒绝（凭据已过期或被吊销），云端功能暂不可用；本机数据不受影响"
+                control={
+                  <Button
+                    color="warning"
+                    variant="outlined"
+                    disabled={busy}
+                    onClick={goAuth}
+                    sx={{ textTransform: 'none', fontSize: 13 }}
+                  >
+                    重新登录
+                  </Button>
+                }
+              />
+            )}
             <SettingsRow
-              label="退出登录"
-              hint="仅断开本机与云端的同步，本地数据保留"
+              // 过期后没有会话可「退出」：这个动作实际只清掉本机残留的账号与废票。
+              // 与侧栏菜单同一套说法——两处都写「退出登录」会与「登录状态：已过期」打架。
+              label={expired ? '清除本机登录信息' : '退出登录'}
+              hint={
+                expired
+                  ? '登录已过期：只清掉本机残留的账号与票据，本地数据保留'
+                  : '仅断开本机与云端的同步，本地数据保留'
+              }
               control={
                 <Button
                   color="error"
@@ -333,7 +367,7 @@ export function AccountSection() {
                   onClick={() => void logout()}
                   sx={{ textTransform: 'none', fontSize: 13 }}
                 >
-                  退出登录
+                  {expired ? '清除登录信息' : '退出登录'}
                 </Button>
               }
             />

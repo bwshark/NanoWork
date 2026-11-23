@@ -44,6 +44,8 @@ import { KB_UPLOAD_ACCEPT, precheckUpload } from "@/lib/kb/kbUpload";
 import { docIndexHint } from "@/lib/kb/kbDocumentMeta";
 import { readFileAsBase64 } from "@/lib/artifact/fileBase64";
 import { createRuntimeKbGateway } from "@/sync/kbGateway";
+import { useAuthIssue } from "@/sync/useAuthIssue";
+import type { AuthIssue as SyncAuthIssue } from "@/sync/useAuthIssue";
 import { useSyncRuntime } from "@/sync/useSyncRuntime";
 import {
   collectAssetIds,
@@ -108,14 +110,11 @@ const ALL_ROLES = ["member", "admin", "owner"] as const;
 /** 个人库的副标题。与参考界面同一句话：它解释的是「为什么这里没有成员与权限」。 */
 const PERSONAL_KB_SUBTITLE = "个人知识库仅自己可见，快来打造你的知识花园吧！";
 
-/**
- * 登录态问题的三种结论。
- *
- * `anonymous` 与 `expired` 必须分开：前者是「还没有账户」，后者是「有账户，但这张
- * access token 不能用了」。access token 只有 30 分钟寿命，过期是**常态**；一律说
- * 「需要先登录账户」，就会出现「侧边栏明明显示着登录邮箱」的自相矛盾。
+/*
+ * 登录态的三种结论由 `useSyncAuthIssue` 统一给出（见 `sync/useAuthIssue.ts`）：
+ * `anonymous` 是「还没有账户」，`expired` 是「有账户，但凭据已被服务端拒绝」。
+ * 本页只额外负责一件事——把**自己撞到的 401**作为证据交上去。
  */
-type AuthIssue = "none" | "anonymous" | "expired";
 
 function roleLabels(roles: readonly string[]): string {
   return roles.map((role) => KB_ROLE_LABELS[role] ?? role).join(" / ");
@@ -162,8 +161,15 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
     setSessionExpired(false);
   }, [client]);
 
-  const authIssue: AuthIssue =
-    client === null ? "anonymous" : sessionExpired ? "expired" : "none";
+  /*
+   * 登录态结论**与侧边栏共用一份**：账户记着「换票被服务端拒绝」这件事，
+   * 这里再加上本页自己的 401 证据。两侧各算一遍是这页原来的病根——侧边栏显示着
+   * 登录邮箱，横幅却写着「登录状态已过期」。
+   */
+  const authIssue: SyncAuthIssue = useAuthIssue({
+    gatewayReady: client !== null,
+    rejected: sessionExpired,
+  });
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -985,13 +991,13 @@ export function KnowledgePage({ gateway }: { gateway?: KbGateway }) {
                 </Button>
               )}
               <Button size="small" onClick={() => navigate(ROUTES.auth)}>
-                去登录
+                {expired ? "重新登录" : "去登录"}
               </Button>
             </Stack>
           }
         >
           {expired
-            ? `${KB_SESSION_EXPIRED}。access token 有效期 30 分钟，过期不会把你登出，但界面手上这张票已经不能用了。`
+            ? `${KB_SESSION_EXPIRED}。本机仍保留着账号与数据，重新登录一次即可恢复；在此之前云端资料不可用。`
             : `${KB_LOGIN_REQUIRED}。知识库是云端资源：资料的存取与可见范围都在服务端判定。`}
         </Alert>
       </Box>

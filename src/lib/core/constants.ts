@@ -283,6 +283,10 @@ export const USER_INSTRUCTIONS_TAG_CLOSE = '</user_custom_instructions>';
 // 放在这里只是为了与其余注入标签同一处可查——不要在这个文件里拼正文。
 export const KNOWLEDGE_TAG_OPEN = '<knowledge_context>';
 export const KNOWLEDGE_TAG_CLOSE = '</knowledge_context>';
+// 项目共享记忆（FR-12.7 ③）。同一套纪律：标签在这里登记，正文由
+// `lib/project/projectMemory.ts` 产出。
+export const PROJECT_MEMORY_TAG_OPEN = '<project_memory>';
+export const PROJECT_MEMORY_TAG_CLOSE = '</project_memory>';
 
 /**
  * 用户级长期记忆（L2）的存储 key：路由到 `~/.nanowork/MEMORY.md`（跨项目生效）。

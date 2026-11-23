@@ -20,6 +20,7 @@ import {
   type KbSummary,
 } from '@/lib/kb/kbClient';
 import { createRuntimeKbGateway } from '@/sync/kbGateway';
+import { useAuthIssue } from '@/sync/useAuthIssue';
 import { useSyncRuntime } from '@/sync/useSyncRuntime';
 import type { AgentKnowledgeBinding } from '@/types';
 
@@ -69,8 +70,14 @@ export function AgentKnowledgePicker({ value, onChange, gateway }: AgentKnowledg
   useEffect(() => {
     setSessionExpired(false);
   }, [client]);
+  /*
+   * 结论与侧边栏共用（账户记着换票是否被服务端拒绝）。原来这里自己算一个布尔，
+   * 结果同一时刻侧边栏说「已登录」、这里说「登录状态已过期」。
+   */
+  const authIssue = useAuthIssue({ gatewayReady: client !== null, rejected: sessionExpired });
+  const expired = authIssue === 'expired';
   // 没有网关 = 未登录；有网关但票废了 = 登录已过期。两者都要拦住本组件的正常渲染
-  const needLogin = client === null || sessionExpired;
+  const needLogin = authIssue !== 'none';
   const [orgs, setOrgs] = useState<KbOrg[]>([]);
   const [kbs, setKbs] = useState<KbSummary[]>([]);
   const [loading, setLoading] = useState(false);
@@ -157,9 +164,9 @@ export function AgentKnowledgePicker({ value, onChange, gateway }: AgentKnowledg
           知识库（FR-2.3）
         </Typography>
         <Typography sx={{ fontSize: 12, color: 'text.secondary' }}>
-          {sessionExpired ? KB_SESSION_EXPIRED : KB_LOGIN_REQUIRED}
+          {expired ? KB_SESSION_EXPIRED : KB_LOGIN_REQUIRED}
         </Typography>
-        {sessionExpired && (
+        {expired && (
           <Button
             size="small"
             sx={{ mt: 0.5 }}

@@ -3,6 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "author": "bwshark",
+  "license": "MIT",
   "type": "module",
   "main": "electron/main.cjs",
   "description": "类 WorkBuddy 智能体客户端助手（基于 nanobot 引擎）— 跨端（Web + Electron）React 渲染层",

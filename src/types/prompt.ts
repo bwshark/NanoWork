@@ -77,6 +77,8 @@ export interface AssembledSection {
     | 'user-instructions'
     | 'memory'
     | 'memory-write'
+    // 项目共享记忆（FR-12.7 ③）：会话属某项目且该项目写了共享记忆时才有
+    | 'project-memory'
     | 'knowledge'
     | 'skills'
     | 'local-time';

@@ -73,6 +73,9 @@ export type AppAuditAction =
   | 'orgAsset.update'
   | 'orgAsset.withdraw'
   | 'orgAsset.import'
+  // 项目共享记忆（FR-12.7 ③）：它是**团队级**内容，改一次所有人都受影响，
+  // 而且会随每轮对话进入提示词——比改一个本地设置更需要事后能查到「谁什么时候改的」。
+  | 'project.memory.update'
   | 'security.deny_write'
   | 'security.path_rules'
   // —— 引擎侧（actor=engine，由 nanobot 自己写）——
@@ -120,6 +123,7 @@ export const APP_AUDIT_ACTION_LABELS: Record<AppAuditAction, string> = {
   'orgAsset.update': '修改组织资产信息',
   'orgAsset.withdraw': '撤回组织资产',
   'orgAsset.import': '导入组织资产',
+  'project.memory.update': '修改项目共享记忆',
   'security.deny_write': '切换默认拒绝写入',
   'security.path_rules': '修改路径权限规则',
   // 引擎侧动作：id 与 `nanobot/security/audit.py` 里 `record_app_operation(action=…)`
@@ -172,6 +176,8 @@ export const APP_AUDIT_ACTION_GROUPS: Record<string, AppAuditAction[]> = {
     'orgAsset.update',
     'orgAsset.withdraw',
     'orgAsset.import',
+    // 共享记忆与组织资产同组：都是「改动会影响别人」的团队级内容
+    'project.memory.update',
   ],
   '安全': ['security.deny_write', 'security.path_rules'],
   '引擎侧': ['dream.accept', 'dream.reject', 'config.reload', 'cron.reload'],

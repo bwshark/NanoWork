@@ -50,6 +50,8 @@ import {
 } from "@/lib/orgAsset/orgAssetPayload";
 import { createRuntimeKbGateway } from "@/sync/kbGateway";
 import { createRuntimeOrgAssetGateway } from "@/sync/orgAssetGateway";
+import { useAuthIssue } from "@/sync/useAuthIssue";
+import { useSyncRuntime } from "@/sync/useSyncRuntime";
 import { useAgentsStore } from "@/stores/agentsStore";
 import { useModelsStore } from "@/stores/modelsStore";
 import { useSkillsStore } from "@/stores/skillsStore";
@@ -85,13 +87,19 @@ export function OrgAssetsPage({
   gateway?: OrgAssetGateway | null;
   kbGateway?: KbGateway | null;
 } = {}) {
+  /**
+   * 登录态**必须订阅**，且要进下面两个 memo 的依赖：`initSyncRuntime()` 是启动后异步的，
+   * 路由可能先落到本页。只在渲染期读一次单例，会把这个页面永久钉在「需要先登录」上——
+   * 而侧栏同一时刻显示着登录邮箱（与知识库页原来那个 bug 同源）。
+   */
+  const runtime = useSyncRuntime();
   const client = useMemo<OrgAssetGateway | null>(
     () => (gateway !== undefined ? gateway : createRuntimeOrgAssetGateway()),
-    [gateway],
+    [gateway, runtime],
   );
   const kb = useMemo<KbGateway | null>(
     () => (kbGateway !== undefined ? kbGateway : createRuntimeKbGateway()),
-    [kbGateway],
+    [kbGateway, runtime],
   );
 
   const agents = useAgentsStore((s) => s.agents);
@@ -105,6 +113,15 @@ export function OrgAssetsPage({
   const [orgsLoading, setOrgsLoading] = useState(false);
   const [offline, setOffline] = useState(false);
   const [sessionExpired, setSessionExpired] = useState(false);
+  // 网关换了（重新登录 / 运行时到位）：上一次的「过期」结论作废
+  useEffect(() => {
+    setSessionExpired(false);
+  }, [client]);
+  /** 与侧边栏共用同一份登录态结论（账户记着换票是否被服务端拒绝） */
+  const authIssue = useAuthIssue({
+    gatewayReady: client !== null,
+    rejected: sessionExpired,
+  });
 
   const [assets, setAssets] = useState<OrgAsset[]>([]);
   const [listLoading, setListLoading] = useState(false);
@@ -381,7 +398,7 @@ export function OrgAssetsPage({
     await applyPrompt(asset, prompt);
   };
 
-  if (!client) {
+  if (client === null || authIssue === "anonymous") {
     return (
       <Box sx={{ p: 3 }}>
         <Typography variant="h5" sx={{ mb: 1 }}>
@@ -402,7 +419,11 @@ export function OrgAssetsPage({
         本机后续改动不会同步到已发布的那一份。
       </Typography>
 
-      {sessionExpired && (
+      {/*
+        * 这里只报事实、不放按钮：恢复入口在侧边栏账户菜单（「重新登录」）。
+        * 本页原来没有路由依赖，为了一个按钮把它绑进 Router 不值得。
+        */}
+      {authIssue === "expired" && (
         <Alert severity="warning" sx={{ mb: 2 }}>
           {ORG_ASSET_SESSION_EXPIRED}
         </Alert>

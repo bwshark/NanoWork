@@ -149,7 +149,7 @@ export interface VersionStamp {
  * 也 import 本模块，而主进程产物是 esbuild 的 **CJS**：本文件必须保持「纯常量、
  * 不含 `import.meta`」，否则 `main.cjs` 构不出来。
  */
-export const DEFAULT_SYNC_BASE_URL = 'http://192.168.0.157:8910';
+export const DEFAULT_SYNC_BASE_URL = 'http://127.0.0.1:8910';
 
 /**
  * 客户端墓碑上行的时间窗（§六 #10）。

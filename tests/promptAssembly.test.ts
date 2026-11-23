@@ -220,3 +220,30 @@ describe('assemblePromptSections：知识库段（FR-2.3 / FR-4.7）', () => {
     expect(ids).not.toContain('knowledge');
   });
 });
+
+describe('assemblePromptSections：项目共享记忆段（FR-12.7 ③）', () => {
+  it('段位：记忆写入之后、知识库之前（两者同属「已知事实」层）', () => {
+    const ids = assemblePromptSections({
+      memory: '记忆正文',
+      memoryWrite: '写入协议',
+      projectMemory: '<project_memory>团队约定</project_memory>',
+      knowledge: '<knowledge_context>资料</knowledge_context>',
+      skills: ['技能A'],
+    }).map((s) => s.id);
+
+    // 刻意**不**插在 memory 与 memory-write 之间：那会打断「读完记忆紧接着读写入协议」
+    expect(ids).toEqual([
+      'product-identity',
+      'memory',
+      'memory-write',
+      'project-memory',
+      'knowledge',
+      'skills',
+    ]);
+  });
+
+  it('空的共享记忆段整段不出现（会话不属项目 / 项目还没写）', () => {
+    const ids = assemblePromptSections({ projectMemory: '  \n ' }).map((s) => s.id);
+    expect(ids).not.toContain('project-memory');
+  });
+});

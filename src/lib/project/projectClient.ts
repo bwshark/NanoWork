@@ -52,6 +52,24 @@ export interface ProjectDetail {
   kbs: ProjectKb[];
 }
 
+/**
+ * 项目共享记忆（FR-12.7 ③）。
+ *
+ * `canEdit` 与 `maxChars` 都由服务端给：前者是权限（前端不重算「我是不是 lead」），
+ * 后者是唯一上限（不在客户端另写一个常量，见 `lib/project/projectMemory.ts` 文件头）。
+ */
+export interface ProjectMemory {
+  text: string;
+  /** 乐观锁版本。保存时必须原样带回，不匹配即 409 */
+  rev: number;
+  /** ISO 字符串，空串 = 从未写过 */
+  updatedAt: string;
+  /** 最后写入者邮箱；解析不出来时为空串 */
+  updatedBy: string;
+  canEdit: boolean;
+  maxChars: number;
+}
+
 /** 未登录时的文案（与知识库分开：两个页面可能一个能用一个不能用，话要说清是哪个）。 */
 export const PROJECT_LOGIN_REQUIRED = '项目空间在云端，需要先登录账户';
 
@@ -78,6 +96,16 @@ export interface ProjectGateway {
   /** 加库：服务端会先校验「你能不能读这本库」，403 表示你没权限，不是库不存在 */
   addKb(projectId: string, kbId: string): Promise<ApiResult<ProjectKb>>;
   removeKb(projectId: string, kbId: string): Promise<ApiResult<undefined>>;
+  /** 读共享记忆（组织成员都可读，不只项目成员） */
+  getMemory(projectId: string): Promise<ApiResult<ProjectMemory>>;
+  /**
+   * 写共享记忆。`rev` 必须原样带回读到的那个版本：
+   * 409 = 别人先改了（**不是**「你没权限」也不是「服务端坏了」），界面要引导重新拉取。
+   */
+  putMemory(
+    projectId: string,
+    input: { text: string; rev: number },
+  ): Promise<ApiResult<ProjectMemory>>;
 }
 
 export function createProjectGateway(config: AuthedRequestConfig): ProjectGateway {
@@ -119,6 +147,13 @@ export function createProjectGateway(config: AuthedRequestConfig): ProjectGatewa
     removeKb: (projectId, kbId) =>
       call<undefined>(`/api/projects/${enc(projectId)}/kbs/${enc(kbId)}`, {
         method: 'DELETE',
+      }),
+    getMemory: (projectId) =>
+      call<ProjectMemory>(`/api/projects/${enc(projectId)}/memory`),
+    putMemory: (projectId, input) =>
+      call<ProjectMemory>(`/api/projects/${enc(projectId)}/memory`, {
+        method: 'PUT',
+        body: input,
       }),
   };
 }

@@ -161,6 +161,65 @@ describe('syncAccount：refresh 轮换', () => {
     expect(account.isAuthenticated()).toBe(true);
   });
 
+  /*
+   * 「过期」是**账户级事实**，不是某个页面自己的布尔。
+   *
+   * 原来每个页面各记一个 `sessionExpired`，侧边栏却只看会话在不在，于是同一时刻
+   * 侧边栏显示登录邮箱、页面横幅写着「登录状态已过期」。现在由账户记住这件事，
+   * 侧边栏与所有云端页面订阅同一份结论（见 `sync/useAuthIssue.ts`）。
+   */
+  it('刷新被服务端拒绝（401）：记为「登录已过期」并广播，会话仍保留', async () => {
+    const { impl } = makeFetch((_url, _init, call) =>
+      call === 0 ? jsonResponse(pair('a1', 'r1')) : jsonResponse({ detail: '已被使用过' }, 401),
+    );
+    const account = createMemorySyncAccount({ baseUrl: 'http://x', fetchImpl: impl });
+    await account.login('u@example.com', 'pw');
+    expect(account.isSessionExpired(), '刚登录就被判过期').toBe(false);
+
+    const seen: Array<AccountSession | null> = [];
+    account.subscribe((s) => seen.push(s));
+    await account.refresh();
+
+    expect(account.isSessionExpired()).toBe(true);
+    // 广播出去了：否则侧边栏会一直停在「已登录」
+    expect(seen.length, '过期没有通知订阅者').toBeGreaterThan(0);
+    expect(account.isAuthenticated()).toBe(true);
+  });
+
+  it('刷新失败但是**网络错误**：不算过期（票可能还有效，不能让人白重登一次）', async () => {
+    const { impl } = makeFetch((_url, _init, call) => {
+      if (call === 0) return jsonResponse(pair('a1', 'r1'));
+      throw new TypeError('fetch failed');
+    });
+    const account = createMemorySyncAccount({ baseUrl: 'http://x', fetchImpl: impl });
+    await account.login('u@example.com', 'pw');
+
+    await expect(account.refresh()).resolves.toBe(false);
+    expect(account.isSessionExpired(), '网络抖动被说成登录过期').toBe(false);
+  });
+
+  it('过期后重新登录 / 换票成功都会复位', async () => {
+    // 0 登录 → 1 刷新 401（过期）→ 2 登录成功 → 3 刷新 401 → 4 刷新成功
+    const { impl } = makeFetch((_url, _init, call) => {
+      if (call === 1 || call === 3) return jsonResponse({ detail: '已被使用过' }, 401);
+      if (call === 4) return jsonResponse(pair('a3', 'r3'));
+      return jsonResponse(pair('a1', 'r1'));
+    });
+    const account = createMemorySyncAccount({ baseUrl: 'http://x', fetchImpl: impl });
+
+    await account.login('u@example.com', 'pw');
+    await account.refresh();
+    expect(account.isSessionExpired()).toBe(true);
+
+    await account.login('u@example.com', 'pw');
+    expect(account.isSessionExpired(), '重新登录后仍被判过期').toBe(false);
+
+    await account.refresh();
+    expect(account.isSessionExpired()).toBe(true);
+    await expect(account.refresh()).resolves.toBe(true);
+    expect(account.isSessionExpired(), '换票成功后仍被判过期').toBe(false);
+  });
+
   it('未登录时 refresh 直接返回 false，不发请求', async () => {
     const { impl, calls } = makeFetch(() => jsonResponse(pair()));
     const account = createMemorySyncAccount({ baseUrl: 'http://x', fetchImpl: impl });
